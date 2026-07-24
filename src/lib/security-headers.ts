@@ -20,8 +20,40 @@
  *     against real traffic first; promote it to enforced once the violation
  *     reports are clean.
  *
+ * The report-only policy carries `report-uri` and `report-to` directives that
+ * point at the /api/csp-report sink (src/routes/api/csp-report.ts). Both are
+ * emitted for coverage: `report-uri` is the legacy directive still honoured by
+ * most browsers, `report-to` is the current Reporting API mechanism, whose
+ * endpoint group is declared via the companion `Report-To` (v0) and
+ * `Reporting-Endpoints` (v1) response headers. The enforced policy deliberately
+ * carries no reporting directives — only the untested lockdown needs validating.
+ *
  * Nothing here weakens an existing header: values are only set when absent.
  */
+
+/** Endpoint group name shared by the report-to directive and the Report-To headers. */
+const CSP_REPORT_GROUP = "csp-endpoint";
+
+/** Same-origin path of the violation report sink. */
+const CSP_REPORT_PATH = "/api/csp-report";
+
+/**
+ * Resolve the origin the browser should post reports back to. Prefers the
+ * proxy-forwarded host/proto (the app is served behind Cloudflare Workers, so
+ * request.url is the internal origin) and falls back to the request URL.
+ */
+function reportOrigin(request: Request): string | null {
+  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+  if (host) {
+    const proto = request.headers.get("x-forwarded-proto") ?? "https";
+    return `${proto}://${host}`;
+  }
+  try {
+    return new URL(request.url).origin;
+  } catch {
+    return null;
+  }
+}
 
 /** Origins the app legitimately talks to (Supabase REST, Auth, Storage, Realtime). */
 function connectSources(): string {
@@ -63,6 +95,11 @@ function reportOnlyCsp(): string {
     "base-uri 'self'",
     "object-src 'none'",
     "form-action 'self'",
+    // Reporting: legacy directive first, Reporting API group second. A path is a
+    // valid report-uri value; report-to resolves its endpoint from the
+    // Report-To / Reporting-Endpoints headers set alongside this policy.
+    `report-uri ${CSP_REPORT_PATH}`,
+    `report-to ${CSP_REPORT_GROUP}`,
   ].join("; ");
 }
 
@@ -82,6 +119,23 @@ export function applySecurityHeaders(request: Request, response: Response): Resp
   );
   set("Content-Security-Policy", ENFORCED_CSP);
   set("Content-Security-Policy-Report-Only", reportOnlyCsp());
+
+  // Declare the report-to endpoint group for both Reporting API generations.
+  // Report-To (v0) is still what Chromium consults for CSP; Reporting-Endpoints
+  // (v1) is the modern header. Both name the same same-origin sink.
+  const origin = reportOrigin(request);
+  if (origin) {
+    const reportUrl = `${origin}${CSP_REPORT_PATH}`;
+    set("Reporting-Endpoints", `${CSP_REPORT_GROUP}="${reportUrl}"`);
+    set(
+      "Report-To",
+      JSON.stringify({
+        group: CSP_REPORT_GROUP,
+        max_age: 10886400,
+        endpoints: [{ url: reportUrl }],
+      }),
+    );
+  }
 
   // HSTS only over TLS. Emitting it on plain http is ignored by browsers, and
   // sending it from a local http dev origin would needlessly pin localhost.

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -21,6 +21,11 @@ export function NotificationBell() {
   const { user } = useAuth();
   const qc = useQueryClient();
 
+  // Realtime is the primary update path (see the subscription below). Polling is
+  // only a fallback for when the realtime channel is down, so it stays disabled
+  // while the channel is SUBSCRIBED and switches on if the connection degrades.
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
+
   const { data } = useQuery({
     queryKey: queryKeys.notifications.list(user?.id),
     queryFn: async () => {
@@ -33,18 +38,38 @@ export function NotificationBell() {
       return (data as any[]) ?? [];
     },
     enabled: !!user,
-    refetchInterval: 30000,
+    // No fixed poll: realtime pushes changes instantly. Fall back to a slow 60s
+    // poll only while realtime is disconnected, so the bell still recovers if the
+    // websocket silently drops.
+    refetchInterval: realtimeConnected ? false : 60_000,
   });
 
-  // Realtime subscription
+  // Realtime subscription — the primary mechanism for keeping the bell current.
   useEffect(() => {
     if (!user?.id) return;
+    // Tracks whether the channel has previously dropped, so we only force a
+    // catch-up refetch on genuine reconnects, not on the initial subscribe (the
+    // query already fetches on mount).
+    let wasDisconnected = false;
     const ch = supabase
       .channel(`notif-${user.id}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${user.id}` },
         () => qc.invalidateQueries({ queryKey: queryKeys.notifications.all() }))
-      .subscribe();
-    return () => { supabase.removeChannel(ch); };
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          setRealtimeConnected(true);
+          // Reconnected after a drop: refetch once to pull in anything the
+          // channel missed while it was down.
+          if (wasDisconnected) {
+            wasDisconnected = false;
+            qc.invalidateQueries({ queryKey: queryKeys.notifications.all() });
+          }
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          wasDisconnected = true;
+          setRealtimeConnected(false);
+        }
+      });
+    return () => { setRealtimeConnected(false); supabase.removeChannel(ch); };
   }, [user?.id, qc]);
 
   const items = data ?? [];

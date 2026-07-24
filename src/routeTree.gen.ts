@@ -14,6 +14,7 @@ import { Route as McpRouteImport } from './routes/mcp'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiCspReportRouteImport } from './routes/api/csp-report'
 import { Route as AppProfileRouteImport } from './routes/_app.profile'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
 import { Route as AppCallCenterRouteImport } from './routes/_app.call-center'
@@ -54,6 +55,11 @@ const AppRoute = AppRouteImport.update({
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiCspReportRoute = ApiCspReportRouteImport.update({
+  id: '/api/csp-report',
+  path: '/api/csp-report',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppProfileRoute = AppProfileRouteImport.update({
@@ -156,6 +162,7 @@ export interface FileRoutesByFullPath {
   '/call-center': typeof AppCallCenterRoute
   '/dashboard': typeof AppDashboardRoute
   '/profile': typeof AppProfileRoute
+  '/api/csp-report': typeof ApiCspReportRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
   '/admin/branches': typeof AppAdminBranchesRoute
@@ -179,6 +186,7 @@ export interface FileRoutesByTo {
   '/call-center': typeof AppCallCenterRoute
   '/dashboard': typeof AppDashboardRoute
   '/profile': typeof AppProfileRoute
+  '/api/csp-report': typeof ApiCspReportRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
   '/admin/branches': typeof AppAdminBranchesRoute
@@ -204,6 +212,7 @@ export interface FileRoutesById {
   '/_app/call-center': typeof AppCallCenterRoute
   '/_app/dashboard': typeof AppDashboardRoute
   '/_app/profile': typeof AppProfileRoute
+  '/api/csp-report': typeof ApiCspReportRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
   '/_app/admin/branches': typeof AppAdminBranchesRoute
@@ -229,6 +238,7 @@ export interface FileRouteTypes {
     | '/call-center'
     | '/dashboard'
     | '/profile'
+    | '/api/csp-report'
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
     | '/admin/branches'
@@ -252,6 +262,7 @@ export interface FileRouteTypes {
     | '/call-center'
     | '/dashboard'
     | '/profile'
+    | '/api/csp-report'
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
     | '/admin/branches'
@@ -276,6 +287,7 @@ export interface FileRouteTypes {
     | '/_app/call-center'
     | '/_app/dashboard'
     | '/_app/profile'
+    | '/api/csp-report'
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
     | '/_app/admin/branches'
@@ -298,6 +310,7 @@ export interface RootRouteChildren {
   ResetPasswordRoute: typeof ResetPasswordRoute
   Char91DotmcpChar93ListToolsRoute: typeof Char91DotmcpChar93ListToolsRoute
   Char91DotwellKnownChar93OauthProtectedResourceRoute: typeof Char91DotwellKnownChar93OauthProtectedResourceRoute
+  ApiCspReportRoute: typeof ApiCspReportRoute
   DotlovableOauthConsentRoute: typeof DotlovableOauthConsentRoute
   Char91DotmcpChar93InvokeToolToolRoute: typeof Char91DotmcpChar93InvokeToolToolRoute
   ApiPublicCdrProgressJobIdRoute: typeof ApiPublicCdrProgressJobIdRoute
@@ -338,6 +351,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/csp-report': {
+      id: '/api/csp-report'
+      path: '/api/csp-report'
+      fullPath: '/api/csp-report'
+      preLoaderRoute: typeof ApiCspReportRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app/profile': {
@@ -503,6 +523,7 @@ const rootRouteChildren: RootRouteChildren = {
   Char91DotmcpChar93ListToolsRoute: Char91DotmcpChar93ListToolsRoute,
   Char91DotwellKnownChar93OauthProtectedResourceRoute:
     Char91DotwellKnownChar93OauthProtectedResourceRoute,
+  ApiCspReportRoute: ApiCspReportRoute,
   DotlovableOauthConsentRoute: DotlovableOauthConsentRoute,
   Char91DotmcpChar93InvokeToolToolRoute: Char91DotmcpChar93InvokeToolToolRoute,
   ApiPublicCdrProgressJobIdRoute: ApiPublicCdrProgressJobIdRoute,
