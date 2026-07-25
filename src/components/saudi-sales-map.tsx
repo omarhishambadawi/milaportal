@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fmtSAR } from "@/lib/branches";
+import { MapPin, TrendingUp } from "lucide-react";
 
 /**
  * Saudi Arabia sales heat map — enterprise-grade inline SVG.
- * No external deps. Brand palette, smooth animations, collision-aware labels.
+ * No external deps. Brand palette, premium gradients, glow layers,
+ * collision-aware labels, reduced-motion aware, dark-mode tuned.
  */
 
 // Approximate lat/lon for major Saudi cities. Keys stored in normalized form.
@@ -124,10 +126,7 @@ function lookupCoords(name: string): [number, number] | undefined {
   return hit?.[1];
 }
 
-// Visual-only label swap requested by ops: the جدة/الطائف markers are in
-// their correct geographic positions, but the operations team wants the
-// visible text on those two markers exchanged. This does NOT affect data,
-// tooltips, coordinates, or hover behavior — only the on-map label text.
+// Visual-only label swap requested by ops (data unchanged).
 function displayLabel(name: string): string {
   if (name === "جدة") return "الطائف";
   if (name === "الطائف") return "جدة";
@@ -150,16 +149,33 @@ type Placed = CitySales & {
   cx: number; cy: number;
   r: number;
   ratio: number;
+  share: number;
+  rank: number;
+  tier: "low" | "mid" | "high";
   color: string;
   labelX: number;
   labelY: number;
   anchor: "start" | "end" | "middle";
 };
 
+function usePrefersReducedMotion() {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const on = () => setReduced(mq.matches);
+    on();
+    mq.addEventListener?.("change", on);
+    return () => mq.removeEventListener?.("change", on);
+  }, []);
+  return reduced;
+}
+
 export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
   const [hoverName, setHoverName] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const reducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
     const t = window.setTimeout(() => setMounted(true), 30);
@@ -177,12 +193,16 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
     [],
   );
 
-  const heatColor = (ratio: number) => {
-    // Brand: turquoise → amber → red
-    if (ratio < 0.34) return "hsl(184 66% 44%)"; // turquoise
-    if (ratio < 0.67) return "hsl(38 92% 50%)";  // amber
-    return "hsl(0 78% 58%)";                     // red
-  };
+  const tierOf = (ratio: number): "low" | "mid" | "high" =>
+    ratio < 0.34 ? "low" : ratio < 0.67 ? "mid" : "high";
+
+  const colorFor = (tier: "low" | "mid" | "high") =>
+    tier === "low" ? "hsl(184 66% 44%)" : tier === "mid" ? "hsl(38 92% 50%)" : "hsl(0 78% 58%)";
+
+  const totalCompleted = useMemo(
+    () => cities.reduce((s, c) => s + (c.sales || 0), 0),
+    [cities],
+  );
 
   const placed: Placed[] = useMemo(() => {
     const raw = cities
@@ -200,22 +220,21 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
     // Sort by sales desc so largest bubbles get first pick on labels
     raw.sort((a, b) => b.c.sales - a.c.sales);
 
-    // Padding from map edges so labels never clip
     const PAD = 10;
-    // label collision — occupied rects
     const placedLabels: { x: number; y: number; w: number; h: number }[] = [];
     const overlaps = (r: { x: number; y: number; w: number; h: number }) =>
       placedLabels.some((p) => !(r.x + r.w < p.x || p.x + p.w < r.x || r.y + r.h < p.y || p.y + p.h < r.y));
 
-    const out: Placed[] = raw.map(({ c, lon, lat, cx, cy }) => {
+    const out: Placed[] = raw.map(({ c, lon, lat, cx, cy }, idx) => {
       const ratio = c.sales / maxSales;
-      const r = 6 + Math.sqrt(ratio) * 26;
-      const color = heatColor(ratio);
+      const share = totalCompleted > 0 ? c.sales / totalCompleted : 0;
+      const r = 7 + Math.sqrt(ratio) * 28;
+      const tier = tierOf(ratio);
+      const color = colorFor(tier);
       const labelW = Math.max(44, c.name.length * 7.6) + 6;
       const labelH = 16;
       const gap = 8;
 
-      // 8 candidate positions around the bubble, then longer offsets as fallback
       const build = (dist: number) => [
         { x: cx + r + dist, y: cy + 4, anchor: "start" as const },
         { x: cx - r - dist, y: cy + 4, anchor: "end" as const },
@@ -243,7 +262,6 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
       }
 
       if (!chosen) {
-        // Last resort: clamp inside bounds, allow overlap
         for (const cand of build(gap)) {
           const rect = rectFor(cand);
           const clampedX = Math.min(Math.max(rect.x, PAD), W - PAD - rect.w);
@@ -257,62 +275,104 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
       }
 
       return {
-        ...c, lon, lat, cx, cy, r, ratio, color,
+        ...c, lon, lat, cx, cy, r, ratio, share, rank: idx + 1, tier, color,
         labelX: chosen!.x, labelY: chosen!.y, anchor: chosen!.anchor,
       };
     });
 
     return out;
-  }, [cities]);
+  }, [cities, totalCompleted]);
 
   const hover = placed.find((p) => p.name === hoverName) ?? null;
   const unmapped = cities.filter((c) => !lookupCoords(c.name));
 
   return (
-    <Card className="overflow-hidden">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base flex items-center justify-between">
-          <span>Sales by city — Saudi Arabia</span>
-          <span className="text-[11px] font-normal text-muted-foreground">
-            {placed.length} {placed.length === 1 ? "city" : "cities"}
-          </span>
-        </CardTitle>
+    <Card className="overflow-hidden border-border/60 bg-gradient-to-br from-card via-card to-card/90 shadow-sm hover:shadow-md transition-shadow duration-500">
+      <CardHeader className="pb-3 border-b border-border/40">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-primary/15 to-primary/5 ring-1 ring-primary/20">
+              <MapPin className="h-4 w-4 text-primary" aria-hidden />
+            </div>
+            <div className="min-w-0">
+              <CardTitle className="text-base font-semibold tracking-tight truncate">
+                Sales by city — Saudi Arabia
+              </CardTitle>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Geographic distribution of completed sales
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-background/70 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+              <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+              {placed.length} {placed.length === 1 ? "city" : "cities"}
+            </span>
+            {totalCompleted > 0 && (
+              <span className="hidden sm:inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-background/70 px-2.5 py-1 text-[11px] font-medium text-foreground/80">
+                <TrendingUp className="h-3 w-3 text-[var(--positive)]" />
+                {fmtSAR(totalCompleted)}
+              </span>
+            )}
+          </div>
+        </div>
       </CardHeader>
-      <CardContent>
-        <div className="relative w-full overflow-hidden rounded-xl border bg-gradient-to-br from-[var(--tint-map)] via-background to-background">
+      <CardContent className="p-3 sm:p-5">
+        <div
+          className="relative w-full overflow-hidden rounded-2xl border border-border/60 bg-gradient-to-br from-[var(--tint-map)] via-background to-background shadow-inner"
+          style={{
+            backgroundImage:
+              "radial-gradient(ellipse 60% 50% at 55% 55%, color-mix(in oklab, var(--primary) 6%, transparent), transparent 70%)",
+          }}
+        >
           <svg
             ref={svgRef}
             viewBox={`0 0 ${W} ${H}`}
             className="block w-full h-auto"
-            style={{ maxHeight: "min(64vh, 520px)" }}
+            style={{ maxHeight: "min(64vh, 560px)" }}
             preserveAspectRatio="xMidYMid meet"
             role="img"
             aria-label="Saudi Arabia sales heat map"
           >
             <defs>
               <linearGradient id="ksa-fill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" style={{ stopColor: "var(--map-land-top)" }} stopOpacity="0.9" />
-                <stop offset="100%" style={{ stopColor: "var(--map-land-bottom)" }} stopOpacity="0.6" />
+                <stop offset="0%" style={{ stopColor: "var(--map-land-top)" }} stopOpacity="0.95" />
+                <stop offset="100%" style={{ stopColor: "var(--map-land-bottom)" }} stopOpacity="0.7" />
               </linearGradient>
+              <radialGradient id="ksa-inner-glow" cx="50%" cy="50%" r="60%">
+                <stop offset="0%" style={{ stopColor: "var(--map-land-top)" }} stopOpacity="0" />
+                <stop offset="100%" style={{ stopColor: "var(--map-outline)" }} stopOpacity="0.25" />
+              </radialGradient>
               <filter id="ksa-shadow" x="-10%" y="-10%" width="120%" height="120%">
-                <feGaussianBlur in="SourceAlpha" stdDeviation="2.5" />
-                <feOffset dx="0" dy="2" result="offset" />
-                <feComponentTransfer><feFuncA type="linear" slope="0.15" /></feComponentTransfer>
+                <feGaussianBlur in="SourceAlpha" stdDeviation="3" />
+                <feOffset dx="0" dy="3" result="offset" />
+                <feComponentTransfer><feFuncA type="linear" slope="0.2" /></feComponentTransfer>
                 <feMerge><feMergeNode /><feMergeNode in="SourceGraphic" /></feMerge>
+              </filter>
+              <filter id="bubble-glow" x="-100%" y="-100%" width="300%" height="300%">
+                <feGaussianBlur in="SourceGraphic" stdDeviation="6" />
               </filter>
               <filter id="bubble-shadow" x="-50%" y="-50%" width="200%" height="200%">
                 <feGaussianBlur in="SourceAlpha" stdDeviation="2" />
                 <feOffset dx="0" dy="1.5" result="offset" />
-                <feComponentTransfer><feFuncA type="linear" slope="0.35" /></feComponentTransfer>
+                <feComponentTransfer><feFuncA type="linear" slope="0.4" /></feComponentTransfer>
                 <feMerge><feMergeNode /><feMergeNode in="SourceGraphic" /></feMerge>
               </filter>
               <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-                <path d="M 40 0 L 0 0 0 40" fill="none" style={{ stroke: "var(--map-grid)" }} strokeWidth="0.5" opacity="0.4" />
+                <path d="M 40 0 L 0 0 0 40" fill="none" style={{ stroke: "var(--map-grid)" }} strokeWidth="0.5" opacity="0.35" />
               </pattern>
+              {placed.map((p) => (
+                <radialGradient key={`grad-${p.name}`} id={`bg-${slug(p.name)}`} cx="50%" cy="50%" r="50%">
+                  <stop offset="0%" stopColor={p.color} stopOpacity="0.55" />
+                  <stop offset="70%" stopColor={p.color} stopOpacity="0.18" />
+                  <stop offset="100%" stopColor={p.color} stopOpacity="0" />
+                </radialGradient>
+              ))}
             </defs>
 
             <rect width={W} height={H} fill="url(#grid)" />
 
+            {/* Animated country outline draw-on */}
             <path
               d={outlinePath}
               fill="url(#ksa-fill)"
@@ -320,9 +380,17 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
               strokeWidth={1.5}
               strokeLinejoin="round"
               filter="url(#ksa-shadow)"
+              opacity={mounted ? 1 : 0}
+              className="transition-opacity duration-700 ease-out"
+            />
+            <path
+              d={outlinePath}
+              fill="url(#ksa-inner-glow)"
+              style={{ pointerEvents: "none" }}
+              opacity={0.6}
             />
 
-            {/* Label leader lines — drawn so smallest bubbles' lines sit above larger ones. */}
+            {/* Leader lines */}
             {placed.map((p) => {
               const active = hoverName === p.name;
               const tx = p.anchor === "start" ? p.labelX - 2 : p.anchor === "end" ? p.labelX + 2 : p.labelX;
@@ -330,47 +398,78 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
               return (
                 <line key={`ln-${p.name}`}
                   x1={p.cx} y1={p.cy} x2={tx} y2={ty}
-                  style={{ stroke: "var(--map-leader)" }} strokeWidth={0.6} opacity={active ? 0.9 : 0.35}
+                  style={{ stroke: "var(--map-leader)", transition: "opacity 220ms ease" }}
+                  strokeWidth={0.7} opacity={active ? 0.95 : 0.35}
+                  strokeDasharray={active ? "0" : "2 3"}
                 />
               );
             })}
 
-            {/* Bubbles — render largest first so the smallest bubble paints on top.
-                This keeps close clusters (Jeddah/Makkah/Taif) individually visible
-                and matches the hit-target ordering below so what you see is what
-                you click. */}
+            {/* Outer glow halos (largest first) */}
+            {placed.map((p) => {
+              const active = hoverName === p.name;
+              return (
+                <circle
+                  key={`glow-${p.name}`}
+                  cx={p.cx} cy={p.cy}
+                  r={p.r * (active ? 2.2 : 1.7)}
+                  fill={`url(#bg-${slug(p.name)})`}
+                  style={{
+                    pointerEvents: "none",
+                    opacity: mounted ? (active ? 1 : 0.75) : 0,
+                    transition: "opacity 400ms ease, r 260ms cubic-bezier(.34,1.4,.5,1)",
+                  }}
+                />
+              );
+            })}
+
+            {/* Bubbles — largest first so smallest paint on top */}
             {placed.map((p, i) => {
               const active = hoverName === p.name;
+              const topThree = p.rank <= 3 && !reducedMotion;
               return (
                 <g key={p.name}
                   style={{
                     pointerEvents: "none",
                     transformOrigin: `${p.cx}px ${p.cy}px`,
-                    transform: mounted ? "scale(1)" : "scale(0)",
+                    transform: mounted ? (active ? "scale(1.08)" : "scale(1)") : "scale(0)",
                     opacity: mounted ? 1 : 0,
-                    transition: `transform 480ms cubic-bezier(.34,1.4,.5,1) ${i * 40}ms, opacity 320ms ease ${i * 40}ms`,
+                    transition: `transform 520ms cubic-bezier(.34,1.4,.5,1) ${i * 40}ms, opacity 340ms ease ${i * 40}ms`,
                   }}
                 >
-                  <circle cx={p.cx} cy={p.cy} r={p.r} fill={p.color} fillOpacity={active ? 0.32 : 0.22} />
+                  {/* Soft pulse for top cities */}
+                  {topThree && (
+                    <circle cx={p.cx} cy={p.cy} r={p.r} fill="none"
+                      stroke={p.color} strokeWidth={1.25} strokeOpacity={0.5}
+                    >
+                      <animate attributeName="r" values={`${p.r};${p.r + 12};${p.r}`} dur="2.6s" repeatCount="indefinite" />
+                      <animate attributeName="stroke-opacity" values="0.55;0;0.55" dur="2.6s" repeatCount="indefinite" />
+                    </circle>
+                  )}
+                  <circle cx={p.cx} cy={p.cy} r={p.r} fill={p.color} fillOpacity={active ? 0.38 : 0.24} />
                   <circle cx={p.cx} cy={p.cy} r={p.r} fill="none"
-                    stroke={p.color} strokeWidth={active ? 2.25 : 1.5} strokeOpacity={0.95}
-                    style={{ transition: "stroke-width 180ms ease" }}
+                    stroke={p.color} strokeWidth={active ? 2.5 : 1.6} strokeOpacity={0.95}
+                    style={{ transition: "stroke-width 200ms ease, stroke-opacity 200ms ease" }}
                   />
-                  <circle cx={p.cx} cy={p.cy} r={active ? 4.2 : 3.2} fill={p.color}
+                  <circle cx={p.cx} cy={p.cy} r={active ? 4.6 : 3.4} fill={p.color}
                     filter="url(#bubble-shadow)"
-                    style={{ transition: "r 180ms ease" }}
+                    style={{ transition: "r 200ms ease" }}
+                  />
+                  {/* Inner highlight for depth */}
+                  <circle cx={p.cx - p.r * 0.25} cy={p.cy - p.r * 0.25} r={p.r * 0.18}
+                    fill="white" fillOpacity={0.35}
                   />
                 </g>
               );
             })}
 
-            {/* Labels — drawn after bubbles so they sit above */}
+            {/* Labels */}
             {placed.map((p) => {
               const active = hoverName === p.name;
               return (
                 <g key={`lbl-${p.name}`} style={{
                   opacity: mounted ? 1 : 0,
-                  transition: "opacity 300ms ease 250ms",
+                  transition: "opacity 340ms ease 260ms",
                   pointerEvents: "none",
                 }}>
                   <text
@@ -379,7 +478,13 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                     fontSize={11.5}
                     fontWeight={active ? 700 : 600}
                     strokeWidth={3.5} strokeOpacity={0.98} paintOrder="stroke"
-                    style={{ fill: "var(--map-label)", stroke: "var(--map-label-halo)", letterSpacing: 0.15, fontFeatureSettings: '"kern"', textRendering: "geometricPrecision" }}
+                    style={{
+                      fill: "var(--map-label)",
+                      stroke: "var(--map-label-halo)",
+                      letterSpacing: 0.15,
+                      fontFeatureSettings: '"kern"',
+                      textRendering: "geometricPrecision",
+                    }}
                   >
                     {displayLabel(p.name)}
                   </text>
@@ -387,23 +492,18 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
               );
             })}
 
-            {/* Raise hovered group visually by re-rendering last */}
-            {hover && (
+            {/* Hover accent ring */}
+            {hover && !reducedMotion && (
               <g style={{ pointerEvents: "none" }}>
                 <circle cx={hover.cx} cy={hover.cy} r={hover.r + 3} fill="none"
-                  stroke={hover.color} strokeWidth={1} strokeOpacity={0.5}>
-                  <animate attributeName="r" from={hover.r} to={hover.r + 10} dur="1.2s" repeatCount="indefinite" />
-                  <animate attributeName="stroke-opacity" from="0.55" to="0" dur="1.2s" repeatCount="indefinite" />
+                  stroke={hover.color} strokeWidth={1.2} strokeOpacity={0.55}>
+                  <animate attributeName="r" from={hover.r} to={hover.r + 14} dur="1.4s" repeatCount="indefinite" />
+                  <animate attributeName="stroke-opacity" from="0.6" to="0" dur="1.4s" repeatCount="indefinite" />
                 </circle>
               </g>
             )}
 
-            {/* Top-most hit-target layer — neighbor-aware radius.
-                Each city's hit circle is bounded by half the distance to its
-                nearest neighbor so overlapping clusters like Jeddah / Makkah /
-                Taif each unambiguously capture their own pointer events.
-                Rendered smallest-last so tiny bubbles sit on top of larger
-                ones for reliable hover in dense clusters. */}
+            {/* Hit-target layer */}
             {[...placed]
               .map((p) => {
                 let nearest = Infinity;
@@ -412,8 +512,6 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                   const d = Math.hypot(p.cx - q.cx, p.cy - q.cy);
                   if (d < nearest) nearest = d;
                 }
-                // Never let the hit-target reach a neighbor's center.
-                // Use half the distance minus a 1px safety gap.
                 const cap = Number.isFinite(nearest) ? Math.max(4, nearest / 2 - 1) : Infinity;
                 const hitR = Math.min(Math.max(p.r, 8), cap);
                 return { ...p, hitR };
@@ -444,45 +542,73 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
             const nearLeft = leftPct < 22;
             const nearRight = leftPct > 78;
             const xShift = nearLeft ? "0%" : nearRight ? "-100%" : "-50%";
-            const yShift = flipBelow ? `calc(${hover.r + 16}px)` : `calc(-100% - ${hover.r + 14}px)`;
+            const yShift = flipBelow ? `calc(${hover.r + 18}px)` : `calc(-100% - ${hover.r + 16}px)`;
+            const completionRate = hover.count > 0 ? Math.round(((hover.completed ?? 0) / hover.count) * 100) : null;
             return (
-            <div
-              className="pointer-events-none absolute z-10 w-[min(220px,60vw)] sm:min-w-[210px] sm:w-auto rounded-lg border bg-popover/95 backdrop-blur px-2.5 py-2 sm:px-3.5 sm:py-2.5 text-[11px] sm:text-xs text-popover-foreground shadow-lg ring-1 ring-black/5"
-              style={{
-                left: `${leftPct}%`,
-                top: `${topPct}%`,
-                transform: `translate(${xShift}, ${yShift})`,
-                maxWidth: "min(260px, 88vw)",
-              }}
-            >
-              <div className="mb-1 sm:mb-1.5 flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full shrink-0" style={{ background: hover.color }} />
-                <span className="font-semibold text-[12px] sm:text-sm truncate">{hover.name}</span>
+              <div
+                className="pointer-events-none absolute z-10 w-[min(240px,64vw)] sm:w-[260px] rounded-xl border border-border/60 bg-popover/90 backdrop-blur-xl px-3 py-2.5 sm:px-3.5 sm:py-3 text-[11px] sm:text-xs text-popover-foreground shadow-2xl ring-1 ring-black/5 dark:ring-white/5 animate-in fade-in zoom-in-95 duration-150"
+                style={{
+                  left: `${leftPct}%`,
+                  top: `${topPct}%`,
+                  transform: `translate(${xShift}, ${yShift})`,
+                  maxWidth: "min(280px, 92vw)",
+                  boxShadow: `0 20px 40px -20px ${hover.color}55, 0 0 0 1px color-mix(in oklab, ${hover.color} 20%, transparent)`,
+                }}
+              >
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span
+                      className="h-2.5 w-2.5 rounded-full shrink-0 ring-2 ring-background"
+                      style={{ background: hover.color, boxShadow: `0 0 12px ${hover.color}` }}
+                    />
+                    <span className="font-semibold text-[13px] sm:text-sm truncate text-foreground">
+                      {hover.name}
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground shrink-0">
+                    #{hover.rank}
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  <Row label="Completed sales" value={fmtSAR(hover.sales)} strong />
+                  <Row label="Total sales" value={fmtSAR(hover.total ?? hover.sales)} />
+                  <Row label="Total orders" value={String(hover.count)} />
+                  <Row label="Share of total" value={`${(hover.share * 100).toFixed(1)}%`} />
+                  {completionRate != null && (
+                    <Row label="Completion rate" value={`${completionRate}%`} />
+                  )}
+                </div>
+                {/* Share bar */}
+                <div className="mt-2.5 h-1 w-full overflow-hidden rounded-full bg-muted/60">
+                  <div
+                    className="h-full rounded-full transition-all duration-500 ease-out"
+                    style={{
+                      width: `${Math.min(100, hover.share * 100)}%`,
+                      background: `linear-gradient(90deg, ${hover.color}, color-mix(in oklab, ${hover.color} 60%, white))`,
+                    }}
+                  />
+                </div>
               </div>
-              <div className="space-y-0.5 sm:space-y-1">
-                <Row label="Total sales" value={fmtSAR(hover.total ?? hover.sales)} />
-                <Row label="Completed sales" value={fmtSAR(hover.sales)} strong />
-                <Row label="Total orders" value={String(hover.count)} />
-                <Row label="Completion rate" value={
-                  hover.count > 0
-                    ? `${Math.round(((hover.completed ?? 0) / hover.count) * 100)}%`
-                    : "—"
-                } />
-              </div>
-            </div>
             );
           })()}
 
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
-          <LegendDot color="hsl(184 66% 44%)" label="Low" />
-          <LegendDot color="hsl(38 92% 50%)" label="Medium" />
-          <LegendDot color="hsl(0 78% 58%)" label="High" />
-          <span className="ml-auto text-[11px]">Bubble size ∝ completed sales</span>
+        {/* Legend + hint */}
+        <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+          <div className="flex items-center gap-3 rounded-full border border-border/50 bg-background/60 px-3 py-1.5">
+            <LegendDot color="hsl(184 66% 44%)" label="Low" />
+            <span className="h-3 w-px bg-border/70" />
+            <LegendDot color="hsl(38 92% 50%)" label="Medium" />
+            <span className="h-3 w-px bg-border/70" />
+            <LegendDot color="hsl(0 78% 58%)" label="High" />
+          </div>
+          <span className="ml-auto text-[11px] text-muted-foreground/80">
+            Bubble size ∝ completed sales
+          </span>
         </div>
         {unmapped.length > 0 && (
-          <p className="mt-2 text-[11px] text-muted-foreground">
+          <p className="mt-2 text-[11px] text-muted-foreground/80">
             Not plotted: {unmapped.map((u) => u.name).join(", ")}
           </p>
         )}
@@ -491,11 +617,15 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
   );
 }
 
+function slug(s: string) {
+  return s.replace(/[^a-zA-Z0-9]+/g, "_");
+}
+
 function Row({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
   return (
     <div className="flex justify-between gap-6">
       <span className="text-muted-foreground">{label}</span>
-      <span className={`tabular-nums ${strong ? "font-semibold text-foreground" : ""}`}>{value}</span>
+      <span className={`tabular-nums ${strong ? "font-semibold text-foreground" : "text-foreground/90"}`}>{value}</span>
     </div>
   );
 }
@@ -503,8 +633,11 @@ function Row({ label, value, strong }: { label: string; value: string; strong?: 
 function LegendDot({ color, label }: { color: string; label: string }) {
   return (
     <span className="inline-flex items-center gap-1.5">
-      <span className="h-2.5 w-2.5 rounded-full ring-2 ring-background" style={{ background: color, boxShadow: `0 0 0 1px ${color}` }} />
-      {label}
+      <span
+        className="h-2.5 w-2.5 rounded-full ring-2 ring-background"
+        style={{ background: color, boxShadow: `0 0 8px ${color}66` }}
+      />
+      <span className="font-medium">{label}</span>
     </span>
   );
 }
