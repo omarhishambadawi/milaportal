@@ -1,4 +1,4 @@
-import type { ComponentType } from "react";
+import { memo, useMemo, type ComponentType } from "react";
 import { Link } from "@tanstack/react-router";
 import { ChevronLeft, X } from "lucide-react";
 import { BrandLogo } from "@/components/brand-logo";
@@ -51,7 +51,13 @@ function groupNav(nav: NavItemData[]) {
   return groups;
 }
 
-function NavItem({
+/**
+ * Memoized so the nav does not re-render on unrelated parent updates (route
+ * changes that leave `activePath` alone, avatar loads, header state). It still
+ * re-renders on collapse, which is correct — `collapsed` genuinely changes what
+ * it renders.
+ */
+const NavItem = memo(function NavItem({
   item,
   active,
   collapsed,
@@ -83,7 +89,11 @@ function NavItem({
       {/* Icon container — the core of the visual language */}
       <span
         className={cn(
-          "grid h-9 w-9 shrink-0 place-items-center rounded-lg transition-all duration-200 ease-out",
+          // Narrowed from `transition-all`: this element only ever changes
+          // colours, its shadow, and `scale` on press. Listing them keeps the
+          // press feedback on the compositor without animating the layout
+          // properties that shift when the sidebar collapses.
+          "grid h-9 w-9 shrink-0 place-items-center rounded-lg transition-[color,background-color,box-shadow,transform] duration-200 ease-out",
           active
             ? "bg-primary text-primary-foreground shadow-sm shadow-primary/30"
             : "text-foreground/70 group-hover:bg-background group-hover:text-foreground group-active:scale-90",
@@ -105,7 +115,7 @@ function NavItem({
       )}
     </Link>
   );
-}
+});
 
 /** Shared inner shell used by both the desktop rail and the mobile drawer. */
 function SidebarInner({
@@ -121,7 +131,9 @@ function SidebarInner({
   onToggle?: () => void;
   onMobileClose?: () => void;
 }) {
-  const groups = groupNav(nav);
+  // Rebuilt on every render before this — including every frame-adjacent render
+  // during a collapse — even though it depends only on `nav`.
+  const groups = useMemo(() => groupNav(nav), [nav]);
 
   return (
     <div className="flex h-full flex-col">
@@ -232,7 +244,14 @@ export function AppSidebar({
         className={cn(
           "z-20 hidden shrink-0 flex-col md:flex",
           "sticky top-0 h-screen bg-card border-r border-border/70",
-          "transition-[width] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] will-change-[width]",
+          // `will-change-[width]` was here and has been removed. will-change is a
+          // hint to promote an element to its own compositor layer, which only
+          // helps properties the compositor can animate by itself — transform and
+          // opacity. `width` is a layout property: the browser still runs full
+          // layout for this element and the main content beside it on every
+          // frame, so the hint bought nothing while permanently holding an extra
+          // layer (and its memory) for an animation that runs for 300ms.
+          "transition-[width] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]",
           expanded ? "w-64" : "w-[76px]",
         )}
       >

@@ -258,15 +258,47 @@ html.theme-switching { transition-duration: var(--theme-duration); }
  * with `transition-colors` would otherwise be easing *towards a value that is
  * itself still easing*, which lands it late — this pins every element to the
  * current token value, exactly in step.
+ *
+ * `.theme-vt` is the same suppression for the view-transition path, where the
+ * reason differs: there the tokens flip instantly, so a component with its own
+ * colour transition would be captured in the "after" snapshot at its *start*
+ * value and then animate a second time, live, after the cross-fade ends.
  */
 html.theme-switching *,
 html.theme-switching *::before,
-html.theme-switching *::after {
+html.theme-switching *::after,
+html.theme-vt *,
+html.theme-vt *::before,
+html.theme-vt *::after {
   transition-property: none !important;
 }
 
+/*
+ * The view-transition cross-fade — the primary path (see src/lib/theme.tsx).
+ * Two complete snapshots dissolved on the compositor, so no frame can show a
+ * half-updated page and the browser recalculates style once rather than once
+ * per frame.
+ */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--theme-duration);
+  animation-timing-function: var(--theme-ease);
+}
+
+/* The UA pairs the two snapshots with `plus-lighter`, which sums both layers and
+ * visibly blooms through the midpoint — light surfaces wash out on the way to
+ * dark. Plain alpha compositing keeps the mid-transition colours true, which is
+ * what makes the swap read as a dissolve rather than a flash. */
+::view-transition-image-pair(root) { isolation: auto; }
+::view-transition-old(root) { mix-blend-mode: normal; }
+::view-transition-new(root) { mix-blend-mode: normal; }
+
 @media (prefers-reduced-motion: reduce) {
   html.theme-switching { transition-duration: 0ms; }
+  /* The JS path already skips startViewTransition under reduced motion; this
+   * covers a transition begun before the preference changed. */
+  ::view-transition-old(root),
+  ::view-transition-new(root) { animation: none; }
 }
 
 @layer base {
