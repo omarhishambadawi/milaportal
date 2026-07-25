@@ -14,6 +14,33 @@ export type Database = {
   }
   public: {
     Tables: {
+      admin_activity: {
+        Row: {
+          action: string
+          actor_id: string | null
+          created_at: string
+          details: Json
+          id: string
+          target_user_id: string | null
+        }
+        Insert: {
+          action: string
+          actor_id?: string | null
+          created_at?: string
+          details?: Json
+          id?: string
+          target_user_id?: string | null
+        }
+        Update: {
+          action?: string
+          actor_id?: string | null
+          created_at?: string
+          details?: Json
+          id?: string
+          target_user_id?: string | null
+        }
+        Relationships: []
+      }
       branches: {
         Row: {
           branch_no: string
@@ -515,6 +542,8 @@ export type Database = {
           created_at: string
           full_name: string
           id: string
+          must_change_password: boolean
+          must_change_password_expires_at: string | null
           permissions: string[]
           updated_at: string
           yeastar_ext: string | null
@@ -749,8 +778,8 @@ export type Database = {
         | "telesales"
         | "auditor"
         | "owner"
-        | "supervisor"
         | "call_center"
+        | "supervisor"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -884,8 +913,8 @@ export const Constants = {
         "telesales",
         "auditor",
         "owner",
-        "supervisor",
         "call_center",
+        "supervisor",
       ],
     },
   },
