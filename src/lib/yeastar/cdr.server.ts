@@ -123,7 +123,11 @@ async function fetchAllPages(
 
     const list = json.data ?? [];              // CORRECT field
     if (typeof json.total_number === "number") totalReported = json.total_number;
-    records.push(...list);
+    // Append element-by-element rather than `records.push(...list)`: with
+    // page_size up to 10,000 the spread pushes that many args onto the call
+    // stack in one call, which risks a RangeError on large pages. A plain loop
+    // has no argument-count ceiling.
+    for (const r of list) records.push(r);
     const totalPages = totalReported != null ? Math.max(1, Math.ceil(totalReported / pageSize)) : null;
     if (progress && jobId) {
       await progress.updateJob(jobId, {

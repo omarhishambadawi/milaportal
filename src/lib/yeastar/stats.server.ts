@@ -313,7 +313,7 @@ function hourOf(ts: number | undefined, tzOffsetMin: number): number {
 // All callers now use `aggregateAnalytics` directly.
 
 
-interface Classified {
+export interface Classified {
   rows: CdrRecord[];
   direction: "Inbound" | "Outbound";
   anyAnswered: boolean;
@@ -375,19 +375,26 @@ function matchesStatus(c: Classified, status: AggregateOptions["status"]): boole
   return dispSet.has(status);
 }
 
-export function aggregateAnalytics(
-  records: CdrRecord[],
-  agents: AgentRef[],
-  orders: OrderRef[],
-  opts: AggregateOptions = {},
-): AnalyticsResult {
-  const tz = opts.tzOffsetMin ?? Number(process.env.YEASTAR_UTC_OFFSET_MINUTES ?? BUSINESS_UTC_OFFSET_MINUTES);
-  const direction = opts.direction ?? "all";
-  const status = opts.status ?? "all";
+/** Output of the scope-independent phase 1 (see `classifyRecords`). */
+export interface ClassifiedRecords {
+  /** Grouped + classified calls. */
+  groups: Classified[];
+  /** Deduped, non-internal rows — the input to per-agent aggregation. */
+  filteredRecords: CdrRecord[];
+}
 
-  const byExt = new Map<string, AgentRef>();
-  for (const a of agents) if (a.ext) byExt.set(String(a.ext).trim(), a);
-
+/**
+ * Phase 1 — normalize, group and classify raw CDR rows.
+ *
+ * Everything here is a pure function of `records` alone: it does NOT depend on
+ * the agent roster, orders, queue numbers, or the direction/status/scope
+ * filters. That independence is what makes the result safe to cache per CDR
+ * window and reuse across every team/agent/direction/status permutation the UI
+ * requests (M-4). The expensive work — the row dedup, the correlation grouping
+ * and the sliding-fingerprint sort — then runs once per window instead of once
+ * per filter toggle.
+ */
+export function classifyRecords(records: CdrRecord[]): ClassifiedRecords {
   // Drop Internal / ext-to-ext rows entirely, up front.
   const nonInternal = records.filter(
     (r) => (r.call_type === "Inbound" || r.call_type === "Outbound") && !looksInternal(r),
@@ -449,11 +456,34 @@ export function aggregateAnalytics(
   ];
 
   // Classify every group.
-  const classified: Classified[] = [];
+  const groups: Classified[] = [];
   for (const rows of allGroups) {
     const c = classify(rows);
-    if (c) classified.push(c);
+    if (c) groups.push(c);
   }
+
+  return { groups, filteredRecords };
+}
+
+/**
+ * Phase 2 — filter classified groups by the active scope and accumulate every
+ * KPI. Cheap relative to phase 1, and dependent on the roster/orders/filters,
+ * so it is re-run per request rather than cached.
+ */
+export function aggregateClassified(
+  input: ClassifiedRecords,
+  agents: AgentRef[],
+  orders: OrderRef[],
+  opts: AggregateOptions = {},
+): AnalyticsResult {
+  const tz = opts.tzOffsetMin ?? Number(process.env.YEASTAR_UTC_OFFSET_MINUTES ?? BUSINESS_UTC_OFFSET_MINUTES);
+  const direction = opts.direction ?? "all";
+  const status = opts.status ?? "all";
+
+  const byExt = new Map<string, AgentRef>();
+  for (const a of agents) if (a.ext) byExt.set(String(a.ext).trim(), a);
+
+  const { groups: classified, filteredRecords } = input;
 
   // C2: apply direction/status filters at the CALL level, post-classification.
   const filteredGroups = classified.filter((c) => {
@@ -723,4 +753,22 @@ export function aggregateAnalytics(
         .sort((a, b) => b.count - a.count).slice(0, 25),
     },
   };
+}
+
+/**
+ * One-shot analytics over raw CDR rows — the original public entry point.
+ *
+ * Behaviourally identical to before the M-4 split: it simply runs phase 1 then
+ * phase 2. Callers that repeatedly analyse the SAME CDR window under different
+ * filters (the Call Center page) should instead cache `classifyRecords` and
+ * call `aggregateClassified` directly, as `getCallCenterAnalytics` now does.
+ * Diagnostics and one-off traces keep using this wrapper.
+ */
+export function aggregateAnalytics(
+  records: CdrRecord[],
+  agents: AgentRef[],
+  orders: OrderRef[],
+  opts: AggregateOptions = {},
+): AnalyticsResult {
+  return aggregateClassified(classifyRecords(records), agents, orders, opts);
 }

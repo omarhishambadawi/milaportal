@@ -512,6 +512,41 @@ function evictCdrCache() {
   }
 }
 
+// ---- Phase-1 (classification) cache ----------------------------------------
+//
+// The CDR *network* fetch is cached above, but classifying those rows — dedup,
+// correlation grouping and the sliding-fingerprint sort — is pure over the
+// record set and independent of team/agent/direction/status/orders. The Call
+// Center page issues one analytics request per filter permutation over the same
+// window, so without this every filter toggle re-ran the whole classification.
+//
+// Keyed by the same `from|to` window and identity-checked against the exact
+// records array returned by the CDR cache: when the CDR entry expires and
+// refetches, it yields a NEW array, the identity check misses, and we
+// reclassify. Same size bound as the CDR cache; entries only hold references to
+// the already-cached CdrRecord objects, not copies.
+type ClassifiedRecordsT = import("@/lib/yeastar/stats.server").ClassifiedRecords;
+const classifiedCache = new Map<string, { records: unknown[]; value: ClassifiedRecordsT }>();
+
+function getClassifiedCached(
+  from: string,
+  to: string,
+  records: any[],
+  classifyRecords: (r: any[]) => ClassifiedRecordsT,
+): ClassifiedRecordsT {
+  const key = `${from}|${to}`;
+  const hit = classifiedCache.get(key);
+  if (hit && hit.records === records) return hit.value;
+  const value = classifyRecords(records);
+  classifiedCache.set(key, { records, value });
+  while (classifiedCache.size > CDR_CACHE_MAX) {
+    const oldest = classifiedCache.keys().next().value;
+    if (oldest === undefined) break;
+    classifiedCache.delete(oldest);
+  }
+  return value;
+}
+
 async function getCdrCached(from: string, to: string, jobId?: string) {
   evictCdrCache();
   const key = `${from}|${to}`;
@@ -750,11 +785,16 @@ export const getCallCenterAnalytics = createServerFn({ method: "POST" })
         orders = (ord as any[]) ?? [];
       }
 
-      const { aggregateAnalytics } = await import("@/lib/yeastar/stats.server");
+      const { aggregateClassified, classifyRecords } = await import("@/lib/yeastar/stats.server");
       // Pass PBX queue numbers so agentExtFor never mistakes a queue for an
       // agent (root cause of the Inbound=0 bug on queue-inbound calls).
       const { queueNumbers } = await fetchQueueData();
-      const result = aggregateAnalytics(records, agents, orders, {
+      // Phase 1 is cached per window (see getClassifiedCached); phase 2 applies
+      // the request's direction/status/scope filters. Identical result to the
+      // former single aggregateAnalytics call — only the redundant re-grouping
+      // across filter permutations is eliminated.
+      const classified = getClassifiedCached(data.from, data.to, records, classifyRecords);
+      const result = aggregateClassified(classified, agents, orders, {
         direction: data.direction,
         status: data.status,
         queueNumbers,
