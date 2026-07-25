@@ -3,7 +3,18 @@ import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { APP_ROLES, canActOnRole, canAssignRole, isRetiredRole, roleHasAgentCode } from "@/lib/roles";
 import { AVATAR_BUCKET, AVATAR_SIGNED_TTL, avatarObjectPath } from "@/lib/avatar";
-import { passwordSchema } from "@/lib/password-policy";
+import {
+  DEFAULT_TEMP_PASSWORD_TTL_HOURS,
+  TEMP_PASSWORD_TTL_OPTIONS,
+  passwordSchema,
+  temporaryPasswordDeadline,
+  type TempPasswordTtlHours,
+} from "@/lib/password-policy";
+import { AUDIT_ACTIONS, logAdminAction, targetSnapshot } from "@/lib/audit.server";
+
+/** Accepts only the offered TTLs, so the deadline cannot be widened by a
+ *  hand-rolled request. The timestamp itself is always computed server-side. */
+const TtlEnum = z.union([z.literal(TEMP_PASSWORD_TTL_OPTIONS[0]), z.literal(TEMP_PASSWORD_TTL_OPTIONS[1])]);
 
 // Derived from APP_ROLES so a role added to the enum cannot be silently
 // rejected at this boundary. `supervisor` was missing here even though the
@@ -141,7 +152,7 @@ async function assertMayAssignRole(callerId: string, role: string, action: strin
 
 export const adminCreateUser = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { email: string; password: string; fullName: string; agentCode?: string; role: RoleValue }) =>
+  .inputValidator((d: { email: string; password: string; fullName: string; agentCode?: string; role: RoleValue; temporary?: boolean; expiresInHours?: TempPasswordTtlHours }) =>
     z
       .object({
         email: z.string().email(),
@@ -151,6 +162,11 @@ export const adminCreateUser = createServerFn({ method: "POST" })
         fullName: z.string().min(1).max(120),
         agentCode: z.string().max(40).optional(),
         role: RoleEnum,
+        // The password an admin types at creation is the same handover credential
+        // as one typed into the reset dialog — two people know it — so it defaults
+        // to temporary as well, and the new user replaces it at first sign-in.
+        temporary: z.boolean().optional().default(true),
+        expiresInHours: TtlEnum.optional().default(DEFAULT_TEMP_PASSWORD_TTL_HOURS),
       })
       .parse(d),
   )
@@ -185,7 +201,32 @@ export const adminCreateUser = createServerFn({ method: "POST" })
         .insert({ user_id: newUserId, role: data.role });
       if (roleErr) throw new Error(roleErr.message);
     }
-    return { id: newUserId };
+    // handle_new_user() creates the profile row with the column default (false),
+    // so the flag is set here rather than passed through user_metadata — that
+    // trigger deliberately ignores client-supplied metadata beyond name/code.
+    if (newUserId && data.temporary) {
+      const { error: flagErr } = await supabaseAdmin
+        .from("profiles")
+        .update({
+          must_change_password: true,
+          must_change_password_expires_at: temporaryPasswordDeadline(data.expiresInHours),
+        } as any)
+        .eq("id", newUserId);
+      if (flagErr) throw new Error(flagErr.message);
+    }
+    await logAdminAction({
+      actorId: context.userId,
+      targetUserId: newUserId ?? null,
+      action: AUDIT_ACTIONS.userCreated,
+      details: {
+        targetName: data.fullName,
+        targetEmail: data.email,
+        role: data.role,
+        temporaryPassword: data.temporary,
+        expiresInHours: data.temporary ? data.expiresInHours : null,
+      },
+    });
+    return { id: newUserId, temporary: data.temporary };
   });
 
 
@@ -210,6 +251,12 @@ export const adminSetActive = createServerFn({ method: "POST" })
       .update({ active: data.active })
       .eq("id", data.userId);
     if (error) throw new Error(error.message);
+    await logAdminAction({
+      actorId: context.userId,
+      targetUserId: data.userId,
+      action: data.active ? AUDIT_ACTIONS.userActivated : AUDIT_ACTIONS.userDeactivated,
+      details: await targetSnapshot(data.userId),
+    });
     return { ok: true };
   });
 
@@ -282,12 +329,22 @@ export const adminSetRole = createServerFn({ method: "POST" })
     // would let them demote an admin.
     await assertMayAdministerTarget(context.userId, data.userId, "change the role of");
     await assertMayAssignRole(context.userId, data.role, "grant");
+    const previousRole = await getRole(data.userId);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     await supabaseAdmin.from("user_roles").delete().eq("user_id", data.userId);
     const { error } = await supabaseAdmin
       .from("user_roles")
       .insert({ user_id: data.userId, role: data.role });
     if (error) throw new Error(error.message);
+    // Granting Owner gets its own action rather than being buried among ordinary
+    // role changes: it is the one irreversible grant on the platform, and an
+    // investigator should be able to list every occurrence with one predicate.
+    await logAdminAction({
+      actorId: context.userId,
+      targetUserId: data.userId,
+      action: data.role === "owner" ? AUDIT_ACTIONS.ownerGranted : AUDIT_ACTIONS.userRoleChanged,
+      details: { ...(await targetSnapshot(data.userId)), from: previousRole, to: data.role },
+    });
     return { ok: true };
   });
 
@@ -330,14 +387,39 @@ export const adminUpdateProfile = createServerFn({ method: "POST" })
       .update(patch)
       .eq("id", data.userId);
     if (error) throw new Error(error.message);
+    await logAdminAction({
+      actorId: context.userId,
+      targetUserId: data.userId,
+      action: AUDIT_ACTIONS.userProfileUpdated,
+      details: {
+        ...(await targetSnapshot(data.userId)),
+        fullName: data.fullName,
+        agentCode,
+        yeastarExt: patch.yeastar_ext,
+        // The interesting half of this event: permissions are an authorization
+        // surface, so the granted set is recorded rather than just "edited".
+        permissions: data.permissions ?? null,
+      },
+    });
     return { ok: true };
   });
 
 
 export const adminSetPassword = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { userId: string; password: string }) =>
-    z.object({ userId: z.string().uuid(), password: passwordSchema }).parse(d),
+  .inputValidator((d: { userId: string; password: string; temporary?: boolean; expiresInHours?: TempPasswordTtlHours }) =>
+    z
+      .object({
+        userId: z.string().uuid(),
+        password: passwordSchema,
+        // Marks the password as a handover credential: the holder must replace it
+        // before they can use the app. Defaults to true — an admin-set password is
+        // a password two people know, and treating that as permanent is the unsafe
+        // default. Opting out is deliberate (the dialog offers a toggle).
+        temporary: z.boolean().optional().default(true),
+        expiresInHours: TtlEnum.optional().default(DEFAULT_TEMP_PASSWORD_TTL_HOURS),
+      })
+      .parse(d),
   )
   .handler(async ({ data, context }) => {
     await assertCanManageUsers(context.supabase, context.userId);
@@ -348,12 +430,82 @@ export const adminSetPassword = createServerFn({ method: "POST" })
     // Same reasoning one rung down: a Supervisor resetting an admin's password
     // would be a takeover of that admin.
     await assertMayAdministerTarget(context.userId, data.userId, "reset the password of");
+    // Nobody may hand themselves a temporary password: it is meaningless (you
+    // already know your own password) and it would let a caller strand their own
+    // session behind the forced-change gate. Self-service changes go through
+    // changeMyPassword, which demands the current password.
+    if (data.userId === context.userId) {
+      throw new Error("Use the password section of your profile to change your own password");
+    }
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { error } = await supabaseAdmin.auth.admin.updateUserById(data.userId, {
       password: data.password,
     });
     if (error) throw new Error(error.message);
-    return { ok: true };
+    // Order matters: the flag is written only after the password actually
+    // changed, so a failed reset never leaves someone locked behind a
+    // forced-change screen for a password that was never issued.
+    //
+    // A permanent reset clears the deadline as well as the flag — leaving a stale
+    // timestamp behind would read, under the encoding in 20260725003000, as an
+    // account whose credential had been rotated away.
+    const expiresAt = data.temporary ? temporaryPasswordDeadline(data.expiresInHours) : null;
+    const { error: flagError } = await supabaseAdmin
+      .from("profiles")
+      .update({
+        must_change_password: data.temporary,
+        must_change_password_expires_at: expiresAt,
+      } as any)
+      .eq("id", data.userId);
+    if (flagError) throw new Error(flagError.message);
+    await logAdminAction({
+      actorId: context.userId,
+      targetUserId: data.userId,
+      action: AUDIT_ACTIONS.passwordSetByAdmin,
+      details: {
+        ...(await targetSnapshot(data.userId)),
+        temporary: data.temporary,
+        expiresAt,
+        expiresInHours: data.temporary ? data.expiresInHours : null,
+      },
+    });
+    return { ok: true, temporary: data.temporary, expiresAt };
+  });
+
+/**
+ * Send the account holder a password-recovery email.
+ *
+ * The alternative to a temporary password, and the better default when the user
+ * is reachable: nothing is changed, no credential is spoken aloud or pasted into
+ * a chat, and the new password is known only to them. The temporary-password path
+ * stays for the cases this cannot serve — a wrong or dead mailbox, or a handover
+ * that has to happen while the admin is on the phone with them.
+ *
+ * Behind exactly the same authorization ceiling as `adminSetPassword`, because it
+ * reaches the same outcome by another route: whoever receives that email can set
+ * the account's password. Without the ceiling a Supervisor could mail themselves
+ * a recovery link for an admin account whose mailbox they control.
+ */
+export const adminSendPasswordReset = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: { userId: string }) => z.object({ userId: z.string().uuid() }).parse(d))
+  .handler(async ({ data, context }) => {
+    await assertCanManageUsers(context.supabase, context.userId);
+    await assertMayActOnTarget(context.supabase, context.userId, data.userId, "send a password reset for");
+    await assertMayAdministerTarget(context.userId, data.userId, "send a password reset for");
+    const { getUserEmail, sendPasswordResetEmail } = await import("@/lib/password.server");
+    // The address is read from auth.users rather than accepted from the caller,
+    // so the link can only ever go to the account's own mailbox.
+    const email = await getUserEmail(data.userId);
+    if (!email) throw new Error("That account has no email address on file");
+    await sendPasswordResetEmail(email);
+    await logAdminAction({
+      actorId: context.userId,
+      targetUserId: data.userId,
+      action: AUDIT_ACTIONS.passwordResetEmailSent,
+      details: { ...(await targetSnapshot(data.userId)), sentTo: email },
+    });
+    return { ok: true, email };
   });
 
 export const adminDeleteUser = createServerFn({ method: "POST" })
@@ -372,11 +524,46 @@ export const adminDeleteUser = createServerFn({ method: "POST" })
     if (await isOwner(context.supabase, data.userId)) {
       throw new Error("Owner accounts cannot be deleted");
     }
+    // Snapshot before the account exists no longer — afterwards there is nothing
+    // left to look up, and "deleted <uuid>" is not an audit record.
+    const snapshot = await targetSnapshot(data.userId);
+    const deletedRole = await getRole(data.userId);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { error } = await supabaseAdmin.auth.admin.deleteUser(data.userId);
     if (error) throw new Error(error.message);
+    await logAdminAction({
+      actorId: context.userId,
+      targetUserId: data.userId,
+      action: AUDIT_ACTIONS.userDeleted,
+      details: { ...snapshot, role: deletedRole },
+    });
     return { ok: true };
   });
+
+/** Auth admin page size. 1000 is the API maximum. */
+const AUTH_USERS_PAGE_SIZE = 1000;
+
+/**
+ * Every auth user's email, keyed by id.
+ *
+ * Paginated rather than a single `perPage: 1000` call: that call silently
+ * returned only the first page, so past the thousandth account the users table
+ * would render blank emails — and email is what the search box matches on, so
+ * those rows also became unsearchable. Pages are fetched until one comes back
+ * short, which is the documented end-of-list signal.
+ */
+async function listAuthEmails(supabaseAdmin: any): Promise<Map<string, string>> {
+  const emails = new Map<string, string>();
+  for (let page = 1; ; page++) {
+    const { data, error } = await supabaseAdmin.auth.admin.listUsers({
+      page, perPage: AUTH_USERS_PAGE_SIZE,
+    });
+    if (error) throw new Error(error.message);
+    const users = data?.users ?? [];
+    for (const u of users) if (u.email) emails.set(u.id, u.email);
+    if (users.length < AUTH_USERS_PAGE_SIZE) return emails;
+  }
+}
 
 export const adminListUsers = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
@@ -384,16 +571,20 @@ export const adminListUsers = createServerFn({ method: "GET" })
     // Supervisor manages users, so it must be able to read the list.
     await assertCanManageUsers(context.supabase, context.userId);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { data: profiles, error } = await supabaseAdmin
-      .from("profiles" as any)
-      .select("id,full_name,agent_code,active,permissions,created_at,yeastar_ext,avatar_url")
-      .order("created_at", { ascending: false });
-    if (error) throw new Error(error.message);
-    const { data: roles } = await supabaseAdmin.from("user_roles").select("user_id,role");
-    const { data: list } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
-    const emails = new Map(list.users.map((u: any) => [u.id, u.email]));
-    const roleMap = new Map((roles ?? []).map((r: any) => [r.user_id, r.role]));
-    const rows = (profiles ?? []).map((p: any) => ({
+    // The three reads are independent — profiles, roles and auth emails — so they
+    // run concurrently. Previously they were three sequential awaits, which cost
+    // the sum of the round trips on every load of the page.
+    const [profilesRes, rolesRes, emails] = await Promise.all([
+      supabaseAdmin
+        .from("profiles" as any)
+        .select("id,full_name,agent_code,active,permissions,created_at,yeastar_ext,avatar_url,must_change_password,must_change_password_expires_at")
+        .order("created_at", { ascending: false }),
+      supabaseAdmin.from("user_roles").select("user_id,role"),
+      listAuthEmails(supabaseAdmin),
+    ]);
+    if (profilesRes.error) throw new Error(profilesRes.error.message);
+    const roleMap = new Map((rolesRes.data ?? []).map((r: any) => [r.user_id, r.role]));
+    const rows = (profilesRes.data ?? []).map((p: any) => ({
       ...p,
       email: emails.get(p.id) ?? "",
       role: roleMap.get(p.id) ?? null,
@@ -402,15 +593,23 @@ export const adminListUsers = createServerFn({ method: "GET" })
     // URL here (service_role signs any path — owner-scoped storage RLS would
     // block an admin from signing another user's avatar client-side). Legacy
     // long-lived URLs are re-signed short-lived via their extracted path too.
-    await Promise.all(
-      rows.map(async (r: any) => {
-        const path = avatarObjectPath(r.avatar_url);
-        if (!path) return;
-        const { data: signed } = await supabaseAdmin.storage
-          .from(AVATAR_BUCKET)
-          .createSignedUrl(path, AVATAR_SIGNED_TTL);
-        r.avatar_url = signed?.signedUrl ?? null;
-      }),
-    );
+    //
+    // One batched `createSignedUrls` call rather than one request per avatar:
+    // the previous per-row loop issued N concurrent storage requests on every
+    // load, which on a few hundred accounts is the dominant cost of this
+    // function and is what made the page slow to appear.
+    const signable = rows
+      .map((r: any) => ({ row: r, path: avatarObjectPath(r.avatar_url) }))
+      .filter((e): e is { row: any; path: string } => !!e.path);
+    if (signable.length > 0) {
+      const { data: signed } = await supabaseAdmin.storage
+        .from(AVATAR_BUCKET)
+        .createSignedUrls(signable.map((e) => e.path), AVATAR_SIGNED_TTL);
+      // Results come back in request order; an individual entry can still carry
+      // its own error (a deleted object), in which case the row simply loses its
+      // avatar and falls back to initials rather than failing the whole list.
+      const byPath = new Map((signed ?? []).map((s: any) => [s.path, s.signedUrl ?? null]));
+      for (const { row, path } of signable) row.avatar_url = byPath.get(path) ?? null;
+    }
     return rows;
   });

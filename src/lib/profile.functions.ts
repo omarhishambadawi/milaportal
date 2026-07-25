@@ -1,7 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { passwordSchema } from "@/lib/password-policy";
+import { passwordSchema, temporaryPasswordState } from "@/lib/password-policy";
+import { AUDIT_ACTIONS, logAdminAction } from "@/lib/audit.server";
 
 /**
  * Update the authenticated user's own profile.
@@ -98,6 +99,128 @@ export const changeMyPassword = createServerFn({ method: "POST" })
     });
     if (updateError) throw new Error(updateError.message);
 
-    console.log("[authz] password changed by self", { userId: context.userId });
+    // The account now holds a password only its owner knows, so the
+    // administrator-issued flag no longer applies. Cleared through service_role:
+    // `authenticated` has no UPDATE grant on the column (20260725002000), which
+    // is what stops a user clearing the flag without actually changing anything.
+    await clearMustChangePassword(context.userId);
+
+    await logAdminAction({
+      actorId: context.userId,
+      targetUserId: context.userId,
+      action: AUDIT_ACTIONS.passwordChangedSelf,
+      details: { email },
+    });
     return { ok: true as const };
+  });
+
+/** Drop the administrator-issued marker and its deadline. Shared by the two ways
+ *  a user replaces an issued password: the self-service form and the emailed
+ *  recovery link. */
+async function clearMustChangePassword(userId: string) {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { error } = await supabaseAdmin
+    .from("profiles")
+    .update({ must_change_password: false, must_change_password_expires_at: null } as any)
+    .eq("id", userId);
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Clear the forced-change marker after a recovery-link password reset.
+ *
+ * The recovery flow sets the password through `supabase.auth.updateUser()` in the
+ * browser — possession of the emailed token is the proof of identity there, and
+ * there is no current password to submit — so it cannot go through
+ * `changeMyPassword`, and the flag would otherwise survive the very reset that
+ * was supposed to satisfy it, trapping the user on the forced-change screen.
+ *
+ * Being callable without actually changing a password is acceptable, and worth
+ * being explicit about: the flag is a workflow gate, not a security boundary.
+ * Anyone who can call this already holds a valid session for the account, which
+ * means they already know the current password (or hold a recovery token for it)
+ * — clearing the flag grants them nothing they did not already have. The
+ * boundary that matters, "who may set this account's password", is enforced in
+ * `changeMyPassword` and `adminSetPassword`, and is untouched by this.
+ */
+export const markPasswordChanged = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await clearMustChangePassword(context.userId);
+    await logAdminAction({
+      actorId: context.userId,
+      targetUserId: context.userId,
+      action: AUDIT_ACTIONS.passwordChangedViaRecovery,
+    });
+    return { ok: true as const };
+  });
+
+/**
+ * Retire an administrator-issued password that has passed its deadline.
+ *
+ * What makes the expiry more than a rendering rule: the credential is replaced
+ * with a random value nobody holds, so a temporary password that was leaked —
+ * read off a sticky note, forwarded in a chat thread — stops being usable rather
+ * than merely stopping being welcome.
+ *
+ * Safety properties, in order of how badly each would hurt if wrong:
+ *
+ *   * It only ever acts on `context.userId`. There is no target parameter, so it
+ *     cannot be pointed at another account.
+ *   * The expiry decision is made HERE, from the stored columns, never from an
+ *     argument. A client that lies about being expired changes nothing.
+ *   * It refuses unless the account is genuinely in the expired state, so it can
+ *     never destroy a password the user chose themselves.
+ *
+ * The deadline is then nulled while `must_change_password` stays true — the
+ * encoding for "rotated away, recoverable only by email" (see 20260725003000).
+ * That also makes the call idempotent: a second invocation finds no deadline,
+ * sees the credential is already gone, and does nothing.
+ */
+export const expireTemporaryPassword = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: profile, error } = await supabaseAdmin
+      .from("profiles")
+      .select("must_change_password,must_change_password_expires_at")
+      .eq("id", context.userId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+
+    const fields = profile as {
+      must_change_password?: boolean;
+      must_change_password_expires_at?: string | null;
+    } | null;
+
+    // Already rotated (no deadline left) or not expired at all — nothing to do.
+    if (!fields?.must_change_password || !fields.must_change_password_expires_at) {
+      return { rotated: false as const };
+    }
+    if (temporaryPasswordState(fields) !== "expired") {
+      return { rotated: false as const };
+    }
+
+    // 48 hex characters: far beyond anything guessable, and never shown to
+    // anyone. The account is recoverable only through the emailed link from here.
+    const random = `${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, "");
+    const { error: pwError } = await supabaseAdmin.auth.admin.updateUserById(context.userId, {
+      password: random,
+    });
+    if (pwError) throw new Error(pwError.message);
+
+    const { error: flagError } = await supabaseAdmin
+      .from("profiles")
+      .update({ must_change_password_expires_at: null } as any)
+      .eq("id", context.userId);
+    if (flagError) throw new Error(flagError.message);
+
+    await logAdminAction({
+      actorId: null,
+      targetUserId: context.userId,
+      action: AUDIT_ACTIONS.temporaryPasswordExpired,
+      details: { expiredAt: fields.must_change_password_expires_at },
+    });
+    console.warn("[authz] temporary password expired and was rotated", { userId: context.userId });
+    return { rotated: true as const };
   });

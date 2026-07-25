@@ -1,6 +1,8 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
+import { markPasswordChanged } from "@/lib/profile.functions";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,6 +18,7 @@ export const Route = createFileRoute("/reset-password")({
 
 function ResetPage() {
   const navigate = useNavigate();
+  const markChangedFn = useServerFn(markPasswordChanged);
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -29,8 +32,13 @@ function ResetPage() {
     // This flow is reached from a recovery link, so there is no current password
     // to confirm — possession of the emailed token is the proof of identity.
     const { error } = await supabase.auth.updateUser({ password });
+    if (error) { setBusy(false); toast.error(error.message); return; }
+    // A recovery reset satisfies an administrator-issued temporary password just
+    // as the self-service form does; without this the forced-change screen would
+    // still be waiting on the other side of the redirect. Best-effort — the
+    // password is already changed, so a failure here must not report failure.
+    try { await markChangedFn(); } catch { /* gate clears on next reset */ }
     setBusy(false);
-    if (error) { toast.error(error.message); return; }
     toast.success("Password updated");
     navigate({ to: "/dashboard", replace: true });
   };

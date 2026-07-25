@@ -9,6 +9,9 @@ import {
 import { hasPerm, canViewCallCenter } from "@/lib/permissions";
 import { AppHeader } from "@/components/app-header";
 import { AppSidebar } from "@/components/app-sidebar";
+import { ForcePasswordChange } from "@/features/profile/components/force-password-change";
+import { TemporaryPasswordExpired } from "@/features/profile/components/temporary-password-expired";
+import { temporaryPasswordState } from "@/lib/password-policy";
 
 export const Route = createFileRoute("/_app")({
   component: AppLayout,
@@ -17,7 +20,7 @@ export const Route = createFileRoute("/_app")({
 const SIDEBAR_PREF_KEY = "milaserv.sidebar.expanded";
 
 function AppLayout() {
-  const { session, profile, role, loading, signOut } = useAuth();
+  const { session, profile, role, loading, signOut, refresh } = useAuth();
   const navigate = useNavigate();
   const { location } = useRouterState();
 
@@ -77,6 +80,35 @@ function AppLayout() {
           <Button variant="outline" onClick={() => signOut()}>Sign out</Button>
         </div>
       </div>
+    );
+  }
+
+  // An administrator-issued password is a credential two people know. Until the
+  // holder replaces it, the entire authenticated surface is withheld — same
+  // treatment as a deactivated account, and for the same reason: this is a
+  // property of the account, not of the page being visited, so it cannot be
+  // sidestepped by navigating elsewhere. Sits after the `active` check because
+  // a deactivated account has nothing to gain from setting a password.
+  //
+  // Past its deadline the password is not merely unwelcome but retired: the
+  // expired screen rotates it away and hands the user the recovery path.
+  const tempPasswordState = temporaryPasswordState(profile);
+  if (tempPasswordState === "expired") {
+    return (
+      <TemporaryPasswordExpired
+        email={session.user.email}
+        onSignOut={() => signOut().then(() => navigate({ to: "/auth", replace: true }))}
+      />
+    );
+  }
+  if (tempPasswordState === "active") {
+    return (
+      <ForcePasswordChange
+        name={profile?.full_name}
+        deadline={profile?.must_change_password_expires_at ?? null}
+        onDone={refresh}
+        onSignOut={() => signOut().then(() => navigate({ to: "/auth", replace: true }))}
+      />
     );
   }
 

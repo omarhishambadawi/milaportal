@@ -38,6 +38,11 @@ export interface Profile {
   yeastar_ext?: string | null;
   created_at?: string;
   avatar_url?: string | null;
+  /** Set when an administrator issued the current password. The app layout
+   *  blocks on it until the holder sets one of their own. Read together with
+   *  the deadline below via `temporaryPasswordState()`. */
+  must_change_password?: boolean;
+  must_change_password_expires_at?: string | null;
 }
 
 
