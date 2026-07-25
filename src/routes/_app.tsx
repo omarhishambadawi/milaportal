@@ -103,7 +103,12 @@ function AppLayout() {
         onSignOut={() => signOut().then(() => navigate({ to: "/auth", replace: true }))}
       />
 
-      <main className="flex-1 min-w-0 flex flex-col overflow-x-hidden">
+      {/* `main` must NOT establish a scroll container: an `overflow-x-hidden`
+          here makes it the sticky header's scroll root, and since the document
+          (not `main`) is what scrolls, the header would scroll away. Keep
+          overflow visible on `main` so the header sticks to the viewport, and
+          move horizontal containment down onto the content wrapper. */}
+      <main className="flex-1 min-w-0 flex flex-col">
         <AppHeader
           title={activeItem?.label ?? "MilaServ Portal"}
           icon={activeItem?.icon}
@@ -114,10 +119,12 @@ function AppLayout() {
           onSignOut={() => signOut().then(() => navigate({ to: "/auth", replace: true }))}
         />
 
-        {/* Route content — quick fade-in */}
+        {/* Route content — quick fade-in. `overflow-x-hidden` lives here (a
+            sibling of the header, not its ancestor) so wide content is still
+            contained without breaking the sticky header. */}
         <div
           key={location.pathname}
-          className="p-3 sm:p-4 lg:p-6 xl:px-8 w-full animate-in fade-in duration-150"
+          className="p-3 sm:p-4 lg:p-6 xl:px-8 w-full overflow-x-hidden animate-in fade-in duration-150"
         >
           <Outlet />
         </div>

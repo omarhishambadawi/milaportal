@@ -19,6 +19,7 @@ import { useOrdersListFilters } from "@/features/orders/hooks/use-orders-list-fi
 import { useOrdersListData } from "@/features/orders/hooks/use-orders-list-data";
 import { useOrdersMutations } from "@/features/orders/hooks/use-orders-mutations";
 import { useOrdersExport } from "@/features/orders/hooks/use-orders-export";
+import { useOrdersScrollRestoration } from "@/features/orders/hooks/use-orders-scroll-restoration";
 
 export const Route = createFileRoute("/_app/orders/")({
   head: () => ({ meta: [{ title: "Orders" }] }),
@@ -45,6 +46,10 @@ function OrdersList() {
   });
 
   const { isLoading, pageRows, summary, total, totalPages, currentPage, rangeStart, rangeEnd } = data;
+
+  // Restore list scroll position when returning from an order (filters, search
+  // and pagination are already preserved via the module-level filter cache).
+  useOrdersScrollRestoration(!isLoading);
 
   if (!f.canView) {
     return <div className="text-center py-16"><Eye className="mx-auto h-10 w-10 text-muted-foreground" /><p className="mt-2 text-sm text-muted-foreground">You don't have access to Orders.</p></div>;
