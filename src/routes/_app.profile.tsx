@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { UserAvatar } from "@/components/user-avatar";
 import { ChangePasswordCard } from "@/features/profile/components/change-password-card";
+import { RoleBadge } from "@/components/role-badge";
 import { AVATAR_BUCKET, avatarObjectPath } from "@/lib/avatar";
 import { LogOut, Mail, IdCard, Phone, ShieldCheck, Calendar, Camera, Trash2, Save, Pencil } from "lucide-react";
 import { format } from "date-fns";
@@ -175,7 +176,9 @@ function ProfilePage() {
                 </div>
               )}
               <div className="flex flex-wrap items-center gap-2">
-                {role && <Badge variant="secondary" className="capitalize">{role.replace("_", " ")}</Badge>}
+                {/* Shared badge: the Owner is visually distinct here too, rather
+                    than rendering as a generic grey chip like every other role. */}
+                {role && <RoleBadge role={role} />}
                 {profile?.active ? (
                   <Badge className="bg-success text-success-foreground hover:bg-success">Active</Badge>
                 ) : (

@@ -11,8 +11,12 @@ import type { AppRole } from "@/lib/roles";
 export type { AppRole };
 
 /** True for the Owner role. Owner is protected: it cannot be deleted,
- *  deactivated, or have its role changed. See 20260721001200_owner_protection. */
-export function isOwnerRole(role: AppRole | null | undefined): boolean {
+ *  deactivated, or have its role changed. See 20260721001200_owner_protection.
+ *
+ *  Accepts a plain string, like `roleLabel`/`roleTone` do, because callers often
+ *  hold an unvalidated role straight from a database row; a non-matching value
+ *  simply returns false. */
+export function isOwnerRole(role: string | null | undefined): boolean {
   return role === "owner";
 }
 

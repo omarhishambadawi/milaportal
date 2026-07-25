@@ -27,6 +27,20 @@ import { createClient } from "@supabase/supabase-js";
  * Returns false on bad credentials rather than throwing, so callers can map it
  * to a specific, non-enumerating error message.
  */
+/**
+ * The sign-in email for a user id, read through service_role.
+ *
+ * Needed because `verifyPassword` authenticates by email, but the callers only
+ * hold a user id. The JWT usually carries the email, so callers should prefer
+ * that and fall back to this for tokens issued without the claim.
+ */
+export async function getUserEmail(userId: string): Promise<string | null> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data, error } = await supabaseAdmin.auth.admin.getUserById(userId);
+  if (error) return null;
+  return data?.user?.email ?? null;
+}
+
 export async function verifyPassword(email: string, password: string): Promise<boolean> {
   const SUPABASE_URL = process.env.SUPABASE_URL;
   const SUPABASE_PUBLISHABLE_KEY = process.env.SUPABASE_PUBLISHABLE_KEY;

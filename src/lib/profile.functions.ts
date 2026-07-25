@@ -75,20 +75,15 @@ export const changeMyPassword = createServerFn({ method: "POST" })
     }
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { getUserEmail, verifyPassword } = await import("@/lib/password.server");
 
     // The JWT normally carries the email; fall back to an admin lookup so the
     // flow still works for tokens issued without that claim.
     const claimEmail = (context.claims as { email?: unknown } | null)?.email;
     let email = typeof claimEmail === "string" && claimEmail ? claimEmail : null;
-    if (!email) {
-      const { data: found, error } = await supabaseAdmin.auth.admin.getUserById(context.userId);
-      if (error || !found?.user?.email) {
-        throw new Error("Could not verify your account");
-      }
-      email = found.user.email;
-    }
+    if (!email) email = await getUserEmail(context.userId);
+    if (!email) throw new Error("Could not verify your account");
 
-    const { verifyPassword } = await import("@/lib/password.server");
     if (!(await verifyPassword(email, data.currentPassword))) {
       // Deliberately not distinguishing "wrong password" from any other
       // verification failure in the message shown to the caller.

@@ -213,10 +213,40 @@ export const adminSetActive = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+/**
+ * Re-authenticate the caller.
+ *
+ * Used to gate the single most dangerous role change — granting Owner. Every
+ * other role change is deliberately left un-gated, per the product decision;
+ * adding a password prompt to routine edits trains people to type their password
+ * without reading the dialog, which makes the prompt that *does* matter weaker.
+ *
+ * Verified server-side for the same reason as the self-service password change:
+ * a confirmation the browser could skip protects nothing.
+ */
+async function assertPasswordConfirmed(context: { userId: string; claims: unknown }, password: string) {
+  const claimEmail = (context.claims as { email?: unknown } | null)?.email;
+  let email = typeof claimEmail === "string" && claimEmail ? claimEmail : null;
+  const { getUserEmail, verifyPassword } = await import("@/lib/password.server");
+  if (!email) email = await getUserEmail(context.userId);
+  if (!email) throw new Error("Could not verify your account");
+  if (!(await verifyPassword(email, password))) {
+    console.warn("[authz] failed password confirmation on Owner transfer", { callerId: context.userId });
+    throw new Error("Password confirmation failed");
+  }
+}
+
 export const adminSetRole = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { userId: string; role: RoleValue }) =>
-    z.object({ userId: z.string().uuid(), role: RoleEnum }).parse(d),
+  .inputValidator((d: { userId: string; role: RoleValue; confirmPassword?: string }) =>
+    z
+      .object({
+        userId: z.string().uuid(),
+        role: RoleEnum,
+        // Required only when granting Owner; see the handler.
+        confirmPassword: z.string().min(1).optional(),
+      })
+      .parse(d),
   )
   .handler(async ({ data, context }) => {
     await assertCanManageUsers(context.supabase, context.userId);
@@ -229,6 +259,22 @@ export const adminSetRole = createServerFn({ method: "POST" })
     }
     if (data.role === "owner" && !(await isOwner(context.supabase, context.userId))) {
       throw new Error("Forbidden: only an Owner may grant the Owner role");
+    }
+    // Granting Owner ADDS an Owner; it is not a transfer. The acting Owner keeps
+    // their role, and any number of Owners may coexist, all with identical
+    // privileges and protections (is_owner() is a per-user EXISTS, and
+    // has_permission()/is_administrator() short-circuit for every one of them).
+    //
+    // It is nonetheless irreversible in practice -- an Owner cannot afterwards be
+    // demoted, deactivated or deleted -- so it requires the acting Owner to
+    // re-enter their password. Enforced here, not in the dialog, so a caller that
+    // omits the field is refused rather than silently succeeding. All other role
+    // changes need no confirmation.
+    if (data.role === "owner") {
+      if (!data.confirmPassword) {
+        throw new Error("Granting the Owner role requires your password");
+      }
+      await assertPasswordConfirmed(context, data.confirmPassword);
     }
     // The two halves of the escalation guard: the caller must outrank the target
     // AND must be allowed to hand out the requested role. Checking only the

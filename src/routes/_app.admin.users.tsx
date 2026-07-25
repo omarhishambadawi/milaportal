@@ -16,7 +16,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { ShieldAlert, KeyRound, Pencil, Plus, Trash2, Search, MoreHorizontal, Users as UsersIcon, Check, X } from "lucide-react";
+import { ShieldAlert, KeyRound, Pencil, Plus, Trash2, Search, MoreHorizontal, Users as UsersIcon, Check, X, Crown } from "lucide-react";
 import { ALL_PERMISSIONS, defaultPermsForRole, PERMISSION_GROUPS, hasPerm } from "@/lib/permissions";
 import { evaluatePassword } from "@/lib/password-policy";
 import {
@@ -24,11 +24,10 @@ import {
   ROLE_LABEL,
   ROLE_OPTION_LABEL,
   roleHasAgentCode,
-  roleLabel,
-  roleTone,
   type AppRole,
 } from "@/lib/roles";
 import { PasswordInput } from "@/components/password-input";
+import { RoleBadge } from "@/components/role-badge";
 import { UserAvatar } from "@/components/user-avatar";
 import { cn } from "@/lib/utils";
 import { queryKeys } from "@/lib/query-keys";
@@ -63,6 +62,34 @@ function AdminUsers() {
   const setPwFn = useServerFn(adminSetPassword);
   const updFn = useServerFn(adminUpdateProfile);
   const delFn = useServerFn(adminDeleteUser);
+
+  // Granting Owner. This ADDS an Owner -- it is not a transfer: the acting Owner
+  // keeps their own role, and the platform supports any number of Owners, all with
+  // identical privileges and protections.
+  //
+  // Kept off the role dropdown on purpose: it is not a routine edit, and an Owner
+  // cannot afterwards be demoted, deactivated or deleted. Only an existing Owner
+  // sees this action, and it requires their password.
+  const callerIsOwner = isOwnerRole(role);
+  const [grantOwnerTo, setGrantOwnerTo] = useState<any>(null);
+  const [grantOwnerPw, setGrantOwnerPw] = useState("");
+  const [grantOwnerBusy, setGrantOwnerBusy] = useState(false);
+
+  const confirmGrantOwner = async () => {
+    if (!grantOwnerTo || !grantOwnerPw) return;
+    setGrantOwnerBusy(true);
+    try {
+      await setRoleFn({ data: { userId: grantOwnerTo.id, role: "owner", confirmPassword: grantOwnerPw } });
+      toast.success(`${grantOwnerTo.full_name} is now an Owner`);
+      setGrantOwnerTo(null);
+      setGrantOwnerPw("");
+      reload();
+    } catch (e: any) {
+      toast.error(e.message ?? "Could not grant the Owner role");
+    } finally {
+      setGrantOwnerBusy(false);
+    }
+  };
 
   const { data, isLoading, error } = useQuery({
     queryKey: queryKeys.adminUsers.list(),
@@ -284,9 +311,7 @@ function AdminUsers() {
                   <TableCell className="hidden md:table-cell text-sm text-muted-foreground">{u.email}</TableCell>
                   <TableCell className="hidden md:table-cell font-mono text-xs">{u.agent_code ?? "—"}</TableCell>
                   <TableCell>
-                    <Badge variant="outline" className={cn("capitalize font-medium", roleTone(u.role))}>
-                      {roleLabel(u.role)}
-                    </Badge>
+                    <RoleBadge role={u.role} />
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
@@ -320,6 +345,16 @@ function AdminUsers() {
                           <div className="px-2 pb-1 text-[10px] text-muted-foreground">
                             Owner accounts are protected
                           </div>
+                        )}
+                        {/* Owner-only, and never for an account that is already
+                            an Owner. Opens a password-confirmed dialog. */}
+                        {callerIsOwner && !rowIsOwner && (
+                          <>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem onSelect={() => { setGrantOwnerTo(u); setGrantOwnerPw(""); }}>
+                              <Crown className="h-4 w-4 mr-2" />Grant Owner…
+                            </DropdownMenuItem>
+                          </>
                         )}
                         {/* Administrator-only: Supervisor holds manage_users but
                             may never delete a user, so it must not see the action
@@ -456,6 +491,43 @@ function AdminUsers() {
             </ul>
             <DialogFooter><Button onClick={savePw} disabled={!evaluatePassword(newPw).valid}>Update password</Button></DialogFooter>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Grant Owner — password-confirmed. Adds an Owner; does not transfer. */}
+      <Dialog open={!!grantOwnerTo} onOpenChange={(o) => { if (!o) { setGrantOwnerTo(null); setGrantOwnerPw(""); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Crown className="h-4 w-4 text-primary" />Grant Owner role
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              <span className="font-medium text-foreground">{grantOwnerTo?.full_name}</span> will gain
+              unrestricted access to every feature, with the same privileges and protections as
+              every other Owner. You keep your own Owner role — this adds an Owner rather than
+              handing yours over.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              An Owner cannot afterwards be demoted, deactivated or deleted.
+            </p>
+            <div className="space-y-2">
+              <Label htmlFor="grant-owner-confirm">Confirm your password to continue</Label>
+              <PasswordInput
+                id="grant-owner-confirm"
+                autoComplete="current-password"
+                value={grantOwnerPw}
+                onChange={(e) => setGrantOwnerPw(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => { setGrantOwnerTo(null); setGrantOwnerPw(""); }}>Cancel</Button>
+            <Button onClick={confirmGrantOwner} disabled={!grantOwnerPw || grantOwnerBusy}>
+              {grantOwnerBusy ? "Confirming…" : "Grant Owner role"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
