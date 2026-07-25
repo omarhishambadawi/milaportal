@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { UserAvatar } from "@/components/user-avatar";
+import { ChangePasswordCard } from "@/features/profile/components/change-password-card";
 import { AVATAR_BUCKET, avatarObjectPath } from "@/lib/avatar";
 import { LogOut, Mail, IdCard, Phone, ShieldCheck, Calendar, Camera, Trash2, Save, Pencil } from "lucide-react";
 import { format } from "date-fns";
@@ -212,6 +213,9 @@ function ProfilePage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Password — self-service change, current password required */}
+      <ChangePasswordCard />
 
       <div className="flex justify-end">
         <Button variant="outline" onClick={() => signOut().then(() => navigate({ to: "/auth", replace: true }))}>
