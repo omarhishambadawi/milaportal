@@ -4,24 +4,13 @@
  * Internal calls excluded, monthly default.
  */
 import { createFileRoute } from "@tanstack/react-router";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { useServerFn } from "@tanstack/react-start";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { format } from "date-fns";
-import type { DateRange } from "react-day-picker";
 import {
   BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid,
   LineChart, Line, Legend,
 } from "recharts";
-// xlsx is lazy-loaded inside the export handler to keep it out of the initial route chunk.
 import {
   Download, ShieldAlert, PhoneOff, AlertTriangle, Printer, PhoneIncoming, PhoneOutgoing, Clock, Users, TrendingUp,
 } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
-import { useAuth } from "@/lib/auth";
-import { hasPerm, canViewCallCenter } from "@/lib/permissions";
-import { useAgentDirectory } from "@/lib/directory";
-import { getCallCenterAnalytics, yeastarRealtimeQueue } from "@/lib/yeastar.functions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -29,147 +18,34 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { DateRangePicker } from "@/components/date-range-picker";
-import { cn } from "@/lib/utils";
 import { fmtSAR } from "@/lib/branches";
-import { queryKeys } from "@/lib/query-keys";
+import type { Team, Direction } from "@/features/call-center/types";
+import { tooltipStyle } from "@/features/call-center/constants";
+import { pct, hhmmss } from "@/features/call-center/utils";
+import { exportCallCenter } from "@/features/call-center/export";
+import { SectionHeader } from "@/features/call-center/components/section-header";
+import { HeroKpi } from "@/features/call-center/components/hero-kpi";
+import { Kpi } from "@/features/call-center/components/kpi";
+import { ChartCard } from "@/features/call-center/components/chart-card";
+import { useCallCenterFilters } from "@/features/call-center/hooks/use-call-center-filters";
+import { useCallCenterAnalytics } from "@/features/call-center/hooks/use-call-center-analytics";
+import { useRealtimeQueue } from "@/features/call-center/hooks/use-realtime-queue";
 
 export const Route = createFileRoute("/_app/call-center")({
   head: () => ({ meta: [{ title: "Call Center Analytics — MilaServ Portal" }] }),
   component: CallCenterPage,
 });
 
-const toISO = (d: Date) => format(d, "yyyy-MM-dd");
-
-type Team = "all" | "customer_care" | "telesales";
-type Direction = "all" | "Inbound" | "Outbound";
-
 function CallCenterPage() {
-  const { role, profile, loading: authLoading } = useAuth();
-  const canView = canViewCallCenter(role, profile?.permissions as any);
-  const canAll = hasPerm(role, profile?.permissions as any, "view_all_agents");
-  const canExport = hasPerm(role, profile?.permissions as any, "export_reports");
-
-
-  // Default: today
-  const today = new Date();
-  const [range, setRange] = useState<DateRange | undefined>({ from: today, to: today });
-  const [team, setTeam] = useState<Team>("all");
-  const [agentId, setAgentId] = useState<string>("all");
-  const [direction, setDirection] = useState<Direction>("all");
-  const [search, setSearch] = useState("");
-
-  const from = range?.from ? toISO(range.from) : toISO(today);
-  const to = range?.to ? toISO(range.to) : from;
-
-
-  // Agents dropdown (admin only) — reads the shared agent directory.
-  const { data: agents } = useAgentDirectory({ enabled: canAll });
-  const filteredAgents = useMemo(() => {
-    if (!agents) return [];
-    const operational = agents.filter((a: any) => a.role === "customer_care" || a.role === "telesales");
-    return team === "all" ? operational : operational.filter((a: any) => a.role === team);
-  }, [agents, team]);
-
-  // Progress job id (rotates per query)
-  const jobIdRef = useRef<string>("");
-  const [jobId, setJobId] = useState<string>("");
-  useEffect(() => {
-    const id = crypto.randomUUID();
-    jobIdRef.current = id;
-    setJobId(id);
-  }, [from, to, team, agentId, direction]);
-
-  // Analytics query — one call feeds every section.
-  // Gate on auth readiness + permissions to prevent duplicate/premature fetches.
-  const analyticsFn = useServerFn(getCallCenterAnalytics);
-  const q = useQuery({
-    queryKey: queryKeys.callCenter.analytics({ from, to, team, agentId, direction }),
-    queryFn: () => analyticsFn({
-      data: {
-        from, to, team,
-        agentId: canAll && agentId !== "all" ? agentId : null,
-        direction, status: "all",
-        includeOrders: true,
-        jobId: jobIdRef.current,
-      },
-    }),
-    enabled: !authLoading && canView,
-    // Overrides that are NOT covered by the global defaults: a full CDR sweep
-    // can page through millions of records, so this query opts out of remount
-    // and reconnect refetches entirely and holds data for 5 min rather than 1.
-    // (`refetchOnWindowFocus: false` was dropped — it is now the global default.)
-    staleTime: 5 * 60_000,
-    placeholderData: keepPreviousData,
-    refetchOnMount: false,
-    refetchOnReconnect: false,
+  const f = useCallCenterFilters();
+  const a = useCallCenterAnalytics({
+    from: f.from, to: f.to, team: f.team, agentId: f.agentId, direction: f.direction,
+    canAll: f.canAll, canView: f.canView, authLoading: f.authLoading,
+    jobId: f.jobId, jobIdRef: f.jobIdRef, search: f.search,
   });
+  const rt = useRealtimeQueue({ authLoading: f.authLoading, canView: f.canView });
 
-  // Realtime queue widget — /queue/call_status + /queue/agent_status
-  const realtimeFn = useServerFn(yeastarRealtimeQueue);
-  const rt = useQuery({
-    queryKey: queryKeys.callCenter.realtime(),
-    queryFn: () => realtimeFn(),
-    enabled: !authLoading && canView,
-    refetchInterval: 15_000,
-    staleTime: 10_000,
-  });
-
-  // Survey removed — Satisfaction Survey section discontinued.
-
-
-  // Progress polling — track live server progress during any fetch.
-  const [progress, setProgress] = useState<{ percent: number; message: string } | null>(null);
-  useEffect(() => {
-    if (!q.isFetching || !jobId) { setProgress(null); return; }
-    let stop = false;
-    const tick = async () => {
-      try {
-        // The progress endpoint reads via service_role, so it requires a
-        // bearer token — send the current session's access token.
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session?.access_token) return;
-        const res = await fetch(`/api/public/cdr-progress/${jobId}`, {
-          cache: "no-store",
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-        if (!res.ok) return;
-        const j = await res.json();
-        if (!stop) setProgress({ percent: j.percent ?? 0, message: j.message ?? "Loading…" });
-      } catch { /* ignore */ }
-    };
-    tick();
-    const iv = setInterval(tick, 800);
-    return () => { stop = true; clearInterval(iv); };
-  }, [q.isFetching, jobId]);
-
-  const data = q.data;
-  const ok = data && data.ok === true;
-  const configured = !data || (data as any).configured !== false;
-  // Use isFetching so the loading state persists across every fetch (initial + refetches),
-  // and treat auth loading as loading too to avoid a flash of empty KPIs.
-  const isLoading = authLoading || q.isFetching || (q.isPending && (q.fetchStatus !== "idle"));
-  const errored = (data && data.ok === false) || !!q.error;
-  const errMsg = q.error instanceof Error ? q.error.message
-    : errored ? (configured ? "Call analytics are temporarily unavailable." : "Call analytics are not configured yet.") : null;
-
-
-  const totals = ok ? data.totals : null;
-  const rows = ok ? data.agents : [];
-  const byDay = ok ? data.byDay : [];
-  const byHour = ok ? data.byHour : [];
-  const teamCompare = ok ? data.teamCompare : [];
-  const conv = ok ? data.conversion : null;
-
-  const hourly12 = useMemo(() => byHour.map((h) => ({
-    ...h,
-    label: hourLabel(h.hour),
-  })), [byHour]);
-
-  const searchedAgents = useMemo(() => {
-    if (!search.trim()) return rows;
-    const s = search.toLowerCase();
-    return rows.filter((r) => r.name.toLowerCase().includes(s) || r.ext.toLowerCase().includes(s));
-  }, [rows, search]);
+  const { q, progress, ok, isLoading, errMsg, totals, rows, byDay, byHour, teamCompare, conv, hourly12, searchedAgents } = a;
 
   // Permission gate sits below every hook: `authLoading` starts true, so an
   // early return placed above the hooks would run 15 hooks on the first render
@@ -177,7 +53,7 @@ function CallCenterPage() {
   // rejects outright ("Rendered fewer hooks than expected"). Hooks first, then
   // the guard; the derivations above are pure and simply compute over empty
   // arrays on the render that bails out.
-  if (!authLoading && !canView) {
+  if (!f.authLoading && !f.canView) {
     return (
       <div className="text-center py-16">
         <ShieldAlert className="mx-auto h-10 w-10 text-destructive" />
@@ -186,35 +62,7 @@ function CallCenterPage() {
     );
   }
 
-  const doExport = async () => {
-    if (!ok || !totals) return;
-    const XLSX = await import("xlsx");
-    const kpiSheet = [
-      { Metric: "Total calls", Value: totals.total },
-      { Metric: "Answered", Value: totals.answered },
-      { Metric: "Missed (queue)", Value: totals.missed },
-      { Metric: "Abandoned", Value: totals.abandoned },
-      { Metric: "No-answer outbound", Value: totals.noAnswerOutbound },
-      { Metric: "Inbound", Value: totals.inbound },
-      { Metric: "Outbound", Value: totals.outbound },
-      { Metric: "Answer rate %", Value: totals.answerRate.toFixed(2) },
-      { Metric: "Avg talking", Value: hhmmss(totals.avgTalkSec) },
-      { Metric: "Avg waiting", Value: hhmmss(totals.avgWaitSec) },
-      { Metric: "Total talk", Value: hhmmss(totals.talkSeconds) },
-      { Metric: "Conversion rate %", Value: (conv?.overall.conversionRate ?? 0).toFixed(2) },
-    ];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(kpiSheet), "KPIs");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Agents");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(byDay), "By day");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hourly12), "By hour");
-    if (conv) {
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(conv.perAgent), "Conversion by agent");
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(conv.perDay), "Conversion by day");
-    }
-    XLSX.writeFile(wb, `call-center-${from}_${to}.xlsx`);
-  };
-
+  const doExport = () => exportCallCenter({ ok, totals, conv, rows, byDay, hourly12, from: f.from, to: f.to });
 
   return (
     <div className="space-y-6 print:space-y-3">
@@ -223,12 +71,12 @@ function CallCenterPage() {
         <div className="min-w-0">
           <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Call Center Analytics</h1>
           <p className="text-xs sm:text-sm text-muted-foreground truncate">
-            {team === "all" ? "All teams" : team === "customer_care" ? "Customer Care" : "Telesales"} · {from} → {to}
+            {f.team === "all" ? "All teams" : f.team === "customer_care" ? "Customer Care" : "Telesales"} · {f.from} → {f.to}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 print:hidden">
-          <DateRangePicker range={range} onChange={setRange} align="end" size="sm" />
-          <Select value={team} onValueChange={(v) => { setTeam(v as Team); setAgentId("all"); }}>
+          <DateRangePicker range={f.range} onChange={f.setRange} align="end" size="sm" />
+          <Select value={f.team} onValueChange={(v) => { f.setTeam(v as Team); f.setAgentId("all"); }}>
             <SelectTrigger className="h-9 w-[150px]"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All teams</SelectItem>
@@ -236,18 +84,18 @@ function CallCenterPage() {
               <SelectItem value="telesales">Telesales</SelectItem>
             </SelectContent>
           </Select>
-          {canAll && (
-            <Select value={agentId} onValueChange={setAgentId}>
+          {f.canAll && (
+            <Select value={f.agentId} onValueChange={f.setAgentId}>
               <SelectTrigger className="h-9 w-[190px]"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All agents</SelectItem>
-                {filteredAgents.map((a: any) => (
-                  <SelectItem key={a.id} value={a.id}>{a.full_name}</SelectItem>
+                {f.filteredAgents.map((agent: any) => (
+                  <SelectItem key={agent.id} value={agent.id}>{agent.full_name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           )}
-          <Select value={direction} onValueChange={(v) => setDirection(v as Direction)}>
+          <Select value={f.direction} onValueChange={(v) => f.setDirection(v as Direction)}>
             <SelectTrigger className="h-9 w-[130px]"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Both</SelectItem>
@@ -255,7 +103,7 @@ function CallCenterPage() {
               <SelectItem value="Outbound">Outbound</SelectItem>
             </SelectContent>
           </Select>
-          {canExport && (
+          {f.canExport && (
             <>
               <Button variant="outline" size="sm" onClick={doExport} disabled={!ok}>
                 <Download className="h-4 w-4 mr-2" />Excel
@@ -414,7 +262,7 @@ function CallCenterPage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="text-base">Agents ({rows.length})</CardTitle>
-              <Input placeholder="Search agent or ext…" value={search} onChange={(e) => setSearch(e.target.value)} className="h-8 w-48" />
+              <Input placeholder="Search agent or ext…" value={f.search} onChange={(e) => f.setSearch(e.target.value)} className="h-8 w-48" />
             </CardHeader>
             <CardContent className="p-0 overflow-x-auto">
               <table className="w-full text-sm">
@@ -443,22 +291,22 @@ function CallCenterPage() {
                     ))
                   ) : searchedAgents.length === 0 ? (
                     <tr><td colSpan={14} className="text-center text-muted-foreground py-6">No agents matched.</td></tr>
-                  ) : searchedAgents.map((a) => (
-                    <tr key={a.agentId} className="border-b last:border-0">
-                      <td className="px-3 py-2 font-mono text-xs">{a.ext}</td>
-                      <td className="px-3 py-2 font-medium">{a.name}</td>
-                      <td className="px-3 py-2 text-xs text-muted-foreground">{a.team === "customer_care" ? "Customer Care" : "Telesales"}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{a.total}</td>
-                      <td className="px-3 py-2 text-right tabular-nums font-semibold text-success">{a.answered}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-destructive">{a.missed}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{a.noAnswerOutbound}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{a.inbound}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{a.outbound}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{a.answerRate.toFixed(1)}%</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{hhmmss(a.talkSeconds)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{hhmmss(a.avgTalkSec)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{hhmmss(a.avgRingSec)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{hhmmss(a.longestSec)}</td>
+                  ) : searchedAgents.map((agent) => (
+                    <tr key={agent.agentId} className="border-b last:border-0">
+                      <td className="px-3 py-2 font-mono text-xs">{agent.ext}</td>
+                      <td className="px-3 py-2 font-medium">{agent.name}</td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">{agent.team === "customer_care" ? "Customer Care" : "Telesales"}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{agent.total}</td>
+                      <td className="px-3 py-2 text-right tabular-nums font-semibold text-success">{agent.answered}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-destructive">{agent.missed}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{agent.noAnswerOutbound}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{agent.inbound}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{agent.outbound}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{agent.answerRate.toFixed(1)}%</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{hhmmss(agent.talkSeconds)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{hhmmss(agent.avgTalkSec)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{hhmmss(agent.avgRingSec)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{hhmmss(agent.longestSec)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -530,113 +378,4 @@ function CallCenterPage() {
       )}
     </div>
   );
-}
-
-// ---- helpers & tiny components ---------------------------------------------
-
-function SectionHeader({ children }: { children: React.ReactNode }) {
-  return (
-    <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider pt-2">
-      {children}
-    </h2>
-  );
-}
-
-const tooltipStyle: React.CSSProperties = {
-  background: "var(--color-popover)",
-  border: "1px solid var(--color-border)",
-  borderRadius: 10,
-  fontSize: 12,
-  boxShadow: "0 6px 20px -10px rgba(0,0,0,.25)",
-  color: "var(--color-foreground)",
-};
-
-type Tone = "primary" | "secondary" | "success" | "warning" | "destructive" | "muted";
-
-const toneMap: Record<Tone, { text: string; ring: string; iconBg: string; iconText: string }> = {
-  primary:     { text: "text-primary",     ring: "ring-primary/20",     iconBg: "bg-primary/10",     iconText: "text-primary" },
-  secondary:   { text: "text-secondary",   ring: "ring-secondary/20",   iconBg: "bg-secondary/10",   iconText: "text-secondary" },
-  success:     { text: "text-success",     ring: "ring-success/20",     iconBg: "bg-success/10",     iconText: "text-success" },
-  warning:     { text: "text-warning",     ring: "ring-warning/20",     iconBg: "bg-warning/10",     iconText: "text-warning" },
-  destructive: { text: "text-destructive", ring: "ring-destructive/20", iconBg: "bg-destructive/10", iconText: "text-destructive" },
-  muted:       { text: "text-foreground",  ring: "ring-border",         iconBg: "bg-muted",          iconText: "text-muted-foreground" },
-};
-
-function HeroKpi({ label, value, loading, icon: Icon, tone = "muted", hint }: { label: string; value: string | number; loading?: boolean; icon?: any; tone?: Tone; hint?: string }) {
-  const t = toneMap[tone];
-  return (
-    <Card className="overflow-hidden transition-shadow hover:shadow-md">
-      <CardContent className="p-4 sm:p-5">
-        <div className="flex items-start justify-between gap-2 mb-3">
-          <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{label}</div>
-          {Icon && (
-            <div className={cn("rounded-lg p-2", t.iconBg)}>
-              <Icon className={cn("h-4 w-4", t.iconText)} />
-            </div>
-          )}
-        </div>
-        {loading ? (
-          <Skeleton className="h-9 w-24" />
-        ) : (
-          <div className={cn("text-2xl sm:text-3xl font-semibold tabular-nums tracking-tight", t.text)}>{value}</div>
-        )}
-        {hint && <div className="mt-1.5 text-[11px] text-muted-foreground/80">{hint}</div>}
-      </CardContent>
-    </Card>
-  );
-}
-
-function Kpi({ label, value, loading, icon: Icon, tone = "muted", hint }: { label: string; value: string | number; loading?: boolean; icon?: any; tone?: Tone; hint?: string }) {
-  const t = toneMap[tone];
-  return (
-    <Card className="transition-shadow hover:shadow-sm">
-      <CardContent className="p-3 sm:p-4">
-        <div className="flex items-center justify-between mb-1.5">
-          <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">{label}</div>
-          {Icon && <Icon className={cn("h-3.5 w-3.5", t.iconText)} />}
-        </div>
-        {loading ? (
-          <Skeleton className="h-6 w-16" />
-        ) : (
-          <div className={cn("text-lg sm:text-xl font-semibold tabular-nums", t.text)}>{value}</div>
-        )}
-        {hint && <div className="mt-1 text-[10px] text-muted-foreground/80">{hint}</div>}
-      </CardContent>
-    </Card>
-  );
-}
-
-function ChartCard({ title, loading, hasData, children }: { title: string; loading?: boolean; hasData?: boolean; children: React.ReactNode }) {
-  return (
-    <Card>
-      <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">{title}</CardTitle></CardHeader>
-      <CardContent className="h-64">
-        {loading ? (
-          <Skeleton className="h-full w-full" />
-        ) : !hasData ? (
-          <div className="h-full flex items-center justify-center text-xs text-muted-foreground">No data</div>
-        ) : children}
-      </CardContent>
-    </Card>
-  );
-}
-
-// SurveySection removed — Satisfaction Survey has been discontinued.
-
-
-function hourLabel(h: number): string {
-  if (h === 0) return "12 AM";
-  if (h < 12) return `${h} AM`;
-  if (h === 12) return "12 PM";
-  return `${h - 12} PM`;
-}
-
-function pct(v?: number) { return `${(v ?? 0).toFixed(1)}%`; }
-
-function hhmmss(sec?: number): string {
-  const s = Math.max(0, Math.floor(sec ?? 0));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const ss = s % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
 }
