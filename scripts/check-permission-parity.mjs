@@ -29,7 +29,14 @@ const MIGRATIONS_DIR = join(ROOT, "supabase", "migrations");
 
 // Roles whose permission arrays are enumerated in SQL (owner/admin short-circuit
 // to full access on both sides and have no array to compare).
-const ENUMERATED_ROLES = ["supervisor", "customer_care", "telesales", "call_center", "auditor"];
+//
+// `call_center` was removed here when the role was retired
+// (20260725001000): its branch is gone from has_permission() and from
+// permissions.ts, so there is no longer a pair of arrays to compare. The enum
+// value still exists in Postgres (values cannot be dropped without recreating the
+// type) but nothing may hold it, and has_permission() now denies it by default
+// via the ELSE arm.
+const ENUMERATED_ROLES = ["supervisor", "customer_care", "telesales", "auditor"];
 
 function fail(msg) {
   console.error(`\n✖ Permission parity check FAILED\n\n${msg}\n`);
@@ -91,8 +98,13 @@ function parseSql(text, file) {
       defaults[role] = auditorSafe;
       continue;
     }
+    // The lookbehind matters: `_role` must be the whole variable, not the tail of
+    // a longer identifier. Without it, an unrelated column named e.g. `target_role`
+    // elsewhere in the migration matches `_role = 'telesales'`, and the lazy scan
+    // then runs forward into a DIFFERENT role's arrays — silently comparing the
+    // wrong permission sets. A parity guard that can mis-anchor is worse than none.
     const re = new RegExp(
-      `_role\\s*=\\s*'${role}'[\\s\\S]*?_allowed\\s*:=\\s*ARRAY\\[([\\s\\S]*?)\\][\\s\\S]*?_defaults\\s*:=\\s*ARRAY\\[([\\s\\S]*?)\\]`,
+      `(?<![A-Za-z0-9_])_role\\s*=\\s*'${role}'[\\s\\S]*?_allowed\\s*:=\\s*ARRAY\\[([\\s\\S]*?)\\][\\s\\S]*?_defaults\\s*:=\\s*ARRAY\\[([\\s\\S]*?)\\]`,
     );
     const m = text.match(re);
     if (!m) fail(`Could not parse _allowed/_defaults for role '${role}' in SQL (${file}).`);
@@ -146,20 +158,20 @@ function parseTs(text) {
   const allowedBody = objectBody(text, "ROLE_ALLOWED_PERMS");
   const defaultsBody = objectBody(text, "ROLE_DEFAULTS");
 
+  // ROLE_ALLOWED_PERMS.supervisor / ROLE_DEFAULTS.supervisor reference the named
+  // SUPERVISOR_* arrays rather than inlining, so they are read from those.
   const allowed = {
     supervisor: supervisorAllowed,
     // ROLE_ALLOWED_PERMS.auditor === AUDITOR_SAFE_READ_PERMS === [...AUDITOR_PERMS]
     auditor: auditorPerms,
     customer_care: inlineRoleArray(allowedBody, "customer_care", "ROLE_ALLOWED_PERMS"),
     telesales: inlineRoleArray(allowedBody, "telesales", "ROLE_ALLOWED_PERMS"),
-    call_center: inlineRoleArray(allowedBody, "call_center", "ROLE_ALLOWED_PERMS"),
   };
   const defaults = {
     supervisor: supervisorDefaults,
     auditor: auditorPerms, // ROLE_DEFAULTS.auditor === AUDITOR_PERMS
     customer_care: inlineRoleArray(defaultsBody, "customer_care", "ROLE_DEFAULTS"),
     telesales: inlineRoleArray(defaultsBody, "telesales", "ROLE_DEFAULTS"),
-    call_center: inlineRoleArray(defaultsBody, "call_center", "ROLE_DEFAULTS"),
   };
   return { allowed, defaults, auditorSafe: auditorPerms };
 }

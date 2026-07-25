@@ -67,11 +67,30 @@ const AUDITOR_PERMS: PermKey[] = [
 
 const AUDITOR_SAFE_READ_PERMS: PermKey[] = [...AUDITOR_PERMS];
 
-// Operational role between the administrators and the agents: runs the daily
-// order/complaint workflow across the whole team, but never touches user
-// administration, roles, permissions or system settings.
-// `edit_all_orders` is what grants order reassignment -- prevent_order_reassignment
-// only permits changing agent_id/team for callers holding it.
+/**
+ * Supervisor: everything except the destructive and owner-level surfaces.
+ *
+ * Holds `manage_users` (create and edit users), `admin_access` (branch/system
+ * settings) and `view_reports`, so it is close to an administrator. It is held
+ * back on exactly three things:
+ *
+ *   - `delete_orders` / `delete_complaints` are absent -> cannot delete records.
+ *   - Deleting a *user* is not permission-gated at all; `adminDeleteUser` requires
+ *     `is_administrator` (owner/admin), so Supervisor can never reach it.
+ *   - The Yeastar page and its server functions gate on `is_administrator` too,
+ *     which Supervisor is not -> no PBX access.
+ *
+ * Because Supervisor can manage users, role assignment is additionally capped by
+ * the rank ladder in `roles.ts`: a Supervisor cannot mint or touch an
+ * admin/owner, which is what stops `manage_users` becoming self-promotion.
+ *
+ * `edit_all_orders` is what grants order reassignment -- prevent_order_reassignment
+ * only permits changing agent_id/team for callers holding it.
+ *
+ * Must stay byte-identical to the `supervisor` branch of `has_permission()`
+ * (20260725001000_supervisor_scope_and_retire_call_center.sql). The SQL is
+ * authoritative; this mirror is what the UI renders from.
+ */
 const SUPERVISOR_ALLOWED_PERMS: PermKey[] = [
   "view_orders", "create_orders", "edit_orders", "edit_all_orders",
   "view_complaints", "create_complaints", "edit_complaints", "edit_all_complaints",
@@ -79,6 +98,7 @@ const SUPERVISOR_ALLOWED_PERMS: PermKey[] = [
   "view_dashboard", "view_team_analytics", "view_all_agents", "view_call_center",
   "verify_own_orders", "verify_all_orders", "view_invoice_analytics",
   "view_branches", "export_reports",
+  "view_reports", "manage_users", "admin_access",
 ];
 
 const SUPERVISOR_DEFAULT_PERMS: PermKey[] = [
@@ -86,11 +106,13 @@ const SUPERVISOR_DEFAULT_PERMS: PermKey[] = [
   "view_complaints", "create_complaints", "edit_complaints", "edit_all_complaints",
   "resolve_complaints", "resolve_all_complaints",
   "view_dashboard", "view_team_analytics", "view_all_agents", "view_call_center",
-  "verify_own_orders", "verify_all_orders", "view_branches",
+  "verify_own_orders", "verify_all_orders", "view_invoice_analytics",
+  "view_branches", "export_reports",
+  "view_reports", "manage_users", "admin_access",
 ];
 
 const ROLE_ALLOWED_PERMS: Record<Exclude<AppRole, "admin" | "owner">, PermKey[]> = {
-
+  supervisor: SUPERVISOR_ALLOWED_PERMS,
   customer_care: [
     "view_orders", "create_orders", "edit_orders",
     "view_complaints", "create_complaints", "edit_complaints", "resolve_complaints",
@@ -106,20 +128,13 @@ const ROLE_ALLOWED_PERMS: Record<Exclude<AppRole, "admin" | "owner">, PermKey[]>
     "view_branches",
     "export_reports",
   ],
-  call_center: [
-    "view_orders",
-    "view_complaints", "create_complaints", "edit_complaints", "resolve_complaints",
-    "view_dashboard", "view_team_analytics", "view_call_center",
-    "view_invoice_analytics", "export_reports",
-    "view_branches",
-  ],
   auditor: AUDITOR_SAFE_READ_PERMS,
 };
 
 const ROLE_DEFAULTS: Record<AppRole, PermKey[]> = {
   owner: ALL_PERMISSIONS.map((p) => p.key),
   admin: ALL_PERMISSIONS.map((p) => p.key),
-
+  supervisor: SUPERVISOR_DEFAULT_PERMS,
   customer_care: [
     "view_orders", "create_orders", "edit_orders",
     "view_complaints", "create_complaints", "edit_complaints", "resolve_complaints",
@@ -131,12 +146,6 @@ const ROLE_DEFAULTS: Record<AppRole, PermKey[]> = {
     "view_orders", "create_orders", "edit_orders",
     "view_dashboard",
     "verify_own_orders",
-    "view_branches",
-  ],
-  call_center: [
-    "view_orders",
-    "view_complaints", "create_complaints", "edit_complaints", "resolve_complaints",
-    "view_dashboard", "view_team_analytics", "view_call_center",
     "view_branches",
   ],
   auditor: AUDITOR_PERMS,
@@ -151,8 +160,17 @@ export function hasPerm(role: AppRole | null, permissions: string[] | null | und
     return AUDITOR_PERMS.includes(perm);
   }
   const nonAdminRole = role as Exclude<AppRole, "admin" | "owner">;
-  if (permissions && permissions.length > 0) return ROLE_ALLOWED_PERMS[nonAdminRole].includes(perm) && permissions.includes(perm);
-  return ROLE_DEFAULTS[role].includes(perm);
+  // Deny-by-default for any role with no entry in the tables above — a value the
+  // database still carries but the app layer no longer knows (the retired
+  // `call_center`, or a role added to the enum before it is wired up here).
+  // Indexing straight into these Records used to throw a TypeError on
+  // `undefined.includes(...)`, which took the whole page down instead of simply
+  // refusing the permission. `supervisor` hit exactly that before it was wired in.
+  const allowed = ROLE_ALLOWED_PERMS[nonAdminRole];
+  const defaults = ROLE_DEFAULTS[role];
+  if (!allowed || !defaults) return false;
+  if (permissions && permissions.length > 0) return allowed.includes(perm) && permissions.includes(perm);
+  return defaults.includes(perm);
 }
 
 export function defaultPermsForRole(role: AppRole): PermKey[] {

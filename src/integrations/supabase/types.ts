@@ -743,6 +743,7 @@ export type Database = {
         | "telesales"
         | "auditor"
         | "owner"
+        | "supervisor"
         | "call_center"
     }
     CompositeTypes: {
@@ -877,6 +878,7 @@ export const Constants = {
         "telesales",
         "auditor",
         "owner",
+        "supervisor",
         "call_center",
       ],
     },

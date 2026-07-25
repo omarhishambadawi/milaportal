@@ -16,16 +16,19 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { ShieldAlert, KeyRound, Pencil, Plus, Trash2, Search, MoreHorizontal, Users as UsersIcon } from "lucide-react";
+import { ShieldAlert, KeyRound, Pencil, Plus, Trash2, Search, MoreHorizontal, Users as UsersIcon, Check, X } from "lucide-react";
 import { ALL_PERMISSIONS, defaultPermsForRole, PERMISSION_GROUPS, hasPerm } from "@/lib/permissions";
+import { evaluatePassword } from "@/lib/password-policy";
 import {
   ASSIGNABLE_ROLES,
   ROLE_LABEL,
   ROLE_OPTION_LABEL,
+  roleHasAgentCode,
   roleLabel,
   roleTone,
   type AppRole,
 } from "@/lib/roles";
+import { PasswordInput } from "@/components/password-input";
 import { UserAvatar } from "@/components/user-avatar";
 import { cn } from "@/lib/utils";
 import { queryKeys } from "@/lib/query-keys";
@@ -42,7 +45,16 @@ type RoleKey = AppRole;
 
 function AdminUsers() {
   const { role, profile } = useAuth();
-  const canManageUsers = isAdministrator(role) && hasPerm(role, profile?.permissions as any, "manage_users");
+  // Permission-only, deliberately: the previous `isAdministrator(role) && …`
+  // conjunct made this page unreachable for any non-administrator, which now
+  // includes Supervisor — a role that holds manage_users. The conjunct was also
+  // redundant for administrators, since hasPerm() short-circuits to true for
+  // owner/admin. This mirrors the server gate (assertCanManageUsers), so UI
+  // visibility and API authorization are derived from the same permission.
+  const canManageUsers = hasPerm(role, profile?.permissions as any, "manage_users");
+  // Deleting users stays administrator-only (see adminDeleteUser). Supervisor
+  // must not see delete affordances it cannot use.
+  const canDeleteUsers = isAdministrator(role);
   const qc = useQueryClient();
   const listFn = useServerFn(adminListUsers);
   const createFn = useServerFn(adminCreateUser);
@@ -172,13 +184,20 @@ function AdminUsers() {
               <div className="space-y-2"><Label>Full name</Label><Input required value={nf.fullName} onChange={(e) => setNf({ ...nf, fullName: e.target.value })} /></div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-2"><Label>Email</Label><Input type="email" required value={nf.email} onChange={(e) => setNf({ ...nf, email: e.target.value })} /></div>
-                <div className="space-y-2"><Label>Agent code</Label><Input value={nf.agentCode} onChange={(e) => setNf({ ...nf, agentCode: e.target.value })} placeholder="4002" /></div>
+                {/* Agent Code applies to agent roles only — Owner, Admin,
+                    Supervisor and Auditor take no orders, so the field is hidden
+                    rather than shown and ignored. The server enforces the same rule. */}
+                {roleHasAgentCode(nf.role) && (
+                  <div className="space-y-2"><Label>Agent code</Label><Input value={nf.agentCode} onChange={(e) => setNf({ ...nf, agentCode: e.target.value })} placeholder="4002" /></div>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-2"><Label>Password</Label><Input type="password" minLength={8} required value={nf.password} onChange={(e) => setNf({ ...nf, password: e.target.value })} /></div>
+                <div className="space-y-2"><Label>Password</Label><PasswordInput required value={nf.password} onChange={(e) => setNf({ ...nf, password: e.target.value })} /></div>
                 <div className="space-y-2">
                   <Label>Role</Label>
-                  <Select value={nf.role} onValueChange={(v) => setNf({ ...nf, role: v as RoleKey })}>
+                  {/* Clear any typed agent code when moving to a non-agent role,
+                      so a hidden field cannot submit a stale value. */}
+                  <Select value={nf.role} onValueChange={(v) => setNf({ ...nf, role: v as RoleKey, agentCode: roleHasAgentCode(v) ? nf.agentCode : "" })}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {ASSIGNABLE_ROLES.map((r) => (
@@ -302,24 +321,31 @@ function AdminUsers() {
                             Owner accounts are protected
                           </div>
                         )}
-                        <DropdownMenuSeparator />
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <DropdownMenuItem onSelect={(e) => e.preventDefault()} disabled={rowIsOwner} className="text-destructive focus:text-destructive">
-                              <Trash2 className="h-4 w-4 mr-2" />Delete user
-                            </DropdownMenuItem>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Delete {u.full_name}?</AlertDialogTitle>
-                              <AlertDialogDescription>This permanently removes the account and signs them out. Their existing orders are kept for records. This cannot be undone.</AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancel</AlertDialogCancel>
-                              <AlertDialogAction onClick={async () => { try { await delFn({ data: { userId: u.id } }); toast.success("User deleted"); reload(); } catch (e: any) { toast.error(e.message); } }}>Delete</AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
+                        {/* Administrator-only: Supervisor holds manage_users but
+                            may never delete a user, so it must not see the action
+                            at all. adminDeleteUser enforces the same server-side. */}
+                        {canDeleteUsers && (
+                          <>
+                            <DropdownMenuSeparator />
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <DropdownMenuItem onSelect={(e) => e.preventDefault()} disabled={rowIsOwner} className="text-destructive focus:text-destructive">
+                                  <Trash2 className="h-4 w-4 mr-2" />Delete user
+                                </DropdownMenuItem>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>Delete {u.full_name}?</AlertDialogTitle>
+                                  <AlertDialogDescription>This permanently removes the account and signs them out. Their existing orders are kept for records. This cannot be undone.</AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                  <AlertDialogAction onClick={async () => { try { await delFn({ data: { userId: u.id } }); toast.success("User deleted"); reload(); } catch (e: any) { toast.error(e.message); } }}>Delete</AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                          </>
+                        )}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>
@@ -345,8 +371,11 @@ function AdminUsers() {
                 </div>
               </div>
               <div className="grid sm:grid-cols-3 gap-3">
-                <div className="space-y-2 sm:col-span-2"><Label>Full name</Label><Input value={editing.full_name} onChange={(e) => setEditing({ ...editing, full_name: e.target.value })} /></div>
-                <div className="space-y-2"><Label>Agent code</Label><Input value={editing.agent_code ?? ""} onChange={(e) => setEditing({ ...editing, agent_code: e.target.value })} /></div>
+                <div className={roleHasAgentCode(editing.role) ? "space-y-2 sm:col-span-2" : "space-y-2 sm:col-span-3"}><Label>Full name</Label><Input value={editing.full_name} onChange={(e) => setEditing({ ...editing, full_name: e.target.value })} /></div>
+                {/* Agent roles only — see the create dialog. */}
+                {roleHasAgentCode(editing.role) && (
+                  <div className="space-y-2"><Label>Agent code</Label><Input value={editing.agent_code ?? ""} onChange={(e) => setEditing({ ...editing, agent_code: e.target.value })} /></div>
+                )}
                 <div className="space-y-2 sm:col-span-3"><Label>Yeastar extension</Label><Input value={editing.yeastar_ext ?? ""} onChange={(e) => setEditing({ ...editing, yeastar_ext: e.target.value })} placeholder="e.g. 1001" /><p className="text-xs text-muted-foreground">PBX extension number used to attribute calls to this agent.</p></div>
                 <div className="space-y-2 sm:col-span-3">
                   <Label>Role</Label>
@@ -416,8 +445,16 @@ function AdminUsers() {
           <DialogHeader><DialogTitle>Reset password</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">Set a new password for {pwUser?.full_name}.</p>
-            <Input type="password" minLength={8} placeholder="New password (min 8)" value={newPw} onChange={(e) => setNewPw(e.target.value)} />
-            <DialogFooter><Button onClick={savePw} disabled={newPw.length < 8}>Update password</Button></DialogFooter>
+            <PasswordInput placeholder="New password" value={newPw} onChange={(e) => setNewPw(e.target.value)} />
+            <ul className="space-y-1">
+              {evaluatePassword(newPw).results.map((rule) => (
+                <li key={rule.id} className={cn("flex items-center gap-1.5 text-xs", rule.passed ? "text-[var(--positive)]" : "text-muted-foreground")}>
+                  {rule.passed ? <Check className="h-3.5 w-3.5 shrink-0" aria-hidden /> : <X className="h-3.5 w-3.5 shrink-0" aria-hidden />}
+                  {rule.label}
+                </li>
+              ))}
+            </ul>
+            <DialogFooter><Button onClick={savePw} disabled={!evaluatePassword(newPw).valid}>Update password</Button></DialogFooter>
           </div>
         </DialogContent>
       </Dialog>
