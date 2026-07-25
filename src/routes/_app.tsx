@@ -1,5 +1,5 @@
 import { createFileRoute, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth, isAdministrator } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import {
@@ -46,6 +46,13 @@ function AppLayout() {
   }, [loading, session, navigate]);
 
   useEffect(() => { setMobileOpen(false); }, [location.pathname]);
+
+  // Stable references: the sidebar's inner tree is memoized, and an inline
+  // arrow here would hand it a fresh callback on every layout render, turning
+  // every unrelated update (avatar load, notifications) into a sidebar
+  // reconcile.
+  const toggleSidebar = useCallback(() => setExpanded((v) => !v), []);
+  const closeMobileSidebar = useCallback(() => setMobileOpen(false), []);
 
   const canDashboard = hasPerm(role, profile?.permissions as any, "view_dashboard");
   const canOrders = hasPerm(role, profile?.permissions as any, "view_orders");
@@ -126,9 +133,9 @@ function AppLayout() {
         nav={nav}
         activePath={activePath}
         expanded={expanded}
-        onToggle={() => setExpanded((v) => !v)}
+        onToggle={toggleSidebar}
         mobileOpen={mobileOpen}
-        onMobileClose={() => setMobileOpen(false)}
+        onMobileClose={closeMobileSidebar}
         name={profile?.full_name ?? session.user.email ?? "Account"}
         role={role}
         avatarUrl={profile?.avatar_url}

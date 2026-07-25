@@ -24,6 +24,43 @@ type SidebarProps = {
   onSignOut: () => void;
 };
 
+/*
+ * Collapse is CSS-only.
+ *
+ * The rail used to unmount every label, group heading, the brand text and the
+ * footer caption on collapse (`{!collapsed && …}`), so a toggle began with a
+ * synchronous React commit that removed ~15 DOM nodes — reconcile, DOM
+ * mutation and a full layout on the very frame the 300ms width animation was
+ * trying to start. That first dropped frame is what read as stutter.
+ *
+ * Now the desktop <aside> carries `data-state="expanded|collapsed"` and a
+ * named group (`group/rail`), and every collapse affordance is a
+ * `group-data-[state=collapsed]/rail:` variant on an element that stays
+ * mounted:
+ *
+ *   - text collapses via max-width + opacity inside overflow-hidden — with
+ *     border-box sizing, max-w-0 closes the box (padding included) to exactly
+ *     0, so the icons land in the same place the old conditional layout put
+ *     them;
+ *   - group headings collapse via a fixed height;
+ *   - the divider that replaces a heading in rail mode fades in via
+ *     border-color, from transparent;
+ *   - everything rides the same 300ms/cubic-bezier clock as the aside's own
+ *     width, so icons, labels and content arrive together.
+ *
+ * The mobile drawer renders the same inner tree WITHOUT the group/rail marker,
+ * so none of the collapsed variants can ever apply there — it is always the
+ * expanded rendering, as before.
+ *
+ * A width animation is layout-bound by nature; the point here is that the
+ * browser now runs exactly one layout per frame (the width tween), instead of
+ * layout plus a React commit on frame one, and the per-frame style work is
+ * opacity/max-width on a handful of small boxes.
+ */
+
+/** Every collapse affordance shares the aside's width clock. */
+const RAIL_CLOCK = "duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]";
+
 /**
  * Presentational grouping of the (already permission-filtered) nav items into
  * labelled sections. Purely visual — routing/permissions are untouched; any
@@ -52,38 +89,44 @@ function groupNav(nav: NavItemData[]) {
 }
 
 /**
- * Memoized so the nav does not re-render on unrelated parent updates (route
- * changes that leave `activePath` alone, avatar loads, header state). It still
- * re-renders on collapse, which is correct — `collapsed` genuinely changes what
- * it renders.
+ * Memoized, and no longer told about collapse at all: its rendering is
+ * identical in both states and the collapsed appearance comes entirely from
+ * the group-data variants. On a toggle these elements are not reconciled —
+ * memo sees the same props and React never enters them.
+ *
+ * `title` is now unconditional (it used to appear only when collapsed). The
+ * tooltip is the only label a collapsed rail has, and browsers only surface it
+ * on a deliberate hover pause, so carrying it in the expanded state too is
+ * harmless — that trade is what lets `collapsed` disappear from the props.
  */
 const NavItem = memo(function NavItem({
   item,
   active,
-  collapsed,
 }: {
   item: NavItemData;
   active: boolean;
-  collapsed: boolean;
 }) {
   const Icon = item.icon;
   return (
     <Link
       to={item.to}
-      title={collapsed ? item.label : undefined}
+      title={item.label}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "group relative flex items-center rounded-xl outline-none transition-colors duration-200 ease-out",
+        "group relative flex items-center overflow-hidden rounded-xl px-2 py-1.5 outline-none transition-colors duration-200 ease-out",
         "focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
-        collapsed ? "justify-center p-1.5" : "gap-3 px-2 py-1.5",
         active ? "bg-primary/10" : "hover:bg-accent/70",
       )}
     >
-      {/* Active rail — animates in from the left edge */}
-      {active && !collapsed && (
+      {/* Active rail — animates in from the left edge; fades away in rail mode
+          instead of unmounting. */}
+      {active && (
         <span
           aria-hidden
-          className="absolute left-0 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-primary animate-in fade-in slide-in-from-left-1 duration-300"
+          className={cn(
+            "absolute left-0 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-primary animate-in fade-in slide-in-from-left-1 duration-300",
+            "transition-opacity group-data-[state=collapsed]/rail:opacity-0",
+          )}
         />
       )}
       {/* Icon container — the core of the visual language */}
@@ -101,24 +144,28 @@ const NavItem = memo(function NavItem({
       >
         <Icon className="h-[18px] w-[18px]" />
       </span>
-      {!collapsed && (
-        <span
-          className={cn(
-            "truncate text-sm tracking-tight transition-colors duration-200",
-            active
-              ? "font-semibold text-foreground"
-              : "font-medium text-foreground/70 group-hover:text-foreground",
-          )}
-        >
-          {item.label}
-        </span>
-      )}
+      {/* pl-3 replaces the parent's old gap-3, so the whole spacing collapses
+          with the box: border-box max-w-0 closes padding and content together,
+          leaving the 36px icon exactly centred in the 52px collapsed slot. */}
+      <span
+        className={cn(
+          "min-w-0 truncate pl-3 text-sm tracking-tight",
+          "max-w-40 transition-[max-width,opacity,color]",
+          RAIL_CLOCK,
+          "group-data-[state=collapsed]/rail:max-w-0 group-data-[state=collapsed]/rail:opacity-0",
+          active
+            ? "font-semibold text-foreground"
+            : "font-medium text-foreground/70 group-hover:text-foreground",
+        )}
+      >
+        {item.label}
+      </span>
     </Link>
   );
 });
 
 /** Shared inner shell used by both the desktop rail and the mobile drawer. */
-function SidebarInner({
+const SidebarInner = memo(function SidebarInner({
   nav,
   activePath,
   collapsed,
@@ -127,6 +174,9 @@ function SidebarInner({
 }: {
   nav: NavItemData[];
   activePath: string;
+  /** Consumed ONLY by the footer button's title/aria-expanded. Every visual
+   *  collapse affordance is a group-data variant, so on toggle the DOM diff of
+   *  this whole tree is two attributes on one <button>. */
   collapsed: boolean;
   onToggle?: () => void;
   onMobileClose?: () => void;
@@ -138,24 +188,24 @@ function SidebarInner({
   return (
     <div className="flex h-full flex-col">
       {/* Brand */}
-      <div
-        className={cn(
-          "flex h-16 shrink-0 items-center border-b border-border/60",
-          collapsed ? "justify-center px-2" : "px-4",
-        )}
-      >
-        <div className="flex min-w-0 items-center gap-2.5">
+      <div className="flex h-16 shrink-0 items-center border-b border-border/60 px-4">
+        <div className="flex min-w-0 items-center">
           <BrandLogo />
-          {!collapsed && (
-            <div className="min-w-0">
-              <div className="truncate text-sm font-bold leading-tight tracking-tight text-foreground">
-                MilaServ
-              </div>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80">
-                Portal
-              </div>
+          <div
+            className={cn(
+              "min-w-0 overflow-hidden pl-2.5",
+              "max-w-36 transition-[max-width,opacity]",
+              RAIL_CLOCK,
+              "group-data-[state=collapsed]/rail:max-w-0 group-data-[state=collapsed]/rail:opacity-0",
+            )}
+          >
+            <div className="truncate text-sm font-bold leading-tight tracking-tight text-foreground">
+              MilaServ
             </div>
-          )}
+            <div className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80">
+              Portal
+            </div>
+          </div>
         </div>
         {onMobileClose && (
           <button
@@ -172,33 +222,41 @@ function SidebarInner({
       {/* Navigation */}
       <nav
         className={cn(
-          "flex-1 overflow-y-auto overflow-x-hidden py-3",
+          "flex-1 overflow-y-auto overflow-x-hidden px-3 py-3",
           "[&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent",
           "[&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-transparent",
           "hover:[&::-webkit-scrollbar-thumb]:bg-border/70",
-          collapsed ? "px-2.5" : "px-3",
         )}
       >
         {groups.map((g, gi) => (
           <div
             key={g.id}
             className={cn(
-              gi > 0 && (collapsed ? "mt-2 border-t border-border/50 pt-2" : "mt-5"),
+              gi > 0 && [
+                // The hairline that stands in for the heading in rail mode
+                // fades in from transparent instead of appearing on a class
+                // swap.
+                "mt-5 border-t border-transparent transition-[margin,padding,border-color]",
+                RAIL_CLOCK,
+                "group-data-[state=collapsed]/rail:mt-2 group-data-[state=collapsed]/rail:pt-2 group-data-[state=collapsed]/rail:border-border/50",
+              ],
             )}
           >
-            {!collapsed && (
-              <div className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">
-                {g.label}
-              </div>
-            )}
+            <div
+              className={cn(
+                // Fixed height (not `auto`) so the collapse to h-0 is
+                // animatable; 10px type sits comfortably inside 16px.
+                "mb-1.5 h-4 overflow-hidden whitespace-nowrap px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70",
+                "transition-[height,margin,opacity]",
+                RAIL_CLOCK,
+                "group-data-[state=collapsed]/rail:mb-0 group-data-[state=collapsed]/rail:h-0 group-data-[state=collapsed]/rail:opacity-0",
+              )}
+            >
+              {g.label}
+            </div>
             <div className="space-y-0.5">
               {g.items.map((it) => (
-                <NavItem
-                  key={it.to}
-                  item={it}
-                  active={activePath === it.to}
-                  collapsed={collapsed}
-                />
+                <NavItem key={it.to} item={it} active={activePath === it.to} />
               ))}
             </div>
           </div>
@@ -211,22 +269,33 @@ function SidebarInner({
           <button
             type="button"
             onClick={onToggle}
+            aria-expanded={!collapsed}
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className={cn(
-              "flex h-9 w-full items-center rounded-lg text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/70 hover:text-foreground",
-              collapsed ? "justify-center" : "gap-2 px-2.5",
-            )}
+            className="flex h-9 w-full items-center rounded-lg px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/70 hover:text-foreground"
           >
             <ChevronLeft
-              className={cn("h-4 w-4 transition-transform duration-300 ease-out", collapsed && "rotate-180")}
+              className={cn(
+                "h-4 w-4 shrink-0 transition-transform",
+                RAIL_CLOCK,
+                "group-data-[state=collapsed]/rail:rotate-180",
+              )}
             />
-            {!collapsed && <span>Collapse</span>}
+            <span
+              className={cn(
+                "overflow-hidden whitespace-nowrap pl-2",
+                "max-w-24 transition-[max-width,opacity]",
+                RAIL_CLOCK,
+                "group-data-[state=collapsed]/rail:max-w-0 group-data-[state=collapsed]/rail:opacity-0",
+              )}
+            >
+              Collapse
+            </span>
           </button>
         </div>
       )}
     </div>
   );
-}
+});
 
 
 export function AppSidebar({
@@ -241,8 +310,9 @@ export function AppSidebar({
     <>
       {/* Desktop rail */}
       <aside
+        data-state={expanded ? "expanded" : "collapsed"}
         className={cn(
-          "z-20 hidden shrink-0 flex-col md:flex",
+          "group/rail z-20 hidden shrink-0 flex-col md:flex",
           "sticky top-0 h-screen bg-card border-r border-border/70",
           // `will-change-[width]` was here and has been removed. will-change is a
           // hint to promote an element to its own compositor layer, which only
@@ -263,7 +333,8 @@ export function AppSidebar({
         />
       </aside>
 
-      {/* Mobile drawer */}
+      {/* Mobile drawer — no group/rail marker, so the collapsed variants can
+          never apply here; it always renders expanded. */}
       {mobileOpen && (
         <div className="fixed inset-0 z-50 md:hidden">
           <div
@@ -283,4 +354,3 @@ export function AppSidebar({
     </>
   );
 }
-
