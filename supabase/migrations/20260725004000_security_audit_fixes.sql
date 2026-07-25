@@ -1,9 +1,7 @@
 -- Sprint E: fixes from the RBAC and security audit.
 --
 -- Two findings from the audit are deliberately NOT addressed here, because both
--- would change what users see rather than close a hole, and that is a product
--- decision rather than a security one. They are written up in full for whoever
--- makes that call:
+-- would change what users see rather than close a hole:
 --
 --   1. Orders and complaints are readable by every user holding `view_orders` /
 --      `view_complaints`, with no per-agent scoping. An agent can read every
@@ -11,10 +9,19 @@
 --      `list_orders` tool, or a direct PostgREST query. 20260707161549 scoped
 --      orders to `agent_id = auth.uid()` unless the caller held `view_all_agents`;
 --      20260709171928 dropped that two days later and restored the unscoped
---      policy, which is the state today. Everything else in the permission model
---      treats `view_all_agents` as the cross-agent gate, so either the RLS or the
---      model is wrong — but scoping reads would visibly change the Orders list
---      for every agent, so it is left alone pending that decision.
+--      policy, which is the state today.
+--
+--      THIS IS INTENTIONAL AND MUST NOT BE "FIXED". Confirmed as a business
+--      decision on 2026-07-25: the operational workflow is a shared order and
+--      complaint book, and agents are expected to see all of it. The unscoped
+--      SELECT policies above are therefore correct as written, and a future
+--      audit that flags them again should stop here rather than re-scope them.
+--
+--      What this does mean: `view_all_agents` is NOT a confidentiality boundary
+--      for order and complaint rows. It gates cross-agent *analytics* (the
+--      dashboard, call-centre scoping, the survey policy below) and nothing more.
+--      Anything that genuinely must be restricted per agent needs its own
+--      mechanism rather than an assumption that this permission provides one.
 --
 --   2. profiles has two SELECT policies: a scoped one (own row, or
 --      `manage_users` / `view_all_agents`) and "Authenticated can view agent
