@@ -301,8 +301,6 @@ export type Database = {
           created_at: string
           full_name: string
           id: string
-          must_change_password: boolean
-          must_change_password_expires_at: string | null
           permissions: string[]
           updated_at: string
           yeastar_ext: string | null
@@ -314,8 +312,6 @@ export type Database = {
           created_at?: string
           full_name: string
           id: string
-          must_change_password?: boolean
-          must_change_password_expires_at?: string | null
           permissions?: string[]
           updated_at?: string
           yeastar_ext?: string | null
@@ -327,8 +323,6 @@ export type Database = {
           created_at?: string
           full_name?: string
           id?: string
-          must_change_password?: boolean
-          must_change_password_expires_at?: string | null
           permissions?: string[]
           updated_at?: string
           yeastar_ext?: string | null
@@ -749,7 +743,6 @@ export type Database = {
         | "telesales"
         | "auditor"
         | "owner"
-        | "supervisor"
         | "call_center"
     }
     CompositeTypes: {
@@ -884,7 +877,6 @@ export const Constants = {
         "telesales",
         "auditor",
         "owner",
-        "supervisor",
         "call_center",
       ],
     },
