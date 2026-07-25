@@ -11,6 +11,7 @@ import {
   type TempPasswordTtlHours,
 } from "@/lib/password-policy";
 import { AUDIT_ACTIONS, logAdminAction, targetSnapshot } from "@/lib/audit.server";
+import { ACTIVITY_PAGE_SIZE, ACTIVITY_MAX_ROWS } from "@/lib/audit-log";
 
 /** Accepts only the offered TTLs, so the deadline cannot be widened by a
  *  hand-rolled request. The timestamp itself is always computed server-side. */
@@ -538,6 +539,81 @@ export const adminDeleteUser = createServerFn({ method: "POST" })
       details: { ...snapshot, role: deletedRole },
     });
     return { ok: true };
+  });
+
+/**
+ * Read the administrative audit trail.
+ *
+ * Sprint D created `public.admin_activity` and wired every privileged write to
+ * it, but nothing ever read it back: the trail existed only for someone with
+ * direct database access. This is that read path.
+ *
+ * Administrator-only, deliberately NOT `assertCanManageUsers`. Supervisor holds
+ * `manage_users`, and its own actions are among the entries here — letting the
+ * audited party read the record of what was noticed about them is the wrong
+ * default, and the table's RLS policy ("Admin activity readable by
+ * administrators", 20260725003000) already says `is_administrator`. Keeping this
+ * gate identical means the API and the database agree rather than one being
+ * quietly laxer than the other.
+ *
+ * Paging grows the limit instead of using an offset or a cursor. The log is
+ * append-only *at the head*, so an offset shifts under the reader as new entries
+ * land (rows are re-shown or skipped), while a `created_at` cursor silently drops
+ * entries that share a timestamp. Re-reading from the top is exact, and at the
+ * scale of an administrative log the extra rows cost nothing. `ACTIVITY_MAX_ROWS`
+ * bounds it.
+ */
+export const adminListActivity = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d?: { targetUserId?: string; limit?: number }) =>
+    z
+      .object({
+        /** Restrict to one account's history (the per-row "Activity" action). */
+        targetUserId: z.string().uuid().optional(),
+        limit: z.number().int().min(1).max(ACTIVITY_MAX_ROWS).optional().default(ACTIVITY_PAGE_SIZE),
+      })
+      .parse(d ?? {}),
+  )
+  .handler(async ({ data, context }) => {
+    await assertAdmin(context.supabase, context.userId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    // One row past the page, purely to answer "is there more" without a count(*)
+    // over a table that only grows.
+    let query = supabaseAdmin
+      .from("admin_activity" as any)
+      .select("id,actor_id,target_user_id,action,details,created_at")
+      .order("created_at", { ascending: false })
+      .limit(Math.min(data.limit + 1, ACTIVITY_MAX_ROWS + 1));
+    if (data.targetUserId) query = query.eq("target_user_id", data.targetUserId);
+    const { data: rows, error } = await query;
+    if (error) throw new Error(error.message);
+
+    const all = (rows ?? []) as any[];
+    const entries = all.slice(0, data.limit);
+
+    // Actor names are resolved here rather than joined in SQL: admin_activity
+    // deliberately carries no FK to profiles (the log has to survive the account
+    // being deleted), so there is no relationship for PostgREST to embed.
+    const actorIds = [...new Set(entries.map((e) => e.actor_id).filter(Boolean))] as string[];
+    const actorNames = new Map<string, string>();
+    if (actorIds.length > 0) {
+      const { data: actors } = await supabaseAdmin
+        .from("profiles")
+        .select("id,full_name")
+        .in("id", actorIds);
+      for (const a of (actors ?? []) as any[]) actorNames.set(a.id, a.full_name);
+    }
+
+    return {
+      entries: entries.map((e) => ({
+        ...e,
+        details: e.details ?? {},
+        // An actor whose own account has since been deleted keeps their id in the
+        // row but has no profile left to name them.
+        actor_name: e.actor_id ? (actorNames.get(e.actor_id) ?? null) : null,
+      })),
+      hasMore: all.length > entries.length,
+    };
   });
 
 /** Auth admin page size. 1000 is the API maximum. */

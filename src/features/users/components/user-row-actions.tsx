@@ -1,4 +1,4 @@
-import { Crown, KeyRound, Mail, MoreHorizontal, Pencil, Power, Trash2 } from "lucide-react";
+import { Crown, KeyRound, Mail, MoreHorizontal, Pencil, Power, ScrollText, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -34,11 +34,13 @@ export function UserRowActions({
   mayActOnRow,
   callerIsOwner,
   canDelete,
+  canViewActivity,
   onEdit,
   onResetPassword,
   onSendResetEmail,
   onToggleActive,
   onGrantOwner,
+  onViewActivity,
   onDelete,
 }: {
   user: AdminUserRow;
@@ -46,11 +48,14 @@ export function UserRowActions({
   mayActOnRow: boolean;
   callerIsOwner: boolean;
   canDelete: boolean;
+  /** Reading the audit trail is administrator-only; Supervisor never sees it. */
+  canViewActivity: boolean;
   onEdit: (user: AdminUserRow) => void;
   onResetPassword: (user: AdminUserRow) => void;
   onSendResetEmail: (user: AdminUserRow) => void;
   onToggleActive: (user: AdminUserRow) => void;
   onGrantOwner: (user: AdminUserRow) => void;
+  onViewActivity: (user: AdminUserRow) => void;
   onDelete: (user: AdminUserRow) => void;
 }) {
   return (
@@ -82,6 +87,16 @@ export function UserRowActions({
         <DropdownMenuItem onSelect={() => onResetPassword(user)} disabled={!mayActOnRow}>
           <KeyRound className="mr-2 h-4 w-4" aria-hidden />Set a password…
         </DropdownMenuItem>
+
+        {/* Deliberately not gated on `mayActOnRow`: this reads the audit trail
+            rather than changing the account, and the portal-wide log an
+            administrator can already open contains the same entries. Hiding it on
+            Owner rows would be theatre. */}
+        {canViewActivity && (
+          <DropdownMenuItem onSelect={() => onViewActivity(user)}>
+            <ScrollText className="mr-2 h-4 w-4" aria-hidden />View activity
+          </DropdownMenuItem>
+        )}
 
         <DropdownMenuSeparator />
 

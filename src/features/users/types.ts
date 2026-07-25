@@ -17,6 +17,23 @@ export interface AdminUserRow {
 }
 
 /**
+ * One entry from `public.admin_activity`, as returned by `adminListActivity`.
+ *
+ * `actor_name` is resolved server-side; the target's name and email come from the
+ * snapshot taken in `details` at the time of the action, which is what keeps a
+ * deletion readable after the account is gone.
+ */
+export interface AdminActivityEntry {
+  id: string;
+  actor_id: string | null;
+  actor_name: string | null;
+  target_user_id: string | null;
+  action: string;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
+/**
  * Status facet. `pending` is not a status of the *account* but of its credential
  * — "was handed a temporary password and has not replaced it yet" — and it earns
  * a place here because it is the one thing an administrator needs to chase after

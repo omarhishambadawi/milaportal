@@ -124,6 +124,17 @@ export const queryKeys = {
   adminUsers: {
     all: () => ["admin-users"] as const,
     list: () => ["admin-users", "list"] as const,
+    /**
+     * Administrative audit trail. Nested under `admin-users` on purpose: every
+     * write on that page appends to this log, so the existing
+     * `invalidateQueries(adminUsers.all())` in `useUsersMutations` refreshes the
+     * log too rather than leaving it a change behind.
+     *
+     * `targetUserId` is part of the key because the dialog filters to one account;
+     * `limit` is, because paging works by growing it (see `adminListActivity`).
+     */
+    activity: (targetUserId: string | null, limit: number) =>
+      ["admin-users", "activity", targetUserId, limit] as const,
   },
 
   callCenter: {

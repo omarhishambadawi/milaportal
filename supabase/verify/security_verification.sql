@@ -26,6 +26,7 @@ WITH checks AS (
     AND c.relname IN (
       'profiles','user_roles','orders','complaints','branches','notifications',
       'order_activity','complaint_activity','satisfaction_surveys',
+      'admin_activity',
       'cdr_progress','yeastar_token_cache','yeastar_extension_map'
     )
 
@@ -72,6 +73,46 @@ WITH checks AS (
     CASE WHEN has_column_privilege('authenticated', 'public.profiles', 'yeastar_ext', 'UPDATE')
          THEN 'ESCALATION OPEN -- agents can retarget their PBX extension'
          ELSE 'revoked' END
+
+  UNION ALL
+
+  -- 3b. profiles: sensitive columns unreadable by authenticated ------------
+  --     The real confidentiality boundary on this table -- the SELECT policy is
+  --     intentionally open at row level (20260725200000).
+  SELECT
+    'profiles SELECT(' || col || ') NOT granted to authenticated',
+    NOT has_column_privilege('authenticated', 'public.profiles', col, 'SELECT'),
+    CASE WHEN has_column_privilege('authenticated', 'public.profiles', col, 'SELECT')
+         THEN 'COLUMN IS READABLE -- the directory grant has been widened'
+         ELSE 'not granted' END
+  FROM unnest(ARRAY['permissions','yeastar_ext','must_change_password']) AS col
+
+  UNION ALL
+
+  -- 3c. profiles: exactly one SELECT policy --------------------------------
+  --     Two existed until 20260725200000, and because policies are OR-ed the
+  --     open one shadowed the scoped one entirely. A second policy reappearing
+  --     means someone has added a row-scoping predicate that cannot take effect.
+  SELECT
+    'profiles has exactly one SELECT policy',
+    (SELECT count(*) FROM pg_policy pol
+      WHERE pol.polrelid = 'public.profiles'::regclass AND pol.polcmd = 'r') = 1,
+    'select policies = ' || (SELECT count(*)::text FROM pg_policy pol
+      WHERE pol.polrelid = 'public.profiles'::regclass AND pol.polcmd = 'r')
+
+  UNION ALL
+
+  -- 3d. admin_activity is append-only --------------------------------------
+  --     An audit trail that can be rewritten afterwards is worth little. No
+  --     UPDATE or DELETE grant exists for anyone, service_role included.
+  SELECT
+    'admin_activity: ' || role_name || ' cannot ' || priv,
+    NOT has_table_privilege(role_name, 'public.admin_activity', priv),
+    CASE WHEN has_table_privilege(role_name, 'public.admin_activity', priv)
+         THEN 'GRANTED -- the audit trail is rewritable'
+         ELSE 'revoked' END
+  FROM unnest(ARRAY['authenticated','service_role']) AS role_name,
+       unnest(ARRAY['UPDATE','DELETE']) AS priv
 
   UNION ALL
 

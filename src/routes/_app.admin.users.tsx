@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useState } from "react";
-import { Plus, RefreshCw, ShieldAlert, Users as UsersIcon } from "lucide-react";
+import { Plus, RefreshCw, ScrollText, ShieldAlert, Users as UsersIcon } from "lucide-react";
 
 import {
   AlertDialog,
@@ -18,6 +18,7 @@ import { defaultPermsForRole, hasPerm } from "@/lib/permissions";
 import type { AppRole } from "@/lib/roles";
 import { cn } from "@/lib/utils";
 
+import { ActivityLogDialog } from "@/features/users/components/activity-log-dialog";
 import { CreateUserDialog } from "@/features/users/components/create-user-dialog";
 import { EditUserDialog } from "@/features/users/components/edit-user-dialog";
 import { GrantOwnerDialog } from "@/features/users/components/grant-owner-dialog";
@@ -59,6 +60,11 @@ function AdminUsers() {
   // Deleting users stays administrator-only (see adminDeleteUser). Supervisor
   // must not see delete affordances it cannot use.
   const canDeleteUsers = isAdministrator(role);
+  // The audit trail is administrator-only for the same reason the RLS policy on
+  // admin_activity is (20260725003000): a Supervisor's own actions are among the
+  // entries, so it is not the party that should be reading them back. Mirrors the
+  // `assertAdmin` gate on adminListActivity.
+  const canViewActivity = isAdministrator(role);
   const callerIsOwner = isOwnerRole(role);
 
   const { users, isLoading, isFetching, error } = useUsersList(canManageUsers);
@@ -71,6 +77,14 @@ function AdminUsers() {
   const [grantOwnerTo, setGrantOwnerTo] = useState<AdminUserRow | null>(null);
   const [deleting, setDeleting] = useState<AdminUserRow | null>(null);
   const [deactivating, setDeactivating] = useState<AdminUserRow | null>(null);
+  /**
+   * The audit-log dialog needs an explicit `open` flag rather than the
+   * `open={!!row}` shorthand the other dialogs use: it has a legitimate
+   * open-with-no-row state (the portal-wide log opened from the header), so a
+   * null row cannot double as "closed".
+   */
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [activityFor, setActivityFor] = useState<AdminUserRow | null>(null);
 
   /**
    * Open the edit dialog with an effective permission set.
@@ -94,6 +108,13 @@ function AdminUsers() {
   const openPassword = useCallback((user: AdminUserRow) => setPasswordFor(user), []);
   const openGrantOwner = useCallback((user: AdminUserRow) => setGrantOwnerTo(user), []);
   const openDelete = useCallback((user: AdminUserRow) => setDeleting(user), []);
+
+  // Stable, like every other row callback — the memoized rows in UsersTable only
+  // skip re-rendering while these keep their identity.
+  const openActivity = useCallback((user: AdminUserRow) => {
+    setActivityFor(user);
+    setActivityOpen(true);
+  }, []);
 
   // Reactivating is harmless and immediate; deactivating locks someone out of
   // their account, so it goes through a confirmation.
@@ -141,6 +162,15 @@ function AdminUsers() {
           {isFetching && !isLoading && (
             <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" aria-label="Refreshing" />
           )}
+          {canViewActivity && (
+            <Button
+              variant="outline"
+              className="shadow-sm"
+              onClick={() => { setActivityFor(null); setActivityOpen(true); }}
+            >
+              <ScrollText className="mr-2 h-4 w-4" aria-hidden />Activity log
+            </Button>
+          )}
           <Button className="shadow-sm" onClick={() => setCreating(true)}>
             <Plus className="mr-2 h-4 w-4" aria-hidden />Add user
           </Button>
@@ -169,6 +199,7 @@ function AdminUsers() {
         error={error}
         callerIsOwner={callerIsOwner}
         canDelete={canDeleteUsers}
+        canViewActivity={canViewActivity}
         emptyDescription={emptyDescription}
         onClearFilters={filters.filtersActive ? filters.clearFilters : null}
         onEdit={openEdit}
@@ -176,6 +207,7 @@ function AdminUsers() {
         onSendResetEmail={sendResetEmail}
         onToggleActive={toggleActive}
         onGrantOwner={openGrantOwner}
+        onViewActivity={openActivity}
         onDelete={openDelete}
       />
 
@@ -218,6 +250,13 @@ function AdminUsers() {
         onConfirm={(password) =>
           grantOwnerTo ? mutations.grantOwner(grantOwnerTo, password) : Promise.resolve(false)
         }
+      />
+
+      <ActivityLogDialog
+        open={activityOpen}
+        onOpenChange={setActivityOpen}
+        user={activityFor}
+        enabled={canViewActivity}
       />
 
       {/* One dialog per destructive action, pointed at the chosen row — rather

@@ -18,10 +18,22 @@ export type DirectoryAgent = {
 export const AGENT_DIRECTORY_KEY = ["agent-directory"] as const;
 
 /**
- * Loads every profile the caller is allowed to see, joined with each user's
- * role. RLS still governs the rows returned: privileged users (manage_users /
- * view_all_agents) get the whole directory, everyone else gets only their own
- * row — exactly as the previous per-route queries did.
+ * Loads the agent directory, joined with each user's role.
+ *
+ * What each half returns is NOT symmetric, and the difference is deliberate:
+ *
+ *   - profiles: every active user sees every row. The directory has to resolve
+ *     any agent's name, so row-level access is open by design and the
+ *     confidentiality boundary is the column-level SELECT grant — only
+ *     (id, full_name, agent_code, active, created_at) are readable at all.
+ *   - user_roles: scoped. Only `manage_users` / `view_all_agents` holders read
+ *     other people's roles; everyone else gets their own row, so `role` comes
+ *     back null for the rest and consumers must tolerate that.
+ *
+ * This comment previously claimed profiles was scoped the same way as
+ * user_roles. It never was: the scoped policy was shadowed by an
+ * `USING (true)` directory policy from the day after it was written, and
+ * 20260725200000 removed the dead policy rather than the access.
  */
 async function fetchAgentDirectory(): Promise<DirectoryAgent[]> {
   const [{ data: profiles }, { data: roles }] = await Promise.all([

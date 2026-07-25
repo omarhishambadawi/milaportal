@@ -24,6 +24,7 @@ interface RowCallbacks {
   onSendResetEmail: (user: AdminUserRow) => void;
   onToggleActive: (user: AdminUserRow) => void;
   onGrantOwner: (user: AdminUserRow) => void;
+  onViewActivity: (user: AdminUserRow) => void;
   onDelete: (user: AdminUserRow) => void;
 }
 
@@ -37,8 +38,13 @@ interface RowCallbacks {
  * would defeat the comparison entirely.
  */
 const UserRow = memo(function UserRow({
-  user, callerIsOwner, canDelete, ...callbacks
-}: { user: AdminUserRow; callerIsOwner: boolean; canDelete: boolean } & RowCallbacks) {
+  user, callerIsOwner, canDelete, canViewActivity, ...callbacks
+}: {
+  user: AdminUserRow;
+  callerIsOwner: boolean;
+  canDelete: boolean;
+  canViewActivity: boolean;
+} & RowCallbacks) {
   const rowIsOwner = isOwnerRole(user.role);
   // Owner rows may only be touched by another Owner. The server enforces this
   // independently (admin.functions.ts); this keeps the UI honest about it.
@@ -93,6 +99,7 @@ const UserRow = memo(function UserRow({
           mayActOnRow={mayActOnRow}
           callerIsOwner={callerIsOwner}
           canDelete={canDelete}
+          canViewActivity={canViewActivity}
           {...callbacks}
         />
       </TableCell>
@@ -151,13 +158,14 @@ function PendingPasswordBadge({ user }: { user: AdminUserRow }) {
  * when rows land.
  */
 export function UsersTable({
-  users, isLoading, error, callerIsOwner, canDelete, emptyDescription, onClearFilters, ...callbacks
+  users, isLoading, error, callerIsOwner, canDelete, canViewActivity, emptyDescription, onClearFilters, ...callbacks
 }: {
   users: AdminUserRow[];
   isLoading: boolean;
   error: Error | null;
   callerIsOwner: boolean;
   canDelete: boolean;
+  canViewActivity: boolean;
   emptyDescription: string;
   onClearFilters: (() => void) | null;
 } & RowCallbacks) {
@@ -206,6 +214,7 @@ export function UsersTable({
               user={user}
               callerIsOwner={callerIsOwner}
               canDelete={canDelete}
+              canViewActivity={canViewActivity}
               {...callbacks}
             />
           ))}
