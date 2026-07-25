@@ -62,7 +62,6 @@ export function ComplaintForm({ mode }: { mode: "create" | "edit" }) {
   });
 
   const isOwner = existing && user && existing.agent_id === user.id;
-  const isAuditor = role === "auditor";
   const canEditThis = mode === "create" ? canCreate : (canEditAll || (isOwner && canEditOwn));
   const readOnly = mode === "edit" && !canEditThis;
 
@@ -93,7 +92,13 @@ export function ComplaintForm({ mode }: { mode: "create" | "edit" }) {
 
   const cityFor = useMemo(() => (b: string | null) => branches?.find((x) => x.branch_no === b)?.city ?? "", [branches]);
 
-  if (mode === "edit" && existing && !canView && !isAuditor) {
+  // Permission-only. This previously read `!canView && !isAuditor`, so holding
+  // the auditor *role* opened the complaint even when `view_complaints` had been
+  // revoked from that individual — the one case the check exists for. Auditors
+  // hold view_complaints by default and so are unaffected; what changes is that
+  // revoking it now actually revokes it. Read-only rendering is unrelated and
+  // still derives from `canEditThis`.
+  if (mode === "edit" && existing && !canView) {
     return <div className="text-center py-16"><ShieldAlert className="mx-auto h-10 w-10 text-destructive" /><p className="mt-2 text-sm text-muted-foreground">You don't have access.</p></div>;
   }
   if (mode === "create" && !canCreate) {

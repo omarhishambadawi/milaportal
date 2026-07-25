@@ -87,10 +87,13 @@ $$;
 --
 -- Three deliberate differences from order_activity:
 --
---   * No INSERT grant to `authenticated`. order_activity is insertable by any
---     signed-in user with `WITH CHECK (true)`, which means its entries can be
---     forged; for an audit log that property would destroy the whole point.
---     Only service_role writes here, from the server functions.
+--   * No INSERT grant to `authenticated`. order_activity and complaint_activity
+--     both still carry one (from 20260624110459 / 20260701221219); writes are
+--     refused today only because no INSERT *policy* survives on either table, so
+--     RLS denies by default. For an audit log, resting on the absence of a policy
+--     is too thin — one permissive policy added later and entries become
+--     forgeable. Here the privilege itself is withheld.
+--     (20260725004000 revokes those two dangling grants for the same reason.)
 --   * No UPDATE or DELETE grant to ANYONE, service_role included. The log is
 --     append-only by privilege rather than by convention, so a compromised
 --     service key can add noise but cannot quietly erase a trail.
