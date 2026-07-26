@@ -568,6 +568,7 @@ export type Database = {
       }
       is_active: { Args: { _user_id: string }; Returns: boolean }
       is_administrator: { Args: { _user_id: string }; Returns: boolean }
+      is_owner: { Args: { _user_id: string }; Returns: boolean }
       notify_users: {
         Args: {
           _body: string
