@@ -3,8 +3,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth, isAdministrator } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import {
-  LayoutDashboard, ListOrdered, Plus, Users, MapPin,
-  ShieldAlert, MessageSquareWarning, PhoneCall, Headphones,
+  LayoutDashboard,
+  ListOrdered,
+  Plus,
+  Users,
+  MapPin,
+  ShieldAlert,
+  MessageSquareWarning,
+  PhoneCall,
+  Headphones,
 } from "lucide-react";
 import { hasPerm, canViewCallCenter } from "@/lib/permissions";
 import { AppHeader } from "@/components/app-header";
@@ -38,14 +45,18 @@ function AppLayout() {
   }, []);
 
   useEffect(() => {
-    try { localStorage.setItem(SIDEBAR_PREF_KEY, expanded ? "1" : "0"); } catch {}
+    try {
+      localStorage.setItem(SIDEBAR_PREF_KEY, expanded ? "1" : "0");
+    } catch {}
   }, [expanded]);
 
   useEffect(() => {
     if (!loading && !session) navigate({ to: "/auth", replace: true });
   }, [loading, session, navigate]);
 
-  useEffect(() => { setMobileOpen(false); }, [location.pathname]);
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
 
   // Stable references: the sidebar's inner tree is memoized, and an inline
   // arrow here would hand it a fresh callback on every layout render, turning
@@ -59,22 +70,35 @@ function AppLayout() {
   const canCreate = hasPerm(role, profile?.permissions as any, "create_orders");
   const canComplaints = hasPerm(role, profile?.permissions as any, "view_complaints");
   const canUsers = hasPerm(role, profile?.permissions as any, "manage_users");
-  const canBranches = hasPerm(role, profile?.permissions as any, "view_branches") || hasPerm(role, profile?.permissions as any, "admin_access");
+  const canBranches =
+    hasPerm(role, profile?.permissions as any, "view_branches") ||
+    hasPerm(role, profile?.permissions as any, "admin_access");
   const canCallCenter = canViewCallCenter(role, profile?.permissions as any);
 
-  const nav = useMemo(() => ([
-    ...(canDashboard ? [{ to: "/dashboard", label: "Dashboard", icon: LayoutDashboard }] : []),
-    ...(canOrders ? [{ to: "/orders", label: "Orders", icon: ListOrdered }] : []),
-    ...(canCreate ? [{ to: "/orders/new", label: "New", icon: Plus }] : []),
-    ...(canComplaints ? [{ to: "/complaints", label: "Complaints", icon: MessageSquareWarning }] : []),
-    ...(canCallCenter ? [{ to: "/call-center", label: "Calls", icon: Headphones }] : []),
-    ...(canUsers ? [{ to: "/admin/users", label: "Users", icon: Users }] : []),
-    ...(canBranches ? [{ to: "/admin/branches", label: "Branches", icon: MapPin }] : []),
-    ...(isAdministrator(role) ? [{ to: "/admin/yeastar", label: "Yeastar", icon: PhoneCall }] : []),
-  ]), [canDashboard, canOrders, canCreate, canComplaints, canCallCenter, canUsers, canBranches, role]);
+  const nav = useMemo(
+    () => [
+      ...(canDashboard ? [{ to: "/dashboard", label: "Dashboard", icon: LayoutDashboard }] : []),
+      ...(canOrders ? [{ to: "/orders", label: "Orders", icon: ListOrdered }] : []),
+      ...(canCreate ? [{ to: "/orders/new", label: "New", icon: Plus }] : []),
+      ...(canComplaints
+        ? [{ to: "/complaints", label: "Complaints", icon: MessageSquareWarning }]
+        : []),
+      ...(canCallCenter ? [{ to: "/call-center", label: "Calls", icon: Headphones }] : []),
+      ...(canUsers ? [{ to: "/admin/users", label: "Users", icon: Users }] : []),
+      ...(canBranches ? [{ to: "/admin/branches", label: "Branches", icon: MapPin }] : []),
+      ...(isAdministrator(role)
+        ? [{ to: "/admin/yeastar", label: "Yeastar", icon: PhoneCall }]
+        : []),
+    ],
+    [canDashboard, canOrders, canCreate, canComplaints, canCallCenter, canUsers, canBranches, role],
+  );
 
   if (loading || !session) {
-    return <div className="flex min-h-screen items-center justify-center text-muted-foreground">Loading…</div>;
+    return (
+      <div className="flex min-h-screen items-center justify-center text-muted-foreground">
+        Loading…
+      </div>
+    );
   }
 
   if (profile && !profile.active) {
@@ -83,8 +107,12 @@ function AppLayout() {
         <div className="max-w-md text-center space-y-4">
           <ShieldAlert className="mx-auto h-12 w-12 text-destructive" />
           <h1 className="text-xl font-semibold">Account deactivated</h1>
-          <p className="text-sm text-muted-foreground">Your account is currently inactive. Please contact an administrator.</p>
-          <Button variant="outline" onClick={() => signOut()}>Sign out</Button>
+          <p className="text-sm text-muted-foreground">
+            Your account is currently inactive. Please contact an administrator.
+          </p>
+          <Button variant="outline" onClick={() => signOut()}>
+            Sign out
+          </Button>
         </div>
       </div>
     );

@@ -21,11 +21,7 @@
  */
 
 /** Values safe to carry across the VITE_ boundary in either direction. */
-const BRIDGED_KEYS = [
-  "SUPABASE_URL",
-  "SUPABASE_PUBLISHABLE_KEY",
-  "SUPABASE_PROJECT_ID",
-] as const;
+const BRIDGED_KEYS = ["SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_PROJECT_ID"] as const;
 
 /**
  * Vite only guarantees static replacement for literal `import.meta.env.VITE_X`
@@ -41,7 +37,9 @@ function viteEnv(): Record<string, string | undefined> {
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function firstString(...candidates: unknown[]): string | undefined {

@@ -5,7 +5,14 @@ import { Clock, KeyRound, SearchX, ShieldAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { RoleBadge } from "@/components/role-badge";
 import { UserAvatar } from "@/components/user-avatar";
@@ -38,7 +45,11 @@ interface RowCallbacks {
  * would defeat the comparison entirely.
  */
 const UserRow = memo(function UserRow({
-  user, callerIsOwner, canDelete, canViewActivity, ...callbacks
+  user,
+  callerIsOwner,
+  canDelete,
+  canViewActivity,
+  ...callbacks
 }: {
   user: AdminUserRow;
   callerIsOwner: boolean;
@@ -80,7 +91,10 @@ const UserRow = memo(function UserRow({
       <TableCell>
         <div className="flex items-center gap-2">
           <span
-            className={cn("h-2 w-2 shrink-0 rounded-full", user.active ? "bg-emerald-500" : "bg-muted-foreground/40")}
+            className={cn(
+              "h-2 w-2 shrink-0 rounded-full",
+              user.active ? "bg-emerald-500" : "bg-muted-foreground/40",
+            )}
             aria-hidden
           />
           <span className="text-xs">{user.active ? "Active" : "Inactive"}</span>
@@ -135,7 +149,11 @@ function PendingPasswordBadge({ user }: { user: AdminUserRow }) {
                 : "border-amber-500/30 bg-amber-500/10 text-[var(--badge-amber)]",
             )}
           >
-            {expired ? <Clock className="h-2.5 w-2.5" aria-hidden /> : <KeyRound className="h-2.5 w-2.5" aria-hidden />}
+            {expired ? (
+              <Clock className="h-2.5 w-2.5" aria-hidden />
+            ) : (
+              <KeyRound className="h-2.5 w-2.5" aria-hidden />
+            )}
             {expired ? "Expired" : "Temp"}
           </Badge>
         </TooltipTrigger>
@@ -158,7 +176,15 @@ function PendingPasswordBadge({ user }: { user: AdminUserRow }) {
  * when rows land.
  */
 export function UsersTable({
-  users, isLoading, error, callerIsOwner, canDelete, canViewActivity, emptyDescription, onClearFilters, ...callbacks
+  users,
+  isLoading,
+  error,
+  callerIsOwner,
+  canDelete,
+  canViewActivity,
+  emptyDescription,
+  onClearFilters,
+  ...callbacks
 }: {
   users: AdminUserRow[];
   isLoading: boolean;
@@ -208,16 +234,18 @@ export function UsersTable({
             </TableRow>
           )}
 
-          {!isLoading && !error && users.map((user) => (
-            <UserRow
-              key={user.id}
-              user={user}
-              callerIsOwner={callerIsOwner}
-              canDelete={canDelete}
-              canViewActivity={canViewActivity}
-              {...callbacks}
-            />
-          ))}
+          {!isLoading &&
+            !error &&
+            users.map((user) => (
+              <UserRow
+                key={user.id}
+                user={user}
+                callerIsOwner={callerIsOwner}
+                canDelete={canDelete}
+                canViewActivity={canViewActivity}
+                {...callbacks}
+              />
+            ))}
         </TableBody>
       </Table>
     </div>
@@ -238,11 +266,21 @@ function SkeletonRows() {
               </div>
             </div>
           </TableCell>
-          <TableCell className="hidden lg:table-cell"><Skeleton className="h-5 w-20 rounded-full" /></TableCell>
-          <TableCell className="hidden md:table-cell"><Skeleton className="h-3.5 w-12" /></TableCell>
-          <TableCell className="hidden xl:table-cell"><Skeleton className="h-3.5 w-20" /></TableCell>
-          <TableCell><Skeleton className="h-3.5 w-16" /></TableCell>
-          <TableCell className="text-right"><Skeleton className="ml-auto h-8 w-8 rounded-md" /></TableCell>
+          <TableCell className="hidden lg:table-cell">
+            <Skeleton className="h-5 w-20 rounded-full" />
+          </TableCell>
+          <TableCell className="hidden md:table-cell">
+            <Skeleton className="h-3.5 w-12" />
+          </TableCell>
+          <TableCell className="hidden xl:table-cell">
+            <Skeleton className="h-3.5 w-20" />
+          </TableCell>
+          <TableCell>
+            <Skeleton className="h-3.5 w-16" />
+          </TableCell>
+          <TableCell className="text-right">
+            <Skeleton className="ml-auto h-8 w-8 rounded-md" />
+          </TableCell>
         </TableRow>
       ))}
     </>

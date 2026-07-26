@@ -81,7 +81,11 @@ function loadSqlDefinition() {
 
 function parseSql(text, file) {
   // Guard: owner/admin must still short-circuit to full access.
-  if (!/_role IN \('admin'::public\.app_role, 'owner'::public\.app_role\)[\s\S]*?RETURN true/i.test(text)) {
+  if (
+    !/_role IN \('admin'::public\.app_role, 'owner'::public\.app_role\)[\s\S]*?RETURN true/i.test(
+      text,
+    )
+  ) {
     fail(`SQL has_permission (${file}) no longer short-circuits owner/admin to full access.`);
   }
 

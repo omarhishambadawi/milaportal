@@ -89,8 +89,8 @@ export function ForcePasswordChange({
           {deadline && (
             <p className="flex items-center gap-1.5 text-xs text-[var(--badge-amber)]">
               <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden />
-              Expires {formatDistanceToNow(new Date(deadline), { addSuffix: true })} — after that
-              it stops working and you will need an emailed reset link.
+              Expires {formatDistanceToNow(new Date(deadline), { addSuffix: true })} — after that it
+              stops working and you will need an emailed reset link.
             </p>
           )}
         </CardHeader>
@@ -127,9 +127,11 @@ export function ForcePasswordChange({
                       rule.passed ? "text-[var(--positive)]" : "text-muted-foreground",
                     )}
                   >
-                    {rule.passed
-                      ? <Check className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                      : <X className="h-3.5 w-3.5 shrink-0" aria-hidden />}
+                    {rule.passed ? (
+                      <Check className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                    ) : (
+                      <X className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                    )}
                     {rule.label}
                   </li>
                 ))}

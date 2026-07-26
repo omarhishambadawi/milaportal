@@ -32,21 +32,30 @@ export const getSurveyAnalytics = createServerFn({ method: "POST" })
     const list = (rows as any[]) ?? [];
     const total = list.length;
     const avg = total ? list.reduce((s, r) => s + Number(r.rating || 0), 0) / total : 0;
-    const distribution = [1, 2, 3, 4, 5].map((n) => ({ rating: n, count: list.filter((r) => r.rating === n).length }));
+    const distribution = [1, 2, 3, 4, 5].map((n) => ({
+      rating: n,
+      count: list.filter((r) => r.rating === n).length,
+    }));
     const byDayMap = new Map<string, { date: string; count: number; sum: number }>();
     for (const r of list) {
       const date = String(r.submitted_at).slice(0, 10);
       const b = byDayMap.get(date) ?? { date, count: 0, sum: 0 };
-      b.count++; b.sum += Number(r.rating || 0);
+      b.count++;
+      b.sum += Number(r.rating || 0);
       byDayMap.set(date, b);
     }
-    const trend = [...byDayMap.values()].sort((a, b) => a.date.localeCompare(b.date)).map((b) => ({
-      date: b.date, count: b.count, avg: b.count ? b.sum / b.count : 0,
-    }));
+    const trend = [...byDayMap.values()]
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map((b) => ({
+        date: b.date,
+        count: b.count,
+        avg: b.count ? b.sum / b.count : 0,
+      }));
 
     return {
       ok: true as const,
-      total, avg,
+      total,
+      avg,
       distribution,
       trend,
     };

@@ -2,7 +2,10 @@
  *  first inline with a "+N" chip listing the rest in a tooltip title. */
 export function InvoiceCell({ value }: { value: string | null | undefined }) {
   if (!value) return <span className="text-muted-foreground font-sans">—</span>;
-  const parts = String(value).split(/[,\n]+/).map((s) => s.trim()).filter(Boolean);
+  const parts = String(value)
+    .split(/[,\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
   if (parts.length === 0) return <span className="text-muted-foreground font-sans">—</span>;
   const [first, ...rest] = parts;
   return (

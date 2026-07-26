@@ -78,7 +78,6 @@ export function AppHeader({
 
         <div className="hidden sm:block mx-1 h-6 w-px bg-border/70" aria-hidden />
 
-
         <div className="flex items-center gap-2.5 min-w-0">
           {Icon && (
             <span className="hidden sm:grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary ring-1 ring-inset ring-primary/15">
@@ -117,10 +116,19 @@ export function AppHeader({
               )}
               aria-label="Account menu"
             >
-              <UserAvatar name={name} url={avatarUrl} size="sm" className="ring-2 ring-background" />
+              <UserAvatar
+                name={name}
+                url={avatarUrl}
+                size="sm"
+                className="ring-2 ring-background"
+              />
               <div className="hidden lg:block min-w-0 leading-tight">
-                <div className="text-xs font-semibold truncate max-w-[9rem] text-foreground">{name}</div>
-                <div className="text-[10px] text-muted-foreground capitalize truncate max-w-[9rem]">{roleLabel}</div>
+                <div className="text-xs font-semibold truncate max-w-[9rem] text-foreground">
+                  {name}
+                </div>
+                <div className="text-[10px] text-muted-foreground capitalize truncate max-w-[9rem]">
+                  {roleLabel}
+                </div>
               </div>
               <ChevronDown className="hidden sm:block h-4 w-4 text-muted-foreground transition-transform duration-200 group-data-[state=open]:rotate-180" />
             </button>
@@ -134,7 +142,9 @@ export function AppHeader({
                 <UserAvatar name={name} url={avatarUrl} size="md" />
                 <div className="min-w-0">
                   <div className="text-sm font-semibold truncate text-foreground">{name}</div>
-                  <div className="text-[11px] font-normal text-muted-foreground capitalize truncate">{roleLabel}</div>
+                  <div className="text-[11px] font-normal text-muted-foreground capitalize truncate">
+                    {roleLabel}
+                  </div>
                 </div>
               </Link>
             </DropdownMenuLabel>

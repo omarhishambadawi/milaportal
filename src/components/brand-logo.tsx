@@ -22,9 +22,24 @@ export function BrandLogo({ size = "sidebar", className }: BrandLogoProps) {
   const img = "absolute inset-0 block h-full w-full object-contain object-center";
 
   return (
-    <div className={cn("relative flex shrink-0 items-center justify-center", sizes[size], className)}>
-      <img src={lightLogo.url} alt="MilaServ" width={512} height={389} className={cn(img, "theme-mark-light")} />
-      <img src={darkLogo.url} alt="" aria-hidden width={512} height={389} className={cn(img, "theme-mark-dark")} />
+    <div
+      className={cn("relative flex shrink-0 items-center justify-center", sizes[size], className)}
+    >
+      <img
+        src={lightLogo.url}
+        alt="MilaServ"
+        width={512}
+        height={389}
+        className={cn(img, "theme-mark-light")}
+      />
+      <img
+        src={darkLogo.url}
+        alt=""
+        aria-hidden
+        width={512}
+        height={389}
+        className={cn(img, "theme-mark-dark")}
+      />
     </div>
   );
 }

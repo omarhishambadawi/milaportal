@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch supersedes the first: cancel the older run
+# rather than paying for a verdict on a commit nobody will look at. `main` is
+# excluded so every commit on the default branch keeps its own result.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # `npm install`, not `npm ci`: the repo commits bun.lock and deliberately
+      # does not track package-lock.json (see the note in vercel.json), and
+      # `npm ci` requires an npm lockfile. The trade-off is that CI resolves
+      # semver ranges fresh on each run, so a dependency can move under us
+      # without a commit — a real gap, and the reason to consider committing a
+      # package-lock.json or moving CI to `bun install --frozen-lockfile`.
+      - name: Install dependencies
+        run: npm install
+
+      # Ordered cheapest-signal-first: a type error or a lint error is far more
+      # common than a permission drift or a failing assertion, and each step
+      # below is only meaningful if the ones above it passed. Every step runs
+      # the same script a developer runs locally (`npm run ci`), so there is one
+      # definition of "green" rather than two.
+      - name: TypeScript
+        run: npm run typecheck
+
+      - name: ESLint
+        run: npm run lint
+
+      # Guards the one invariant neither the compiler nor the tests can see:
+      # that public.has_permission() in SQL and src/lib/permissions.ts still
+      # describe the same permission sets. They are enforced in different
+      # processes, so drift between them is invisible until someone is granted
+      # or refused the wrong thing in production.
+      - name: Permission parity (SQL ↔ TypeScript)
+        run: npm run check:permissions
+
+      - name: Tests
+        run: npm test

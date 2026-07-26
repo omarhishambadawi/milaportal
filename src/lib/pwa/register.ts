@@ -30,7 +30,9 @@ export async function registerPwa(): Promise<void> {
         const url = r.active?.scriptURL ?? "";
         if (url.endsWith("/sw.js")) await r.unregister();
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     return;
   }
 

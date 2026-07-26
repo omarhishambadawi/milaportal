@@ -39,7 +39,13 @@ export function useDashboardFilters() {
     return `${format(range.from, "PP")} — ${format(range.to, "PP")}`;
   }, [range]);
 
-  const effectiveAgent = canViewAllAgents ? agentFilter : (!canViewTeamAnalytics && user?.id ? user.id : (mineOnly && user?.id ? user.id : "all"));
+  const effectiveAgent = canViewAllAgents
+    ? agentFilter
+    : !canViewTeamAnalytics && user?.id
+      ? user.id
+      : mineOnly && user?.id
+        ? user.id
+        : "all";
   const effectiveTeam = canViewTeamAnalytics ? teamFilter : "all";
 
   // Identity of every dashboard aggregation query. Complaints have no team
@@ -56,9 +62,10 @@ export function useDashboardFilters() {
     return base.filter((a: any) => a.role === teamFilter);
   }, [agents, teamFilter]);
 
-  const selectedAgentLabel = canViewAllAgents && agentFilter !== "all"
-    ? (agents?.find((a: any) => a.id === agentFilter)?.full_name ?? "agent")
-    : null;
+  const selectedAgentLabel =
+    canViewAllAgents && agentFilter !== "all"
+      ? (agents?.find((a: any) => a.id === agentFilter)?.full_name ?? "agent")
+      : null;
 
   // Caption reads the scope that was actually applied rather than `mineOnly`
   // alone. `effectiveAgent` narrows to the current user in two ways: via the
@@ -69,18 +76,32 @@ export function useDashboardFilters() {
 
   return {
     // permissions
-    canViewDashboard, canViewTeamAnalytics, canViewAllAgents, canExport, isAdmin,
+    canViewDashboard,
+    canViewTeamAnalytics,
+    canViewAllAgents,
+    canExport,
+    isAdmin,
     userId: user?.id,
     // controls
-    mineOnly, setMineOnly,
-    agentFilter, setAgentFilter,
-    teamFilter, setTeamFilter,
-    range, setRange,
+    mineOnly,
+    setMineOnly,
+    agentFilter,
+    setAgentFilter,
+    teamFilter,
+    setTeamFilter,
+    range,
+    setRange,
     // derived scope + query-key filter objects
-    from, to, dateLabel,
-    effectiveAgent, effectiveTeam,
-    dashFilters, cmpFilters,
+    from,
+    to,
+    dateLabel,
+    effectiveAgent,
+    effectiveTeam,
+    dashFilters,
+    cmpFilters,
     // agent directory + labels
-    filteredAgents, selectedAgentLabel, scopedToSelf,
+    filteredAgents,
+    selectedAgentLabel,
+    scopedToSelf,
   };
 }

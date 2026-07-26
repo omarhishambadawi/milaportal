@@ -27,7 +27,10 @@ export function useOrderForm(mode: "create" | "edit") {
   const { data: branches } = useQuery({
     queryKey: queryKeys.branches.list(),
     queryFn: async () => {
-      const { data, error } = await supabase.from("branches").select("branch_no,city").order("branch_no");
+      const { data, error } = await supabase
+        .from("branches")
+        .select("branch_no,city")
+        .order("branch_no");
       if (error) throw error;
       return data ?? [];
     },
@@ -65,12 +68,15 @@ export function useOrderForm(mode: "create" | "edit") {
   const canEditOwn = hasPerm(role, profile?.permissions as any, "edit_orders");
   const canDelete = hasPerm(role, profile?.permissions as any, "delete_orders");
   const isOwner = !!existing && !!user && existing.agent_id === user.id;
-  const canEditThis = mode === "create" ? canCreate : (canEditAll || (isOwner && canEditOwn));
+  const canEditThis = mode === "create" ? canCreate : canEditAll || (isOwner && canEditOwn);
   const readOnly = mode === "edit" && !canEditThis;
 
   useEffect(() => {
     if (existing) {
-      const t = (existing.team === "customer_care" || existing.team === "telesales") ? existing.team : "customer_care";
+      const t =
+        existing.team === "customer_care" || existing.team === "telesales"
+          ? existing.team
+          : "customer_care";
       setForm({
         order_date: existing.order_date,
         team: t,
@@ -84,7 +90,10 @@ export function useOrderForm(mode: "create" | "edit") {
         status: existing.status,
       });
       const raw = (existing.invoice_no ?? "").toString();
-      const parts = raw.split(/[,\n]+/).map((s) => s.trim()).filter(Boolean);
+      const parts = raw
+        .split(/[,\n]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
       setInvoices(parts.length > 0 ? parts : [""]);
     }
   }, [existing]);
@@ -93,14 +102,23 @@ export function useOrderForm(mode: "create" | "edit") {
     if (mode === "create") setForm((f) => ({ ...f, team: defaultTeam(role) }));
   }, [role, mode]);
 
-  const cityFor = useMemo(() => (b: string | null) => branches?.find((x) => x.branch_no === b)?.city ?? "", [branches]);
+  const cityFor = useMemo(
+    () => (b: string | null) => branches?.find((x) => x.branch_no === b)?.city ?? "",
+    [branches],
+  );
 
-  const invoicesJoined = invoices.map((s) => s.trim()).filter(Boolean).join(", ");
+  const invoicesJoined = invoices
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join(", ");
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
-    if (!canEditThis) { toast.error("You don't have permission to modify this order"); return; }
+    if (!canEditThis) {
+      toast.error("You don't have permission to modify this order");
+      return;
+    }
     setBusy(true);
     try {
       const parsed = orderFormSchema.parse({
@@ -113,11 +131,16 @@ export function useOrderForm(mode: "create" | "edit") {
         status: mode === "create" ? "Pending" : form.status,
       });
       if (mode === "create") {
-        const { error } = await supabase.from("orders").insert({ ...parsed, agent_id: user.id } as any);
+        const { error } = await supabase
+          .from("orders")
+          .insert({ ...parsed, agent_id: user.id } as any);
         if (error) throw error;
         toast.success("Order saved");
       } else {
-        const { error } = await supabase.from("orders").update(parsed as any).eq("id", id!);
+        const { error } = await supabase
+          .from("orders")
+          .update(parsed as any)
+          .eq("id", id!);
         if (error) throw error;
         toast.success("Order updated");
       }
@@ -133,10 +156,16 @@ export function useOrderForm(mode: "create" | "edit") {
 
   const del = async () => {
     if (!id) return;
-    if (!canDelete) { toast.error("You don't have permission to delete orders"); return; }
+    if (!canDelete) {
+      toast.error("You don't have permission to delete orders");
+      return;
+    }
     if (!confirm("Delete this order?")) return;
     const { error } = await supabase.from("orders").delete().eq("id", id);
-    if (error) { toast.error(error.message); return; }
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
     toast.success("Deleted");
     qc.invalidateQueries({ queryKey: queryKeys.orders.all() });
     qc.invalidateQueries({ queryKey: queryKeys.dashboard.all() });
@@ -148,13 +177,21 @@ export function useOrderForm(mode: "create" | "edit") {
     id,
     branches,
     existing,
-    form, setForm,
-    invoices, setInvoices,
+    form,
+    setForm,
+    invoices,
+    setInvoices,
     busy,
-    open, setOpen,
+    open,
+    setOpen,
     cityFor,
-    canView, canCreate, canEditAll, canDelete,
-    canEditThis, readOnly,
-    submit, del,
+    canView,
+    canCreate,
+    canEditAll,
+    canDelete,
+    canEditThis,
+    readOnly,
+    submit,
+    del,
   };
 }

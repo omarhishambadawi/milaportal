@@ -1,0 +1,30 @@
+# Normalize line endings.
+#
+# Without this, the checkout on a Windows machine (core.autocrlf=true) rewrites
+# LF to CRLF in the working tree while the index keeps LF. Prettier then reads
+# CRLF, `endOfLine: "auto"` preserves it, and the files show as modified with an
+# empty content diff -- which is exactly the state four MCP route files were in
+# before this file existed.
+#
+# `text=auto eol=lf` makes git store AND check out LF everywhere, on every
+# platform, so the working tree, the index and Prettier all agree.
+* text=auto eol=lf
+
+# Binary / generated artefacts that must never be line-ending converted.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+
+# Lockfiles: keep LF, and keep them out of diffs and language statistics.
+bun.lock linguist-generated=true
+*.lock text eol=lf
+
+# Generated sources. Still LF, but marked so review tools collapse them.
+src/routeTree.gen.ts linguist-generated=true
+src/integrations/supabase/types.ts linguist-generated=true

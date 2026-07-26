@@ -2,7 +2,13 @@ import type { AppRole } from "@/lib/auth";
 import { isAdministrator } from "@/lib/auth";
 import { CALL_CENTER_VIEW_PERMISSIONS } from "@/lib/call-center-permissions";
 
-export type PermissionGroup = "Orders" | "Complaints" | "Dashboard" | "Invoice Verification" | "Branches" | "Administration";
+export type PermissionGroup =
+  | "Orders"
+  | "Complaints"
+  | "Dashboard"
+  | "Invoice Verification"
+  | "Branches"
+  | "Administration";
 
 export interface PermissionDef {
   key: string;
@@ -92,39 +98,80 @@ const AUDITOR_SAFE_READ_PERMS: PermKey[] = [...AUDITOR_PERMS];
  * authoritative; this mirror is what the UI renders from.
  */
 const SUPERVISOR_ALLOWED_PERMS: PermKey[] = [
-  "view_orders", "create_orders", "edit_orders", "edit_all_orders",
-  "view_complaints", "create_complaints", "edit_complaints", "edit_all_complaints",
-  "resolve_complaints", "resolve_all_complaints",
-  "view_dashboard", "view_team_analytics", "view_all_agents", "view_call_center",
-  "verify_own_orders", "verify_all_orders", "view_invoice_analytics",
-  "view_branches", "export_reports",
-  "view_reports", "manage_users", "admin_access",
+  "view_orders",
+  "create_orders",
+  "edit_orders",
+  "edit_all_orders",
+  "view_complaints",
+  "create_complaints",
+  "edit_complaints",
+  "edit_all_complaints",
+  "resolve_complaints",
+  "resolve_all_complaints",
+  "view_dashboard",
+  "view_team_analytics",
+  "view_all_agents",
+  "view_call_center",
+  "verify_own_orders",
+  "verify_all_orders",
+  "view_invoice_analytics",
+  "view_branches",
+  "export_reports",
+  "view_reports",
+  "manage_users",
+  "admin_access",
 ];
 
 const SUPERVISOR_DEFAULT_PERMS: PermKey[] = [
-  "view_orders", "create_orders", "edit_orders", "edit_all_orders",
-  "view_complaints", "create_complaints", "edit_complaints", "edit_all_complaints",
-  "resolve_complaints", "resolve_all_complaints",
-  "view_dashboard", "view_team_analytics", "view_all_agents", "view_call_center",
-  "verify_own_orders", "verify_all_orders", "view_invoice_analytics",
-  "view_branches", "export_reports",
-  "view_reports", "manage_users", "admin_access",
+  "view_orders",
+  "create_orders",
+  "edit_orders",
+  "edit_all_orders",
+  "view_complaints",
+  "create_complaints",
+  "edit_complaints",
+  "edit_all_complaints",
+  "resolve_complaints",
+  "resolve_all_complaints",
+  "view_dashboard",
+  "view_team_analytics",
+  "view_all_agents",
+  "view_call_center",
+  "verify_own_orders",
+  "verify_all_orders",
+  "view_invoice_analytics",
+  "view_branches",
+  "export_reports",
+  "view_reports",
+  "manage_users",
+  "admin_access",
 ];
 
 const ROLE_ALLOWED_PERMS: Record<Exclude<AppRole, "admin" | "owner">, PermKey[]> = {
   supervisor: SUPERVISOR_ALLOWED_PERMS,
   customer_care: [
-    "view_orders", "create_orders", "edit_orders",
-    "view_complaints", "create_complaints", "edit_complaints", "resolve_complaints",
-    "view_dashboard", "view_team_analytics",
-    "verify_own_orders", "view_invoice_analytics",
+    "view_orders",
+    "create_orders",
+    "edit_orders",
+    "view_complaints",
+    "create_complaints",
+    "edit_complaints",
+    "resolve_complaints",
+    "view_dashboard",
+    "view_team_analytics",
+    "verify_own_orders",
+    "view_invoice_analytics",
     "view_branches",
     "export_reports",
   ],
   telesales: [
-    "view_orders", "create_orders", "edit_orders",
-    "view_dashboard", "view_team_analytics",
-    "verify_own_orders", "view_invoice_analytics",
+    "view_orders",
+    "create_orders",
+    "edit_orders",
+    "view_dashboard",
+    "view_team_analytics",
+    "verify_own_orders",
+    "view_invoice_analytics",
     "view_branches",
     "export_reports",
   ],
@@ -136,14 +183,22 @@ const ROLE_DEFAULTS: Record<AppRole, PermKey[]> = {
   admin: ALL_PERMISSIONS.map((p) => p.key),
   supervisor: SUPERVISOR_DEFAULT_PERMS,
   customer_care: [
-    "view_orders", "create_orders", "edit_orders",
-    "view_complaints", "create_complaints", "edit_complaints", "resolve_complaints",
-    "view_dashboard", "view_team_analytics",
+    "view_orders",
+    "create_orders",
+    "edit_orders",
+    "view_complaints",
+    "create_complaints",
+    "edit_complaints",
+    "resolve_complaints",
+    "view_dashboard",
+    "view_team_analytics",
     "verify_own_orders",
     "view_branches",
   ],
   telesales: [
-    "view_orders", "create_orders", "edit_orders",
+    "view_orders",
+    "create_orders",
+    "edit_orders",
     "view_dashboard",
     "verify_own_orders",
     "view_branches",
@@ -151,7 +206,11 @@ const ROLE_DEFAULTS: Record<AppRole, PermKey[]> = {
   auditor: AUDITOR_PERMS,
 };
 
-export function hasPerm(role: AppRole | null, permissions: string[] | null | undefined, perm: PermKey): boolean {
+export function hasPerm(
+  role: AppRole | null,
+  permissions: string[] | null | undefined,
+  perm: PermKey,
+): boolean {
   if (!role) return false;
   if (isAdministrator(role)) return true;
   if (role === "auditor") {
@@ -169,7 +228,8 @@ export function hasPerm(role: AppRole | null, permissions: string[] | null | und
   const allowed = ROLE_ALLOWED_PERMS[nonAdminRole];
   const defaults = ROLE_DEFAULTS[role];
   if (!allowed || !defaults) return false;
-  if (permissions && permissions.length > 0) return allowed.includes(perm) && permissions.includes(perm);
+  if (permissions && permissions.length > 0)
+    return allowed.includes(perm) && permissions.includes(perm);
   return defaults.includes(perm);
 }
 
@@ -184,8 +244,18 @@ export function defaultPermsForRole(role: AppRole): PermKey[] {
  * both the route (_app.call-center.tsx) and the sidebar (_app.tsx); the server
  * functions mirror it against the same permission list.
  */
-export function canViewCallCenter(role: AppRole | null, permissions: string[] | null | undefined): boolean {
+export function canViewCallCenter(
+  role: AppRole | null,
+  permissions: string[] | null | undefined,
+): boolean {
   return CALL_CENTER_VIEW_PERMISSIONS.some((perm) => hasPerm(role, permissions, perm));
 }
 
-export const PERMISSION_GROUPS: PermissionGroup[] = ["Orders", "Complaints", "Dashboard", "Invoice Verification", "Branches", "Administration"];
+export const PERMISSION_GROUPS: PermissionGroup[] = [
+  "Orders",
+  "Complaints",
+  "Dashboard",
+  "Invoice Verification",
+  "Branches",
+  "Administration",
+];

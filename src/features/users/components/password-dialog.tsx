@@ -12,9 +12,22 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { PasswordInput } from "@/components/password-input";
 import {
@@ -56,7 +69,11 @@ export function PasswordDialog({
   user: AdminUserRow | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (password: string, temporary: boolean, expiresInHours: TempPasswordTtlHours) => Promise<boolean>;
+  onSubmit: (
+    password: string,
+    temporary: boolean,
+    expiresInHours: TempPasswordTtlHours,
+  ) => Promise<boolean>;
   onSendEmail: () => Promise<boolean>;
 }) {
   const [password, setPassword] = useState("");
@@ -157,7 +174,9 @@ export function PasswordDialog({
               <span className="w-full border-t border-border" />
             </div>
             <div className="relative flex justify-center">
-              <span className="bg-background px-2 text-xs uppercase tracking-wide text-muted-foreground">or</span>
+              <span className="bg-background px-2 text-xs uppercase tracking-wide text-muted-foreground">
+                or
+              </span>
             </div>
           </div>
 
@@ -192,7 +211,11 @@ export function PasswordDialog({
                   disabled={!password}
                   aria-label="Copy password"
                 >
-                  {copied ? <Check className="h-4 w-4 text-[var(--positive)]" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
+                  {copied ? (
+                    <Check className="h-4 w-4 text-[var(--positive)]" aria-hidden />
+                  ) : (
+                    <Copy className="h-4 w-4" aria-hidden />
+                  )}
                 </Button>
               </div>
               <ul id="admin-password-rules" aria-live="polite" className="space-y-1 pt-1">
@@ -204,9 +227,11 @@ export function PasswordDialog({
                       rule.passed ? "text-[var(--positive)]" : "text-muted-foreground",
                     )}
                   >
-                    {rule.passed
-                      ? <Check className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                      : <X className="h-3.5 w-3.5 shrink-0" aria-hidden />}
+                    {rule.passed ? (
+                      <Check className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                    ) : (
+                      <X className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                    )}
                     {rule.label}
                   </li>
                 ))}
@@ -216,14 +241,20 @@ export function PasswordDialog({
             <div className="space-y-3 rounded-lg border p-3">
               <label className="flex cursor-pointer items-start justify-between gap-3">
                 <span className="min-w-0">
-                  <span className="block text-sm font-medium">Require a change at next sign-in</span>
+                  <span className="block text-sm font-medium">
+                    Require a change at next sign-in
+                  </span>
                   <span className="block text-xs text-muted-foreground">
                     {temporary
                       ? "They cannot use the app until they replace this password."
                       : "Leaving this off means you and they both know this password indefinitely."}
                   </span>
                 </span>
-                <Switch checked={temporary} onCheckedChange={setTemporary} aria-label="Require a change at next sign-in" />
+                <Switch
+                  checked={temporary}
+                  onCheckedChange={setTemporary}
+                  aria-label="Require a change at next sign-in"
+                />
               </label>
 
               {/* Only meaningful for a temporary password — a permanent one has
@@ -233,13 +264,18 @@ export function PasswordDialog({
                   <Label htmlFor="temp-password-ttl" className="text-sm font-normal">
                     Expires after
                   </Label>
-                  <Select value={String(ttl)} onValueChange={(v) => setTtl(Number(v) as TempPasswordTtlHours)}>
+                  <Select
+                    value={String(ttl)}
+                    onValueChange={(v) => setTtl(Number(v) as TempPasswordTtlHours)}
+                  >
                     <SelectTrigger id="temp-password-ttl" className="h-8 w-[130px]">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       {TEMP_PASSWORD_TTL_OPTIONS.map((hours) => (
-                        <SelectItem key={hours} value={String(hours)}>{hours} hours</SelectItem>
+                        <SelectItem key={hours} value={String(hours)}>
+                          {hours} hours
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -248,7 +284,12 @@ export function PasswordDialog({
             </div>
 
             <DialogFooter>
-              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => onOpenChange(false)}
+                disabled={busy}
+              >
                 Cancel
               </Button>
               <Button type="submit" disabled={!valid || busy || emailing}>
@@ -262,7 +303,8 @@ export function PasswordDialog({
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>
-                {temporary ? "Issue a temporary password" : "Replace this password"} for {user?.full_name}?
+                {temporary ? "Issue a temporary password" : "Replace this password"} for{" "}
+                {user?.full_name}?
               </AlertDialogTitle>
               <AlertDialogDescription asChild>
                 <div className="space-y-2">

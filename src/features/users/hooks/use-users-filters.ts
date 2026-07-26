@@ -35,7 +35,9 @@ export function useUsersFilters(users: AdminUserRow[]) {
 
   // Any change to what is being looked at returns to the first page — otherwise
   // narrowing a filter while on page 4 lands on an empty table.
-  useEffect(() => { setPage(0); }, [term, role, status, sort, pageSize]);
+  useEffect(() => {
+    setPage(0);
+  }, [term, role, status, sort, pageSize]);
 
   const filtered = useMemo(
     () => users.filter((u) => matchesUser(u, { term, role, status })),
@@ -72,13 +74,25 @@ export function useUsersFilters(users: AdminUserRow[]) {
 
   return {
     // controls
-    q, setQ,
-    role, setRole,
-    status, setStatus,
-    sort, setSort,
-    page: safePage, setPage,
-    pageSize, setPageSize,
+    q,
+    setQ,
+    role,
+    setRole,
+    status,
+    setStatus,
+    sort,
+    setSort,
+    page: safePage,
+    setPage,
+    pageSize,
+    setPageSize,
     // derived
-    term, filtered, visible, pageCount, stats, filtersActive, clearFilters,
+    term,
+    filtered,
+    visible,
+    pageCount,
+    stats,
+    filtersActive,
+    clearFilters,
   };
 }

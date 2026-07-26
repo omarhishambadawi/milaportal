@@ -78,9 +78,17 @@ function Consent() {
     const { data, error } = approve
       ? await api.approveAuthorization(authorization_id)
       : await api.denyAuthorization(authorization_id);
-    if (error) { setBusy(false); setError(error.message); return; }
+    if (error) {
+      setBusy(false);
+      setError(error.message);
+      return;
+    }
     const target = data?.redirect_url ?? data?.redirect_to;
-    if (!target) { setBusy(false); setError("No redirect returned by the authorization server."); return; }
+    if (!target) {
+      setBusy(false);
+      setError("No redirect returned by the authorization server.");
+      return;
+    }
     window.location.href = target;
   }
 
@@ -93,15 +101,23 @@ function Consent() {
           )}
           <CardTitle>Connect {clientName}</CardTitle>
           <CardDescription>
-            {clientName} is requesting access to MilaServ Portal as you. It will be able
-            to read your orders, complaints, and profile using the same permissions you have.
+            {clientName} is requesting access to MilaServ Portal as you. It will be able to read
+            your orders, complaints, and profile using the same permissions you have.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
           <div className="flex gap-2 justify-end">
-            <Button variant="outline" disabled={busy} onClick={() => decide(false)}>Deny</Button>
-            <Button disabled={busy} onClick={() => decide(true)}>{busy ? "Working…" : "Approve"}</Button>
+            <Button variant="outline" disabled={busy} onClick={() => decide(false)}>
+              Deny
+            </Button>
+            <Button disabled={busy} onClick={() => decide(true)}>
+              {busy ? "Working…" : "Approve"}
+            </Button>
           </div>
         </CardContent>
       </Card>

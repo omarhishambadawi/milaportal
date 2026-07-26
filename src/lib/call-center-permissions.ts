@@ -12,7 +12,4 @@
  * functions in yeastar.functions.ts. It defines only the access GATE; it does
  * not change any role or permission definitions.
  */
-export const CALL_CENTER_VIEW_PERMISSIONS = [
-  "view_call_center",
-  "view_team_analytics",
-] as const;
+export const CALL_CENTER_VIEW_PERMISSIONS = ["view_call_center", "view_team_analytics"] as const;

@@ -19,9 +19,19 @@ interface UseOrdersExportArgs {
  * fetch, same column mapping and file name. xlsx stays lazy-loaded to keep it
  * out of the route's initial chunk.
  */
-export function useOrdersExport({ from, to, canExport, applyFilters, namesById, cities }: UseOrdersExportArgs) {
+export function useOrdersExport({
+  from,
+  to,
+  canExport,
+  applyFilters,
+  namesById,
+  cities,
+}: UseOrdersExportArgs) {
   const exportXlsx = async () => {
-    if (!canExport) { toast.error("You don't have permission to export reports"); return; }
+    if (!canExport) {
+      toast.error("You don't have permission to export reports");
+      return;
+    }
     toast.info("Preparing export…");
     // Fetch every row that matches the current filter, in batches, respecting RLS.
     const BATCH = 1000;
@@ -32,7 +42,10 @@ export function useOrdersExport({ from, to, canExport, applyFilters, namesById, 
       qb = qb.order("order_date", { ascending: false }).order("created_at", { ascending: false });
       qb = qb.range(start, start + BATCH - 1);
       const { data, error } = await qb;
-      if (error) { toast.error(error.message); return; }
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
       all.push(...(data ?? []));
       if (!data || data.length < BATCH) break;
     }

@@ -2,7 +2,13 @@ import { useEffect, useState } from "react";
 import { Crown } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { PasswordInput } from "@/components/password-input";
 
@@ -33,7 +39,9 @@ export function GrantOwnerDialog({
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { if (open) setPassword(""); }, [open, user?.id]);
+  useEffect(() => {
+    if (open) setPassword("");
+  }, [open, user?.id]);
 
   const confirm = async () => {
     if (!password || busy) return;
@@ -48,7 +56,8 @@ export function GrantOwnerDialog({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Crown className="h-4 w-4 text-primary" aria-hidden />Grant Owner role
+            <Crown className="h-4 w-4 text-primary" aria-hidden />
+            Grant Owner role
           </DialogTitle>
         </DialogHeader>
 
@@ -56,8 +65,8 @@ export function GrantOwnerDialog({
           <p className="text-sm text-muted-foreground">
             <span className="font-medium text-foreground">{user?.full_name}</span> will gain
             unrestricted access to every feature, with the same privileges and protections as every
-            other Owner. You keep your own Owner role — this adds an Owner rather than handing
-            yours over.
+            other Owner. You keep your own Owner role — this adds an Owner rather than handing yours
+            over.
           </p>
           <p className="text-sm text-muted-foreground">
             An Owner cannot afterwards be demoted, deactivated or deleted.
@@ -69,13 +78,17 @@ export function GrantOwnerDialog({
               autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") confirm(); }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") confirm();
+              }}
             />
           </div>
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>Cancel</Button>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
+            Cancel
+          </Button>
           <Button onClick={confirm} disabled={!password || busy}>
             {busy ? "Confirming…" : "Grant Owner role"}
           </Button>

@@ -3,7 +3,13 @@ import { Check, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
-export function CopyableOrderNo({ value, alwaysShowIcon = false }: { value: string; alwaysShowIcon?: boolean }) {
+export function CopyableOrderNo({
+  value,
+  alwaysShowIcon = false,
+}: {
+  value: string;
+  alwaysShowIcon?: boolean;
+}) {
   const [copied, setCopied] = useState(false);
   const onCopy = async (e: ReactMouseEvent) => {
     e.stopPropagation();
@@ -17,7 +23,9 @@ export function CopyableOrderNo({ value, alwaysShowIcon = false }: { value: stri
   };
   return (
     <span className="inline-flex items-center gap-1.5 min-w-0">
-      <span className="font-mono font-semibold text-[13px] tracking-tight whitespace-nowrap text-foreground">{value}</span>
+      <span className="font-mono font-semibold text-[13px] tracking-tight whitespace-nowrap text-foreground">
+        {value}
+      </span>
       <button
         type="button"
         onClick={onCopy}

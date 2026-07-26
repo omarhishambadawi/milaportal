@@ -35,7 +35,9 @@ export function useCallCenterFilters() {
   const { data: agents } = useAgentDirectory({ enabled: canAll });
   const filteredAgents = useMemo(() => {
     if (!agents) return [];
-    const operational = agents.filter((a: any) => a.role === "customer_care" || a.role === "telesales");
+    const operational = agents.filter(
+      (a: any) => a.role === "customer_care" || a.role === "telesales",
+    );
     return team === "all" ? operational : operational.filter((a: any) => a.role === team);
   }, [agents, team]);
 
@@ -50,16 +52,27 @@ export function useCallCenterFilters() {
 
   return {
     // permissions
-    authLoading, canView, canAll, canExport,
+    authLoading,
+    canView,
+    canAll,
+    canExport,
     // filter state + setters
-    range, setRange,
-    team, setTeam,
-    agentId, setAgentId,
-    direction, setDirection,
-    search, setSearch,
+    range,
+    setRange,
+    team,
+    setTeam,
+    agentId,
+    setAgentId,
+    direction,
+    setDirection,
+    search,
+    setSearch,
     // derived
-    from, to, filteredAgents,
+    from,
+    to,
+    filteredAgents,
     // progress job id
-    jobId, jobIdRef,
+    jobId,
+    jobIdRef,
   };
 }

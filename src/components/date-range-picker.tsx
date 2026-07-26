@@ -21,18 +21,27 @@ export function buildRange(kind: Preset): DateRange {
   const t = new Date();
   if (kind === "today") return { from: t, to: t };
   if (kind === "yesterday") {
-    const y = new Date(); y.setDate(y.getDate() - 1);
+    const y = new Date();
+    y.setDate(y.getDate() - 1);
     return { from: y, to: y };
   }
   if (kind === "7d") {
-    const f = new Date(); f.setDate(f.getDate() - 6);
+    const f = new Date();
+    f.setDate(f.getDate() - 6);
     return { from: f, to: t };
   }
-  return { from: new Date(t.getFullYear(), t.getMonth(), 1), to: new Date(t.getFullYear(), t.getMonth() + 1, 0) };
+  return {
+    from: new Date(t.getFullYear(), t.getMonth(), 1),
+    to: new Date(t.getFullYear(), t.getMonth() + 1, 0),
+  };
 }
 
 export function DateRangePicker({
-  range, onChange, disabled, align = "start", size = "default",
+  range,
+  onChange,
+  disabled,
+  align = "start",
+  size = "default",
 }: {
   range: DateRange | undefined;
   onChange: (r: DateRange | undefined) => void;
@@ -49,7 +58,16 @@ export function DateRangePicker({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="outline" size={size} disabled={disabled} className={cn("font-normal justify-start", size === "default" && "h-10 min-w-[200px]", !range?.from && "text-muted-foreground")}>
+        <Button
+          variant="outline"
+          size={size}
+          disabled={disabled}
+          className={cn(
+            "font-normal justify-start",
+            size === "default" && "h-10 min-w-[200px]",
+            !range?.from && "text-muted-foreground",
+          )}
+        >
           <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
           <span className="truncate">{label}</span>
         </Button>
@@ -62,9 +80,17 @@ export function DateRangePicker({
       >
         <div className="flex flex-col sm:flex-row max-h-[min(80vh,560px)]">
           <div className="flex sm:flex-col gap-1 border-b sm:border-b-0 sm:border-r p-2 sm:w-[124px] shrink-0 bg-muted/30 overflow-x-auto sm:overflow-visible">
-            <div className="hidden sm:block text-[10px] uppercase tracking-wider text-muted-foreground px-2 pt-1 pb-1 font-semibold">Presets</div>
+            <div className="hidden sm:block text-[10px] uppercase tracking-wider text-muted-foreground px-2 pt-1 pb-1 font-semibold">
+              Presets
+            </div>
             {PRESETS.map((p) => (
-              <Button key={p.key} size="sm" variant="ghost" className="justify-start font-normal h-8 whitespace-nowrap shrink-0" onClick={() => onChange(buildRange(p.key))}>
+              <Button
+                key={p.key}
+                size="sm"
+                variant="ghost"
+                className="justify-start font-normal h-8 whitespace-nowrap shrink-0"
+                onClick={() => onChange(buildRange(p.key))}
+              >
                 {p.label}
               </Button>
             ))}

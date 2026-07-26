@@ -24,25 +24,39 @@ interface UseDashboardExportDataArgs {
  * the route; returns the refetch handle and busy flag the Export button uses.
  */
 export function useDashboardExportData({
-  from, to, effectiveAgent, effectiveTeam, dashFilters, isAdmin, userId,
+  from,
+  to,
+  effectiveAgent,
+  effectiveTeam,
+  dashFilters,
+  isAdmin,
+  userId,
 }: UseDashboardExportDataArgs) {
   const { refetch: refetchExport, isFetching: exportBusy } = useQuery({
     queryKey: queryKeys.dashboard.exportData({ ...dashFilters, isAdmin, userId }),
     enabled: false,
     queryFn: async () => {
       const buildOrders = () => {
-        let qb = supabase.from("orders")
-          .select("id,order_date,team,agent_id,branch_no,invoice_value,status,order_type,delivery_type,call_center_verified")
-          .gte("order_date", from).lte("order_date", to)
+        let qb = supabase
+          .from("orders")
+          .select(
+            "id,order_date,team,agent_id,branch_no,invoice_value,status,order_type,delivery_type,call_center_verified",
+          )
+          .gte("order_date", from)
+          .lte("order_date", to)
           .order("order_date", { ascending: false });
         if (effectiveAgent !== "all") qb = qb.eq("agent_id", effectiveAgent);
-        if (effectiveTeam !== "all") qb = qb.eq("team", effectiveTeam as "customer_care" | "telesales");
+        if (effectiveTeam !== "all")
+          qb = qb.eq("team", effectiveTeam as "customer_care" | "telesales");
         return qb;
       };
 
       const buildComplaints = () => {
-        let cb = supabase.from("complaints" as any).select("id,complaint_date,branch_no,status,agent_id")
-          .gte("complaint_date", from).lte("complaint_date", to)
+        let cb = supabase
+          .from("complaints" as any)
+          .select("id,complaint_date,branch_no,status,agent_id")
+          .gte("complaint_date", from)
+          .lte("complaint_date", to)
           .order("complaint_date", { ascending: false });
         if (effectiveAgent !== "all") cb = cb.eq("agent_id", effectiveAgent);
         return cb;
@@ -69,11 +83,15 @@ export function useDashboardExportData({
       const monthAll = sum(rangeOrders);
       const monthCompleted = sum(completedRows(rangeOrders));
       const monthCompletedCount = completedRows(rangeOrders).length;
-      const completionRate = rangeOrders.length > 0 ? (monthCompletedCount / rangeOrders.length) * 100 : 0;
+      const completionRate =
+        rangeOrders.length > 0 ? (monthCompletedCount / rangeOrders.length) * 100 : 0;
 
       // Generic aggregation: counts, completed-sales, completed count, completion rate
       const groupAgg = (rows: any[], keyFn: (o: any) => string) => {
-        const m: Record<string, { count: number; sales: number; completed: number; total: number }> = {};
+        const m: Record<
+          string,
+          { count: number; sales: number; completed: number; total: number }
+        > = {};
         for (const o of rows) {
           const k = keyFn(o) || "—";
           if (!m[k]) m[k] = { count: 0, sales: 0, completed: 0, total: 0 };
@@ -85,7 +103,8 @@ export function useDashboardExportData({
           }
         }
         return Object.entries(m).map(([name, v]) => ({
-          name, ...v,
+          name,
+          ...v,
           rate: v.count > 0 ? (v.completed / v.count) * 100 : 0,
         }));
       };
@@ -102,11 +121,29 @@ export function useDashboardExportData({
       }
 
       // CC verification by agent
-      const verifByAgent: Record<string, { name: string; total: number; verified: number; nonVerified: number; verifiedValue: number; verifiedCount: number }> = {};
+      const verifByAgent: Record<
+        string,
+        {
+          name: string;
+          total: number;
+          verified: number;
+          nonVerified: number;
+          verifiedValue: number;
+          verifiedCount: number;
+        }
+      > = {};
       for (const o of rangeOrders) {
         const k = o.agent_id ?? "—";
         const name = nameMap.get(o.agent_id) ?? "Unknown";
-        if (!verifByAgent[k]) verifByAgent[k] = { name, total: 0, verified: 0, nonVerified: 0, verifiedValue: 0, verifiedCount: 0 };
+        if (!verifByAgent[k])
+          verifByAgent[k] = {
+            name,
+            total: 0,
+            verified: 0,
+            nonVerified: 0,
+            verifiedValue: 0,
+            verifiedCount: 0,
+          };
         verifByAgent[k].total += 1;
         if (o.call_center_verified) {
           verifByAgent[k].verified += 1;
@@ -116,13 +153,16 @@ export function useDashboardExportData({
           verifByAgent[k].nonVerified += 1;
         }
       }
-      let verifAgentRows = Object.entries(verifByAgent).map(([agentId, r]) => ({
-        agentId, ...r, rate: r.total > 0 ? (r.verified / r.total) * 100 : 0,
-      })).sort((a, b) => b.verified - a.verified);
+      const verifAgentRows = Object.entries(verifByAgent)
+        .map(([agentId, r]) => ({
+          agentId,
+          ...r,
+          rate: r.total > 0 ? (r.verified / r.total) * 100 : 0,
+        }))
+        .sort((a, b) => b.verified - a.verified);
       // Privacy scoping is enforced by RLS ([H4]): non-privileged agents
       // only receive their own order rows from the database, so a client-
       // side filter here would be redundant.
-
 
       const totalVerified = verifiedRows(rangeOrders).length;
       const totalNonVerified = rangeOrders.length - totalVerified;
@@ -131,7 +171,8 @@ export function useDashboardExportData({
       // Complaints aggregations
       const cmpByBranch: Record<string, { total: number; resolved: number }> = {};
       const cmpByCity: Record<string, { total: number; resolved: number }> = {};
-      let cmpResolved = 0, cmpInProg = 0;
+      let cmpResolved = 0,
+        cmpInProg = 0;
       for (const c of cmps) {
         const b = c.branch_no ?? "—";
         const city = cityMap.get(c.branch_no) ?? "—";
@@ -145,12 +186,22 @@ export function useDashboardExportData({
           cmpResolved += 1;
         } else cmpInProg += 1;
       }
-      const cmpBranchRows = Object.entries(cmpByBranch).map(([name, v]) => ({
-        name, ...v, open: v.total - v.resolved, rate: v.total > 0 ? (v.resolved / v.total) * 100 : 0,
-      })).sort((a, b) => b.total - a.total).slice(0, 10);
-      const cmpCityRows = Object.entries(cmpByCity).map(([name, v]) => ({
-        name, ...v, rate: v.total > 0 ? (v.resolved / v.total) * 100 : 0,
-      })).sort((a, b) => b.total - a.total);
+      const cmpBranchRows = Object.entries(cmpByBranch)
+        .map(([name, v]) => ({
+          name,
+          ...v,
+          open: v.total - v.resolved,
+          rate: v.total > 0 ? (v.resolved / v.total) * 100 : 0,
+        }))
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 10);
+      const cmpCityRows = Object.entries(cmpByCity)
+        .map(([name, v]) => ({
+          name,
+          ...v,
+          rate: v.total > 0 ? (v.resolved / v.total) * 100 : 0,
+        }))
+        .sort((a, b) => b.total - a.total);
 
       const buildStats = (rows: any[]) => {
         const completed = completedRows(rows);
@@ -171,19 +222,33 @@ export function useDashboardExportData({
       const totalStats = buildStats(rangeOrders);
 
       return {
-        monthAll, monthCompleted, monthCompletedCount,
+        monthAll,
+        monthCompleted,
+        monthCompletedCount,
         monthTotalCount: rangeOrders.length,
         monthCashSales: cashStats.totalSales,
         monthWasSales: wasStats.totalSales,
-        cashStats, wasStats, totalStats,
+        cashStats,
+        wasStats,
+        totalStats,
         completionRate,
-        totalVerified, totalNonVerified, totalVerifiedValue,
+        totalVerified,
+        totalNonVerified,
+        totalVerifiedValue,
         verifRate: rangeOrders.length > 0 ? (totalVerified / rangeOrders.length) * 100 : 0,
         verifAgentRows: verifAgentRows.slice(0, 12),
-        byAgent: groupAgg(rangeOrders, (o) => nameMap.get(o.agent_id) ?? "Unknown").sort((a, b) => b.sales - a.sales).slice(0, 10),
-        byTeam: groupAgg(rangeOrders, (o) => o.team === "telesales" ? "Telesales" : "Customer Care"),
-        byBranch: groupAgg(rangeOrders, (o) => o.branch_no ?? "—").sort((a, b) => b.sales - a.sales).slice(0, 10),
-        byCity: groupAgg(rangeOrders, (o) => cityMap.get(o.branch_no) ?? "—").sort((a, b) => b.sales - a.sales),
+        byAgent: groupAgg(rangeOrders, (o) => nameMap.get(o.agent_id) ?? "Unknown")
+          .sort((a, b) => b.sales - a.sales)
+          .slice(0, 10),
+        byTeam: groupAgg(rangeOrders, (o) =>
+          o.team === "telesales" ? "Telesales" : "Customer Care",
+        ),
+        byBranch: groupAgg(rangeOrders, (o) => o.branch_no ?? "—")
+          .sort((a, b) => b.sales - a.sales)
+          .slice(0, 10),
+        byCity: groupAgg(rangeOrders, (o) => cityMap.get(o.branch_no) ?? "—").sort(
+          (a, b) => b.sales - a.sales,
+        ),
         byDelivery: groupAgg(rangeOrders, (o) => o.delivery_type ?? "—"),
         byDeliveryBranch: (() => {
           const m: Record<string, Record<string, number>> = {};
@@ -210,9 +275,12 @@ export function useDashboardExportData({
         pending: byStatus["Pending"] ?? 0,
         cancelled: byStatus["Cancelled"] ?? 0,
         byDay: Object.values(byDay).sort((a, b) => a.date.localeCompare(b.date)),
-        cmpTotal: cmps.length, cmpResolved, cmpInProg,
+        cmpTotal: cmps.length,
+        cmpResolved,
+        cmpInProg,
         cmpResolutionRate: cmps.length > 0 ? (cmpResolved / cmps.length) * 100 : 0,
-        cmpBranchRows, cmpCityRows,
+        cmpBranchRows,
+        cmpCityRows,
       };
     },
   });

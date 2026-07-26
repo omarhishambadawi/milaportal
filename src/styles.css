@@ -24,61 +24,257 @@
  * Browsers without registered-property interpolation simply swap instantly —
  * no fade, but no glitch either.
  */
-@property --background { syntax: "<color>"; inherits: true; initial-value: oklch(0.995 0.003 200); }
-@property --foreground { syntax: "<color>"; inherits: true; initial-value: oklch(0.24 0.04 260); }
-@property --card { syntax: "<color>"; inherits: true; initial-value: oklch(1 0 0); }
-@property --card-foreground { syntax: "<color>"; inherits: true; initial-value: oklch(0.24 0.04 260); }
-@property --popover { syntax: "<color>"; inherits: true; initial-value: oklch(1 0 0); }
-@property --popover-foreground { syntax: "<color>"; inherits: true; initial-value: oklch(0.24 0.04 260); }
-@property --primary { syntax: "<color>"; inherits: true; initial-value: oklch(0.72 0.12 194); }
-@property --primary-foreground { syntax: "<color>"; inherits: true; initial-value: oklch(0.99 0 0); }
-@property --secondary { syntax: "<color>"; inherits: true; initial-value: oklch(0.29 0.04 260); }
-@property --secondary-foreground { syntax: "<color>"; inherits: true; initial-value: oklch(0.99 0 0); }
-@property --muted { syntax: "<color>"; inherits: true; initial-value: oklch(0.965 0.01 200); }
-@property --muted-foreground { syntax: "<color>"; inherits: true; initial-value: oklch(0.5 0.03 250); }
-@property --accent { syntax: "<color>"; inherits: true; initial-value: oklch(0.93 0.05 195); }
-@property --accent-foreground { syntax: "<color>"; inherits: true; initial-value: oklch(0.32 0.06 200); }
-@property --destructive { syntax: "<color>"; inherits: true; initial-value: oklch(0.58 0.22 25); }
-@property --destructive-foreground { syntax: "<color>"; inherits: true; initial-value: oklch(0.99 0 0); }
-@property --success { syntax: "<color>"; inherits: true; initial-value: oklch(0.62 0.15 155); }
-@property --success-foreground { syntax: "<color>"; inherits: true; initial-value: oklch(0.99 0 0); }
-@property --warning { syntax: "<color>"; inherits: true; initial-value: oklch(0.78 0.15 75); }
-@property --warning-foreground { syntax: "<color>"; inherits: true; initial-value: oklch(0.22 0.05 75); }
-@property --border { syntax: "<color>"; inherits: true; initial-value: oklch(0.91 0.015 210); }
-@property --input { syntax: "<color>"; inherits: true; initial-value: oklch(0.91 0.015 210); }
-@property --ring { syntax: "<color>"; inherits: true; initial-value: oklch(0.72 0.12 194); }
-@property --chart-1 { syntax: "<color>"; inherits: true; initial-value: oklch(0.72 0.12 194); }
-@property --chart-2 { syntax: "<color>"; inherits: true; initial-value: oklch(0.47 0.05 195); }
-@property --chart-3 { syntax: "<color>"; inherits: true; initial-value: oklch(0.4 0.06 255); }
-@property --chart-4 { syntax: "<color>"; inherits: true; initial-value: oklch(0.65 0.09 220); }
-@property --chart-5 { syntax: "<color>"; inherits: true; initial-value: oklch(0.78 0.1 190); }
+@property --background {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.995 0.003 200);
+}
+@property --foreground {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.24 0.04 260);
+}
+@property --card {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(1 0 0);
+}
+@property --card-foreground {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.24 0.04 260);
+}
+@property --popover {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(1 0 0);
+}
+@property --popover-foreground {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.24 0.04 260);
+}
+@property --primary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.72 0.12 194);
+}
+@property --primary-foreground {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.99 0 0);
+}
+@property --secondary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.29 0.04 260);
+}
+@property --secondary-foreground {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.99 0 0);
+}
+@property --muted {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.965 0.01 200);
+}
+@property --muted-foreground {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.5 0.03 250);
+}
+@property --accent {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.93 0.05 195);
+}
+@property --accent-foreground {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.32 0.06 200);
+}
+@property --destructive {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.58 0.22 25);
+}
+@property --destructive-foreground {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.99 0 0);
+}
+@property --success {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.62 0.15 155);
+}
+@property --success-foreground {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.99 0 0);
+}
+@property --warning {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.78 0.15 75);
+}
+@property --warning-foreground {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.22 0.05 75);
+}
+@property --border {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.91 0.015 210);
+}
+@property --input {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.91 0.015 210);
+}
+@property --ring {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.72 0.12 194);
+}
+@property --chart-1 {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.72 0.12 194);
+}
+@property --chart-2 {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.47 0.05 195);
+}
+@property --chart-3 {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.4 0.06 255);
+}
+@property --chart-4 {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.65 0.09 220);
+}
+@property --chart-5 {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.78 0.1 190);
+}
 
 /* Semantic tints that previously used raw `dark:` palette literals — as tokens
  * they ride the same clock instead of snapping a frame ahead. */
-@property --positive { syntax: "<color>"; inherits: true; initial-value: oklch(62.7% 0.194 149.214); }
-@property --positive-alt { syntax: "<color>"; inherits: true; initial-value: oklch(59.6% 0.145 163.225); }
-@property --negative { syntax: "<color>"; inherits: true; initial-value: oklch(57.7% 0.245 27.325); }
-@property --attention { syntax: "<color>"; inherits: true; initial-value: oklch(66.6% 0.179 58.318); }
-@property --badge-violet { syntax: "<color>"; inherits: true; initial-value: oklch(49.1% 0.27 292.581); }
-@property --badge-blue { syntax: "<color>"; inherits: true; initial-value: oklch(48.8% 0.243 264.376); }
-@property --badge-emerald { syntax: "<color>"; inherits: true; initial-value: oklch(50.8% 0.118 165.612); }
-@property --badge-amber { syntax: "<color>"; inherits: true; initial-value: oklch(55.5% 0.163 48.998); }
-@property --tint-cash { syntax: "<color>"; inherits: true; initial-value: oklch(98.7% 0.022 95.277); }
-@property --tint-wasfaty { syntax: "<color>"; inherits: true; initial-value: oklch(97.7% 0.013 236.62); }
-@property --tint-map { syntax: "<color>"; inherits: true; initial-value: oklch(0.98 0.015 195); }
-@property --map-land-top { syntax: "<color>"; inherits: true; initial-value: oklch(0.93 0.035 195); }
-@property --map-land-bottom { syntax: "<color>"; inherits: true; initial-value: oklch(0.9 0.022 215); }
-@property --map-outline { syntax: "<color>"; inherits: true; initial-value: oklch(0.66 0.07 195); }
-@property --map-grid { syntax: "<color>"; inherits: true; initial-value: oklch(0.92 0.018 215); }
-@property --map-leader { syntax: "<color>"; inherits: true; initial-value: oklch(0.66 0.015 220); }
-@property --map-label { syntax: "<color>"; inherits: true; initial-value: oklch(0.29 0.03 255); }
-@property --map-label-halo { syntax: "<color>"; inherits: true; initial-value: oklch(1 0 0); }
-@property --tint-row { syntax: "<color>"; inherits: true; initial-value: oklch(0.72 0.12 194 / 0.06); }
-@property --tint-resolved { syntax: "<color>"; inherits: true; initial-value: oklch(98.2% 0.018 155.826 / 0.4); }
+@property --positive {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(62.7% 0.194 149.214);
+}
+@property --positive-alt {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(59.6% 0.145 163.225);
+}
+@property --negative {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(57.7% 0.245 27.325);
+}
+@property --attention {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(66.6% 0.179 58.318);
+}
+@property --badge-violet {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(49.1% 0.27 292.581);
+}
+@property --badge-blue {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(48.8% 0.243 264.376);
+}
+@property --badge-emerald {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(50.8% 0.118 165.612);
+}
+@property --badge-amber {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(55.5% 0.163 48.998);
+}
+@property --tint-cash {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(98.7% 0.022 95.277);
+}
+@property --tint-wasfaty {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(97.7% 0.013 236.62);
+}
+@property --tint-map {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.98 0.015 195);
+}
+@property --map-land-top {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.93 0.035 195);
+}
+@property --map-land-bottom {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.9 0.022 215);
+}
+@property --map-outline {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.66 0.07 195);
+}
+@property --map-grid {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.92 0.018 215);
+}
+@property --map-leader {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.66 0.015 220);
+}
+@property --map-label {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.29 0.03 255);
+}
+@property --map-label-halo {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(1 0 0);
+}
+@property --tint-row {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.72 0.12 194 / 0.06);
+}
+@property --tint-resolved {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(98.2% 0.018 155.826 / 0.4);
+}
 
 /* 0 in light, 1 in dark. Lets non-colour theme affordances (the logo cross-fade,
  * the sun/moon swap) be driven off the same animation instead of their own. */
-@property --theme-dark { syntax: "<number>"; inherits: true; initial-value: 0; }
+@property --theme-dark {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
 
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
@@ -127,13 +323,13 @@
   --card-foreground: oklch(0.24 0.04 260);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.24 0.04 260);
-  --primary: oklch(0.72 0.12 194);          /* #25BDBC turquoise */
+  --primary: oklch(0.72 0.12 194); /* #25BDBC turquoise */
   --primary-foreground: oklch(0.99 0 0);
-  --secondary: oklch(0.29 0.04 260);        /* #2B3346 navy */
+  --secondary: oklch(0.29 0.04 260); /* #2B3346 navy */
   --secondary-foreground: oklch(0.99 0 0);
   --muted: oklch(0.965 0.01 200);
   --muted-foreground: oklch(0.5 0.03 250);
-  --accent: oklch(0.93 0.05 195);           /* soft teal accent */
+  --accent: oklch(0.93 0.05 195); /* soft teal accent */
   --accent-foreground: oklch(0.32 0.06 200);
   --destructive: oklch(0.58 0.22 25);
   --destructive-foreground: oklch(0.99 0 0);
@@ -144,21 +340,21 @@
   --border: oklch(0.91 0.015 210);
   --input: oklch(0.91 0.015 210);
   --ring: oklch(0.72 0.12 194);
-  --chart-1: oklch(0.72 0.12 194);          /* turquoise */
-  --chart-2: oklch(0.47 0.05 195);          /* teal */
-  --chart-3: oklch(0.4 0.06 255);           /* navy mid */
-  --chart-4: oklch(0.65 0.09 220);          /* steel blue */
-  --chart-5: oklch(0.78 0.1 190);           /* light turquoise */
-  --positive: oklch(62.7% 0.194 149.214);   /* green-600 */
+  --chart-1: oklch(0.72 0.12 194); /* turquoise */
+  --chart-2: oklch(0.47 0.05 195); /* teal */
+  --chart-3: oklch(0.4 0.06 255); /* navy mid */
+  --chart-4: oklch(0.65 0.09 220); /* steel blue */
+  --chart-5: oklch(0.78 0.1 190); /* light turquoise */
+  --positive: oklch(62.7% 0.194 149.214); /* green-600 */
   --positive-alt: oklch(59.6% 0.145 163.225); /* emerald-600 */
-  --negative: oklch(57.7% 0.245 27.325);    /* red-600 */
-  --attention: oklch(66.6% 0.179 58.318);   /* amber-600 */
-  --badge-violet: oklch(49.1% 0.27 292.581);   /* violet-700 */
-  --badge-blue: oklch(48.8% 0.243 264.376);    /* blue-700 */
+  --negative: oklch(57.7% 0.245 27.325); /* red-600 */
+  --attention: oklch(66.6% 0.179 58.318); /* amber-600 */
+  --badge-violet: oklch(49.1% 0.27 292.581); /* violet-700 */
+  --badge-blue: oklch(48.8% 0.243 264.376); /* blue-700 */
   --badge-emerald: oklch(50.8% 0.118 165.612); /* emerald-700 */
-  --badge-amber: oklch(55.5% 0.163 48.998);    /* amber-700 */
-  --tint-cash: oklch(98.7% 0.022 95.277);   /* amber-50 */
-  --tint-wasfaty: oklch(97.7% 0.013 236.62);/* sky-50 */
+  --badge-amber: oklch(55.5% 0.163 48.998); /* amber-700 */
+  --tint-cash: oklch(98.7% 0.022 95.277); /* amber-50 */
+  --tint-wasfaty: oklch(97.7% 0.013 236.62); /* sky-50 */
   --tint-map: oklch(0.98 0.015 195);
   --tint-row: oklch(0.72 0.12 194 / 0.06);
   --tint-resolved: oklch(98.2% 0.018 155.826 / 0.4); /* green-50/40 */
@@ -176,15 +372,15 @@
 .dark {
   color-scheme: dark;
   /* Premium dark palette — deep navy-slate surfaces with turquoise accents. Avoids pure black. */
-  --background: oklch(0.19 0.02 255);          /* deep slate-navy */
+  --background: oklch(0.19 0.02 255); /* deep slate-navy */
   --foreground: oklch(0.96 0.008 210);
-  --card: oklch(0.23 0.022 255);               /* elevated surface */
+  --card: oklch(0.23 0.022 255); /* elevated surface */
   --card-foreground: oklch(0.96 0.008 210);
   --popover: oklch(0.24 0.022 255);
   --popover-foreground: oklch(0.96 0.008 210);
-  --primary: oklch(0.76 0.13 194);             /* turquoise, slightly brighter for dark bg */
+  --primary: oklch(0.76 0.13 194); /* turquoise, slightly brighter for dark bg */
   --primary-foreground: oklch(0.17 0.02 255);
-  --secondary: oklch(0.30 0.025 255);
+  --secondary: oklch(0.3 0.025 255);
   --secondary-foreground: oklch(0.96 0.008 210);
   --muted: oklch(0.27 0.022 255);
   --muted-foreground: oklch(0.72 0.02 220);
@@ -204,15 +400,15 @@
   --chart-3: oklch(0.62 0.1 235);
   --chart-4: oklch(0.72 0.12 175);
   --chart-5: oklch(0.85 0.09 190);
-  --positive: oklch(79.2% 0.209 151.711);   /* green-400 */
+  --positive: oklch(79.2% 0.209 151.711); /* green-400 */
   --positive-alt: oklch(76.5% 0.177 163.223); /* emerald-400 */
-  --negative: oklch(70.4% 0.191 22.216);    /* red-400 */
-  --attention: oklch(82.8% 0.189 84.429);   /* amber-400 */
-  --badge-violet: oklch(81.1% 0.111 293.571);  /* violet-300 */
-  --badge-blue: oklch(80.9% 0.105 251.813);    /* blue-300 */
+  --negative: oklch(70.4% 0.191 22.216); /* red-400 */
+  --attention: oklch(82.8% 0.189 84.429); /* amber-400 */
+  --badge-violet: oklch(81.1% 0.111 293.571); /* violet-300 */
+  --badge-blue: oklch(80.9% 0.105 251.813); /* blue-300 */
   --badge-emerald: oklch(84.5% 0.143 164.978); /* emerald-300 */
-  --badge-amber: oklch(87.9% 0.169 91.605);    /* amber-300 */
-  --tint-cash: oklch(76.9% 0.188 70.08 / 0.1);   /* amber-500/10 */
+  --badge-amber: oklch(87.9% 0.169 91.605); /* amber-300 */
+  --tint-cash: oklch(76.9% 0.188 70.08 / 0.1); /* amber-500/10 */
   --tint-wasfaty: oklch(68.5% 0.169 237.323 / 0.1); /* sky-500/10 */
   --tint-map: oklch(0.22 0.03 200);
   --tint-row: oklch(0.76 0.13 194 / 0.12);
@@ -238,20 +434,19 @@
     --primary, --primary-foreground, --secondary, --secondary-foreground, --muted,
     --muted-foreground, --accent, --accent-foreground, --destructive, --destructive-foreground,
     --success, --success-foreground, --warning, --warning-foreground, --border, --input, --ring,
-    --chart-1, --chart-2, --chart-3, --chart-4, --chart-5,
-    --positive, --positive-alt, --negative, --attention,
-    --badge-violet, --badge-blue, --badge-emerald, --badge-amber,
-    --tint-cash, --tint-wasfaty, --tint-map, --tint-row, --tint-resolved,
-    --map-land-top, --map-land-bottom, --map-outline, --map-grid, --map-leader,
-    --map-label, --map-label-halo,
-    --theme-dark;
+    --chart-1, --chart-2, --chart-3, --chart-4, --chart-5, --positive, --positive-alt, --negative,
+    --attention, --badge-violet, --badge-blue, --badge-emerald, --badge-amber, --tint-cash,
+    --tint-wasfaty, --tint-map, --tint-row, --tint-resolved, --map-land-top, --map-land-bottom,
+    --map-outline, --map-grid, --map-leader, --map-label, --map-label-halo, --theme-dark;
   transition-duration: 0ms;
   transition-timing-function: var(--theme-ease);
 }
 
 /* Armed only for the duration of an actual toggle, so nothing animates on first
  * paint, on hydration, or when another tab syncs the preference in. */
-html.theme-switching { transition-duration: var(--theme-duration); }
+html.theme-switching {
+  transition-duration: var(--theme-duration);
+}
 
 /*
  * Nothing below <html> gets its own transition during the swap. A component
@@ -289,28 +484,64 @@ html.theme-vt *::after {
  * visibly blooms through the midpoint — light surfaces wash out on the way to
  * dark. Plain alpha compositing keeps the mid-transition colours true, which is
  * what makes the swap read as a dissolve rather than a flash. */
-::view-transition-image-pair(root) { isolation: auto; }
-::view-transition-old(root) { mix-blend-mode: normal; }
-::view-transition-new(root) { mix-blend-mode: normal; }
+::view-transition-image-pair(root) {
+  isolation: auto;
+}
+::view-transition-old(root) {
+  mix-blend-mode: normal;
+}
+::view-transition-new(root) {
+  mix-blend-mode: normal;
+}
 
 @media (prefers-reduced-motion: reduce) {
-  html.theme-switching { transition-duration: 0ms; }
+  html.theme-switching {
+    transition-duration: 0ms;
+  }
   /* The JS path already skips startViewTransition under reduced motion; this
    * covers a transition begun before the preference changed. */
   ::view-transition-old(root),
-  ::view-transition-new(root) { animation: none; }
+  ::view-transition-new(root) {
+    animation: none;
+  }
 }
 
 @layer base {
-  * { border-color: var(--color-border); }
-  html, body { background-color: var(--color-background); color: var(--color-foreground); font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
+  * {
+    border-color: var(--color-border);
+  }
+  html,
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family:
+      ui-sans-serif,
+      system-ui,
+      -apple-system,
+      "Segoe UI",
+      Roboto,
+      "Helvetica Neue",
+      Arial;
+  }
 
   /* Themed scrollbars */
-  * { scrollbar-color: var(--color-muted-foreground) transparent; }
-  *::-webkit-scrollbar { width: 10px; height: 10px; }
-  *::-webkit-scrollbar-thumb { background: color-mix(in oklab, var(--color-muted-foreground) 45%, transparent); border-radius: 8px; }
-  *::-webkit-scrollbar-thumb:hover { background: color-mix(in oklab, var(--color-muted-foreground) 65%, transparent); }
-  *::-webkit-scrollbar-track { background: transparent; }
+  * {
+    scrollbar-color: var(--color-muted-foreground) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--color-muted-foreground) 45%, transparent);
+    border-radius: 8px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--color-muted-foreground) 65%, transparent);
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
 }
 
 /*
@@ -318,8 +549,12 @@ html.theme-vt *::after {
  * --theme-dark, so they cross-fade on the same interpolation as everything
  * else rather than running their own (inevitably differently-timed) animation.
  */
-.theme-mark-light { opacity: calc(1 - var(--theme-dark)); }
-.theme-mark-dark { opacity: var(--theme-dark); }
+.theme-mark-light {
+  opacity: calc(1 - var(--theme-dark));
+}
+.theme-mark-dark {
+  opacity: var(--theme-dark);
+}
 
 .theme-icon-sun {
   opacity: calc(1 - var(--theme-dark));
@@ -327,6 +562,6 @@ html.theme-vt *::after {
 }
 .theme-icon-moon {
   opacity: var(--theme-dark);
-  transform: rotate(calc((var(--theme-dark) - 1) * 90deg)) scale(calc(0.5 + 0.5 * var(--theme-dark)));
+  transform: rotate(calc((var(--theme-dark) - 1) * 90deg))
+    scale(calc(0.5 + 0.5 * var(--theme-dark)));
 }
-

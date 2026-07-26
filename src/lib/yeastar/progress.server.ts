@@ -64,8 +64,14 @@ export async function initJob(jobId: string): Promise<ProgressState> {
   await gc();
   const db = await admin();
   const state: ProgressState = {
-    jobId, status: "pending", page: 0, totalPages: null,
-    records: 0, totalReported: null, message: "Starting…", updatedAt: Date.now(),
+    jobId,
+    status: "pending",
+    page: 0,
+    totalPages: null,
+    records: 0,
+    totalReported: null,
+    message: "Starting…",
+    updatedAt: Date.now(),
   };
   await (db.from("cdr_progress" as any) as any).upsert({
     job_id: jobId,
@@ -89,11 +95,17 @@ export async function updateJob(jobId: string, patch: Partial<ProgressState>): P
 export async function getJob(jobId: string): Promise<ProgressState | null> {
   const db = await admin();
   const { data } = await (db.from("cdr_progress" as any) as any)
-    .select("*").eq("job_id", jobId).maybeSingle();
+    .select("*")
+    .eq("job_id", jobId)
+    .maybeSingle();
   return data ? fromRow(data) : null;
 }
 
-export async function finishJob(jobId: string, totalReported: number | null, records: number): Promise<void> {
+export async function finishJob(
+  jobId: string,
+  totalReported: number | null,
+  records: number,
+): Promise<void> {
   await updateJob(jobId, {
     status: "done",
     message: `Loaded ${records.toLocaleString()} records`,

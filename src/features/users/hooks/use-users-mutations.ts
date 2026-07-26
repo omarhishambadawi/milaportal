@@ -70,11 +70,18 @@ export function useUsersMutations() {
 
   const createUser = useCallback(
     (input: {
-      email: string; password: string; fullName: string;
-      agentCode?: string; role: AppRole; temporary: boolean; expiresInHours: TempPasswordTtlHours;
+      email: string;
+      password: string;
+      fullName: string;
+      agentCode?: string;
+      role: AppRole;
+      temporary: boolean;
+      expiresInHours: TempPasswordTtlHours;
     }) =>
       run(
-        async () => { await createFn({ data: input }); },
+        async () => {
+          await createFn({ data: input });
+        },
         input.temporary
           ? "User created — they will set their own password at first sign-in"
           : "User created",
@@ -102,7 +109,9 @@ export function useUsersMutations() {
           const roleKey = (draft.role ?? "customer_care") as AppRole;
           const current = draft.permissions ?? [];
           const toStore =
-            draft._usingDefaults || permsEqual(current, defaultPermsForRole(roleKey)) ? [] : current;
+            draft._usingDefaults || permsEqual(current, defaultPermsForRole(roleKey))
+              ? []
+              : current;
           await updateFn({
             data: {
               userId: draft.id,
@@ -123,7 +132,9 @@ export function useUsersMutations() {
   const setActive = useCallback(
     (user: AdminUserRow, active: boolean) =>
       run(
-        async () => { await setActiveFn({ data: { userId: user.id, active } }); },
+        async () => {
+          await setActiveFn({ data: { userId: user.id, active } });
+        },
         active ? `${user.full_name} reactivated` : `${user.full_name} deactivated`,
         "Could not update the account",
       ),
@@ -131,9 +142,16 @@ export function useUsersMutations() {
   );
 
   const setPassword = useCallback(
-    (user: AdminUserRow, password: string, temporary: boolean, expiresInHours: TempPasswordTtlHours) =>
+    (
+      user: AdminUserRow,
+      password: string,
+      temporary: boolean,
+      expiresInHours: TempPasswordTtlHours,
+    ) =>
       run(
-        async () => { await setPwFn({ data: { userId: user.id, password, temporary, expiresInHours } }); },
+        async () => {
+          await setPwFn({ data: { userId: user.id, password, temporary, expiresInHours } });
+        },
         temporary
           ? `Temporary password set — ${user.full_name} must change it within ${expiresInHours} hours`
           : "Password updated",
@@ -145,7 +163,9 @@ export function useUsersMutations() {
   const sendResetEmail = useCallback(
     (user: AdminUserRow) =>
       run(
-        async () => { await sendResetFn({ data: { userId: user.id } }); },
+        async () => {
+          await sendResetFn({ data: { userId: user.id } });
+        },
         `Reset link sent to ${user.email}`,
         "Could not send the reset email",
       ),
@@ -168,7 +188,9 @@ export function useUsersMutations() {
   const deleteUser = useCallback(
     (user: AdminUserRow) =>
       run(
-        async () => { await deleteFn({ data: { userId: user.id } }); },
+        async () => {
+          await deleteFn({ data: { userId: user.id } });
+        },
         `${user.full_name} deleted`,
         "Could not delete the user",
       ),
@@ -180,7 +202,15 @@ export function useUsersMutations() {
   // render would make those callbacks unstable and silently defeat the memoized
   // table rows they are passed to.
   return useMemo(
-    () => ({ createUser, saveUser, setActive, setPassword, sendResetEmail, grantOwner, deleteUser }),
+    () => ({
+      createUser,
+      saveUser,
+      setActive,
+      setPassword,
+      sendResetEmail,
+      grantOwner,
+      deleteUser,
+    }),
     [createUser, saveUser, setActive, setPassword, sendResetEmail, grantOwner, deleteUser],
   );
 }

@@ -32,12 +32,20 @@ function ResetPage() {
     // This flow is reached from a recovery link, so there is no current password
     // to confirm — possession of the emailed token is the proof of identity.
     const { error } = await supabase.auth.updateUser({ password });
-    if (error) { setBusy(false); toast.error(error.message); return; }
+    if (error) {
+      setBusy(false);
+      toast.error(error.message);
+      return;
+    }
     // A recovery reset satisfies an administrator-issued temporary password just
     // as the self-service form does; without this the forced-change screen would
     // still be waiting on the other side of the redirect. Best-effort — the
     // password is already changed, so a failure here must not report failure.
-    try { await markChangedFn(); } catch { /* gate clears on next reset */ }
+    try {
+      await markChangedFn();
+    } catch {
+      /* gate clears on next reset */
+    }
     setBusy(false);
     toast.success("Password updated");
     navigate({ to: "/dashboard", replace: true });
@@ -46,12 +54,21 @@ function ResetPage() {
   return (
     <div className="flex min-h-screen items-center justify-center px-4">
       <Card className="w-full max-w-md">
-        <CardHeader><CardTitle>Set a new password</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle>Set a new password</CardTitle>
+        </CardHeader>
         <CardContent>
           <form onSubmit={submit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="pw">New password</Label>
-              <PasswordInput id="pw" autoComplete="new-password" required value={password} onChange={(e) => setPassword(e.target.value)} aria-describedby="reset-password-rules" />
+              <PasswordInput
+                id="pw"
+                autoComplete="new-password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                aria-describedby="reset-password-rules"
+              />
               <ul id="reset-password-rules" aria-live="polite" className="space-y-1 pt-1">
                 {results.map((rule) => (
                   <li
@@ -61,15 +78,19 @@ function ResetPage() {
                       rule.passed ? "text-[var(--positive)]" : "text-muted-foreground",
                     )}
                   >
-                    {rule.passed
-                      ? <Check className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                      : <X className="h-3.5 w-3.5 shrink-0" aria-hidden />}
+                    {rule.passed ? (
+                      <Check className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                    ) : (
+                      <X className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                    )}
                     {rule.label}
                   </li>
                 ))}
               </ul>
             </div>
-            <Button type="submit" className="w-full" disabled={busy || !valid}>{busy ? "Saving…" : "Update password"}</Button>
+            <Button type="submit" className="w-full" disabled={busy || !valid}>
+              {busy ? "Saving…" : "Update password"}
+            </Button>
           </form>
         </CardContent>
       </Card>

@@ -3,18 +3,30 @@ import { format, parseISO } from "date-fns";
 export const toISO = (d: Date) => format(d, "yyyy-MM-dd");
 
 export const normalizeSearchTerm = (value: string) =>
-  value.replace(/[,%.*()]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  value
+    .replace(/[,%.*()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
 
 /** Format ISO date as "Friday, Jul 10, 2026". */
 export const fmtOrderDate = (iso: string | null | undefined) => {
   if (!iso) return "—";
-  try { return format(parseISO(iso), "EEEE, MMM d, yyyy"); } catch { return String(iso); }
+  try {
+    return format(parseISO(iso), "EEEE, MMM d, yyyy");
+  } catch {
+    return String(iso);
+  }
 };
 
 /** Short form for mobile / dense cells: "Fri, Jul 10". */
 export const fmtOrderDateShort = (iso: string | null | undefined) => {
   if (!iso) return "—";
-  try { return format(parseISO(iso), "EEE, MMM d"); } catch { return String(iso); }
+  try {
+    return format(parseISO(iso), "EEE, MMM d");
+  } catch {
+    return String(iso);
+  }
 };
 
 /** Build an .or() filter string for PostgREST across searchable columns. */

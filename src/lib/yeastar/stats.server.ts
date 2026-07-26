@@ -53,8 +53,8 @@ export interface AgentCallStats {
   inbound: number;
   outbound: number;
   answered: number;
-  missed: number;               // per-agent NO ANSWER — INBOUND ONLY (M1)
-  noAnswerOutbound: number;     // per-agent outbound calls customer did not pick up
+  missed: number; // per-agent NO ANSWER — INBOUND ONLY (M1)
+  noAnswerOutbound: number; // per-agent outbound calls customer did not pick up
   busy: number;
   failed: number;
   voicemail: number;
@@ -69,24 +69,24 @@ export interface AgentCallStats {
 }
 
 export interface CallTotals {
-  total: number;                 // inbound + outbound only (Internal excluded)
+  total: number; // inbound + outbound only (Internal excluded)
   inbound: number;
   outbound: number;
   answered: number;
-  missed: number;                // platform (queue) missed only
+  missed: number; // platform (queue) missed only
   abandoned: number;
-  noAnswerOutbound: number;      // outbound calls customer didn't pick up
+  noAnswerOutbound: number; // outbound calls customer didn't pick up
   busy: number;
   failed: number;
   voicemail: number;
-  talkSeconds: number;           // SUM of answered-leg talk across all groups (M2)
-  ringSeconds: number;           // ring on answered groups (agent ring only)
-  waitSeconds: number;           // queue wait, answered + abandoned inbound (H5)
+  talkSeconds: number; // SUM of answered-leg talk across all groups (M2)
+  ringSeconds: number; // ring on answered groups (agent ring only)
+  waitSeconds: number; // queue wait, answered + abandoned inbound (H5)
   handlingSeconds: number;
   longestSec: number;
-  avgTalkSec: number;            // avg talk on answered groups
-  avgWaitSec: number;            // avg wait across inbound answered + abandoned (H5)
-  avgRingAnsweredSec: number;    // avg agent-ring on answered groups
+  avgTalkSec: number; // avg talk on answered groups
+  avgWaitSec: number; // avg wait across inbound answered + abandoned (H5)
+  avgRingAnsweredSec: number; // avg agent-ring on answered groups
   answerRate: number;
   missedRate: number;
   abandonRate: number;
@@ -116,19 +116,31 @@ export interface DayBucket {
 
 export interface TeamCompareRow {
   team: "customer_care" | "telesales";
-  calls: number; answered: number; missed: number; inbound: number; outbound: number;
-  talkSeconds: number; handlingSeconds: number;
-  answerRate: number; missedRate: number;
+  calls: number;
+  answered: number;
+  missed: number;
+  inbound: number;
+  outbound: number;
+  talkSeconds: number;
+  handlingSeconds: number;
+  answerRate: number;
+  missedRate: number;
 }
 
 export interface ConversionRow {
-  agentId: string; name: string; ext: string;
+  agentId: string;
+  name: string;
+  ext: string;
   answered: number;
-  ordersTotal: number; ordersCompleted: number; ordersCancelled: number; ordersPending: number;
-  ordersCash: number; ordersWasfaty: number;
+  ordersTotal: number;
+  ordersCompleted: number;
+  ordersCancelled: number;
+  ordersPending: number;
+  ordersCash: number;
+  ordersWasfaty: number;
   revenue: number;
-  conversionRate: number;      // total orders / answered * 100 (canonical)
-  completionRate: number;      // completed orders / total orders * 100
+  conversionRate: number; // total orders / answered * 100 (canonical)
+  completionRate: number; // completed orders / total orders * 100
   revenuePerCall: number;
   revenuePerOrder: number;
 }
@@ -137,15 +149,22 @@ export interface AnalyticsResult {
   totals: CallTotals;
   agents: AgentCallStats[];
   byDay: DayBucket[];
-  byHour: HourBucket[];              // 0..23
+  byHour: HourBucket[]; // 0..23
   teamCompare: TeamCompareRow[];
   conversion: {
     overall: {
-      answered: number; orders: number; completed: number; cancelled: number; pending: number;
-      cash: number; wasfaty: number; revenue: number;
-      conversionRate: number;        // total orders / answered * 100 (canonical)
-      completionRate: number;        // completed orders / total orders * 100
-      revenuePerCall: number; revenuePerOrder: number;
+      answered: number;
+      orders: number;
+      completed: number;
+      cancelled: number;
+      pending: number;
+      cash: number;
+      wasfaty: number;
+      revenue: number;
+      conversionRate: number; // total orders / answered * 100 (canonical)
+      completionRate: number; // completed orders / total orders * 100
+      revenuePerCall: number;
+      revenuePerOrder: number;
     };
     perAgent: ConversionRow[];
     perDay: { date: string; answered: number; orders: number; rate: number }[];
@@ -312,17 +331,24 @@ function hourOf(ts: number | undefined, tzOffsetMin: number): number {
 // Note: the legacy `aggregateAgentStats` adaptor was removed (Prompt 1, item 1).
 // All callers now use `aggregateAnalytics` directly.
 
-
 export interface Classified {
   rows: CdrRecord[];
   direction: "Inbound" | "Outbound";
   anyAnswered: boolean;
-  talk: number;                  // sum across answered legs (M2)
-  ring: number;                  // max agent ring
-  wait: number;                  // max queue wait
+  talk: number; // sum across answered legs (M2)
+  ring: number; // max agent ring
+  wait: number; // max queue wait
   handling: number;
   primary: CdrRecord;
-  kind: "answered" | "missed" | "abandoned" | "noAnswerOutbound" | "busy" | "failed" | "voicemail" | "other";
+  kind:
+    | "answered"
+    | "missed"
+    | "abandoned"
+    | "noAnswerOutbound"
+    | "busy"
+    | "failed"
+    | "voicemail"
+    | "other";
   ts: number | undefined;
 }
 
@@ -363,14 +389,29 @@ function classify(rows: CdrRecord[]): Classified | null {
     }
   }
 
-  return { rows, direction, anyAnswered, talk, ring, wait, handling, primary, kind, ts: primary.timestamp };
+  return {
+    rows,
+    direction,
+    anyAnswered,
+    talk,
+    ring,
+    wait,
+    handling,
+    primary,
+    kind,
+    ts: primary.timestamp,
+  };
 }
 
 /** Does this classified group pass a status-filter selection? */
 function matchesStatus(c: Classified, status: AggregateOptions["status"]): boolean {
   if (!status || status === "all") return true;
   if (status === "ANSWERED") return c.anyAnswered;
-  if (status === "NO ANSWER") return !c.anyAnswered && (c.kind === "missed" || c.kind === "abandoned" || c.kind === "noAnswerOutbound");
+  if (status === "NO ANSWER")
+    return (
+      !c.anyAnswered &&
+      (c.kind === "missed" || c.kind === "abandoned" || c.kind === "noAnswerOutbound")
+    );
   const dispSet = new Set(c.rows.map((r) => r.disposition));
   return dispSet.has(status);
 }
@@ -408,9 +449,10 @@ export function classifyRecords(records: CdrRecord[]): ClassifiedRecords {
   for (const r of nonInternal) {
     const anyR = r as any;
     const rowId = anyR.uid ?? anyR.new_id ?? anyR.id;
-    const fp = rowId != null
-      ? `id:${rowId}`
-      : `${r.timestamp ?? ""}|${r.call_from_number ?? ""}|${r.call_to_number ?? ""}|${r.disposition ?? ""}|${r.talk_duration ?? ""}|${r.ring_duration ?? ""}`;
+    const fp =
+      rowId != null
+        ? `id:${rowId}`
+        : `${r.timestamp ?? ""}|${r.call_from_number ?? ""}|${r.call_to_number ?? ""}|${r.disposition ?? ""}|${r.talk_duration ?? ""}|${r.ring_duration ?? ""}`;
     if (seen.has(fp)) continue;
     seen.add(fp);
     filteredRecords.push(r);
@@ -425,7 +467,8 @@ export function classifyRecords(records: CdrRecord[]): ClassifiedRecords {
     const cid = correlationId(r);
     if (cid) {
       const arr = groupsById.get(cid);
-      if (arr) arr.push(r); else groupsById.set(cid, [r]);
+      if (arr) arr.push(r);
+      else groupsById.set(cid, [r]);
     } else {
       withoutId.push(r);
     }
@@ -450,10 +493,7 @@ export function classifyRecords(records: CdrRecord[]): ClassifiedRecords {
     lastTsByFp.set(fp, ts);
   }
 
-  const allGroups: CdrRecord[][] = [
-    ...groupsById.values(),
-    ...Object.values(groupsByFp),
-  ];
+  const allGroups: CdrRecord[][] = [...groupsById.values(), ...Object.values(groupsByFp)];
 
   // Classify every group.
   const groups: Classified[] = [];
@@ -476,7 +516,9 @@ export function aggregateClassified(
   orders: OrderRef[],
   opts: AggregateOptions = {},
 ): AnalyticsResult {
-  const tz = opts.tzOffsetMin ?? Number(process.env.YEASTAR_UTC_OFFSET_MINUTES ?? BUSINESS_UTC_OFFSET_MINUTES);
+  const tz =
+    opts.tzOffsetMin ??
+    Number(process.env.YEASTAR_UTC_OFFSET_MINUTES ?? BUSINESS_UTC_OFFSET_MINUTES);
   const direction = opts.direction ?? "all";
   const status = opts.status ?? "all";
 
@@ -504,8 +546,10 @@ export function aggregateClassified(
       if (ext && scope.exts.has(ext)) return true;
     }
     if (
-      scope.ownedQueueNumbers && scope.ownedQueueNumbers.size > 0 &&
-      !c.anyAnswered && c.direction === "Inbound" &&
+      scope.ownedQueueNumbers &&
+      scope.ownedQueueNumbers.size > 0 &&
+      !c.anyAnswered &&
+      c.direction === "Inbound" &&
       routedThroughQueue(c.rows, scope.ownedQueueNumbers)
     ) {
       return true;
@@ -515,13 +559,27 @@ export function aggregateClassified(
   const scopedGroups = scope ? filteredGroups.filter(groupInScope) : filteredGroups;
 
   const totals: CallTotals = {
-    total: 0, inbound: 0, outbound: 0,
-    answered: 0, missed: 0, abandoned: 0, noAnswerOutbound: 0,
-    busy: 0, failed: 0, voicemail: 0,
-    talkSeconds: 0, ringSeconds: 0, waitSeconds: 0, handlingSeconds: 0,
+    total: 0,
+    inbound: 0,
+    outbound: 0,
+    answered: 0,
+    missed: 0,
+    abandoned: 0,
+    noAnswerOutbound: 0,
+    busy: 0,
+    failed: 0,
+    voicemail: 0,
+    talkSeconds: 0,
+    ringSeconds: 0,
+    waitSeconds: 0,
+    handlingSeconds: 0,
     longestSec: 0,
-    avgTalkSec: 0, avgWaitSec: 0, avgRingAnsweredSec: 0,
-    answerRate: 0, missedRate: 0, abandonRate: 0,
+    avgTalkSec: 0,
+    avgWaitSec: 0,
+    avgRingAnsweredSec: 0,
+    answerRate: 0,
+    missedRate: 0,
+    abandonRate: 0,
   };
 
   const dayMap = new Map<string, DayBucket>();
@@ -560,20 +618,42 @@ export function aggregateClassified(
     // Buckets — inbound + outbound only
     const dk = dayKey(c.ts, tz);
     const hr = hourOf(c.ts, tz);
-    const day = dayMap.get(dk) ?? { date: dk, total: 0, answered: 0, missed: 0, abandoned: 0, inbound: 0, outbound: 0, talkSeconds: 0, ringSeconds: 0, waitSeconds: 0, handlingSeconds: 0 };
+    const day = dayMap.get(dk) ?? {
+      date: dk,
+      total: 0,
+      answered: 0,
+      missed: 0,
+      abandoned: 0,
+      inbound: 0,
+      outbound: 0,
+      talkSeconds: 0,
+      ringSeconds: 0,
+      waitSeconds: 0,
+      handlingSeconds: 0,
+    };
     day.total++;
-    if (c.direction === "Inbound") day.inbound++; else day.outbound++;
+    if (c.direction === "Inbound") day.inbound++;
+    else day.outbound++;
     if (c.kind === "answered") {
-      day.answered++; day.talkSeconds += c.talk; day.ringSeconds += c.ring; day.handlingSeconds += c.handling;
+      day.answered++;
+      day.talkSeconds += c.talk;
+      day.ringSeconds += c.ring;
+      day.handlingSeconds += c.handling;
       if (c.direction === "Inbound") day.waitSeconds += c.wait;
-    } else if (c.kind === "abandoned") { day.abandoned++; day.waitSeconds += c.wait; }
-    else if (c.kind === "missed") { day.missed++; day.waitSeconds += c.wait; }
+    } else if (c.kind === "abandoned") {
+      day.abandoned++;
+      day.waitSeconds += c.wait;
+    } else if (c.kind === "missed") {
+      day.missed++;
+      day.waitSeconds += c.wait;
+    }
     dayMap.set(dk, day);
 
     const hb = hourMap.get(hr) ?? { hour: hr, total: 0, answered: 0, inbound: 0, outbound: 0 };
     hb.total++;
     if (c.kind === "answered") hb.answered++;
-    if (c.direction === "Inbound") hb.inbound++; else hb.outbound++;
+    if (c.direction === "Inbound") hb.inbound++;
+    else hb.outbound++;
     hourMap.set(hr, hb);
   }
 
@@ -589,12 +669,27 @@ export function aggregateClassified(
   for (const c of scopedGroups) for (const r of c.rows) keepRowSet.add(r);
 
   const blank = (a: AgentRef): AgentCallStats => ({
-    agentId: a.id, name: a.name, ext: a.ext, team: a.team,
-    total: 0, inbound: 0, outbound: 0,
-    answered: 0, missed: 0, noAnswerOutbound: 0, busy: 0, failed: 0, voicemail: 0,
-    talkSeconds: 0, ringSeconds: 0, handlingSeconds: 0,
+    agentId: a.id,
+    name: a.name,
+    ext: a.ext,
+    team: a.team,
+    total: 0,
+    inbound: 0,
+    outbound: 0,
+    answered: 0,
+    missed: 0,
+    noAnswerOutbound: 0,
+    busy: 0,
+    failed: 0,
+    voicemail: 0,
+    talkSeconds: 0,
+    ringSeconds: 0,
+    handlingSeconds: 0,
     longestSec: 0,
-    avgTalkSec: 0, avgRingSec: 0, avgHandlingSec: 0, answerRate: 0,
+    avgTalkSec: 0,
+    avgRingSec: 0,
+    avgHandlingSec: 0,
+    answerRate: 0,
   });
   const perAgent = new Map<string, AgentCallStats>();
   const unmatchedExt = new Map<string, number>();
@@ -610,7 +705,10 @@ export function aggregateClassified(
       continue;
     }
     let s = perAgent.get(agent.id);
-    if (!s) { s = blank(agent); perAgent.set(agent.id, s); }
+    if (!s) {
+      s = blank(agent);
+      perAgent.set(agent.id, s);
+    }
     s.total++;
     if (r.call_type === "Inbound") s.inbound++;
     else if (r.call_type === "Outbound") s.outbound++;
@@ -634,13 +732,15 @@ export function aggregateClassified(
     else if (r.disposition === "VOICEMAIL") s.voicemail++;
   }
 
-  const agentRows = [...perAgent.values()].map((s) => ({
-    ...s,
-    avgTalkSec: s.answered ? s.talkSeconds / s.answered : 0,
-    avgRingSec: s.answered ? s.ringSeconds / s.answered : 0,
-    avgHandlingSec: s.answered ? s.handlingSeconds / s.answered : 0,
-    answerRate: s.total ? (s.answered / s.total) * 100 : 0,
-  })).sort((a, b) => b.total - a.total);
+  const agentRows = [...perAgent.values()]
+    .map((s) => ({
+      ...s,
+      avgTalkSec: s.answered ? s.talkSeconds / s.answered : 0,
+      avgRingSec: s.answered ? s.ringSeconds / s.answered : 0,
+      avgHandlingSec: s.answered ? s.handlingSeconds / s.answered : 0,
+      answerRate: s.total ? (s.answered / s.total) * 100 : 0,
+    }))
+    .sort((a, b) => b.total - a.total);
 
   // ---- Reconciliation intentionally REMOVED ------------------------------
   // Previous code overwrote platform totals from per-agent row aggregates.
@@ -652,19 +752,43 @@ export function aggregateClassified(
   // Rule: platform KPIs come from classified CDR groups above and stay
   // authoritative. Per-agent stats are supplemental and never mutate them.
 
-
-
   // ---- Team compare -------------------------------------------------------
   // Per M1, team `missed` is inbound-missed only (per-agent already scoped).
   const teams: Record<"customer_care" | "telesales", TeamCompareRow> = {
-    customer_care: { team: "customer_care", calls: 0, answered: 0, missed: 0, inbound: 0, outbound: 0, talkSeconds: 0, handlingSeconds: 0, answerRate: 0, missedRate: 0 },
-    telesales:    { team: "telesales",    calls: 0, answered: 0, missed: 0, inbound: 0, outbound: 0, talkSeconds: 0, handlingSeconds: 0, answerRate: 0, missedRate: 0 },
+    customer_care: {
+      team: "customer_care",
+      calls: 0,
+      answered: 0,
+      missed: 0,
+      inbound: 0,
+      outbound: 0,
+      talkSeconds: 0,
+      handlingSeconds: 0,
+      answerRate: 0,
+      missedRate: 0,
+    },
+    telesales: {
+      team: "telesales",
+      calls: 0,
+      answered: 0,
+      missed: 0,
+      inbound: 0,
+      outbound: 0,
+      talkSeconds: 0,
+      handlingSeconds: 0,
+      answerRate: 0,
+      missedRate: 0,
+    },
   };
   for (const a of agentRows) {
     const t = teams[a.team];
-    t.calls += a.total; t.answered += a.answered; t.missed += a.missed;
-    t.inbound += a.inbound; t.outbound += a.outbound;
-    t.talkSeconds += a.talkSeconds; t.handlingSeconds += a.handlingSeconds;
+    t.calls += a.total;
+    t.answered += a.answered;
+    t.missed += a.missed;
+    t.inbound += a.inbound;
+    t.outbound += a.outbound;
+    t.talkSeconds += a.talkSeconds;
+    t.handlingSeconds += a.handlingSeconds;
   }
   for (const t of Object.values(teams)) {
     t.answerRate = t.calls ? (t.answered / t.calls) * 100 : 0;
@@ -680,9 +804,9 @@ export function aggregateClassified(
   // owns call metrics, Orders owns order metrics — divided here, never merged.
   const S_COMPLETED = STATUSES[1]; // "Completed"
   const S_CANCELLED = STATUSES[2]; // "Cancelled"
-  const S_PENDING   = STATUSES[0]; // "Pending"
-  const T_CASH      = ORDER_TYPES[0];
-  const T_WASFATY   = ORDER_TYPES[1];
+  const S_PENDING = STATUSES[0]; // "Pending"
+  const T_CASH = ORDER_TYPES[0];
+  const T_WASFATY = ORDER_TYPES[1];
 
   const ordersTotal = orders.length;
   const ordersCompleted = orders.filter((o) => o.status === S_COMPLETED).length;
@@ -706,39 +830,46 @@ export function aggregateClassified(
 
   // Per-agent conversion for every in-scope agent (answered from that agent's
   // call stats; orders joined by agent_id). Same canonical formula.
-  const perAgentConv: ConversionRow[] = agentRows.map((a) => {
-    const os = orders.filter((o) => o.agent_id === a.agentId);
-    const oc = os.filter((o) => o.status === S_COMPLETED).length;
-    const rev = os.reduce((s, o) => s + num(o.invoice_value), 0);
-    return {
-      agentId: a.agentId, name: a.name, ext: a.ext,
-      answered: a.answered,
-      ordersTotal: os.length,
-      ordersCompleted: oc,
-      ordersCancelled: os.filter((o) => o.status === S_CANCELLED).length,
-      ordersPending: os.filter((o) => o.status === S_PENDING).length,
-      ordersCash: os.filter((o) => o.order_type === T_CASH).length,
-      ordersWasfaty: os.filter((o) => o.order_type === T_WASFATY).length,
-      revenue: rev,
-      conversionRate: a.answered ? (os.length / a.answered) * 100 : 0,
-      completionRate: os.length ? (oc / os.length) * 100 : 0,
-      revenuePerCall: a.answered ? rev / a.answered : 0,
-      revenuePerOrder: os.length ? rev / os.length : 0,
-    };
-  }).sort((a, b) => b.conversionRate - a.conversionRate);
+  const perAgentConv: ConversionRow[] = agentRows
+    .map((a) => {
+      const os = orders.filter((o) => o.agent_id === a.agentId);
+      const oc = os.filter((o) => o.status === S_COMPLETED).length;
+      const rev = os.reduce((s, o) => s + num(o.invoice_value), 0);
+      return {
+        agentId: a.agentId,
+        name: a.name,
+        ext: a.ext,
+        answered: a.answered,
+        ordersTotal: os.length,
+        ordersCompleted: oc,
+        ordersCancelled: os.filter((o) => o.status === S_CANCELLED).length,
+        ordersPending: os.filter((o) => o.status === S_PENDING).length,
+        ordersCash: os.filter((o) => o.order_type === T_CASH).length,
+        ordersWasfaty: os.filter((o) => o.order_type === T_WASFATY).length,
+        revenue: rev,
+        conversionRate: a.answered ? (os.length / a.answered) * 100 : 0,
+        completionRate: os.length ? (oc / os.length) * 100 : 0,
+        revenuePerCall: a.answered ? rev / a.answered : 0,
+        revenuePerOrder: os.length ? rev / os.length : 0,
+      };
+    })
+    .sort((a, b) => b.conversionRate - a.conversionRate);
 
   // Per-day conversion = total orders / answered calls (both scoped).
   const ordersByDay = new Map<string, number>();
   for (const o of orders) ordersByDay.set(o.order_date, (ordersByDay.get(o.order_date) ?? 0) + 1);
-  const perDay = [...dayMap.values()].sort((a, b) => a.date.localeCompare(b.date)).map((d) => {
-    const answered = d.answered;
-    const ord = ordersByDay.get(d.date) ?? 0;
-    return { date: d.date, answered, orders: ord, rate: answered ? (ord / answered) * 100 : 0 };
-  });
+  const perDay = [...dayMap.values()]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((d) => {
+      const answered = d.answered;
+      const ord = ordersByDay.get(d.date) ?? 0;
+      return { date: d.date, answered, orders: ord, rate: answered ? (ord / answered) * 100 : 0 };
+    });
 
   // Ensure hour 0..23
   const byHour: HourBucket[] = [];
-  for (let h = 0; h < 24; h++) byHour.push(hourMap.get(h) ?? { hour: h, total: 0, answered: 0, inbound: 0, outbound: 0 });
+  for (let h = 0; h < 24; h++)
+    byHour.push(hourMap.get(h) ?? { hour: h, total: 0, answered: 0, inbound: 0, outbound: 0 });
 
   return {
     totals,
@@ -749,8 +880,10 @@ export function aggregateClassified(
     conversion: { overall, perAgent: perAgentConv, perDay },
     unmatched: {
       records: unmatchedRecords,
-      extensions: [...unmatchedExt.entries()].map(([ext, count]) => ({ ext, count }))
-        .sort((a, b) => b.count - a.count).slice(0, 25),
+      extensions: [...unmatchedExt.entries()]
+        .map(([ext, count]) => ({ ext, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 25),
     },
   };
 }

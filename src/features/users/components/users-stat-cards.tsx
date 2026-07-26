@@ -21,10 +21,34 @@ export function UsersStatCards({
   onSelect: (status: UserStatusFilter) => void;
 }) {
   const cards = [
-    { key: "all" as const, label: "Total", value: stats.total, icon: UsersIcon, tone: "text-primary" },
-    { key: "active" as const, label: "Active", value: stats.active, icon: UserCheck, tone: "text-[var(--positive)]" },
-    { key: "inactive" as const, label: "Inactive", value: stats.inactive, icon: CircleSlash, tone: "text-muted-foreground" },
-    { key: "pending" as const, label: "Awaiting password", value: stats.pending, icon: KeyRound, tone: "text-[var(--badge-amber)]" },
+    {
+      key: "all" as const,
+      label: "Total",
+      value: stats.total,
+      icon: UsersIcon,
+      tone: "text-primary",
+    },
+    {
+      key: "active" as const,
+      label: "Active",
+      value: stats.active,
+      icon: UserCheck,
+      tone: "text-[var(--positive)]",
+    },
+    {
+      key: "inactive" as const,
+      label: "Inactive",
+      value: stats.inactive,
+      icon: CircleSlash,
+      tone: "text-muted-foreground",
+    },
+    {
+      key: "pending" as const,
+      label: "Awaiting password",
+      value: stats.pending,
+      icon: KeyRound,
+      tone: "text-[var(--badge-amber)]",
+    },
   ];
 
   return (

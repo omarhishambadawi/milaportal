@@ -30,11 +30,29 @@ interface UseOrdersListDataArgs {
  * calls, same enrichment and summary shapes.
  */
 export function useOrdersListData({
-  from, to, team, agent, status, mineOnly, userId, isAdmin, term, searching,
-  filterKey, page, pageSize, applyFilters, namesById, cities,
+  from,
+  to,
+  team,
+  agent,
+  status,
+  mineOnly,
+  userId,
+  isAdmin,
+  term,
+  searching,
+  filterKey,
+  page,
+  pageSize,
+  applyFilters,
+  namesById,
+  cities,
 }: UseOrdersListDataArgs) {
   // Paginated page fetch (server-side range + count).
-  const { data: pageData, isLoading, isFetching } = useQuery({
+  const {
+    data: pageData,
+    isLoading,
+    isFetching,
+  } = useQuery({
     queryKey: queryKeys.orders.page(filterKey, page, pageSize),
     placeholderData: keepPreviousData,
     queryFn: async () => {
@@ -101,9 +119,14 @@ export function useOrdersListData({
   };
 
   return {
-    isLoading, isFetching,
+    isLoading,
+    isFetching,
     pageRows,
     summary,
-    total, totalPages, currentPage, rangeStart, rangeEnd,
+    total,
+    totalPages,
+    currentPage,
+    rangeStart,
+    rangeEnd,
   };
 }

@@ -25,7 +25,10 @@ export const fmtSAR = (v: number | string | null | undefined) => {
 };
 
 /** Team-aware display number, e.g. CC-43435 or TS-4323. Strips leading "#". */
-export function formatOrderNo(team: string | null | undefined, displayNo: string | null | undefined): string {
+export function formatOrderNo(
+  team: string | null | undefined,
+  displayNo: string | null | undefined,
+): string {
   if (!displayNo) return "—";
   const n = String(displayNo).replace(/^#/, "");
   const prefix = team === "telesales" ? "TS-" : "CC-";

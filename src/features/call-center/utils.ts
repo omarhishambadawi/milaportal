@@ -9,7 +9,9 @@ export function hourLabel(h: number): string {
   return `${h - 12} PM`;
 }
 
-export function pct(v?: number) { return `${(v ?? 0).toFixed(1)}%`; }
+export function pct(v?: number) {
+  return `${(v ?? 0).toFixed(1)}%`;
+}
 
 export function hhmmss(sec?: number): string {
   const s = Math.max(0, Math.floor(sec ?? 0));

@@ -1,7 +1,13 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { APP_ROLES, canActOnRole, canAssignRole, isRetiredRole, roleHasAgentCode } from "@/lib/roles";
+import {
+  APP_ROLES,
+  canActOnRole,
+  canAssignRole,
+  isRetiredRole,
+  roleHasAgentCode,
+} from "@/lib/roles";
 import { AVATAR_BUCKET, AVATAR_SIGNED_TTL, avatarObjectPath } from "@/lib/avatar";
 import {
   DEFAULT_TEMP_PASSWORD_TTL_HOURS,
@@ -15,7 +21,10 @@ import { ACTIVITY_PAGE_SIZE, ACTIVITY_MAX_ROWS } from "@/lib/audit-log";
 
 /** Accepts only the offered TTLs, so the deadline cannot be widened by a
  *  hand-rolled request. The timestamp itself is always computed server-side. */
-const TtlEnum = z.union([z.literal(TEMP_PASSWORD_TTL_OPTIONS[0]), z.literal(TEMP_PASSWORD_TTL_OPTIONS[1])]);
+const TtlEnum = z.union([
+  z.literal(TEMP_PASSWORD_TTL_OPTIONS[0]),
+  z.literal(TEMP_PASSWORD_TTL_OPTIONS[1]),
+]);
 
 // Derived from APP_ROLES so a role added to the enum cannot be silently
 // rejected at this boundary. `supervisor` was missing here even though the
@@ -49,7 +58,12 @@ async function isOwner(supabase: any, userId: string): Promise<boolean> {
 }
 
 /** Refuse when the target is an Owner and the caller is not one. */
-async function assertMayActOnTarget(supabase: any, callerId: string, targetId: string, action: string) {
+async function assertMayActOnTarget(
+  supabase: any,
+  callerId: string,
+  targetId: string,
+  action: string,
+) {
   if (!(await isOwner(supabase, targetId))) return;
   if (await isOwner(supabase, callerId)) return;
   console.warn("[authz] non-owner attempted to act on Owner", { callerId, targetId, action });
@@ -65,8 +79,14 @@ async function assertAdmin(supabase: any, userId: string) {
   }
   if (!data) {
     const { data: roleRow } = await supabase
-      .from("user_roles").select("role").eq("user_id", userId).maybeSingle();
-    console.warn("[authz] non-administrator access attempt", { userId, role: roleRow?.role ?? null });
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", userId)
+      .maybeSingle();
+    console.warn("[authz] non-administrator access attempt", {
+      userId,
+      role: roleRow?.role ?? null,
+    });
     throw new Error("Forbidden: administrator access required (owner or admin)");
   }
   console.log("[authz] administrator access granted", { userId });
@@ -83,7 +103,10 @@ async function assertAdmin(supabase: any, userId: string) {
 async function getRole(userId: string): Promise<string | null> {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const { data, error } = await supabaseAdmin
-    .from("user_roles").select("role").eq("user_id", userId).maybeSingle();
+    .from("user_roles")
+    .select("role")
+    .eq("user_id", userId)
+    .maybeSingle();
   if (error) {
     console.error("[authz] role lookup failed", { userId, error: error.message });
     throw new Error("Forbidden: authorization check failed");
@@ -135,7 +158,11 @@ async function assertMayAdministerTarget(callerId: string, targetId: string, act
   const [callerRole, targetRole] = await Promise.all([getRole(callerId), getRole(targetId)]);
   if (canActOnRole(callerRole, targetRole)) return;
   console.warn("[authz] refused action on target outside caller's authority", {
-    callerId, callerRole, targetId, targetRole, action,
+    callerId,
+    callerRole,
+    targetId,
+    targetRole,
+    action,
   });
   throw new Error(`Forbidden: you are not permitted to ${action} this account`);
 }
@@ -147,29 +174,43 @@ async function assertMayAssignRole(callerId: string, role: string, action: strin
   }
   const callerRole = await getRole(callerId);
   if (canAssignRole(callerRole, role)) return;
-  console.warn("[authz] refused role assignment outside caller's authority", { callerId, callerRole, role, action });
+  console.warn("[authz] refused role assignment outside caller's authority", {
+    callerId,
+    callerRole,
+    role,
+    action,
+  });
   throw new Error(`Forbidden: you may not ${action} the ${role} role`);
 }
 
 export const adminCreateUser = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { email: string; password: string; fullName: string; agentCode?: string; role: RoleValue; temporary?: boolean; expiresInHours?: TempPasswordTtlHours }) =>
-    z
-      .object({
-        email: z.string().email(),
-        // Same policy as the self-service change and the reset flow, so a
-        // password an admin sets cannot be weaker than one a user may choose.
-        password: passwordSchema,
-        fullName: z.string().min(1).max(120),
-        agentCode: z.string().max(40).optional(),
-        role: RoleEnum,
-        // The password an admin types at creation is the same handover credential
-        // as one typed into the reset dialog — two people know it — so it defaults
-        // to temporary as well, and the new user replaces it at first sign-in.
-        temporary: z.boolean().optional().default(true),
-        expiresInHours: TtlEnum.optional().default(DEFAULT_TEMP_PASSWORD_TTL_HOURS),
-      })
-      .parse(d),
+  .inputValidator(
+    (d: {
+      email: string;
+      password: string;
+      fullName: string;
+      agentCode?: string;
+      role: RoleValue;
+      temporary?: boolean;
+      expiresInHours?: TempPasswordTtlHours;
+    }) =>
+      z
+        .object({
+          email: z.string().email(),
+          // Same policy as the self-service change and the reset flow, so a
+          // password an admin sets cannot be weaker than one a user may choose.
+          password: passwordSchema,
+          fullName: z.string().min(1).max(120),
+          agentCode: z.string().max(40).optional(),
+          role: RoleEnum,
+          // The password an admin types at creation is the same handover credential
+          // as one typed into the reset dialog — two people know it — so it defaults
+          // to temporary as well, and the new user replaces it at first sign-in.
+          temporary: z.boolean().optional().default(true),
+          expiresInHours: TtlEnum.optional().default(DEFAULT_TEMP_PASSWORD_TTL_HOURS),
+        })
+        .parse(d),
   )
   .handler(async ({ data, context }) => {
     await assertCanManageUsers(context.supabase, context.userId);
@@ -230,7 +271,6 @@ export const adminCreateUser = createServerFn({ method: "POST" })
     return { id: newUserId, temporary: data.temporary };
   });
 
-
 export const adminSetActive = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: { userId: string; active: boolean }) =>
@@ -272,14 +312,19 @@ export const adminSetActive = createServerFn({ method: "POST" })
  * Verified server-side for the same reason as the self-service password change:
  * a confirmation the browser could skip protects nothing.
  */
-async function assertPasswordConfirmed(context: { userId: string; claims: unknown }, password: string) {
+async function assertPasswordConfirmed(
+  context: { userId: string; claims: unknown },
+  password: string,
+) {
   const claimEmail = (context.claims as { email?: unknown } | null)?.email;
   let email = typeof claimEmail === "string" && claimEmail ? claimEmail : null;
   const { getUserEmail, verifyPassword } = await import("@/lib/password.server");
   if (!email) email = await getUserEmail(context.userId);
   if (!email) throw new Error("Could not verify your account");
   if (!(await verifyPassword(email, password))) {
-    console.warn("[authz] failed password confirmation on Owner transfer", { callerId: context.userId });
+    console.warn("[authz] failed password confirmation on Owner transfer", {
+      callerId: context.userId,
+    });
     throw new Error("Password confirmation failed");
   }
 }
@@ -351,16 +396,23 @@ export const adminSetRole = createServerFn({ method: "POST" })
 
 export const adminUpdateProfile = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { userId: string; fullName: string; agentCode?: string; yeastarExt?: string | null; permissions?: string[] }) =>
-    z
-      .object({
-        userId: z.string().uuid(),
-        fullName: z.string().min(1).max(120),
-        agentCode: z.string().max(40).optional().nullable(),
-        yeastarExt: z.string().max(20).optional().nullable(),
-        permissions: z.array(z.string()).optional(),
-      })
-      .parse(d),
+  .inputValidator(
+    (d: {
+      userId: string;
+      fullName: string;
+      agentCode?: string;
+      yeastarExt?: string | null;
+      permissions?: string[];
+    }) =>
+      z
+        .object({
+          userId: z.string().uuid(),
+          fullName: z.string().min(1).max(120),
+          agentCode: z.string().max(40).optional().nullable(),
+          yeastarExt: z.string().max(20).optional().nullable(),
+          permissions: z.array(z.string()).optional(),
+        })
+        .parse(d),
   )
   .handler(async ({ data, context }) => {
     await assertCanManageUsers(context.supabase, context.userId);
@@ -383,10 +435,7 @@ export const adminUpdateProfile = createServerFn({ method: "POST" })
       const v = (data.yeastarExt ?? "").trim();
       patch.yeastar_ext = v.length > 0 ? v : null;
     }
-    const { error } = await supabaseAdmin
-      .from("profiles")
-      .update(patch)
-      .eq("id", data.userId);
+    const { error } = await supabaseAdmin.from("profiles").update(patch).eq("id", data.userId);
     if (error) throw new Error(error.message);
     await logAdminAction({
       actorId: context.userId,
@@ -405,29 +454,39 @@ export const adminUpdateProfile = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
-
 export const adminSetPassword = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { userId: string; password: string; temporary?: boolean; expiresInHours?: TempPasswordTtlHours }) =>
-    z
-      .object({
-        userId: z.string().uuid(),
-        password: passwordSchema,
-        // Marks the password as a handover credential: the holder must replace it
-        // before they can use the app. Defaults to true — an admin-set password is
-        // a password two people know, and treating that as permanent is the unsafe
-        // default. Opting out is deliberate (the dialog offers a toggle).
-        temporary: z.boolean().optional().default(true),
-        expiresInHours: TtlEnum.optional().default(DEFAULT_TEMP_PASSWORD_TTL_HOURS),
-      })
-      .parse(d),
+  .inputValidator(
+    (d: {
+      userId: string;
+      password: string;
+      temporary?: boolean;
+      expiresInHours?: TempPasswordTtlHours;
+    }) =>
+      z
+        .object({
+          userId: z.string().uuid(),
+          password: passwordSchema,
+          // Marks the password as a handover credential: the holder must replace it
+          // before they can use the app. Defaults to true — an admin-set password is
+          // a password two people know, and treating that as permanent is the unsafe
+          // default. Opting out is deliberate (the dialog offers a toggle).
+          temporary: z.boolean().optional().default(true),
+          expiresInHours: TtlEnum.optional().default(DEFAULT_TEMP_PASSWORD_TTL_HOURS),
+        })
+        .parse(d),
   )
   .handler(async ({ data, context }) => {
     await assertCanManageUsers(context.supabase, context.userId);
     // Resetting a password is account takeover: without this an ordinary admin
     // could set the Owner's password and sign in as the Owner, defeating every
     // other Owner protection.
-    await assertMayActOnTarget(context.supabase, context.userId, data.userId, "reset the password of");
+    await assertMayActOnTarget(
+      context.supabase,
+      context.userId,
+      data.userId,
+      "reset the password of",
+    );
     // Same reasoning one rung down: a Supervisor resetting an admin's password
     // would be a takeover of that admin.
     await assertMayAdministerTarget(context.userId, data.userId, "reset the password of");
@@ -492,7 +551,12 @@ export const adminSendPasswordReset = createServerFn({ method: "POST" })
   .inputValidator((d: { userId: string }) => z.object({ userId: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
     await assertCanManageUsers(context.supabase, context.userId);
-    await assertMayActOnTarget(context.supabase, context.userId, data.userId, "send a password reset for");
+    await assertMayActOnTarget(
+      context.supabase,
+      context.userId,
+      data.userId,
+      "send a password reset for",
+    );
     await assertMayAdministerTarget(context.userId, data.userId, "send a password reset for");
     const { getUserEmail, sendPasswordResetEmail } = await import("@/lib/password.server");
     // The address is read from auth.users rather than accepted from the caller,
@@ -570,7 +634,13 @@ export const adminListActivity = createServerFn({ method: "GET" })
       .object({
         /** Restrict to one account's history (the per-row "Activity" action). */
         targetUserId: z.string().uuid().optional(),
-        limit: z.number().int().min(1).max(ACTIVITY_MAX_ROWS).optional().default(ACTIVITY_PAGE_SIZE),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(ACTIVITY_MAX_ROWS)
+          .optional()
+          .default(ACTIVITY_PAGE_SIZE),
       })
       .parse(d ?? {}),
   )
@@ -632,7 +702,8 @@ async function listAuthEmails(supabaseAdmin: any): Promise<Map<string, string>> 
   const emails = new Map<string, string>();
   for (let page = 1; ; page++) {
     const { data, error } = await supabaseAdmin.auth.admin.listUsers({
-      page, perPage: AUTH_USERS_PAGE_SIZE,
+      page,
+      perPage: AUTH_USERS_PAGE_SIZE,
     });
     if (error) throw new Error(error.message);
     const users = data?.users ?? [];
@@ -653,7 +724,9 @@ export const adminListUsers = createServerFn({ method: "GET" })
     const [profilesRes, rolesRes, emails] = await Promise.all([
       supabaseAdmin
         .from("profiles" as any)
-        .select("id,full_name,agent_code,active,permissions,created_at,yeastar_ext,avatar_url,must_change_password,must_change_password_expires_at")
+        .select(
+          "id,full_name,agent_code,active,permissions,created_at,yeastar_ext,avatar_url,must_change_password,must_change_password_expires_at",
+        )
         .order("created_at", { ascending: false }),
       supabaseAdmin.from("user_roles").select("user_id,role"),
       listAuthEmails(supabaseAdmin),
@@ -678,9 +751,10 @@ export const adminListUsers = createServerFn({ method: "GET" })
       .map((r: any) => ({ row: r, path: avatarObjectPath(r.avatar_url) }))
       .filter((e): e is { row: any; path: string } => !!e.path);
     if (signable.length > 0) {
-      const { data: signed } = await supabaseAdmin.storage
-        .from(AVATAR_BUCKET)
-        .createSignedUrls(signable.map((e) => e.path), AVATAR_SIGNED_TTL);
+      const { data: signed } = await supabaseAdmin.storage.from(AVATAR_BUCKET).createSignedUrls(
+        signable.map((e) => e.path),
+        AVATAR_SIGNED_TTL,
+      );
       // Results come back in request order; an individual entry can still carry
       // its own error (a deleted object), in which case the row simply loses its
       // avatar and falls back to initials rather than failing the whole list.

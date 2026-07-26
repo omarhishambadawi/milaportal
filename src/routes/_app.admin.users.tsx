@@ -127,7 +127,9 @@ function AdminUsers() {
   );
 
   const sendResetEmail = useCallback(
-    (user: AdminUserRow) => { void mutations.sendResetEmail(user); },
+    (user: AdminUserRow) => {
+      void mutations.sendResetEmail(user);
+    },
     [mutations],
   );
 
@@ -135,13 +137,17 @@ function AdminUsers() {
     return (
       <div className="py-16 text-center">
         <ShieldAlert className="mx-auto h-10 w-10 text-destructive" aria-hidden />
-        <p className="mt-2 text-sm text-muted-foreground">You don't have access to user management.</p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          You don't have access to user management.
+        </p>
       </div>
     );
   }
 
   const emptyDescription = describeFilters({
-    term: filters.term, role: filters.role, status: filters.status,
+    term: filters.term,
+    role: filters.role,
+    status: filters.status,
   });
 
   return (
@@ -160,19 +166,27 @@ function AdminUsers() {
               a minute, so without this the page can look frozen after a change
               made in another tab. */}
           {isFetching && !isLoading && (
-            <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" aria-label="Refreshing" />
+            <RefreshCw
+              className="h-4 w-4 animate-spin text-muted-foreground"
+              aria-label="Refreshing"
+            />
           )}
           {canViewActivity && (
             <Button
               variant="outline"
               className="shadow-sm"
-              onClick={() => { setActivityFor(null); setActivityOpen(true); }}
+              onClick={() => {
+                setActivityFor(null);
+                setActivityOpen(true);
+              }}
             >
-              <ScrollText className="mr-2 h-4 w-4" aria-hidden />Activity log
+              <ScrollText className="mr-2 h-4 w-4" aria-hidden />
+              Activity log
             </Button>
           )}
           <Button className="shadow-sm" onClick={() => setCreating(true)}>
-            <Plus className="mr-2 h-4 w-4" aria-hidden />Add user
+            <Plus className="mr-2 h-4 w-4" aria-hidden />
+            Add user
           </Button>
         </div>
       </div>
@@ -220,19 +234,27 @@ function AdminUsers() {
         onPageSizeChange={filters.setPageSize}
       />
 
-      <CreateUserDialog open={creating} onOpenChange={setCreating} onSubmit={mutations.createUser} />
+      <CreateUserDialog
+        open={creating}
+        onOpenChange={setCreating}
+        onSubmit={mutations.createUser}
+      />
 
       <EditUserDialog
         draft={editing}
         open={!!editing}
-        onOpenChange={(open) => { if (!open) setEditing(null); }}
+        onOpenChange={(open) => {
+          if (!open) setEditing(null);
+        }}
         onSave={mutations.saveUser}
       />
 
       <PasswordDialog
         user={passwordFor}
         open={!!passwordFor}
-        onOpenChange={(open) => { if (!open) setPasswordFor(null); }}
+        onOpenChange={(open) => {
+          if (!open) setPasswordFor(null);
+        }}
         onSubmit={(password, temporary, expiresInHours) =>
           passwordFor
             ? mutations.setPassword(passwordFor, password, temporary, expiresInHours)
@@ -246,7 +268,9 @@ function AdminUsers() {
       <GrantOwnerDialog
         user={grantOwnerTo}
         open={!!grantOwnerTo}
-        onOpenChange={(open) => { if (!open) setGrantOwnerTo(null); }}
+        onOpenChange={(open) => {
+          if (!open) setGrantOwnerTo(null);
+        }}
         onConfirm={(password) =>
           grantOwnerTo ? mutations.grantOwner(grantOwnerTo, password) : Promise.resolve(false)
         }
@@ -261,7 +285,12 @@ function AdminUsers() {
 
       {/* One dialog per destructive action, pointed at the chosen row — rather
           than one mounted inside every row's menu. */}
-      <AlertDialog open={!!deactivating} onOpenChange={(open) => { if (!open) setDeactivating(null); }}>
+      <AlertDialog
+        open={!!deactivating}
+        onOpenChange={(open) => {
+          if (!open) setDeactivating(null);
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Deactivate {deactivating?.full_name}?</AlertDialogTitle>
@@ -273,7 +302,9 @@ function AdminUsers() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => { if (deactivating) void mutations.setActive(deactivating, false); }}
+              onClick={() => {
+                if (deactivating) void mutations.setActive(deactivating, false);
+              }}
             >
               Deactivate
             </AlertDialogAction>
@@ -281,7 +312,12 @@ function AdminUsers() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={!!deleting} onOpenChange={(open) => { if (!open) setDeleting(null); }}>
+      <AlertDialog
+        open={!!deleting}
+        onOpenChange={(open) => {
+          if (!open) setDeleting(null);
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {deleting?.full_name}?</AlertDialogTitle>
@@ -294,7 +330,9 @@ function AdminUsers() {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className={cn("bg-destructive text-destructive-foreground hover:bg-destructive/90")}
-              onClick={() => { if (deleting) void mutations.deleteUser(deleting); }}
+              onClick={() => {
+                if (deleting) void mutations.deleteUser(deleting);
+              }}
             >
               Delete
             </AlertDialogAction>

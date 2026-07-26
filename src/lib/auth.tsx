@@ -45,7 +45,6 @@ export interface Profile {
   must_change_password_expires_at?: string | null;
 }
 
-
 interface AuthCtx {
   session: Session | null;
   user: User | null;
@@ -76,7 +75,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfile((Array.isArray(p) ? p[0] : p) as Profile | null);
     setRole((r?.role as AppRole) ?? null);
   };
-
 
   useEffect(() => {
     const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {

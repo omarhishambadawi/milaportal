@@ -16,7 +16,16 @@ interface ExportCallCenterArgs {
  * route's `doExport`: same sheets, same metrics, same file name. xlsx stays
  * lazy-loaded to keep it out of the route's initial chunk.
  */
-export async function exportCallCenter({ ok, totals, conv, rows, byDay, hourly12, from, to }: ExportCallCenterArgs) {
+export async function exportCallCenter({
+  ok,
+  totals,
+  conv,
+  rows,
+  byDay,
+  hourly12,
+  from,
+  to,
+}: ExportCallCenterArgs) {
   if (!ok || !totals) return;
   const XLSX = await import("xlsx");
   const kpiSheet = [
@@ -39,7 +48,11 @@ export async function exportCallCenter({ ok, totals, conv, rows, byDay, hourly12
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(byDay), "By day");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hourly12), "By hour");
   if (conv) {
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(conv.perAgent), "Conversion by agent");
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.json_to_sheet(conv.perAgent),
+      "Conversion by agent",
+    );
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(conv.perDay), "Conversion by day");
   }
   XLSX.writeFile(wb, `call-center-${from}_${to}.xlsx`);

@@ -68,7 +68,6 @@ export const ASSIGNABLE_ROLES = [
   "auditor",
 ] as const satisfies readonly AppRole[];
 
-
 /** Human-readable name. Exhaustive: a new role will not typecheck without one. */
 export const ROLE_LABEL: Record<AppRole, string> = {
   owner: "Owner",
@@ -129,7 +128,10 @@ function assignableBy(actorRole: string | null | undefined): readonly AppRole[] 
  * password and changing the role. Owner carries additional dedicated checks and
  * DB triggers on top of this; this is the general rule beneath them.
  */
-export function canActOnRole(actorRole: string | null | undefined, targetRole: string | null | undefined): boolean {
+export function canActOnRole(
+  actorRole: string | null | undefined,
+  targetRole: string | null | undefined,
+): boolean {
   const allowed = assignableBy(actorRole);
   if (allowed.length === 0) return false;
   // A user stranded on an unknown or retired role (the orphaned `call_center`)
@@ -140,7 +142,10 @@ export function canActOnRole(actorRole: string | null | undefined, targetRole: s
 }
 
 /** May an actor holding `actorRole` grant `targetRole` to someone? */
-export function canAssignRole(actorRole: string | null | undefined, targetRole: string | null | undefined): boolean {
+export function canAssignRole(
+  actorRole: string | null | undefined,
+  targetRole: string | null | undefined,
+): boolean {
   // Retired values are not assignable by anyone, including the Owner.
   if (!isAppRole(targetRole)) return false;
   return assignableBy(actorRole).includes(targetRole);
@@ -173,12 +178,14 @@ export const ROLE_TONE: Record<AppRole, string> = {
  * agents: they take no orders, so an agent code on them is meaningless and was
  * previously rendered as an empty field and accepted by the create/edit forms.
  */
-export const AGENT_CODE_ROLES = ["customer_care", "telesales"] as const satisfies readonly AppRole[];
+export const AGENT_CODE_ROLES = [
+  "customer_care",
+  "telesales",
+] as const satisfies readonly AppRole[];
 
 export function roleHasAgentCode(role: string | null | undefined): boolean {
   return isAppRole(role) && (AGENT_CODE_ROLES as readonly string[]).includes(role);
 }
-
 
 /** Narrowing guard for values arriving from the database or an API boundary. */
 export function isAppRole(value: unknown): value is AppRole {

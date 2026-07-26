@@ -42,7 +42,14 @@ export default defineTool({
       byStatus[status] = (byStatus[status] ?? 0) + 1;
       totalValue += Number(r.invoice_value ?? 0);
     }
-    const summary = { from, to, total_orders: rows.length, total_invoice_value: totalValue, by_team: byTeam, by_status: byStatus };
+    const summary = {
+      from,
+      to,
+      total_orders: rows.length,
+      total_invoice_value: totalValue,
+      by_team: byTeam,
+      by_status: byStatus,
+    };
     return {
       content: [{ type: "text", text: JSON.stringify(summary, null, 2) }],
       structuredContent: summary,

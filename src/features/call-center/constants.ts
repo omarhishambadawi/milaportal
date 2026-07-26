@@ -10,11 +10,44 @@ export const tooltipStyle: CSSProperties = {
   color: "var(--color-foreground)",
 };
 
-export const toneMap: Record<Tone, { text: string; ring: string; iconBg: string; iconText: string }> = {
-  primary:     { text: "text-primary",     ring: "ring-primary/20",     iconBg: "bg-primary/10",     iconText: "text-primary" },
-  secondary:   { text: "text-secondary",   ring: "ring-secondary/20",   iconBg: "bg-secondary/10",   iconText: "text-secondary" },
-  success:     { text: "text-success",     ring: "ring-success/20",     iconBg: "bg-success/10",     iconText: "text-success" },
-  warning:     { text: "text-warning",     ring: "ring-warning/20",     iconBg: "bg-warning/10",     iconText: "text-warning" },
-  destructive: { text: "text-destructive", ring: "ring-destructive/20", iconBg: "bg-destructive/10", iconText: "text-destructive" },
-  muted:       { text: "text-foreground",  ring: "ring-border",         iconBg: "bg-muted",          iconText: "text-muted-foreground" },
+export const toneMap: Record<
+  Tone,
+  { text: string; ring: string; iconBg: string; iconText: string }
+> = {
+  primary: {
+    text: "text-primary",
+    ring: "ring-primary/20",
+    iconBg: "bg-primary/10",
+    iconText: "text-primary",
+  },
+  secondary: {
+    text: "text-secondary",
+    ring: "ring-secondary/20",
+    iconBg: "bg-secondary/10",
+    iconText: "text-secondary",
+  },
+  success: {
+    text: "text-success",
+    ring: "ring-success/20",
+    iconBg: "bg-success/10",
+    iconText: "text-success",
+  },
+  warning: {
+    text: "text-warning",
+    ring: "ring-warning/20",
+    iconBg: "bg-warning/10",
+    iconText: "text-warning",
+  },
+  destructive: {
+    text: "text-destructive",
+    ring: "ring-destructive/20",
+    iconBg: "bg-destructive/10",
+    iconText: "text-destructive",
+  },
+  muted: {
+    text: "text-foreground",
+    ring: "ring-border",
+    iconBg: "bg-muted",
+    iconText: "text-muted-foreground",
+  },
 };

@@ -26,7 +26,10 @@ function NotFoundComponent() {
           The page you're looking for doesn't exist.
         </p>
         <div className="mt-6">
-          <Link to="/" className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+          <Link
+            to="/"
+            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          >
             Go home
           </Link>
         </div>
@@ -49,8 +52,21 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
         <h1 className="text-xl font-semibold">Something went wrong</h1>
         <p className="mt-2 text-sm text-muted-foreground">{error.message}</p>
         <div className="mt-6 flex flex-wrap justify-center gap-2">
-          <button onClick={() => { router.invalidate(); reset(); }} className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">Try again</button>
-          <a href="/" className="rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent">Go home</a>
+          <button
+            onClick={() => {
+              router.invalidate();
+              reset();
+            }}
+            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            Try again
+          </button>
+          <a
+            href="/"
+            className="rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+          >
+            Go home
+          </a>
         </div>
       </div>
     </div>
@@ -70,13 +86,30 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "apple-mobile-web-app-title", content: "MilaServ Portal" },
       { name: "mobile-web-app-capable", content: "yes" },
       { title: "MilaServ Portal" },
-      { name: "description", content: "MilaServ Portal — orders, complaints, call center & sales analytics" },
+      {
+        name: "description",
+        content: "MilaServ Portal — orders, complaints, call center & sales analytics",
+      },
       { property: "og:title", content: "MilaServ Portal" },
       { name: "twitter:title", content: "MilaServ Portal" },
-      { property: "og:description", content: "MilaServ Portal — orders, complaints, call center & sales analytics" },
-      { name: "twitter:description", content: "MilaServ Portal — orders, complaints, call center & sales analytics" },
-      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/d54672b7-3fc3-4317-ab56-89d50fe3188a/id-preview-3f91742d--ee0d9841-3e00-4fc2-b9e5-873ee8568720.lovable.app-1783438085088.png" },
-      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/d54672b7-3fc3-4317-ab56-89d50fe3188a/id-preview-3f91742d--ee0d9841-3e00-4fc2-b9e5-873ee8568720.lovable.app-1783438085088.png" },
+      {
+        property: "og:description",
+        content: "MilaServ Portal — orders, complaints, call center & sales analytics",
+      },
+      {
+        name: "twitter:description",
+        content: "MilaServ Portal — orders, complaints, call center & sales analytics",
+      },
+      {
+        property: "og:image",
+        content:
+          "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/d54672b7-3fc3-4317-ab56-89d50fe3188a/id-preview-3f91742d--ee0d9841-3e00-4fc2-b9e5-873ee8568720.lovable.app-1783438085088.png",
+      },
+      {
+        name: "twitter:image",
+        content:
+          "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/d54672b7-3fc3-4317-ab56-89d50fe3188a/id-preview-3f91742d--ee0d9841-3e00-4fc2-b9e5-873ee8568720.lovable.app-1783438085088.png",
+      },
       { name: "twitter:card", content: "summary_large_image" },
       { property: "og:type", content: "website" },
     ],
@@ -84,8 +117,6 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { rel: "stylesheet", href: appCss },
       { rel: "manifest", href: "/site.webmanifest" },
     ],
-
-
   }),
   shellComponent: RootShell,
   component: RootComponent,
@@ -103,7 +134,10 @@ function RootShell({ children }: { children: ReactNode }) {
         <HeadContent />
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
       </head>
-      <body>{children}<Scripts /></body>
+      <body>
+        {children}
+        <Scripts />
+      </body>
     </html>
   );
 }
@@ -120,7 +154,9 @@ function RootComponent() {
     });
     return () => sub.subscription.unsubscribe();
   }, [router, queryClient]);
-  useEffect(() => { void registerPwa(); }, []);
+  useEffect(() => {
+    void registerPwa();
+  }, []);
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>

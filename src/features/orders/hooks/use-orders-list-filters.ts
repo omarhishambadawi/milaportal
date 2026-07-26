@@ -40,7 +40,10 @@ export function useOrdersListFilters() {
   const initial = ordersFilterCache;
   const [range, setRange] = useState<DateRange | undefined>(() => {
     if (initial?.range?.from) {
-      return { from: new Date(initial.range.from), to: initial.range.to ? new Date(initial.range.to) : undefined };
+      return {
+        from: new Date(initial.range.from),
+        to: initial.range.to ? new Date(initial.range.to) : undefined,
+      };
     }
     return { from: today, to: today };
   });
@@ -61,7 +64,8 @@ export function useOrdersListFilters() {
   const setPageSize = (n: number) => {
     setPageSizeState(n);
     setPage(0);
-    if (typeof window !== "undefined") window.sessionStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(n));
+    if (typeof window !== "undefined")
+      window.sessionStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(n));
   };
 
   // Debounce the search input so we don't fire a query per keystroke.
@@ -73,8 +77,15 @@ export function useOrdersListFilters() {
 
   // Persist filter state on every render so returning from edit restores it.
   ordersFilterCache = {
-    range: range?.from ? { from: range.from.toISOString(), to: range.to?.toISOString() } : undefined,
-    q, team, agent, status, mineOnly, page,
+    range: range?.from
+      ? { from: range.from.toISOString(), to: range.to?.toISOString() }
+      : undefined,
+    q,
+    team,
+    agent,
+    status,
+    mineOnly,
+    page,
   };
 
   const term = normalizeSearchTerm(debouncedQ);
@@ -108,11 +119,31 @@ export function useOrdersListFilters() {
     },
   });
 
-  const filterKey: OrdersFilters = { from, to, team, agent, status, mineOnly, term, userId: user?.id };
+  const filterKey: OrdersFilters = {
+    from,
+    to,
+    team,
+    agent,
+    status,
+    mineOnly,
+    term,
+    userId: user?.id,
+  };
 
   // Apply the shared filter set to a PostgREST query builder.
   const applyFilters = (qb: any) =>
-    applyOrderFilters(qb, { searching, from, to, team, status, mineOnly, userId: user?.id, isAdmin, agent, term });
+    applyOrderFilters(qb, {
+      searching,
+      from,
+      to,
+      team,
+      status,
+      mineOnly,
+      userId: user?.id,
+      isAdmin,
+      agent,
+      term,
+    });
 
   const dateLabel = useMemo(() => {
     if (!range?.from) return "Pick a date";
@@ -121,27 +152,52 @@ export function useOrdersListFilters() {
   }, [range]);
 
   // Reset to first page when filters change
-  const onFilterChange = (fn: () => void) => { fn(); setPage(0); };
+  const onFilterChange = (fn: () => void) => {
+    fn();
+    setPage(0);
+  };
 
   return {
     // identity
     userId: user?.id,
     // permissions
-    isAdmin, canView, canCreate, canEditAll, canEditOwn, canVerifyAll, canVerifyOwn, canExport,
+    isAdmin,
+    canView,
+    canCreate,
+    canEditAll,
+    canEditOwn,
+    canVerifyAll,
+    canVerifyOwn,
+    canExport,
     // filter state + setters
-    range, setRange,
-    q, setQ,
-    team, setTeam,
-    agent, setAgent,
-    status, setStatus,
-    mineOnly, setMineOnly,
-    page, setPage,
-    pageSize, setPageSize,
+    range,
+    setRange,
+    q,
+    setQ,
+    team,
+    setTeam,
+    agent,
+    setAgent,
+    status,
+    setStatus,
+    mineOnly,
+    setMineOnly,
+    page,
+    setPage,
+    pageSize,
+    setPageSize,
     // derived
-    from, to, term, searching, filterKey, dateLabel,
+    from,
+    to,
+    term,
+    searching,
+    filterKey,
+    dateLabel,
     onFilterChange,
     applyFilters,
     // lookups
-    filteredAgentOpts, namesById, cities,
+    filteredAgentOpts,
+    namesById,
+    cities,
   };
 }

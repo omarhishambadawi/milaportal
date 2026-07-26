@@ -25,7 +25,13 @@ interface UseDashboardDataArgs {
  * datasets instead of declaring the queries inline.
  */
 export function useDashboardData({
-  from, to, effectiveTeam, effectiveAgent, dashFilters, cmpFilters, enabled,
+  from,
+  to,
+  effectiveTeam,
+  effectiveAgent,
+  dashFilters,
+  cmpFilters,
+  enabled,
 }: UseDashboardDataArgs) {
   // Headline KPI cards now come from the orders_kpis RPC (server-side
   // aggregation) instead of the client-side cash/wasfaty/total reduction.
@@ -60,7 +66,11 @@ export function useDashboardData({
             completionRate: Number(b.completion_rate),
           }
         : undefined;
-    return { cash: toStats(m.get("cash")), wasfaty: toStats(m.get("wasfaty")), total: toStats(m.get("total")) };
+    return {
+      cash: toStats(m.get("cash")),
+      wasfaty: toStats(m.get("wasfaty")),
+      total: toStats(m.get("total")),
+    };
   }, [kpiRows]);
 
   // Daily sales trend from orders_daily RPC. Rows arrive ordered by full date
@@ -81,7 +91,12 @@ export function useDashboardData({
     enabled,
   });
   const dailyData = useMemo(
-    () => (dailyRows ?? []).map((r) => ({ date: r.day.slice(5), total: Number(r.total_sales), completed: Number(r.completed_sales) })),
+    () =>
+      (dailyRows ?? []).map((r) => ({
+        date: r.day.slice(5),
+        total: Number(r.total_sales),
+        completed: Number(r.completed_sales),
+      })),
     [dailyRows],
   );
 
@@ -118,12 +133,18 @@ export function useDashboardData({
         _mine: false,
       });
       if (error) throw error;
-      return (data ?? []) as Array<{ team: string; order_count: number; completed_sales: number; completion_rate: number }>;
+      return (data ?? []) as Array<{
+        team: string;
+        order_count: number;
+        completed_sales: number;
+        completion_rate: number;
+      }>;
     },
     enabled,
   });
   const teamData = useMemo(
-    () => (teamRows ?? []).map((r) => ({ name: teamLabel(r.team), sales: Number(r.completed_sales) })),
+    () =>
+      (teamRows ?? []).map((r) => ({ name: teamLabel(r.team), sales: Number(r.completed_sales) })),
     [teamRows],
   );
 
@@ -139,12 +160,19 @@ export function useDashboardData({
         _mine: false,
       });
       if (error) throw error;
-      return (data ?? []) as Array<{ agent_id: string; agent_name: string; completed_sales: number }>;
+      return (data ?? []) as Array<{
+        agent_id: string;
+        agent_name: string;
+        completed_sales: number;
+      }>;
     },
     enabled,
   });
   const agentSalesData = useMemo(
-    () => (agentRows ?? []).slice(0, 10).map((r) => ({ name: r.agent_name, sales: Number(r.completed_sales) })),
+    () =>
+      (agentRows ?? [])
+        .slice(0, 10)
+        .map((r) => ({ name: r.agent_name, sales: Number(r.completed_sales) })),
     [agentRows],
   );
 
@@ -161,29 +189,45 @@ export function useDashboardData({
       });
       if (error) throw error;
       return (data ?? []) as Array<{
-        location_type: string; location: string; order_count: number;
-        completed_sales: number; completed_count: number; total_sales: number; completion_rate: number;
+        location_type: string;
+        location: string;
+        order_count: number;
+        completed_sales: number;
+        completed_count: number;
+        total_sales: number;
+        completion_rate: number;
       }>;
     },
     enabled,
   });
   const branchData = useMemo(
-    () => (locationRows ?? []).filter((r) => r.location_type === "branch")
-      .map((r) => ({ name: r.location, sales: Number(r.completed_sales) }))
-      .sort((a, b) => b.sales - a.sales).slice(0, 10),
+    () =>
+      (locationRows ?? [])
+        .filter((r) => r.location_type === "branch")
+        .map((r) => ({ name: r.location, sales: Number(r.completed_sales) }))
+        .sort((a, b) => b.sales - a.sales)
+        .slice(0, 10),
     [locationRows],
   );
   const cityData = useMemo(
-    () => (locationRows ?? []).filter((r) => r.location_type === "city")
-      .map((r) => ({ name: r.location, sales: Number(r.completed_sales) }))
-      .sort((a, b) => b.sales - a.sales),
+    () =>
+      (locationRows ?? [])
+        .filter((r) => r.location_type === "city")
+        .map((r) => ({ name: r.location, sales: Number(r.completed_sales) }))
+        .sort((a, b) => b.sales - a.sales),
     [locationRows],
   );
   const cityMapData = useMemo(
-    () => (locationRows ?? []).filter((r) => r.location_type === "city").map((r) => ({
-      name: r.location, sales: Number(r.completed_sales), count: Number(r.order_count),
-      total: Number(r.total_sales), completed: Number(r.completed_count),
-    })),
+    () =>
+      (locationRows ?? [])
+        .filter((r) => r.location_type === "city")
+        .map((r) => ({
+          name: r.location,
+          sales: Number(r.completed_sales),
+          count: Number(r.order_count),
+          total: Number(r.total_sales),
+          completed: Number(r.completed_count),
+        })),
     [locationRows],
   );
 
@@ -199,12 +243,23 @@ export function useDashboardData({
         _mine: false,
       });
       if (error) throw error;
-      return (data ?? []) as Array<{ delivery_type: string; order_count: number; completed_sales: number; completion_rate: number }>;
+      return (data ?? []) as Array<{
+        delivery_type: string;
+        order_count: number;
+        completed_sales: number;
+        completion_rate: number;
+      }>;
     },
     enabled,
   });
   const deliveryData = useMemo(
-    () => (deliveryRows ?? []).map((r) => ({ name: r.delivery_type, count: Number(r.order_count), sales: Number(r.completed_sales), rate: Number(r.completion_rate) })),
+    () =>
+      (deliveryRows ?? []).map((r) => ({
+        name: r.delivery_type,
+        count: Number(r.order_count),
+        sales: Number(r.completed_sales),
+        rate: Number(r.completion_rate),
+      })),
     [deliveryRows],
   );
 
@@ -220,7 +275,12 @@ export function useDashboardData({
         _mine: false,
       });
       if (error) throw error;
-      return (data ?? []) as Array<{ location_type: string; location: string; delivery_type: string; completed_sales: number }>;
+      return (data ?? []) as Array<{
+        location_type: string;
+        location: string;
+        delivery_type: string;
+        completed_sales: number;
+      }>;
     },
     enabled,
   });
@@ -248,17 +308,27 @@ export function useDashboardData({
       });
       if (error) throw error;
       return (data ?? []) as Array<{
-        agent_id: string; agent_name: string; total_orders: number;
-        verified: number; non_verified: number; verified_value: number; rate: number;
+        agent_id: string;
+        agent_name: string;
+        total_orders: number;
+        verified: number;
+        non_verified: number;
+        verified_value: number;
+        rate: number;
       }>;
     },
     enabled,
   });
   const verifData = useMemo(
-    () => (verificationRows ?? []).slice(0, 12).map((r) => ({
-      name: r.agent_name, total: Number(r.total_orders), verified: Number(r.verified),
-      nonVerified: Number(r.non_verified), rate: Number(r.rate), verifiedValue: Number(r.verified_value),
-    })),
+    () =>
+      (verificationRows ?? []).slice(0, 12).map((r) => ({
+        name: r.agent_name,
+        total: Number(r.total_orders),
+        verified: Number(r.verified),
+        nonVerified: Number(r.non_verified),
+        rate: Number(r.rate),
+        verifiedValue: Number(r.verified_value),
+      })),
     [verificationRows],
   );
 
@@ -267,9 +337,19 @@ export function useDashboardData({
   const { data: cmpKpiRows } = useQuery({
     queryKey: queryKeys.dashboard.complaintsKpis(cmpFilters),
     queryFn: async () => {
-      const { data, error } = await supabase.rpc("complaints_kpis" as any, { _from: from, _to: to, _agent: cmpAgent, _mine: false });
+      const { data, error } = await supabase.rpc("complaints_kpis" as any, {
+        _from: from,
+        _to: to,
+        _agent: cmpAgent,
+        _mine: false,
+      });
       if (error) throw error;
-      return (data ?? []) as Array<{ total: number; in_progress: number; resolved: number; resolution_rate: number }>;
+      return (data ?? []) as Array<{
+        total: number;
+        in_progress: number;
+        resolved: number;
+        resolution_rate: number;
+      }>;
     },
     enabled,
   });
@@ -277,22 +357,44 @@ export function useDashboardData({
   const { data: cmpLocRows } = useQuery({
     queryKey: queryKeys.dashboard.complaintsLocations(cmpFilters),
     queryFn: async () => {
-      const { data, error } = await supabase.rpc("complaints_locations" as any, { _from: from, _to: to, _agent: cmpAgent, _mine: false });
+      const { data, error } = await supabase.rpc("complaints_locations" as any, {
+        _from: from,
+        _to: to,
+        _agent: cmpAgent,
+        _mine: false,
+      });
       if (error) throw error;
-      return (data ?? []) as Array<{ location_type: string; location: string; total: number; resolved: number; open: number; rate: number }>;
+      return (data ?? []) as Array<{
+        location_type: string;
+        location: string;
+        total: number;
+        resolved: number;
+        open: number;
+        rate: number;
+      }>;
     },
     enabled,
   });
   const cmpBranchData = useMemo(
-    () => (cmpLocRows ?? []).filter((r) => r.location_type === "branch")
-      .map((r) => ({ name: r.location, total: Number(r.total), resolved: Number(r.resolved), open: Number(r.open) }))
-      .sort((a, b) => b.total - a.total).slice(0, 10),
+    () =>
+      (cmpLocRows ?? [])
+        .filter((r) => r.location_type === "branch")
+        .map((r) => ({
+          name: r.location,
+          total: Number(r.total),
+          resolved: Number(r.resolved),
+          open: Number(r.open),
+        }))
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 10),
     [cmpLocRows],
   );
   const cmpCityData = useMemo(
-    () => (cmpLocRows ?? []).filter((r) => r.location_type === "city")
-      .map((r) => ({ name: r.location, total: Number(r.total), rate: Number(r.rate) }))
-      .sort((a, b) => b.total - a.total),
+    () =>
+      (cmpLocRows ?? [])
+        .filter((r) => r.location_type === "city")
+        .map((r) => ({ name: r.location, total: Number(r.total), rate: Number(r.rate) }))
+        .sort((a, b) => b.total - a.total),
     [cmpLocRows],
   );
 

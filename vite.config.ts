@@ -140,7 +140,10 @@ export default defineConfig({
             },
             {
               urlPattern: ({ request, sameOrigin }) =>
-                sameOrigin && (request.destination === "script" || request.destination === "style" || request.destination === "font"),
+                sameOrigin &&
+                (request.destination === "script" ||
+                  request.destination === "style" ||
+                  request.destination === "font"),
               handler: "CacheFirst",
               options: {
                 cacheName: "static-assets",
@@ -148,7 +151,8 @@ export default defineConfig({
               },
             },
             {
-              urlPattern: ({ request, sameOrigin }) => sameOrigin && request.destination === "image",
+              urlPattern: ({ request, sameOrigin }) =>
+                sameOrigin && request.destination === "image",
               handler: "CacheFirst",
               options: {
                 cacheName: "images",

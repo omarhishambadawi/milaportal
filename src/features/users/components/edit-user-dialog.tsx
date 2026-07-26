@@ -1,10 +1,22 @@
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { RoleBadge } from "@/components/role-badge";
 import { UserAvatar } from "@/components/user-avatar";
 import { defaultPermsForRole } from "@/lib/permissions";
@@ -85,7 +97,11 @@ export function EditUserDialog({
           </div>
 
           <div className="grid gap-3 sm:grid-cols-3">
-            <div className={roleHasAgentCode(draft.role) ? "space-y-2 sm:col-span-2" : "space-y-2 sm:col-span-3"}>
+            <div
+              className={
+                roleHasAgentCode(draft.role) ? "space-y-2 sm:col-span-2" : "space-y-2 sm:col-span-3"
+              }
+            >
               <Label htmlFor="edit-name">Full name</Label>
               <Input
                 id="edit-name"
@@ -131,14 +147,20 @@ export function EditUserDialog({
                     _roleChange: true,
                     // A user tracking defaults keeps tracking them across a role
                     // change; a pinned custom set is left exactly as pinned.
-                    permissions: draft._usingDefaults ? defaultPermsForRole(v as AppRole) : draft.permissions,
+                    permissions: draft._usingDefaults
+                      ? defaultPermsForRole(v as AppRole)
+                      : draft.permissions,
                   })
                 }
               >
-                <SelectTrigger id="edit-role"><SelectValue /></SelectTrigger>
+                <SelectTrigger id="edit-role">
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
                   {ASSIGNABLE_ROLES.map((r) => (
-                    <SelectItem key={r} value={r}>{ROLE_OPTION_LABEL[r]}</SelectItem>
+                    <SelectItem key={r} value={r}>
+                      {ROLE_OPTION_LABEL[r]}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -150,12 +172,18 @@ export function EditUserDialog({
             usingDefaults={draft._usingDefaults}
             onToggle={togglePerm}
             onResetToDefaults={() =>
-              setDraft({ ...draft, permissions: defaultPermsForRole(roleKey), _usingDefaults: true })
+              setDraft({
+                ...draft,
+                permissions: defaultPermsForRole(roleKey),
+                _usingDefaults: true,
+              })
             }
           />
 
           <DialogFooter>
-            <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>Cancel</Button>
+            <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
+              Cancel
+            </Button>
             <Button onClick={save} disabled={busy || !draft.full_name.trim()}>
               {busy ? "Saving…" : "Save changes"}
             </Button>

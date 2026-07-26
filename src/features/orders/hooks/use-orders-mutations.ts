@@ -17,26 +17,49 @@ interface UseOrdersMutationsArgs {
  * same cache invalidations (orders + dashboard) and toasts.
  */
 export function useOrdersMutations({
-  userId, canEditAll, canEditOwn, canVerifyAll, canVerifyOwn,
+  userId,
+  canEditAll,
+  canEditOwn,
+  canVerifyAll,
+  canVerifyOwn,
 }: UseOrdersMutationsArgs) {
   const qc = useQueryClient();
 
   const canEditOrder = (order: any) => canEditAll || (userId === order.agent_id && canEditOwn);
-  const canVerifyOrder = (order: any) => canVerifyAll || (userId === order.agent_id && canVerifyOwn);
+  const canVerifyOrder = (order: any) =>
+    canVerifyAll || (userId === order.agent_id && canVerifyOwn);
 
   const updateStatus = async (order: any, newStatus: string) => {
-    if (!canEditOrder(order)) { toast.error("You don't have permission to edit this order"); return; }
-    const { error } = await supabase.from("orders").update({ status: newStatus }).eq("id", order.id);
-    if (error) { toast.error(error.message); return; }
+    if (!canEditOrder(order)) {
+      toast.error("You don't have permission to edit this order");
+      return;
+    }
+    const { error } = await supabase
+      .from("orders")
+      .update({ status: newStatus })
+      .eq("id", order.id);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
     toast.success("Status updated");
     qc.invalidateQueries({ queryKey: queryKeys.orders.all() });
     qc.invalidateQueries({ queryKey: queryKeys.dashboard.all() });
   };
 
   const toggleVerified = async (order: any, value: boolean) => {
-    if (!canVerifyOrder(order)) { toast.error("You don't have permission to verify this order"); return; }
-    const { error } = await supabase.from("orders").update({ call_center_verified: value } as any).eq("id", order.id);
-    if (error) { toast.error(error.message); return; }
+    if (!canVerifyOrder(order)) {
+      toast.error("You don't have permission to verify this order");
+      return;
+    }
+    const { error } = await supabase
+      .from("orders")
+      .update({ call_center_verified: value } as any)
+      .eq("id", order.id);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
     qc.invalidateQueries({ queryKey: queryKeys.orders.all() });
     qc.invalidateQueries({ queryKey: queryKeys.dashboard.all() });
   };

@@ -1,4 +1,13 @@
-import { Crown, KeyRound, Mail, MoreHorizontal, Pencil, Power, ScrollText, Trash2 } from "lucide-react";
+import {
+  Crown,
+  KeyRound,
+  Mail,
+  MoreHorizontal,
+  Pencil,
+  Power,
+  ScrollText,
+  Trash2,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -77,15 +86,21 @@ export function UserRowActions({
         <DropdownMenuSeparator />
 
         <DropdownMenuItem onSelect={() => onEdit(user)} disabled={!mayActOnRow}>
-          <Pencil className="mr-2 h-4 w-4" aria-hidden />Edit &amp; permissions
+          <Pencil className="mr-2 h-4 w-4" aria-hidden />
+          Edit &amp; permissions
         </DropdownMenuItem>
 
-        <DropdownMenuItem onSelect={() => onSendResetEmail(user)} disabled={!mayActOnRow || !user.email}>
-          <Mail className="mr-2 h-4 w-4" aria-hidden />Email a reset link
+        <DropdownMenuItem
+          onSelect={() => onSendResetEmail(user)}
+          disabled={!mayActOnRow || !user.email}
+        >
+          <Mail className="mr-2 h-4 w-4" aria-hidden />
+          Email a reset link
         </DropdownMenuItem>
 
         <DropdownMenuItem onSelect={() => onResetPassword(user)} disabled={!mayActOnRow}>
-          <KeyRound className="mr-2 h-4 w-4" aria-hidden />Set a password…
+          <KeyRound className="mr-2 h-4 w-4" aria-hidden />
+          Set a password…
         </DropdownMenuItem>
 
         {/* Deliberately not gated on `mayActOnRow`: this reads the audit trail
@@ -94,7 +109,8 @@ export function UserRowActions({
             Owner rows would be theatre. */}
         {canViewActivity && (
           <DropdownMenuItem onSelect={() => onViewActivity(user)}>
-            <ScrollText className="mr-2 h-4 w-4" aria-hidden />View activity
+            <ScrollText className="mr-2 h-4 w-4" aria-hidden />
+            View activity
           </DropdownMenuItem>
         )}
 
@@ -102,7 +118,10 @@ export function UserRowActions({
 
         {/* Owner accounts can never be deactivated — by anyone, including another
             Owner. Mirrors the protect_owner_profile trigger. */}
-        <DropdownMenuItem onSelect={() => onToggleActive(user)} disabled={rowIsOwner || !mayActOnRow}>
+        <DropdownMenuItem
+          onSelect={() => onToggleActive(user)}
+          disabled={rowIsOwner || !mayActOnRow}
+        >
           <Power className="mr-2 h-4 w-4" aria-hidden />
           {user.active ? "Deactivate" : "Reactivate"}
         </DropdownMenuItem>
@@ -117,7 +136,8 @@ export function UserRowActions({
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => onGrantOwner(user)}>
-              <Crown className="mr-2 h-4 w-4" aria-hidden />Grant Owner…
+              <Crown className="mr-2 h-4 w-4" aria-hidden />
+              Grant Owner…
             </DropdownMenuItem>
           </>
         )}
@@ -130,7 +150,8 @@ export function UserRowActions({
               disabled={rowIsOwner}
               className="text-destructive focus:text-destructive"
             >
-              <Trash2 className="mr-2 h-4 w-4" aria-hidden />Delete user
+              <Trash2 className="mr-2 h-4 w-4" aria-hidden />
+              Delete user
             </DropdownMenuItem>
           </>
         )}

@@ -7,10 +7,32 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ChevronLeft, ChevronRight, Plus, Search, ShieldAlert, Pencil, Eye, Download } from "lucide-react";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  Search,
+  ShieldAlert,
+  Pencil,
+  Eye,
+  Download,
+} from "lucide-react";
 import { COMPLAINT_STATUSES, STATUS_STYLES } from "@/lib/branches";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { hasPerm } from "@/lib/permissions";
 import { queryKeys } from "@/lib/query-keys";
 import { useAgentDirectory } from "@/lib/directory";
@@ -26,7 +48,12 @@ export const Route = createFileRoute("/_app/complaints/")({
 const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 const DEFAULT_PAGE_SIZE = 25;
 const PAGE_SIZE_STORAGE_KEY = "complaints.pageSize";
-const normalizeSearchTerm = (value: string) => value.replace(/[,%.*()]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+const normalizeSearchTerm = (value: string) =>
+  value
+    .replace(/[,%.*()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
 
 /** Build an .or() filter string across the searchable complaint columns.
  *  agent_name is a derived field (joined from profiles), so agent search is
@@ -71,7 +98,8 @@ function ComplaintsList() {
   const setPageSize = (n: number) => {
     setPageSizeState(n);
     setPage(0);
-    if (typeof window !== "undefined") window.sessionStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(n));
+    if (typeof window !== "undefined")
+      window.sessionStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(n));
   };
 
   // Debounce the search input so we don't fire a query per keystroke.
@@ -153,16 +181,28 @@ function ComplaintsList() {
 
   const toggleStatus = async (complaint: any, resolved: boolean) => {
     const owned = complaint.agent_id === user?.id;
-    if (!(canResolveAll || (owned && canResolveOwn))) { toast.error("You don't have permission to resolve this complaint"); return; }
+    if (!(canResolveAll || (owned && canResolveOwn))) {
+      toast.error("You don't have permission to resolve this complaint");
+      return;
+    }
     const id = complaint.id;
-    const { error } = await supabase.from("complaints" as any).update({ status: resolved ? "Resolved" : "In Progress" } as any).eq("id", id);
-    if (error) { toast.error(error.message); return; }
+    const { error } = await supabase
+      .from("complaints" as any)
+      .update({ status: resolved ? "Resolved" : "In Progress" } as any)
+      .eq("id", id);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
     qc.invalidateQueries({ queryKey: queryKeys.complaints.all() });
     qc.invalidateQueries({ queryKey: queryKeys.dashboard.all() });
   };
 
   const doExport = async () => {
-    if (!canExport) { toast.error("You don't have permission to export reports"); return; }
+    if (!canExport) {
+      toast.error("You don't have permission to export reports");
+      return;
+    }
     toast.info("Preparing export…");
     // Fetch every row matching the current filters, in batches, respecting RLS —
     // preserves the previous "export everything matching" behaviour without ever
@@ -175,7 +215,10 @@ function ComplaintsList() {
       qb = qb.order("created_at", { ascending: false });
       qb = qb.range(start, start + BATCH - 1);
       const { data, error } = await qb;
-      if (error) { toast.error(error.message); return; }
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
       all.push(...((data as any[]) ?? []));
       if (!data || (data as any[]).length < BATCH) break;
     }
@@ -198,7 +241,12 @@ function ComplaintsList() {
   };
 
   if (!canView) {
-    return <div className="text-center py-16"><ShieldAlert className="mx-auto h-10 w-10 text-destructive" /><p className="mt-2 text-sm text-muted-foreground">You don't have access to Complaints.</p></div>;
+    return (
+      <div className="text-center py-16">
+        <ShieldAlert className="mx-auto h-10 w-10 text-destructive" />
+        <p className="mt-2 text-sm text-muted-foreground">You don't have access to Complaints.</p>
+      </div>
+    );
   }
 
   return (
@@ -206,12 +254,39 @@ function ComplaintsList() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Complaints</h1>
-          <p className="text-sm text-muted-foreground">{total} complaint{total !== 1 ? "s" : ""}</p>
+          <p className="text-sm text-muted-foreground">
+            {total} complaint{total !== 1 ? "s" : ""}
+          </p>
         </div>
         <div className="flex gap-2 items-center">
-          <Button variant={mineOnly ? "default" : "outline"} size="sm" onClick={() => { setMineOnly((v) => !v); setPage(0); }}>{mineOnly ? "Mine" : "All"}</Button>
-          {canExport && <Button variant="outline" size="sm" onClick={() => { doExport().catch((e) => toast.error(e?.message ?? "Export failed")); }}><Download className="h-4 w-4 mr-2" />Export</Button>}
-          {canCreate && <Button onClick={() => navigate({ to: "/complaints/new" })}><Plus className="h-4 w-4 mr-2" />New complaint</Button>}
+          <Button
+            variant={mineOnly ? "default" : "outline"}
+            size="sm"
+            onClick={() => {
+              setMineOnly((v) => !v);
+              setPage(0);
+            }}
+          >
+            {mineOnly ? "Mine" : "All"}
+          </Button>
+          {canExport && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                doExport().catch((e) => toast.error(e?.message ?? "Export failed"));
+              }}
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Export
+            </Button>
+          )}
+          {canCreate && (
+            <Button onClick={() => navigate({ to: "/complaints/new" })}>
+              <Plus className="h-4 w-4 mr-2" />
+              New complaint
+            </Button>
+          )}
         </div>
       </div>
 
@@ -219,13 +294,33 @@ function ComplaintsList() {
         <CardContent className="p-3 sm:p-4 grid gap-3 sm:grid-cols-3">
           <div className="sm:col-span-2 relative">
             <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input placeholder="Search customer/phone/branch/agent…" value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} className="pl-9 h-10" />
+            <Input
+              placeholder="Search customer/phone/branch/agent…"
+              value={q}
+              onChange={(e) => {
+                setQ(e.target.value);
+                setPage(0);
+              }}
+              className="pl-9 h-10"
+            />
           </div>
-          <Select value={status} onValueChange={(v) => { setStatus(v); setPage(0); }}>
-            <SelectTrigger className="h-10"><SelectValue placeholder="Status" /></SelectTrigger>
+          <Select
+            value={status}
+            onValueChange={(v) => {
+              setStatus(v);
+              setPage(0);
+            }}
+          >
+            <SelectTrigger className="h-10">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All statuses</SelectItem>
-              {COMPLAINT_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+              {COMPLAINT_STATUSES.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </CardContent>
@@ -249,8 +344,20 @@ function ComplaintsList() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {isLoading && <TableRow><TableCell colSpan={9} className="text-center text-muted-foreground py-8">Loading…</TableCell></TableRow>}
-                {!isLoading && pageRows.length === 0 && <TableRow><TableCell colSpan={9} className="text-center text-muted-foreground py-8">No complaints</TableCell></TableRow>}
+                {isLoading && (
+                  <TableRow>
+                    <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
+                      Loading…
+                    </TableCell>
+                  </TableRow>
+                )}
+                {!isLoading && pageRows.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
+                      No complaints
+                    </TableCell>
+                  </TableRow>
+                )}
                 {pageRows.map((c: any) => {
                   const owned = c.agent_id === user?.id;
                   const canEditRow = canEditAll || (owned && canEditOwn);
@@ -259,24 +366,55 @@ function ComplaintsList() {
                   return (
                     <TableRow key={c.id} className={resolved ? "bg-[var(--tint-resolved)]" : ""}>
                       <TableCell onClick={(e) => e.stopPropagation()}>
-                        <Checkbox checked={resolved} disabled={!canResolveRow} onCheckedChange={(v) => toggleStatus(c, !!v)} aria-label="Resolved" />
+                        <Checkbox
+                          checked={resolved}
+                          disabled={!canResolveRow}
+                          onCheckedChange={(v) => toggleStatus(c, !!v)}
+                          aria-label="Resolved"
+                        />
                       </TableCell>
                       <TableCell className="font-mono font-semibold">{c.display_no}</TableCell>
-                      <TableCell className="hidden sm:table-cell whitespace-nowrap">{c.complaint_date}</TableCell>
+                      <TableCell className="hidden sm:table-cell whitespace-nowrap">
+                        {c.complaint_date}
+                      </TableCell>
                       <TableCell className="whitespace-nowrap">{c.customer_name || "—"}</TableCell>
-                      <TableCell className="hidden md:table-cell font-mono text-xs">{c.customer_phone || "—"}</TableCell>
-                      <TableCell className="whitespace-nowrap">{c.branch_no ? `${c.branch_no} — ${c.city || "—"}` : "—"}</TableCell>
-                      <TableCell className="hidden lg:table-cell whitespace-nowrap">{c.agent_name}</TableCell>
+                      <TableCell className="hidden md:table-cell font-mono text-xs">
+                        {c.customer_phone || "—"}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {c.branch_no ? `${c.branch_no} — ${c.city || "—"}` : "—"}
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell whitespace-nowrap">
+                        {c.agent_name}
+                      </TableCell>
                       <TableCell>
-                        <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[c.status] ?? "bg-muted"}`}>{c.status}</span>
+                        <span
+                          className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[c.status] ?? "bg-muted"}`}
+                        >
+                          {c.status}
+                        </span>
                       </TableCell>
                       <TableCell>
                         {canEditRow ? (
-                          <Button variant="ghost" size="icon" onClick={() => navigate({ to: "/complaints/$id", params: { id: c.id } })} aria-label="Edit">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() =>
+                              navigate({ to: "/complaints/$id", params: { id: c.id } })
+                            }
+                            aria-label="Edit"
+                          >
                             <Pencil className="h-4 w-4" />
                           </Button>
                         ) : (
-                          <Button variant="ghost" size="icon" onClick={() => navigate({ to: "/complaints/$id", params: { id: c.id } })} aria-label="View">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() =>
+                              navigate({ to: "/complaints/$id", params: { id: c.id } })
+                            }
+                            aria-label="View"
+                          >
                             <Eye className="h-4 w-4" />
                           </Button>
                         )}
@@ -290,24 +428,52 @@ function ComplaintsList() {
 
           <div className="sticky bottom-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 flex flex-wrap items-center justify-between gap-3 p-3 border-t text-sm">
             <div className="text-muted-foreground">
-              {total === 0
-                ? "No complaints"
-                : <>Showing <span className="font-medium text-foreground">{rangeStart}–{rangeEnd}</span> of <span className="font-medium text-foreground">{total}</span> complaints</>}
+              {total === 0 ? (
+                "No complaints"
+              ) : (
+                <>
+                  Showing{" "}
+                  <span className="font-medium text-foreground">
+                    {rangeStart}–{rangeEnd}
+                  </span>{" "}
+                  of <span className="font-medium text-foreground">{total}</span> complaints
+                </>
+              )}
             </div>
             <div className="flex items-center gap-2 ml-auto">
               <span className="text-xs text-muted-foreground hidden sm:inline">Rows per page</span>
               <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
-                <SelectTrigger className="h-8 w-[72px]"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-8 w-[72px]">
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
-                  {PAGE_SIZE_OPTIONS.map((n) => <SelectItem key={n} value={String(n)}>{n}</SelectItem>)}
+                  {PAGE_SIZE_OPTIONS.map((n) => (
+                    <SelectItem key={n} value={String(n)}>
+                      {n}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
-              <span className="text-xs text-muted-foreground px-2 whitespace-nowrap">Page {currentPage + 1} of {totalPages}</span>
-              <Button size="sm" variant="outline" disabled={currentPage === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
-                <ChevronLeft className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Prev</span>
+              <span className="text-xs text-muted-foreground px-2 whitespace-nowrap">
+                Page {currentPage + 1} of {totalPages}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={currentPage === 0}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+              >
+                <ChevronLeft className="h-4 w-4 sm:mr-1" />
+                <span className="hidden sm:inline">Prev</span>
               </Button>
-              <Button size="sm" variant="outline" disabled={currentPage + 1 >= totalPages} onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}>
-                <span className="hidden sm:inline">Next</span><ChevronRight className="h-4 w-4 sm:ml-1" />
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={currentPage + 1 >= totalPages}
+                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              >
+                <span className="hidden sm:inline">Next</span>
+                <ChevronRight className="h-4 w-4 sm:ml-1" />
               </Button>
             </div>
           </div>

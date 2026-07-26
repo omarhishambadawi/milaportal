@@ -96,9 +96,11 @@ export function ChangePasswordCard() {
                     rule.passed ? "text-[var(--positive)]" : "text-muted-foreground",
                   )}
                 >
-                  {rule.passed
-                    ? <Check className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                    : <X className="h-3.5 w-3.5 shrink-0" aria-hidden />}
+                  {rule.passed ? (
+                    <Check className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  ) : (
+                    <X className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  )}
                   {rule.label}
                 </li>
               ))}

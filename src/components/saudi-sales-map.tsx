@@ -46,59 +46,105 @@ const CITY_COORDS: Record<string, [number, number]> = {
   hafar: [45.9636, 28.4337],
   baha: [41.4677, 20.0129],
   rafha: [43.4939, 29.6202],
-  "الرياض": [46.6753, 24.7136],
-  "جدة": [39.1925, 21.4858],
-  "مكة": [39.8579, 21.3891],
-  "المدينة": [39.6142, 24.4686],
-  "الدمام": [50.1033, 26.4207],
-  "الخبر": [50.2083, 26.2172],
-  "الظهران": [50.1033, 26.2361],
-  "القطيف": [50.0089, 26.5205],
-  "الجبيل": [49.6225, 27.0046],
-  "الهفوف": [49.5877, 25.3548],
-  "الإحساء": [49.5877, 25.3548],
-  "الاحساء": [49.5877, 25.3548],
-  "الطائف": [40.4155, 21.2703],
-  "أبها": [42.5053, 18.2164],
+  الرياض: [46.6753, 24.7136],
+  جدة: [39.1925, 21.4858],
+  مكة: [39.8579, 21.3891],
+  المدينة: [39.6142, 24.4686],
+  الدمام: [50.1033, 26.4207],
+  الخبر: [50.2083, 26.2172],
+  الظهران: [50.1033, 26.2361],
+  القطيف: [50.0089, 26.5205],
+  الجبيل: [49.6225, 27.0046],
+  الهفوف: [49.5877, 25.3548],
+  الإحساء: [49.5877, 25.3548],
+  الاحساء: [49.5877, 25.3548],
+  الطائف: [40.4155, 21.2703],
+  أبها: [42.5053, 18.2164],
   "خميس مشيط": [42.7326, 18.306],
-  "نجران": [44.1277, 17.4924],
-  "جازان": [42.5511, 16.8892],
-  "بيشة": [42.5906, 20.0],
-  "تبوك": [36.5662, 28.3838],
-  "حائل": [41.6907, 27.5219],
-  "بريدة": [43.9757, 26.326],
-  "القصيم": [43.9757, 26.326],
-  "عنيزة": [43.9931, 26.0843],
-  "ينبع": [38.0618, 24.0895],
-  "رابغ": [39.0347, 22.7986],
-  "الخرج": [47.305, 24.1556],
-  "عرعر": [41.0381, 30.9753],
-  "سكاكا": [40.2064, 29.9697],
-  "القريات": [37.3353, 31.332],
+  نجران: [44.1277, 17.4924],
+  جازان: [42.5511, 16.8892],
+  بيشة: [42.5906, 20.0],
+  تبوك: [36.5662, 28.3838],
+  حائل: [41.6907, 27.5219],
+  بريدة: [43.9757, 26.326],
+  القصيم: [43.9757, 26.326],
+  عنيزة: [43.9931, 26.0843],
+  ينبع: [38.0618, 24.0895],
+  رابغ: [39.0347, 22.7986],
+  الخرج: [47.305, 24.1556],
+  عرعر: [41.0381, 30.9753],
+  سكاكا: [40.2064, 29.9697],
+  القريات: [37.3353, 31.332],
   "حفر الباطن": [45.9636, 28.4337],
-  "الباحة": [41.4677, 20.0129],
-  "رفحاء": [43.4939, 29.6202],
+  الباحة: [41.4677, 20.0129],
+  رفحاء: [43.4939, 29.6202],
 };
 
 // More detailed Saudi Arabia outline (lon, lat pairs)
 const KSA_OUTLINE: Array<[number, number]> = [
-  [34.95, 29.35], [36.02, 29.19], [36.48, 29.50], [36.75, 29.87], [37.49, 29.99],
-  [37.98, 30.50], [36.96, 31.49], [38.00, 31.99], [39.15, 32.14], [40.37, 31.93],
-  [42.08, 31.08], [42.85, 30.49], [44.72, 29.19], [46.36, 29.06], [46.55, 29.10],
-  [47.46, 29.98], [48.02, 29.54], [48.42, 28.54], [48.83, 28.06], [49.30, 27.46],
-  [49.98, 27.03], [50.24, 26.35], [50.56, 26.05], [50.20, 25.61], [50.56, 25.00],
-  [51.28, 24.62], [51.60, 24.14], [52.56, 22.94], [55.20, 22.70], [55.67, 22.00],
-  [55.20, 20.55], [52.00, 19.00], [49.50, 19.20], [48.19, 18.16], [47.58, 17.45],
-  [46.72, 17.30], [45.42, 17.33], [43.79, 16.36], [43.19, 16.66], [42.78, 16.38],
-  [42.65, 16.77], [42.35, 17.68], [42.11, 18.36], [41.68, 18.68], [41.22, 19.42],
-  [40.65, 19.86], [39.62, 20.50], [39.10, 21.29], [38.99, 22.06], [38.46, 23.72],
-  [37.16, 24.88], [36.68, 25.61], [35.90, 26.53], [35.15, 27.44], [34.63, 28.06],
+  [34.95, 29.35],
+  [36.02, 29.19],
+  [36.48, 29.5],
+  [36.75, 29.87],
+  [37.49, 29.99],
+  [37.98, 30.5],
+  [36.96, 31.49],
+  [38.0, 31.99],
+  [39.15, 32.14],
+  [40.37, 31.93],
+  [42.08, 31.08],
+  [42.85, 30.49],
+  [44.72, 29.19],
+  [46.36, 29.06],
+  [46.55, 29.1],
+  [47.46, 29.98],
+  [48.02, 29.54],
+  [48.42, 28.54],
+  [48.83, 28.06],
+  [49.3, 27.46],
+  [49.98, 27.03],
+  [50.24, 26.35],
+  [50.56, 26.05],
+  [50.2, 25.61],
+  [50.56, 25.0],
+  [51.28, 24.62],
+  [51.6, 24.14],
+  [52.56, 22.94],
+  [55.2, 22.7],
+  [55.67, 22.0],
+  [55.2, 20.55],
+  [52.0, 19.0],
+  [49.5, 19.2],
+  [48.19, 18.16],
+  [47.58, 17.45],
+  [46.72, 17.3],
+  [45.42, 17.33],
+  [43.79, 16.36],
+  [43.19, 16.66],
+  [42.78, 16.38],
+  [42.65, 16.77],
+  [42.35, 17.68],
+  [42.11, 18.36],
+  [41.68, 18.68],
+  [41.22, 19.42],
+  [40.65, 19.86],
+  [39.62, 20.5],
+  [39.1, 21.29],
+  [38.99, 22.06],
+  [38.46, 23.72],
+  [37.16, 24.88],
+  [36.68, 25.61],
+  [35.9, 26.53],
+  [35.15, 27.44],
+  [34.63, 28.06],
   [34.95, 29.35],
 ];
 
 // Projection bounds
-const LON_MIN = 33.5, LON_MAX = 56.5;
-const LAT_MIN = 15.5, LAT_MAX = 32.8;
+const LON_MIN = 33.5,
+  LON_MAX = 56.5;
+const LAT_MIN = 15.5,
+  LAT_MAX = 32.8;
 const W = 900;
 const H = Math.round((W * (LAT_MAX - LAT_MIN)) / (LON_MAX - LON_MIN));
 
@@ -109,7 +155,9 @@ function project(lon: number, lat: number): [number, number] {
 }
 
 function normalizeCity(s: string): string {
-  return s.toLowerCase().trim()
+  return s
+    .toLowerCase()
+    .trim()
     .replace(/^al[- ]/, "")
     .replace(/^ال/, "")
     .replace(/[’'ـ]/g, "");
@@ -135,7 +183,6 @@ function displayLabel(name: string): string {
   return name;
 }
 
-
 export interface CitySales {
   name: string;
   sales: number;
@@ -145,8 +192,10 @@ export interface CitySales {
 }
 
 type Placed = CitySales & {
-  lon: number; lat: number;
-  cx: number; cy: number;
+  lon: number;
+  lat: number;
+  cx: number;
+  cy: number;
   r: number;
   ratio: number;
   share: number;
@@ -199,10 +248,7 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
   const colorFor = (tier: "low" | "mid" | "high") =>
     tier === "low" ? "hsl(184 66% 44%)" : tier === "mid" ? "hsl(38 92% 50%)" : "hsl(0 78% 58%)";
 
-  const totalCompleted = useMemo(
-    () => cities.reduce((s, c) => s + (c.sales || 0), 0),
-    [cities],
-  );
+  const totalCompleted = useMemo(() => cities.reduce((s, c) => s + (c.sales || 0), 0), [cities]);
 
   const placed: Placed[] = useMemo(() => {
     const raw = cities
@@ -223,7 +269,9 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
     const PAD = 10;
     const placedLabels: { x: number; y: number; w: number; h: number }[] = [];
     const overlaps = (r: { x: number; y: number; w: number; h: number }) =>
-      placedLabels.some((p) => !(r.x + r.w < p.x || p.x + p.w < r.x || r.y + r.h < p.y || p.y + p.h < r.y));
+      placedLabels.some(
+        (p) => !(r.x + r.w < p.x || p.x + p.w < r.x || r.y + r.h < p.y || p.y + p.h < r.y),
+      );
 
     const out: Placed[] = raw.map(({ c, lon, lat, cx, cy }, idx) => {
       const ratio = c.sales / maxSales;
@@ -247,7 +295,12 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
       ];
 
       const rectFor = (cand: { x: number; y: number; anchor: "start" | "end" | "middle" }) => {
-        const rectX = cand.anchor === "start" ? cand.x : cand.anchor === "end" ? cand.x - labelW : cand.x - labelW / 2;
+        const rectX =
+          cand.anchor === "start"
+            ? cand.x
+            : cand.anchor === "end"
+              ? cand.x - labelW
+              : cand.x - labelW / 2;
         return { x: rectX, y: cand.y - labelH + 2, w: labelW, h: labelH };
       };
 
@@ -255,8 +308,18 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
       for (const dist of [gap, gap + 8, gap + 18, gap + 30]) {
         for (const cand of build(dist)) {
           const rect = rectFor(cand);
-          if (rect.x < PAD || rect.x + rect.w > W - PAD || rect.y < PAD || rect.y + rect.h > H - PAD) continue;
-          if (!overlaps(rect)) { chosen = cand; placedLabels.push(rect); break; }
+          if (
+            rect.x < PAD ||
+            rect.x + rect.w > W - PAD ||
+            rect.y < PAD ||
+            rect.y + rect.h > H - PAD
+          )
+            continue;
+          if (!overlaps(rect)) {
+            chosen = cand;
+            placedLabels.push(rect);
+            break;
+          }
         }
         if (chosen) break;
       }
@@ -275,8 +338,20 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
       }
 
       return {
-        ...c, lon, lat, cx, cy, r, ratio, share, rank: idx + 1, tier, color,
-        labelX: chosen!.x, labelY: chosen!.y, anchor: chosen!.anchor,
+        ...c,
+        lon,
+        lat,
+        cx,
+        cy,
+        r,
+        ratio,
+        share,
+        rank: idx + 1,
+        tier,
+        color,
+        labelX: chosen!.x,
+        labelY: chosen!.y,
+        anchor: chosen!.anchor,
       };
     });
 
@@ -337,17 +412,30 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
             <defs>
               <linearGradient id="ksa-fill" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" style={{ stopColor: "var(--map-land-top)" }} stopOpacity="0.95" />
-                <stop offset="100%" style={{ stopColor: "var(--map-land-bottom)" }} stopOpacity="0.7" />
+                <stop
+                  offset="100%"
+                  style={{ stopColor: "var(--map-land-bottom)" }}
+                  stopOpacity="0.7"
+                />
               </linearGradient>
               <radialGradient id="ksa-inner-glow" cx="50%" cy="50%" r="60%">
                 <stop offset="0%" style={{ stopColor: "var(--map-land-top)" }} stopOpacity="0" />
-                <stop offset="100%" style={{ stopColor: "var(--map-outline)" }} stopOpacity="0.25" />
+                <stop
+                  offset="100%"
+                  style={{ stopColor: "var(--map-outline)" }}
+                  stopOpacity="0.25"
+                />
               </radialGradient>
               <filter id="ksa-shadow" x="-10%" y="-10%" width="120%" height="120%">
                 <feGaussianBlur in="SourceAlpha" stdDeviation="3" />
                 <feOffset dx="0" dy="3" result="offset" />
-                <feComponentTransfer><feFuncA type="linear" slope="0.2" /></feComponentTransfer>
-                <feMerge><feMergeNode /><feMergeNode in="SourceGraphic" /></feMerge>
+                <feComponentTransfer>
+                  <feFuncA type="linear" slope="0.2" />
+                </feComponentTransfer>
+                <feMerge>
+                  <feMergeNode />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
               </filter>
               <filter id="bubble-glow" x="-100%" y="-100%" width="300%" height="300%">
                 <feGaussianBlur in="SourceGraphic" stdDeviation="6" />
@@ -355,14 +443,31 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
               <filter id="bubble-shadow" x="-50%" y="-50%" width="200%" height="200%">
                 <feGaussianBlur in="SourceAlpha" stdDeviation="2" />
                 <feOffset dx="0" dy="1.5" result="offset" />
-                <feComponentTransfer><feFuncA type="linear" slope="0.4" /></feComponentTransfer>
-                <feMerge><feMergeNode /><feMergeNode in="SourceGraphic" /></feMerge>
+                <feComponentTransfer>
+                  <feFuncA type="linear" slope="0.4" />
+                </feComponentTransfer>
+                <feMerge>
+                  <feMergeNode />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
               </filter>
               <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-                <path d="M 40 0 L 0 0 0 40" fill="none" style={{ stroke: "var(--map-grid)" }} strokeWidth="0.5" opacity="0.35" />
+                <path
+                  d="M 40 0 L 0 0 0 40"
+                  fill="none"
+                  style={{ stroke: "var(--map-grid)" }}
+                  strokeWidth="0.5"
+                  opacity="0.35"
+                />
               </pattern>
               {placed.map((p) => (
-                <radialGradient key={`grad-${p.name}`} id={`bg-${slug(p.name)}`} cx="50%" cy="50%" r="50%">
+                <radialGradient
+                  key={`grad-${p.name}`}
+                  id={`bg-${slug(p.name)}`}
+                  cx="50%"
+                  cy="50%"
+                  r="50%"
+                >
                   <stop offset="0%" stopColor={p.color} stopOpacity="0.55" />
                   <stop offset="70%" stopColor={p.color} stopOpacity="0.18" />
                   <stop offset="100%" stopColor={p.color} stopOpacity="0" />
@@ -393,13 +498,19 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
             {/* Leader lines */}
             {placed.map((p) => {
               const active = hoverName === p.name;
-              const tx = p.anchor === "start" ? p.labelX - 2 : p.anchor === "end" ? p.labelX + 2 : p.labelX;
+              const tx =
+                p.anchor === "start" ? p.labelX - 2 : p.anchor === "end" ? p.labelX + 2 : p.labelX;
               const ty = p.anchor === "middle" && p.labelY < p.cy ? p.labelY + 3 : p.labelY - 4;
               return (
-                <line key={`ln-${p.name}`}
-                  x1={p.cx} y1={p.cy} x2={tx} y2={ty}
+                <line
+                  key={`ln-${p.name}`}
+                  x1={p.cx}
+                  y1={p.cy}
+                  x2={tx}
+                  y2={ty}
                   style={{ stroke: "var(--map-leader)", transition: "opacity 220ms ease" }}
-                  strokeWidth={0.7} opacity={active ? 0.95 : 0.35}
+                  strokeWidth={0.7}
+                  opacity={active ? 0.95 : 0.35}
                   strokeDasharray={active ? "0" : "2 3"}
                 />
               );
@@ -411,7 +522,8 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
               return (
                 <circle
                   key={`glow-${p.name}`}
-                  cx={p.cx} cy={p.cy}
+                  cx={p.cx}
+                  cy={p.cy}
                   r={p.r * (active ? 2.2 : 1.7)}
                   fill={`url(#bg-${slug(p.name)})`}
                   style={{
@@ -428,7 +540,8 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
               const active = hoverName === p.name;
               const topThree = p.rank <= 3 && !reducedMotion;
               return (
-                <g key={p.name}
+                <g
+                  key={p.name}
                   style={{
                     pointerEvents: "none",
                     transformOrigin: `${p.cx}px ${p.cy}px`,
@@ -439,25 +552,61 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                 >
                   {/* Soft pulse for top cities */}
                   {topThree && (
-                    <circle cx={p.cx} cy={p.cy} r={p.r} fill="none"
-                      stroke={p.color} strokeWidth={1.25} strokeOpacity={0.5}
+                    <circle
+                      cx={p.cx}
+                      cy={p.cy}
+                      r={p.r}
+                      fill="none"
+                      stroke={p.color}
+                      strokeWidth={1.25}
+                      strokeOpacity={0.5}
                     >
-                      <animate attributeName="r" values={`${p.r};${p.r + 12};${p.r}`} dur="2.6s" repeatCount="indefinite" />
-                      <animate attributeName="stroke-opacity" values="0.55;0;0.55" dur="2.6s" repeatCount="indefinite" />
+                      <animate
+                        attributeName="r"
+                        values={`${p.r};${p.r + 12};${p.r}`}
+                        dur="2.6s"
+                        repeatCount="indefinite"
+                      />
+                      <animate
+                        attributeName="stroke-opacity"
+                        values="0.55;0;0.55"
+                        dur="2.6s"
+                        repeatCount="indefinite"
+                      />
                     </circle>
                   )}
-                  <circle cx={p.cx} cy={p.cy} r={p.r} fill={p.color} fillOpacity={active ? 0.38 : 0.24} />
-                  <circle cx={p.cx} cy={p.cy} r={p.r} fill="none"
-                    stroke={p.color} strokeWidth={active ? 2.5 : 1.6} strokeOpacity={0.95}
+                  <circle
+                    cx={p.cx}
+                    cy={p.cy}
+                    r={p.r}
+                    fill={p.color}
+                    fillOpacity={active ? 0.38 : 0.24}
+                  />
+                  <circle
+                    cx={p.cx}
+                    cy={p.cy}
+                    r={p.r}
+                    fill="none"
+                    stroke={p.color}
+                    strokeWidth={active ? 2.5 : 1.6}
+                    strokeOpacity={0.95}
                     style={{ transition: "stroke-width 200ms ease, stroke-opacity 200ms ease" }}
                   />
-                  <circle cx={p.cx} cy={p.cy} r={active ? 4.6 : 3.4} fill={p.color}
+                  <circle
+                    cx={p.cx}
+                    cy={p.cy}
+                    r={active ? 4.6 : 3.4}
+                    fill={p.color}
                     filter="url(#bubble-shadow)"
                     style={{ transition: "r 200ms ease" }}
                   />
                   {/* Inner highlight for depth */}
-                  <circle cx={p.cx - p.r * 0.25} cy={p.cy - p.r * 0.25} r={p.r * 0.18}
-                    fill="white" fillOpacity={0.35}
+                  <circle
+                    cx={p.cx - p.r * 0.25}
+                    cy={p.cy - p.r * 0.25}
+                    r={p.r * 0.18}
+                    fill="white"
+                    fillOpacity={0.35}
                   />
                 </g>
               );
@@ -467,17 +616,23 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
             {placed.map((p) => {
               const active = hoverName === p.name;
               return (
-                <g key={`lbl-${p.name}`} style={{
-                  opacity: mounted ? 1 : 0,
-                  transition: "opacity 340ms ease 260ms",
-                  pointerEvents: "none",
-                }}>
+                <g
+                  key={`lbl-${p.name}`}
+                  style={{
+                    opacity: mounted ? 1 : 0,
+                    transition: "opacity 340ms ease 260ms",
+                    pointerEvents: "none",
+                  }}
+                >
                   <text
-                    x={p.labelX} y={p.labelY}
+                    x={p.labelX}
+                    y={p.labelY}
                     textAnchor={p.anchor}
                     fontSize={11.5}
                     fontWeight={active ? 700 : 600}
-                    strokeWidth={3.5} strokeOpacity={0.98} paintOrder="stroke"
+                    strokeWidth={3.5}
+                    strokeOpacity={0.98}
+                    paintOrder="stroke"
                     style={{
                       fill: "var(--map-label)",
                       stroke: "var(--map-label-halo)",
@@ -495,10 +650,29 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
             {/* Hover accent ring */}
             {hover && !reducedMotion && (
               <g style={{ pointerEvents: "none" }}>
-                <circle cx={hover.cx} cy={hover.cy} r={hover.r + 3} fill="none"
-                  stroke={hover.color} strokeWidth={1.2} strokeOpacity={0.55}>
-                  <animate attributeName="r" from={hover.r} to={hover.r + 14} dur="1.4s" repeatCount="indefinite" />
-                  <animate attributeName="stroke-opacity" from="0.6" to="0" dur="1.4s" repeatCount="indefinite" />
+                <circle
+                  cx={hover.cx}
+                  cy={hover.cy}
+                  r={hover.r + 3}
+                  fill="none"
+                  stroke={hover.color}
+                  strokeWidth={1.2}
+                  strokeOpacity={0.55}
+                >
+                  <animate
+                    attributeName="r"
+                    from={hover.r}
+                    to={hover.r + 14}
+                    dur="1.4s"
+                    repeatCount="indefinite"
+                  />
+                  <animate
+                    attributeName="stroke-opacity"
+                    from="0.6"
+                    to="0"
+                    dur="1.4s"
+                    repeatCount="indefinite"
+                  />
                 </circle>
               </g>
             )}
@@ -534,64 +708,67 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
               ))}
           </svg>
 
-          {hover && (() => {
-            const labelAbove = hover.labelY < hover.cy;
-            const leftPct = (hover.cx / W) * 100;
-            const topPct = (hover.cy / H) * 100;
-            const flipBelow = labelAbove || hover.cy < H * 0.35;
-            const nearLeft = leftPct < 22;
-            const nearRight = leftPct > 78;
-            const xShift = nearLeft ? "0%" : nearRight ? "-100%" : "-50%";
-            const yShift = flipBelow ? `calc(${hover.r + 18}px)` : `calc(-100% - ${hover.r + 16}px)`;
-            const completionRate = hover.count > 0 ? Math.round(((hover.completed ?? 0) / hover.count) * 100) : null;
-            return (
-              <div
-                className="pointer-events-none absolute z-10 w-[min(240px,64vw)] sm:w-[260px] rounded-xl border border-border/60 bg-popover/90 backdrop-blur-xl px-3 py-2.5 sm:px-3.5 sm:py-3 text-[11px] sm:text-xs text-popover-foreground shadow-2xl ring-1 ring-black/5 dark:ring-white/5 animate-in fade-in zoom-in-95 duration-150"
-                style={{
-                  left: `${leftPct}%`,
-                  top: `${topPct}%`,
-                  transform: `translate(${xShift}, ${yShift})`,
-                  maxWidth: "min(280px, 92vw)",
-                  boxShadow: `0 20px 40px -20px ${hover.color}55, 0 0 0 1px color-mix(in oklab, ${hover.color} 20%, transparent)`,
-                }}
-              >
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span
-                      className="h-2.5 w-2.5 rounded-full shrink-0 ring-2 ring-background"
-                      style={{ background: hover.color, boxShadow: `0 0 12px ${hover.color}` }}
-                    />
-                    <span className="font-semibold text-[13px] sm:text-sm truncate text-foreground">
-                      {hover.name}
+          {hover &&
+            (() => {
+              const labelAbove = hover.labelY < hover.cy;
+              const leftPct = (hover.cx / W) * 100;
+              const topPct = (hover.cy / H) * 100;
+              const flipBelow = labelAbove || hover.cy < H * 0.35;
+              const nearLeft = leftPct < 22;
+              const nearRight = leftPct > 78;
+              const xShift = nearLeft ? "0%" : nearRight ? "-100%" : "-50%";
+              const yShift = flipBelow
+                ? `calc(${hover.r + 18}px)`
+                : `calc(-100% - ${hover.r + 16}px)`;
+              const completionRate =
+                hover.count > 0 ? Math.round(((hover.completed ?? 0) / hover.count) * 100) : null;
+              return (
+                <div
+                  className="pointer-events-none absolute z-10 w-[min(240px,64vw)] sm:w-[260px] rounded-xl border border-border/60 bg-popover/90 backdrop-blur-xl px-3 py-2.5 sm:px-3.5 sm:py-3 text-[11px] sm:text-xs text-popover-foreground shadow-2xl ring-1 ring-black/5 dark:ring-white/5 animate-in fade-in zoom-in-95 duration-150"
+                  style={{
+                    left: `${leftPct}%`,
+                    top: `${topPct}%`,
+                    transform: `translate(${xShift}, ${yShift})`,
+                    maxWidth: "min(280px, 92vw)",
+                    boxShadow: `0 20px 40px -20px ${hover.color}55, 0 0 0 1px color-mix(in oklab, ${hover.color} 20%, transparent)`,
+                  }}
+                >
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className="h-2.5 w-2.5 rounded-full shrink-0 ring-2 ring-background"
+                        style={{ background: hover.color, boxShadow: `0 0 12px ${hover.color}` }}
+                      />
+                      <span className="font-semibold text-[13px] sm:text-sm truncate text-foreground">
+                        {hover.name}
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground shrink-0">
+                      #{hover.rank}
                     </span>
                   </div>
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground shrink-0">
-                    #{hover.rank}
-                  </span>
+                  <div className="space-y-1">
+                    <Row label="Completed sales" value={fmtSAR(hover.sales)} strong />
+                    <Row label="Total sales" value={fmtSAR(hover.total ?? hover.sales)} />
+                    <Row label="Total orders" value={String(hover.count)} />
+                    <Row label="Share of total" value={`${(hover.share * 100).toFixed(1)}%`} />
+                    {completionRate != null && (
+                      <Row label="Completion rate" value={`${completionRate}%`} />
+                    )}
+                  </div>
+                  {/* Share bar */}
+                  <div className="mt-2.5 h-1 w-full overflow-hidden rounded-full bg-muted/60">
+                    <div
+                      className="h-full rounded-full transition-all duration-500 ease-out"
+                      style={{
+                        width: `${Math.min(100, hover.share * 100)}%`,
+                        background: `linear-gradient(90deg, ${hover.color}, color-mix(in oklab, ${hover.color} 60%, white))`,
+                      }}
+                    />
+                  </div>
                 </div>
-                <div className="space-y-1">
-                  <Row label="Completed sales" value={fmtSAR(hover.sales)} strong />
-                  <Row label="Total sales" value={fmtSAR(hover.total ?? hover.sales)} />
-                  <Row label="Total orders" value={String(hover.count)} />
-                  <Row label="Share of total" value={`${(hover.share * 100).toFixed(1)}%`} />
-                  {completionRate != null && (
-                    <Row label="Completion rate" value={`${completionRate}%`} />
-                  )}
-                </div>
-                {/* Share bar */}
-                <div className="mt-2.5 h-1 w-full overflow-hidden rounded-full bg-muted/60">
-                  <div
-                    className="h-full rounded-full transition-all duration-500 ease-out"
-                    style={{
-                      width: `${Math.min(100, hover.share * 100)}%`,
-                      background: `linear-gradient(90deg, ${hover.color}, color-mix(in oklab, ${hover.color} 60%, white))`,
-                    }}
-                  />
-                </div>
-              </div>
-            );
-          })()}
-
+              );
+            })()}
         </div>
 
         {/* Legend + hint */}
@@ -625,7 +802,11 @@ function Row({ label, value, strong }: { label: string; value: string; strong?: 
   return (
     <div className="flex justify-between gap-6">
       <span className="text-muted-foreground">{label}</span>
-      <span className={`tabular-nums ${strong ? "font-semibold text-foreground" : "text-foreground/90"}`}>{value}</span>
+      <span
+        className={`tabular-nums ${strong ? "font-semibold text-foreground" : "text-foreground/90"}`}
+      >
+        {value}
+      </span>
     </div>
   );
 }

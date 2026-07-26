@@ -36,7 +36,13 @@ export function PermissionEditor({
             {usingDefaults ? "Using role defaults" : "Custom"}
           </Badge>
         </div>
-        <Button type="button" variant="ghost" size="sm" onClick={onResetToDefaults} disabled={usingDefaults}>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={onResetToDefaults}
+          disabled={usingDefaults}
+        >
           Reset to defaults
         </Button>
       </div>
@@ -57,7 +63,10 @@ export function PermissionEditor({
                     className="flex cursor-pointer items-center justify-between gap-2 rounded px-1 py-1 text-sm transition-colors duration-150 hover:bg-accent/40"
                   >
                     <span className="min-w-0 flex-1 truncate">{p.label}</span>
-                    <Switch checked={selected.has(p.key)} onCheckedChange={(v) => onToggle(p.key, !!v)} />
+                    <Switch
+                      checked={selected.has(p.key)}
+                      onCheckedChange={(v) => onToggle(p.key, !!v)}
+                    />
                   </label>
                 ))}
               </div>

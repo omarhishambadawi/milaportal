@@ -1,13 +1,24 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 import { PAGE_SIZE_OPTIONS } from "../constants";
 
 /** Page controls. Hidden entirely when everything fits on one page. */
 export function UsersPagination({
-  page, pageCount, pageSize, total, onPageChange, onPageSizeChange,
+  page,
+  pageCount,
+  pageSize,
+  total,
+  onPageChange,
+  onPageSizeChange,
 }: {
   page: number;
   pageCount: number;
@@ -24,8 +35,11 @@ export function UsersPagination({
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 px-1">
       <p className="text-xs text-muted-foreground" aria-live="polite">
-        Showing <span className="font-medium text-foreground tabular-nums">{first}–{last}</span> of{" "}
-        <span className="font-medium text-foreground tabular-nums">{total}</span>
+        Showing{" "}
+        <span className="font-medium text-foreground tabular-nums">
+          {first}–{last}
+        </span>{" "}
+        of <span className="font-medium text-foreground tabular-nums">{total}</span>
       </p>
 
       <div className="flex items-center gap-2">
@@ -35,7 +49,9 @@ export function UsersPagination({
           </SelectTrigger>
           <SelectContent>
             {PAGE_SIZE_OPTIONS.map((size) => (
-              <SelectItem key={size} value={String(size)}>{size} / page</SelectItem>
+              <SelectItem key={size} value={String(size)}>
+                {size} / page
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>

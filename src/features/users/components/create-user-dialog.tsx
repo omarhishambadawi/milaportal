@@ -3,10 +3,23 @@ import { Check, Copy, RefreshCw, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { PasswordInput } from "@/components/password-input";
 import {
@@ -43,8 +56,13 @@ export function CreateUserDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit: (input: {
-    email: string; password: string; fullName: string;
-    agentCode?: string; role: AppRole; temporary: boolean; expiresInHours: TempPasswordTtlHours;
+    email: string;
+    password: string;
+    fullName: string;
+    agentCode?: string;
+    role: AppRole;
+    temporary: boolean;
+    expiresInHours: TempPasswordTtlHours;
   }) => Promise<boolean>;
 }) {
   const [form, setForm] = useState(EMPTY);
@@ -64,7 +82,8 @@ export function CreateUserDialog({
   }, [open]);
 
   const { results, valid } = evaluatePassword(password);
-  const canSubmit = form.fullName.trim().length > 0 && form.email.trim().length > 0 && valid && !busy;
+  const canSubmit =
+    form.fullName.trim().length > 0 && form.email.trim().length > 0 && valid && !busy;
 
   const copy = async () => {
     try {
@@ -141,10 +160,14 @@ export function CreateUserDialog({
                   })
                 }
               >
-                <SelectTrigger id="new-user-role"><SelectValue /></SelectTrigger>
+                <SelectTrigger id="new-user-role">
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
                   {ASSIGNABLE_ROLES.map((r) => (
-                    <SelectItem key={r} value={r}>{ROLE_OPTION_LABEL[r]}</SelectItem>
+                    <SelectItem key={r} value={r}>
+                      {ROLE_OPTION_LABEL[r]}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -194,7 +217,11 @@ export function CreateUserDialog({
                 disabled={!password}
                 aria-label="Copy password"
               >
-                {copied ? <Check className="h-4 w-4 text-[var(--positive)]" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
+                {copied ? (
+                  <Check className="h-4 w-4 text-[var(--positive)]" aria-hidden />
+                ) : (
+                  <Copy className="h-4 w-4" aria-hidden />
+                )}
               </Button>
             </div>
             <ul id="new-user-password-rules" aria-live="polite" className="space-y-1 pt-1">
@@ -206,9 +233,11 @@ export function CreateUserDialog({
                     rule.passed ? "text-[var(--positive)]" : "text-muted-foreground",
                   )}
                 >
-                  {rule.passed
-                    ? <Check className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                    : <X className="h-3.5 w-3.5 shrink-0" aria-hidden />}
+                  {rule.passed ? (
+                    <Check className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  ) : (
+                    <X className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  )}
                   {rule.label}
                 </li>
               ))}
@@ -223,17 +252,30 @@ export function CreateUserDialog({
                   Recommended — this password is one you both know.
                 </span>
               </span>
-              <Switch checked={temporary} onCheckedChange={setTemporary} aria-label="Require a change at first sign-in" />
+              <Switch
+                checked={temporary}
+                onCheckedChange={setTemporary}
+                aria-label="Require a change at first sign-in"
+              />
             </label>
 
             {temporary && (
               <div className="flex items-center justify-between gap-3 border-t pt-3">
-                <Label htmlFor="new-user-ttl" className="text-sm font-normal">Expires after</Label>
-                <Select value={String(ttl)} onValueChange={(v) => setTtl(Number(v) as TempPasswordTtlHours)}>
-                  <SelectTrigger id="new-user-ttl" className="h-8 w-[130px]"><SelectValue /></SelectTrigger>
+                <Label htmlFor="new-user-ttl" className="text-sm font-normal">
+                  Expires after
+                </Label>
+                <Select
+                  value={String(ttl)}
+                  onValueChange={(v) => setTtl(Number(v) as TempPasswordTtlHours)}
+                >
+                  <SelectTrigger id="new-user-ttl" className="h-8 w-[130px]">
+                    <SelectValue />
+                  </SelectTrigger>
                   <SelectContent>
                     {TEMP_PASSWORD_TTL_OPTIONS.map((hours) => (
-                      <SelectItem key={hours} value={String(hours)}>{hours} hours</SelectItem>
+                      <SelectItem key={hours} value={String(hours)}>
+                        {hours} hours
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -242,10 +284,17 @@ export function CreateUserDialog({
           </div>
 
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => onOpenChange(false)}
+              disabled={busy}
+            >
               Cancel
             </Button>
-            <Button type="submit" disabled={!canSubmit}>{busy ? "Creating…" : "Create user"}</Button>
+            <Button type="submit" disabled={!canSubmit}>
+              {busy ? "Creating…" : "Create user"}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

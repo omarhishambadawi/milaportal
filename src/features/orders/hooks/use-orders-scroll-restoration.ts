@@ -24,7 +24,9 @@ export function useOrdersScrollRestoration(ready: boolean) {
 
   // Continuously remember where the user is while they browse the list.
   useEffect(() => {
-    const onScroll = () => { savedScrollY = window.scrollY; };
+    const onScroll = () => {
+      savedScrollY = window.scrollY;
+    };
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
@@ -40,6 +42,9 @@ export function useOrdersScrollRestoration(ready: boolean) {
     const raf1 = requestAnimationFrame(() => {
       raf2 = requestAnimationFrame(() => window.scrollTo(0, y));
     });
-    return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
   }, [ready]);
 }

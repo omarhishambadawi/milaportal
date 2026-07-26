@@ -2,7 +2,13 @@ import { Search, SlidersHorizontal, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ROLE_LABEL } from "@/lib/roles";
 
 import { SORT_OPTIONS, STATUS_FILTERS } from "../constants";
@@ -16,10 +22,14 @@ import type { UserSort, UserStatusFilter } from "../types";
  * save space that the layout already has.
  */
 export function UsersToolbar({
-  q, onQChange,
-  role, onRoleChange,
-  status, onStatusChange,
-  sort, onSortChange,
+  q,
+  onQChange,
+  role,
+  onRoleChange,
+  status,
+  onStatusChange,
+  sort,
+  onSortChange,
   resultCount,
   filtersActive,
   onClear,
@@ -39,7 +49,10 @@ export function UsersToolbar({
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card p-3">
       <div className="relative min-w-[200px] flex-1 sm:max-w-sm">
-        <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" aria-hidden />
+        <Search
+          className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground"
+          aria-hidden
+        />
         <Input
           value={q}
           onChange={(e) => onQChange(e.target.value)}
@@ -66,7 +79,9 @@ export function UsersToolbar({
         <SelectContent>
           <SelectItem value="all">All roles</SelectItem>
           {Object.entries(ROLE_LABEL).map(([key, label]) => (
-            <SelectItem key={key} value={key}>{label}</SelectItem>
+            <SelectItem key={key} value={key}>
+              {label}
+            </SelectItem>
           ))}
         </SelectContent>
       </Select>
@@ -77,7 +92,9 @@ export function UsersToolbar({
         </SelectTrigger>
         <SelectContent>
           {STATUS_FILTERS.map((s) => (
-            <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+            <SelectItem key={s.value} value={s.value}>
+              {s.label}
+            </SelectItem>
           ))}
         </SelectContent>
       </Select>
@@ -89,7 +106,9 @@ export function UsersToolbar({
         </SelectTrigger>
         <SelectContent>
           {SORT_OPTIONS.map((s) => (
-            <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+            <SelectItem key={s.value} value={s.value}>
+              {s.label}
+            </SelectItem>
           ))}
         </SelectContent>
       </Select>

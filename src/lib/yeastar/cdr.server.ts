@@ -23,7 +23,6 @@ import { BUSINESS_UTC_OFFSET_MINUTES } from "@/lib/timezone";
 // business timezone (Asia/Riyadh = UTC+3, no DST); override per-deployment.
 const TZ_OFFSET_MIN = Number(process.env.YEASTAR_UTC_OFFSET_MINUTES ?? BUSINESS_UTC_OFFSET_MINUTES);
 
-
 export interface CdrRecord {
   id?: number;
   new_id?: string;
@@ -31,8 +30,8 @@ export interface CdrRecord {
   call_id?: string;
   linkedid?: string;
   linked_id?: string;
-  time?: string;            // PBX-local display time, e.g. "2026/07/01 10:40:07"
-  timestamp?: number;       // epoch seconds (UTC) — authoritative for filtering
+  time?: string; // PBX-local display time, e.g. "2026/07/01 10:40:07"
+  timestamp?: number; // epoch seconds (UTC) — authoritative for filtering
   call_from?: string;
   call_to?: string;
   call_from_number?: string;
@@ -41,10 +40,10 @@ export interface CdrRecord {
   call_to_name?: string;
   disposition?: "ANSWERED" | "NO ANSWER" | "BUSY" | "FAILED" | "VOICEMAIL" | string;
   call_type?: "Inbound" | "Outbound" | "Internal" | string;
-  duration?: number;        // total seconds
-  ring_duration?: number;   // agent ring seconds (until answered / hangup)
-  talk_duration?: number;   // seconds talking
-  wait_time?: number;       // queue wait seconds before agent ring (H5)
+  duration?: number; // total seconds
+  ring_duration?: number; // agent ring seconds (until answered / hangup)
+  talk_duration?: number; // seconds talking
+  wait_time?: number; // queue wait seconds before agent ring (H5)
   agent_ring_time?: number; // synonym for ring on some firmwares
   did_number?: string;
   /** Connected/answering extension on the ANSWERED leg — used for C1 attribution. */
@@ -57,21 +56,20 @@ export interface CdrRecord {
   [k: string]: any;
 }
 
-
 interface CdrPageResponse {
   errcode: number;
   errmsg: string;
   total_number?: number;
-  data?: CdrRecord[];       // CORRECT field (was `cdr_list`)
+  data?: CdrRecord[]; // CORRECT field (was `cdr_list`)
 }
 
 export interface FetchCdrOptions {
-  from: string;             // "YYYY-MM-DD" (inclusive, business tz)
-  to: string;               // "YYYY-MM-DD" (inclusive, business tz)
-  pageSize?: number;        // default 10,000 (Yeastar max)
-  maxPages?: number;        // safety ceiling, default 200
+  from: string; // "YYYY-MM-DD" (inclusive, business tz)
+  to: string; // "YYYY-MM-DD" (inclusive, business tz)
+  pageSize?: number; // default 10,000 (Yeastar max)
+  maxPages?: number; // safety ceiling, default 200
   signal?: AbortSignal;
-  jobId?: string;           // when set, progress is reported via progress.server.ts
+  jobId?: string; // when set, progress is reported via progress.server.ts
 }
 
 export interface FetchCdrResult {
@@ -82,11 +80,12 @@ export interface FetchCdrResult {
   startEpoch: number;
   endEpoch: number;
   elapsedMs: number;
-  truncated: boolean;       // true if the safety ceiling was hit
+  truncated: boolean; // true if the safety ceiling was hit
 }
 
-
-function pad(n: number) { return String(n).padStart(2, "0"); }
+function pad(n: number) {
+  return String(n).padStart(2, "0");
+}
 
 /** Epoch-seconds bounds for [from 00:00:00, to 23:59:59] in the business tz. */
 function dayBounds(from: string, to: string): { startEpoch: number; endEpoch: number } {
@@ -96,7 +95,6 @@ function dayBounds(from: string, to: string): { startEpoch: number; endEpoch: nu
   return { startEpoch, endEpoch };
 }
 
-
 async function fetchAllPages(
   endpoint: string,
   baseQuery: Record<string, string | number | undefined>,
@@ -104,7 +102,12 @@ async function fetchAllPages(
   maxPages: number,
   signal?: AbortSignal,
   jobId?: string,
-): Promise<{ records: CdrRecord[]; totalReported: number | null; pages: number; truncated: boolean }> {
+): Promise<{
+  records: CdrRecord[];
+  totalReported: number | null;
+  pages: number;
+  truncated: boolean;
+}> {
   const records: CdrRecord[] = [];
   let totalReported: number | null = null;
   let page = 1;
@@ -116,35 +119,45 @@ async function fetchAllPages(
       { signal },
     );
 
-    if (httpStatus !== 200) throw new Error(`Yeastar CDR HTTP ${httpStatus}: ${body.slice(0, 200)}`);
+    if (httpStatus !== 200)
+      throw new Error(`Yeastar CDR HTTP ${httpStatus}: ${body.slice(0, 200)}`);
     if (!json || json.errcode !== 0) {
-      throw new Error(`Yeastar CDR errcode ${json?.errcode ?? "n/a"}: ${json?.errmsg ?? "unknown"}`);
+      throw new Error(
+        `Yeastar CDR errcode ${json?.errcode ?? "n/a"}: ${json?.errmsg ?? "unknown"}`,
+      );
     }
 
-    const list = json.data ?? [];              // CORRECT field
+    const list = json.data ?? []; // CORRECT field
     if (typeof json.total_number === "number") totalReported = json.total_number;
     // Append element-by-element rather than `records.push(...list)`: with
     // page_size up to 10,000 the spread pushes that many args onto the call
     // stack in one call, which risks a RangeError on large pages. A plain loop
     // has no argument-count ceiling.
     for (const r of list) records.push(r);
-    const totalPages = totalReported != null ? Math.max(1, Math.ceil(totalReported / pageSize)) : null;
+    const totalPages =
+      totalReported != null ? Math.max(1, Math.ceil(totalReported / pageSize)) : null;
     if (progress && jobId) {
       await progress.updateJob(jobId, {
-        status: "fetching", page, totalPages, records: records.length,
+        status: "fetching",
+        page,
+        totalPages,
+        records: records.length,
         totalReported,
-        message: totalPages
-          ? `Fetching page ${page} of ${totalPages}…`
-          : `Fetching page ${page}…`,
+        message: totalPages ? `Fetching page ${page} of ${totalPages}…` : `Fetching page ${page}…`,
       });
     }
 
-    console.log(`[yeastar cdr] ${endpoint} page=${page} got=${list.length} total=${totalReported ?? "?"} acc=${records.length}`);
+    console.log(
+      `[yeastar cdr] ${endpoint} page=${page} got=${list.length} total=${totalReported ?? "?"} acc=${records.length}`,
+    );
     if (list.length < pageSize) break;
     if (totalReported !== null && records.length >= totalReported) break;
   }
   const truncated = page > maxPages;
-  if (truncated) console.warn(`[yeastar cdr] SAFETY CEILING hit at ${maxPages} pages — result may be incomplete`);
+  if (truncated)
+    console.warn(
+      `[yeastar cdr] SAFETY CEILING hit at ${maxPages} pages — result may be incomplete`,
+    );
   return { records, totalReported, pages: Math.min(page, maxPages), truncated };
 }
 
@@ -173,26 +186,55 @@ export async function fetchCdrRange(opts: FetchCdrOptions): Promise<FetchCdrResu
     const r = await fetchAllPages(
       "/openapi/v1.0/cdr/search",
       { start_time: startEpoch, end_time: endEpoch },
-      pageSize, maxPages, opts.signal, opts.jobId,
+      pageSize,
+      maxPages,
+      opts.signal,
+      opts.jobId,
     );
-    records = r.records; totalReported = r.totalReported; pages = r.pages; truncated = r.truncated;
+    records = r.records;
+    totalReported = r.totalReported;
+    pages = r.pages;
+    truncated = r.truncated;
     if (records.length === 0) {
-      console.warn("[yeastar cdr] /cdr/search returned 0 records — falling back to /cdr/list (H2 empty-fallback).");
+      console.warn(
+        "[yeastar cdr] /cdr/search returned 0 records — falling back to /cdr/list (H2 empty-fallback).",
+      );
       path = "search-empty-list-fallback";
-      const full = await fetchAllPages("/openapi/v1.0/cdr/list", {}, pageSize, maxPages, opts.signal, opts.jobId);
-      records = full.records; totalReported = full.totalReported; pages = full.pages; truncated = full.truncated;
+      const full = await fetchAllPages(
+        "/openapi/v1.0/cdr/list",
+        {},
+        pageSize,
+        maxPages,
+        opts.signal,
+        opts.jobId,
+      );
+      records = full.records;
+      totalReported = full.totalReported;
+      pages = full.pages;
+      truncated = full.truncated;
     }
   } catch (e: any) {
-    console.warn(`[yeastar cdr] /cdr/search failed (${e?.message ?? e}) — falling back to /cdr/list.`);
+    console.warn(
+      `[yeastar cdr] /cdr/search failed (${e?.message ?? e}) — falling back to /cdr/list.`,
+    );
     path = "list-fallback";
-    const full = await fetchAllPages("/openapi/v1.0/cdr/list", {}, pageSize, maxPages, opts.signal, opts.jobId);
-    records = full.records; totalReported = full.totalReported; pages = full.pages; truncated = full.truncated;
+    const full = await fetchAllPages(
+      "/openapi/v1.0/cdr/list",
+      {},
+      pageSize,
+      maxPages,
+      opts.signal,
+      opts.jobId,
+    );
+    records = full.records;
+    totalReported = full.totalReported;
+    pages = full.pages;
+    truncated = full.truncated;
   }
 
   // Authoritative timezone-correct filter by epoch timestamp.
   const filtered = records.filter(inWindow);
   console.log(`[yeastar cdr] path=${path} fetched=${records.length} inWindow=${filtered.length}`);
-
 
   return {
     records: filtered,

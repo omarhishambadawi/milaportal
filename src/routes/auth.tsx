@@ -72,7 +72,10 @@ function AuthPage() {
     setBusy(true);
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     setBusy(false);
-    if (error) { toast.error(error.message); return; }
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
     toast.success("Signed in");
     // No navigation here on purpose. A successful sign-in fires SIGNED_IN on
     // supabase.auth.onAuthStateChange, AuthProvider sets `session`, and the
@@ -81,7 +84,10 @@ function AuthPage() {
   };
 
   const onForgot = async () => {
-    if (!email) { toast.error("Enter your email first"); return; }
+    if (!email) {
+      toast.error("Enter your email first");
+      return;
+    }
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: `${window.location.origin}/reset-password`,
     });
@@ -98,23 +104,41 @@ function AuthPage() {
 
   return (
     <div className="relative flex min-h-screen items-center justify-center bg-gradient-to-br from-accent to-background px-4">
-      <div className="absolute right-4 top-4"><ThemeToggle /></div>
+      <div className="absolute right-4 top-4">
+        <ThemeToggle />
+      </div>
       <Card className="w-full max-w-md shadow-xl border-border/60">
         <CardHeader className="text-center space-y-1 pb-4">
           <BrandLogo size="auth" className="mx-auto -mb-1" />
           <CardTitle className="text-2xl leading-tight">MilaServ Portal</CardTitle>
-          <CardDescription className="pt-1">Sign in to access orders, complaints & call center analytics</CardDescription>
+          <CardDescription className="pt-1">
+            Sign in to access orders, complaints & call center analytics
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={onSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
-              <Input id="email" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="agent@milaserv.com" />
+              <Input
+                id="email"
+                type="email"
+                autoComplete="username"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="agent@milaserv.com"
+              />
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label htmlFor="password">Password</Label>
-                <button type="button" onClick={onForgot} className="text-xs text-primary hover:underline">Forgot?</button>
+                <button
+                  type="button"
+                  onClick={onForgot}
+                  className="text-xs text-primary hover:underline"
+                >
+                  Forgot?
+                </button>
               </div>
               <PasswordInput
                 id="password"
@@ -124,7 +148,9 @@ function AuthPage() {
                 onChange={(e) => setPassword(e.target.value)}
               />
             </div>
-            <Button type="submit" className="w-full" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</Button>
+            <Button type="submit" className="w-full" disabled={busy}>
+              {busy ? "Signing in…" : "Sign in"}
+            </Button>
           </form>
           <p className="mt-6 text-center text-xs text-muted-foreground">
             Need an account? Ask an administrator to create one.

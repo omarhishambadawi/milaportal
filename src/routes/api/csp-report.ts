@@ -46,8 +46,7 @@ function extractReports(contentType: string, parsed: unknown): CspReportBody[] {
   if (Array.isArray(parsed)) {
     return parsed
       .filter(
-        (r): r is { type?: string; body?: CspReportBody } =>
-          typeof r === "object" && r !== null,
+        (r): r is { type?: string; body?: CspReportBody } => typeof r === "object" && r !== null,
       )
       .filter((r) => r.type === undefined || r.type === "csp-violation")
       .map((r) => (r.body ?? {}) as CspReportBody);

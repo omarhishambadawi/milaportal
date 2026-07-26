@@ -51,7 +51,10 @@ export function TemporaryPasswordExpired({
       redirectTo: `${window.location.origin}/reset-password`,
     });
     setSending(false);
-    if (error) { toast.error(error.message); return; }
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
     setSent(true);
     toast.success("Check your inbox for the reset link");
   };

@@ -10,7 +10,10 @@ export const orderFormSchema = z.object({
   branch_no: z.string().min(1, "Branch number is required"),
   delivery_type: z.string().min(1, "Delivery / pickup method is required"),
   invoice_no: z.string().max(50).optional().nullable(),
-  invoice_value: z.preprocess((v) => (v === "" || v == null ? null : Number(v)), z.number().nonnegative().nullable()),
+  invoice_value: z.preprocess(
+    (v) => (v === "" || v == null ? null : Number(v)),
+    z.number().nonnegative().nullable(),
+  ),
   notes: z.string().max(500).optional().nullable(),
   status: z.string().min(1),
 });

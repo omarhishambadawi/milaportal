@@ -12,9 +12,12 @@ import { queryKeys } from "@/lib/query-keys";
 function timeAgo(iso: string) {
   const s = Math.max(1, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
   if (s < 60) return `${s}s ago`;
-  const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`;
-  const d = Math.floor(h / 24); return `${d}d ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
 }
 
 export function NotificationBell() {
@@ -53,8 +56,11 @@ export function NotificationBell() {
     let wasDisconnected = false;
     const ch = supabase
       .channel(`notif-${user.id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${user.id}` },
-        () => qc.invalidateQueries({ queryKey: queryKeys.notifications.all() }))
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${user.id}` },
+        () => qc.invalidateQueries({ queryKey: queryKeys.notifications.all() }),
+      )
       .subscribe((status) => {
         if (status === "SUBSCRIBED") {
           setRealtimeConnected(true);
@@ -69,7 +75,10 @@ export function NotificationBell() {
           setRealtimeConnected(false);
         }
       });
-    return () => { setRealtimeConnected(false); supabase.removeChannel(ch); };
+    return () => {
+      setRealtimeConnected(false);
+      supabase.removeChannel(ch);
+    };
   }, [user?.id, qc]);
 
   const items = data ?? [];
@@ -77,12 +86,19 @@ export function NotificationBell() {
 
   const markAllRead = async () => {
     if (!user) return;
-    await supabase.from("notifications" as any).update({ read_at: new Date().toISOString() } as any).is("read_at", null).eq("user_id", user.id);
+    await supabase
+      .from("notifications" as any)
+      .update({ read_at: new Date().toISOString() } as any)
+      .is("read_at", null)
+      .eq("user_id", user.id);
     qc.invalidateQueries({ queryKey: queryKeys.notifications.all() });
   };
 
   const markOne = async (id: string) => {
-    await supabase.from("notifications" as any).update({ read_at: new Date().toISOString() } as any).eq("id", id);
+    await supabase
+      .from("notifications" as any)
+      .update({ read_at: new Date().toISOString() } as any)
+      .eq("id", id);
     qc.invalidateQueries({ queryKey: queryKeys.notifications.all() });
   };
 
@@ -114,27 +130,50 @@ export function NotificationBell() {
         </div>
         <div className="max-h-[420px] overflow-y-auto">
           {items.length === 0 && (
-            <div className="p-8 text-center text-sm text-muted-foreground">You're all caught up 🎉</div>
+            <div className="p-8 text-center text-sm text-muted-foreground">
+              You're all caught up 🎉
+            </div>
           )}
           {items.map((n) => {
             const to = n.link ?? "#";
             const unreadItem = !n.read_at;
             const Content = (
-              <div className={cn("flex gap-2 p-3 border-b hover:bg-accent/40 transition-colors", unreadItem && "bg-primary/5")}>
-                <div className={cn("mt-1.5 h-2 w-2 rounded-full shrink-0", unreadItem ? "bg-primary" : "bg-transparent")} />
+              <div
+                className={cn(
+                  "flex gap-2 p-3 border-b hover:bg-accent/40 transition-colors",
+                  unreadItem && "bg-primary/5",
+                )}
+              >
+                <div
+                  className={cn(
+                    "mt-1.5 h-2 w-2 rounded-full shrink-0",
+                    unreadItem ? "bg-primary" : "bg-transparent",
+                  )}
+                />
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium truncate">{n.title}</div>
-                  {n.body && <div className="text-xs text-muted-foreground line-clamp-2">{n.body}</div>}
-                  <div className="text-[10px] text-muted-foreground mt-1">{timeAgo(n.created_at)}</div>
+                  {n.body && (
+                    <div className="text-xs text-muted-foreground line-clamp-2">{n.body}</div>
+                  )}
+                  <div className="text-[10px] text-muted-foreground mt-1">
+                    {timeAgo(n.created_at)}
+                  </div>
                 </div>
               </div>
             );
             return to.startsWith("/") ? (
-              <Link key={n.id} to={to} onClick={() => unreadItem && markOne(n.id)} className="block">
+              <Link
+                key={n.id}
+                to={to}
+                onClick={() => unreadItem && markOne(n.id)}
+                className="block"
+              >
                 {Content}
               </Link>
             ) : (
-              <div key={n.id} onClick={() => unreadItem && markOne(n.id)}>{Content}</div>
+              <div key={n.id} onClick={() => unreadItem && markOne(n.id)}>
+                {Content}
+              </div>
             );
           })}
         </div>

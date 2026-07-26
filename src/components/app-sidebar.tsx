@@ -4,7 +4,6 @@ import { ChevronLeft, X } from "lucide-react";
 import { BrandLogo } from "@/components/brand-logo";
 import { cn } from "@/lib/utils";
 
-
 export type NavItemData = {
   to: string;
   label: string;
@@ -71,7 +70,8 @@ const SECTIONS: { id: string; label: string; match: (to: string) => boolean }[] 
   {
     id: "workspace",
     label: "Workspace",
-    match: (t) => t === "/orders" || t === "/orders/new" || t === "/complaints" || t === "/call-center",
+    match: (t) =>
+      t === "/orders" || t === "/orders/new" || t === "/complaints" || t === "/call-center",
   },
   { id: "admin", label: "Administration", match: (t) => t.startsWith("/admin") },
 ];
@@ -99,13 +99,7 @@ function groupNav(nav: NavItemData[]) {
  * on a deliberate hover pause, so carrying it in the expanded state too is
  * harmless — that trade is what lets `collapsed` disappear from the props.
  */
-const NavItem = memo(function NavItem({
-  item,
-  active,
-}: {
-  item: NavItemData;
-  active: boolean;
-}) {
+const NavItem = memo(function NavItem({ item, active }: { item: NavItemData; active: boolean }) {
   const Icon = item.icon;
   return (
     <Link
@@ -297,7 +291,6 @@ const SidebarInner = memo(function SidebarInner({
   );
 });
 
-
 export function AppSidebar({
   nav,
   activePath,
@@ -325,12 +318,7 @@ export function AppSidebar({
           expanded ? "w-64" : "w-[76px]",
         )}
       >
-        <SidebarInner
-          nav={nav}
-          activePath={activePath}
-          collapsed={!expanded}
-          onToggle={onToggle}
-        />
+        <SidebarInner nav={nav} activePath={activePath} collapsed={!expanded} onToggle={onToggle} />
       </aside>
 
       {/* Mobile drawer — no group/rail marker, so the collapsed variants can
