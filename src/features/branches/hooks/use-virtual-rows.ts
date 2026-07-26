@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 
 /**
  * Row windowing for the branch list.
@@ -38,8 +38,19 @@ interface Options {
 }
 
 export interface VirtualResult {
-  /** Attach to the element that scrolls. */
-  scrollRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * Attach to the element that scrolls.
+   *
+   * A callback ref rather than a ref object, and for the same reason as
+   * `useColumnCount` below: the scrolling element does not exist on the first
+   * render. The list shows skeletons while the directory loads and an empty state
+   * when nothing matches, and neither of those is the scroller. A mount effect
+   * reading `ref.current` therefore finds null, bails, and never runs again —
+   * leaving no scroll listener and no measured viewport for the rest of the
+   * session, which is a list frozen on its first screenful of rows above a
+   * full-height spacer. That is the blank area.
+   */
+  scrollRef: (element: HTMLDivElement | null) => void;
   /** Height the inner spacer must have for the scrollbar to be honest. */
   totalHeight: number;
   rows: VirtualRow[];
@@ -56,7 +67,7 @@ export function useVirtualRows({
   expandedExtra,
   overscan = 4,
 }: Options): VirtualResult {
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewport, setViewport] = useState(0);
 
@@ -67,19 +78,21 @@ export function useVirtualRows({
   const extra = expandedRow != null ? expandedExtra : 0;
 
   useLayoutEffect(() => {
-    const element = scrollRef.current;
+    const element = scroller;
     if (!element) return;
 
-    // rAF-throttled: a scroll handler that calls setState on every event fires
-    // far more often than the browser paints, and each call re-renders the list.
-    let frame = 0;
-    const onScroll = () => {
-      if (frame) return;
-      frame = window.requestAnimationFrame(() => {
-        frame = 0;
-        setScrollTop(element.scrollTop);
-      });
-    };
+    /**
+     * Read the scroll position straight through, without an rAF throttle.
+     *
+     * The throttle looked like free insurance and was not: `requestAnimationFrame`
+     * does not run while the document is hidden, so a list scrolled in a
+     * backgrounded or non-compositing document would queue a frame that never
+     * arrives and render its first screenful forever. It also was not buying
+     * much — the spec fires `scroll` from the same "update the rendering" step
+     * that drives rAF, so at most one event per frame reaches this handler
+     * anyway, and React drops the re-render when the value has not changed.
+     */
+    const onScroll = () => setScrollTop(element.scrollTop);
 
     setScrollTop(element.scrollTop);
     setViewport(element.clientHeight);
@@ -89,11 +102,10 @@ export function useVirtualRows({
     observer.observe(element);
 
     return () => {
-      if (frame) window.cancelAnimationFrame(frame);
       element.removeEventListener("scroll", onScroll);
       observer.disconnect();
     };
-  }, []);
+  }, [scroller]);
 
   /** Top offset of a row, accounting for the one expanded card above it. */
   const rowStart = useCallback(
@@ -124,14 +136,13 @@ export function useVirtualRows({
 
   const scrollToIndex = useCallback(
     (index: number) => {
-      const element = scrollRef.current;
-      if (!element || itemsPerRow <= 0) return;
-      element.scrollTo({ top: rowStart(Math.floor(index / itemsPerRow)), behavior: "smooth" });
+      if (!scroller || itemsPerRow <= 0) return;
+      scroller.scrollTo({ top: rowStart(Math.floor(index / itemsPerRow)), behavior: "smooth" });
     },
-    [itemsPerRow, rowStart],
+    [scroller, itemsPerRow, rowStart],
   );
 
-  return { scrollRef, totalHeight, rows, scrollToIndex };
+  return { scrollRef: setScroller, totalHeight, rows, scrollToIndex };
 }
 
 /**

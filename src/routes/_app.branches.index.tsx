@@ -65,7 +65,7 @@ function BranchDirectory() {
     reset,
   } = useBranchFilters(branches);
 
-  const { lastUpdated, lastImport } = useDirectoryFreshness(branches, canManage);
+  const { lastUpdated } = useDirectoryFreshness(branches);
   const map = useMapPanel();
 
   const [selected, setSelected] = useState<string | null>(null);
@@ -133,7 +133,6 @@ function BranchDirectory() {
               resultCount={results.length}
               filtered={filtered}
               lastUpdated={lastUpdated}
-              lastImport={lastImport}
             />
           </div>
         </div>
