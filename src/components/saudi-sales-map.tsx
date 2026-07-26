@@ -724,31 +724,52 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                 hover.count > 0 ? Math.round(((hover.completed ?? 0) / hover.count) * 100) : null;
               return (
                 <div
-                  className="pointer-events-none absolute z-10 w-[min(240px,64vw)] sm:w-[260px] rounded-xl border border-border/60 bg-popover/90 backdrop-blur-xl px-3 py-2.5 sm:px-3.5 sm:py-3 text-[11px] sm:text-xs text-popover-foreground shadow-2xl ring-1 ring-black/5 dark:ring-white/5 animate-in fade-in zoom-in-95 duration-150"
+                  className="pointer-events-none absolute z-10 w-[min(280px,86vw)] sm:w-[280px] md:w-[300px] rounded-2xl border border-border/50 bg-popover/95 backdrop-blur-2xl px-3.5 py-3 sm:px-4 sm:py-3.5 text-popover-foreground shadow-2xl ring-1 ring-black/5 dark:ring-white/10 animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-1 duration-200 ease-out"
                   style={{
                     left: `${leftPct}%`,
                     top: `${topPct}%`,
                     transform: `translate(${xShift}, ${yShift})`,
-                    maxWidth: "min(280px, 92vw)",
-                    boxShadow: `0 20px 40px -20px ${hover.color}55, 0 0 0 1px color-mix(in oklab, ${hover.color} 20%, transparent)`,
+                    maxWidth: "min(320px, 92vw)",
+                    boxShadow: `0 24px 48px -24px ${hover.color}66, 0 0 0 1px color-mix(in oklab, ${hover.color} 22%, transparent), 0 2px 8px -2px rgba(0,0,0,0.12)`,
                   }}
                 >
-                  <div className="mb-2 flex items-center justify-between gap-2">
+                  {/* Header — city + rank chip */}
+                  <div className="mb-2.5 flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
                       <span
                         className="h-2.5 w-2.5 rounded-full shrink-0 ring-2 ring-background"
-                        style={{ background: hover.color, boxShadow: `0 0 12px ${hover.color}` }}
+                        style={{
+                          background: hover.color,
+                          boxShadow: `0 0 12px ${hover.color}`,
+                        }}
                       />
-                      <span className="font-semibold text-[13px] sm:text-sm truncate text-foreground">
+                      <span className="font-semibold text-[14px] sm:text-[15px] leading-tight truncate text-foreground">
                         {hover.name}
                       </span>
                     </div>
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground shrink-0">
+                    <span
+                      className="text-[10px] font-bold uppercase tracking-wider shrink-0 rounded-full px-2 py-0.5"
+                      style={{
+                        background: `color-mix(in oklab, ${hover.color} 14%, transparent)`,
+                        color: hover.color,
+                      }}
+                    >
                       #{hover.rank}
                     </span>
                   </div>
-                  <div className="space-y-1">
-                    <Row label="Completed sales" value={fmtSAR(hover.sales)} strong />
+
+                  {/* Hero metric */}
+                  <div className="mb-3 rounded-xl bg-muted/40 px-3 py-2">
+                    <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Completed sales
+                    </div>
+                    <div className="mt-0.5 text-[15px] sm:text-base font-bold tabular-nums text-foreground">
+                      {fmtSAR(hover.sales)}
+                    </div>
+                  </div>
+
+                  {/* Secondary rows */}
+                  <div className="space-y-1.5 text-[11px] sm:text-xs">
                     <Row label="Total sales" value={fmtSAR(hover.total ?? hover.sales)} />
                     <Row label="Total orders" value={String(hover.count)} />
                     <Row label="Share of total" value={`${(hover.share * 100).toFixed(1)}%`} />
@@ -756,19 +777,21 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                       <Row label="Completion rate" value={`${completionRate}%`} />
                     )}
                   </div>
+
                   {/* Share bar */}
-                  <div className="mt-2.5 h-1 w-full overflow-hidden rounded-full bg-muted/60">
+                  <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-muted/60">
                     <div
                       className="h-full rounded-full transition-all duration-500 ease-out"
                       style={{
                         width: `${Math.min(100, hover.share * 100)}%`,
-                        background: `linear-gradient(90deg, ${hover.color}, color-mix(in oklab, ${hover.color} 60%, white))`,
+                        background: `linear-gradient(90deg, ${hover.color}, color-mix(in oklab, ${hover.color} 55%, white))`,
                       }}
                     />
                   </div>
                 </div>
               );
             })()}
+
         </div>
 
         {/* Legend + hint */}
