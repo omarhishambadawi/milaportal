@@ -1,87 +1,122 @@
-import { Ban, Bike, Building2, MapPinned } from "lucide-react";
+import { Bike, Building2, MapPinned, RefreshCw } from "lucide-react";
+import { BUSINESS_TIMEZONE } from "@/lib/timezone";
 import { cn } from "@/lib/utils";
+import type { ImportHistoryEntry } from "../types";
 import type { BranchStats } from "../search";
 
 /**
- * The four headline numbers.
+ * The directory's headline facts, on one line.
  *
- * They describe the whole directory rather than the current filter, on purpose:
- * these are the "how big is our network" facts, and having them shrink to 3
- * while someone types a search would make them useless as a reference point.
- * The live count of what a filter matched is shown next to the search box,
- * where it belongs.
+ * This replaced a row of four stat tiles. The numbers themselves are worth
+ * keeping — "how big is the network" is a reasonable thing to see — but they were
+ * never the reason anyone opened this page, and as tiles they cost about 80px of
+ * a viewport-height layout whose scarcest resource is rows of cards. As a line of
+ * small text they cost 20px and read the same.
+ *
+ * The freshness stamp shares the line on purpose: an age is only meaningful next
+ * to the thing it describes.
  */
 
-interface Tile {
-  label: string;
-  value: number;
-  icon: typeof Building2;
-  /** Tailwind colour token pair for the icon chip. */
-  tone: string;
+function stamp(iso: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      timeZone: BUSINESS_TIMEZONE,
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    }).format(new Date(iso));
+  } catch {
+    return iso;
+  }
 }
 
-export function BranchStatsRow({ stats, loading }: { stats: BranchStats; loading?: boolean }) {
-  const tiles: Tile[] = [
-    {
-      label: "Total Branches",
-      value: stats.total,
-      icon: Building2,
-      tone: "bg-primary/12 text-primary",
-    },
-    {
-      label: "Cities",
-      value: stats.cities,
-      icon: MapPinned,
-      tone: "bg-[var(--badge-violet)]/12 text-[var(--badge-violet)]",
-    },
-    {
-      label: "With Scooter",
-      value: stats.withScooter,
-      icon: Bike,
-      tone: "bg-[var(--positive)]/12 text-[var(--positive)]",
-    },
-    {
-      label: "Without Scooter",
-      value: stats.withoutScooter,
-      icon: Ban,
-      tone: "bg-muted text-muted-foreground",
-    },
-  ];
+interface Props {
+  stats: BranchStats;
+  loading?: boolean;
+  /** Set while a search or filter is narrowing the list. */
+  resultCount: number;
+  filtered: boolean;
+  /** Newest `updated_at` across the directory. */
+  lastUpdated: string | null;
+  /** The last import, when the viewer is allowed to know about it. */
+  lastImport: ImportHistoryEntry | null;
+}
+
+export function BranchDirectoryMeta({
+  stats,
+  loading,
+  resultCount,
+  filtered,
+  lastUpdated,
+  lastImport,
+}: Props) {
+  if (loading) {
+    return <span className="block h-4 w-64 animate-pulse rounded bg-muted" />;
+  }
+
+  const source = lastImport?.file_name ?? null;
 
   return (
-    // Four across at every width, including phones. Two-by-two would be prettier
-    // in isolation, but it costs a second row of vertical space on exactly the
-    // screen where the list needs it most — the whole page is sized to the
-    // viewport so the search box can stay pinned.
-    <div className="grid grid-cols-4 gap-2 sm:gap-3">
-      {tiles.map((tile) => (
-        <div
-          key={tile.label}
-          className="flex items-center gap-2.5 rounded-xl border border-border/60 bg-card p-2.5 shadow-sm transition-shadow hover:shadow-md sm:p-4"
-        >
-          <span
-            className={cn(
-              "hidden h-9 w-9 shrink-0 place-items-center rounded-lg sm:grid",
-              tile.tone,
-            )}
-            aria-hidden
-          >
-            <tile.icon className="h-4 w-4" />
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+      <span
+        className={cn(
+          "inline-flex items-center gap-1.5",
+          filtered && "font-medium text-foreground",
+        )}
+      >
+        <Building2 className="h-3.5 w-3.5 opacity-70" aria-hidden />
+        {filtered ? (
+          <>
+            <span className="tabular-nums">{resultCount.toLocaleString()}</span> of{" "}
+            <span className="tabular-nums">{stats.total.toLocaleString()}</span> branches
+          </>
+        ) : (
+          <>
+            <span className="tabular-nums">{stats.total.toLocaleString()}</span> branches
+          </>
+        )}
+      </span>
+
+      <span aria-hidden className="opacity-40">
+        ·
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        <MapPinned className="h-3.5 w-3.5 opacity-70" aria-hidden />
+        <span className="tabular-nums">{stats.cities.toLocaleString()}</span> cities
+      </span>
+
+      <span aria-hidden className="opacity-40">
+        ·
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        <Bike className="h-3.5 w-3.5 opacity-70" aria-hidden />
+        <span className="tabular-nums">{stats.withScooter.toLocaleString()}</span> with scooter
+      </span>
+
+      {lastUpdated && (
+        <>
+          <span aria-hidden className="hidden opacity-40 sm:inline">
+            ·
           </span>
-          <div className="min-w-0">
-            <p className="truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground sm:text-[11px]">
-              {tile.label}
-            </p>
-            {loading ? (
-              <span className="mt-1 block h-6 w-10 animate-pulse rounded bg-muted" />
-            ) : (
-              <p className="text-lg font-bold tabular-nums leading-tight text-foreground sm:text-2xl">
-                {tile.value.toLocaleString()}
-              </p>
-            )}
-          </div>
-        </div>
-      ))}
+          <span
+            className="hidden items-center gap-1.5 sm:inline-flex"
+            title={
+              source
+                ? `Last import: ${source}${
+                    lastImport?.importer_name ? ` by ${lastImport.importer_name}` : ""
+                  }`
+                : "The most recent change to any branch record, made by an import."
+            }
+          >
+            <RefreshCw className="h-3.5 w-3.5 opacity-70" aria-hidden />
+            Updated {stamp(lastUpdated)}
+            {source && <span className="hidden truncate lg:inline">· {source}</span>}
+          </span>
+        </>
+      )}
     </div>
   );
 }

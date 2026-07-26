@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   ChevronDown,
   Download,
@@ -19,14 +19,15 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { copyText } from "@/features/branches/clipboard";
-import { BranchFilterBar } from "@/features/branches/components/branch-filter-bar";
 import { BranchList } from "@/features/branches/components/branch-list";
 import { BranchMapSurface } from "@/features/branches/components/branch-map-surface";
-import { BranchStatsRow } from "@/features/branches/components/branch-stats";
+import { BranchSearchBar } from "@/features/branches/components/branch-search-bar";
+import { BranchDirectoryMeta } from "@/features/branches/components/branch-stats";
 import {
   MAX_MAP_WAYPOINTS,
   allContactNumbers,
@@ -35,6 +36,8 @@ import {
 } from "@/features/branches/export";
 import { useBranchDirectory } from "@/features/branches/hooks/use-branch-directory";
 import { useBranchFilters } from "@/features/branches/hooks/use-branch-filters";
+import { useDirectoryFreshness } from "@/features/branches/hooks/use-directory-freshness";
+import { LIST_PANEL_ID, MAP_PANEL_ID, useMapPanel } from "@/features/branches/hooks/use-map-panel";
 import { hasActiveFilters } from "@/features/branches/search";
 
 export const Route = createFileRoute("/_app/branches/")({
@@ -42,54 +45,71 @@ export const Route = createFileRoute("/_app/branches/")({
   component: BranchDirectory,
 });
 
-const MAP_PREF_KEY = "milaserv.branches.map";
-
 function BranchDirectory() {
   const { branches, isLoading, error, canView, canManage, canExport } = useBranchDirectory();
   const {
     filters,
     results,
+    tokens,
     stats,
     cities,
     dutyHours,
+    managers,
     favourites,
     toggleFavourite,
     recent,
     rememberSearch,
     clearRecent,
+    recentBranches,
+    rememberBranch,
+    clearRecentBranches,
     setQuery,
     toggleCity,
     toggleScooter,
     toggleDutyHours,
+    toggleManager,
     toggleFavouritesOnly,
+    focusBranch,
+    clearFilters,
     reset,
   } = useBranchFilters(branches);
 
+  const { lastUpdated, lastImport } = useDirectoryFreshness(branches, canManage);
+  const map = useMapPanel();
+
   const [selected, setSelected] = useState<string | null>(null);
-  const [showMap, setShowMap] = useState(true);
   const [mobileMapOpen, setMobileMapOpen] = useState(false);
 
-  // Hydrated after mount rather than in the initial state, so the server-rendered
-  // markup does not depend on a value only the browser has.
-  useEffect(() => {
-    try {
-      if (localStorage.getItem(MAP_PREF_KEY) === "0") setShowMap(false);
-    } catch {}
-  }, []);
+  const byCode = useMemo(
+    () => new Map(branches.map((branch) => [branch.branch_no, branch])),
+    [branches],
+  );
 
-  const toggleMap = useCallback(() => {
-    setShowMap((current) => {
-      const next = !current;
-      try {
-        localStorage.setItem(MAP_PREF_KEY, next ? "1" : "0");
-      } catch {}
-      return next;
-    });
-  }, []);
+  /**
+   * Opening a card is what counts as "viewing" a branch.
+   *
+   * Recorded here rather than in the card so it happens once per selection,
+   * whether the branch was clicked in the list or picked off the map.
+   */
+  const handleSelect = useCallback(
+    (branchNo: string | null) => {
+      setSelected((current) => {
+        const next = current === branchNo ? null : branchNo;
+        if (next) rememberBranch(next);
+        return next;
+      });
+    },
+    [rememberBranch],
+  );
 
-  const handleSelect = useCallback((branchNo: string | null) => {
-    setSelected((current) => (current === branchNo ? null : branchNo));
-  }, []);
+  const handleFocusBranch = useCallback(
+    (branchNo: string) => {
+      focusBranch(branchNo);
+      setSelected(branchNo);
+      rememberBranch(branchNo);
+    },
+    [focusBranch, rememberBranch],
+  );
 
   const filtered = hasActiveFilters(filters);
 
@@ -127,23 +147,27 @@ function BranchDirectory() {
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
+  const showMapPanel = map.showPanel;
+
   return (
-    // Sized to the viewport rather than growing with content: the search box and
-    // the filter chips have to stay put while results scroll beneath them, and a
-    // page that scrolls as a whole cannot do that without the chips eating a
-    // third of a phone screen on every scroll.
-    <div className="flex flex-col gap-3 h-[calc(100dvh-5.5rem)] sm:gap-4 sm:h-[calc(100dvh-6rem)] lg:h-[calc(100dvh-7rem)]">
+    // Sized to the viewport rather than growing with content: the search box has
+    // to stay put while results scroll beneath it, and a page that scrolls as a
+    // whole cannot do that.
+    <div className="flex flex-col gap-3 h-[calc(100dvh-5.5rem)] sm:h-[calc(100dvh-6rem)] lg:h-[calc(100dvh-7rem)]">
       {/* Header */}
-      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3">
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-x-3 gap-y-2">
         <div className="min-w-0">
           <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Branch Directory</h1>
-          <p className="text-xs text-muted-foreground sm:text-sm">
-            {isLoading
-              ? "Loading branches…"
-              : filtered
-                ? `${results.length} of ${branches.length} branches match`
-                : `${branches.length} branches across ${stats.cities} cities`}
-          </p>
+          <div className="mt-0.5">
+            <BranchDirectoryMeta
+              stats={stats}
+              loading={isLoading}
+              resultCount={results.length}
+              filtered={filtered}
+              lastUpdated={lastUpdated}
+              lastImport={lastImport}
+            />
+          </div>
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
@@ -160,11 +184,15 @@ function BranchDirectory() {
             variant="outline"
             size="sm"
             className="hidden lg:inline-flex"
-            onClick={toggleMap}
-            aria-pressed={showMap}
+            onClick={map.toggle}
+            aria-pressed={map.visible}
           >
-            {showMap ? <PanelRightClose className="h-4 w-4" /> : <MapIcon className="h-4 w-4" />}
-            {showMap ? "Hide map" : "Show map"}
+            {map.visible ? (
+              <PanelRightClose className="h-4 w-4" />
+            ) : (
+              <MapIcon className="h-4 w-4" />
+            )}
+            {map.visible ? "Hide map" : "Show map"}
           </Button>
 
           <DropdownMenu>
@@ -210,26 +238,28 @@ function BranchDirectory() {
       </div>
 
       <div className="shrink-0">
-        <BranchStatsRow stats={stats} loading={isLoading} />
-      </div>
-
-      <div className="shrink-0">
-        <BranchFilterBar
+        <BranchSearchBar
           filters={filters}
           resultCount={results.length}
           totalCount={branches.length}
           cities={cities}
           dutyHours={dutyHours}
-          favouriteCount={favourites.size}
+          managers={managers}
+          favourites={favourites}
           recent={recent}
+          recentBranches={recentBranches}
+          byCode={byCode}
           onQueryChange={setQuery}
           onCommitQuery={rememberSearch}
           onClearRecent={clearRecent}
+          onClearRecentBranches={clearRecentBranches}
           onToggleCity={toggleCity}
           onToggleScooter={toggleScooter}
           onToggleDutyHours={toggleDutyHours}
+          onToggleManager={toggleManager}
           onToggleFavourites={toggleFavouritesOnly}
-          onReset={reset}
+          onClearFilters={clearFilters}
+          onFocusBranch={handleFocusBranch}
         />
       </div>
 
@@ -241,28 +271,53 @@ function BranchDirectory() {
         // `min-h-0` is what lets the list scroll instead of stretching this row:
         // a flex child defaults to min-height:auto, which refuses to shrink below
         // its content and pushes the overflow onto the page.
-        <div className="flex min-h-0 flex-1 gap-4">
-          <BranchList
-            branches={results}
-            loading={isLoading}
-            selected={selected}
-            favourites={favourites}
-            onSelect={handleSelect}
-            onToggleFavourite={toggleFavourite}
-            onResetFilters={reset}
-            filtered={filtered}
-            className={cn("min-w-0 flex-1", showMap && "lg:max-w-[54%]")}
-          />
-
-          {showMap && (
-            <BranchMapSurface
+        <ResizablePanelGroup
+          key={map.layoutKey}
+          defaultLayout={map.defaultLayout}
+          onLayoutChanged={map.remember}
+          className="min-h-0 flex-1"
+        >
+          <ResizablePanel id={LIST_PANEL_ID} minSize={map.listMinWidth} className="min-w-0">
+            <BranchList
               branches={results}
+              loading={isLoading}
               selected={selected}
+              favourites={favourites}
+              tokens={tokens}
+              query={filters.query}
               onSelect={handleSelect}
-              className="hidden flex-1 lg:block"
+              onToggleFavourite={toggleFavourite}
+              onResetFilters={reset}
+              onClearSearch={() => setQuery("")}
+              filtered={filtered}
+              className="h-full"
             />
+          </ResizablePanel>
+
+          {showMapPanel && (
+            <>
+              {/* A wider grab area than the 1px line it draws — a hairline is a
+                  target nobody hits on the first try. */}
+              <ResizableHandle
+                className="mx-1.5 w-px bg-transparent after:w-4 hover:bg-primary/40 focus-visible:bg-primary/60 data-[dragging]:bg-primary/60"
+                aria-label="Resize the map"
+              />
+              <ResizablePanel
+                id={MAP_PANEL_ID}
+                minSize={map.minWidth}
+                maxSize={map.maxWidth}
+                className="min-w-0"
+              >
+                <BranchMapSurface
+                  branches={results}
+                  selected={selected}
+                  onSelect={handleSelect}
+                  className="h-full"
+                />
+              </ResizablePanel>
+            </>
           )}
-        </div>
+        </ResizablePanelGroup>
       )}
 
       {/* Mobile map. A full-height sheet rather than a squeezed split — half a
@@ -281,7 +336,7 @@ function BranchDirectory() {
             branches={results}
             selected={selected}
             onSelect={handleSelect}
-            className="h-[calc(85dvh-4rem)] rounded-none border-0"
+            className={cn("h-[calc(85dvh-4rem)] rounded-none border-0")}
           />
         </SheetContent>
       </Sheet>

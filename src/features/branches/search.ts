@@ -75,6 +75,8 @@ export interface BranchFilters {
   scooter: ScooterFilter;
   /** Duty-hour buckets to keep, e.g. [20, 24]. Empty means every duration. */
   dutyHours: number[];
+  /** Area manager names, as stored. Empty means every manager. */
+  managers: string[];
   favouritesOnly: boolean;
 }
 
@@ -83,16 +85,28 @@ export const EMPTY_FILTERS: BranchFilters = {
   cities: [],
   scooter: "any",
   dutyHours: [],
+  managers: [],
   favouritesOnly: false,
 };
 
 export function hasActiveFilters(filters: BranchFilters): boolean {
+  return filters.query.trim().length > 0 || activeFilterCount(filters) > 0;
+}
+
+/**
+ * How many filters are set, ignoring the search box.
+ *
+ * Drives the badge on the Advanced Filters button: with the chip bar gone, this
+ * count is the only thing telling an agent that the list in front of them is
+ * narrowed by something they cannot see.
+ */
+export function activeFilterCount(filters: BranchFilters): number {
   return (
-    filters.query.trim().length > 0 ||
-    filters.cities.length > 0 ||
-    filters.scooter !== "any" ||
-    filters.dutyHours.length > 0 ||
-    filters.favouritesOnly
+    filters.cities.length +
+    filters.dutyHours.length +
+    filters.managers.length +
+    (filters.scooter === "any" ? 0 : 1) +
+    (filters.favouritesOnly ? 1 : 0)
   );
 }
 
@@ -102,7 +116,7 @@ export function hasActiveFilters(filters: BranchFilters): boolean {
  * "riyadh scooter" narrows rather than widens, which is what someone typing a
  * second word intends. Tokens are folded once here, not per branch.
  */
-function tokenize(query: string): string[] {
+export function tokenize(query: string): string[] {
   const folded = foldText(query);
   return folded.length > 0 ? folded.split(" ").filter(Boolean) : [];
 }
@@ -147,10 +161,12 @@ export function filterBranches(
   const tokens = tokenize(filters.query);
   const cities = filters.cities.length > 0 ? new Set(filters.cities) : null;
   const dutyHours = filters.dutyHours.length > 0 ? new Set(filters.dutyHours) : null;
+  const managers = filters.managers.length > 0 ? new Set(filters.managers) : null;
 
   const matched: BranchView[] = [];
   for (const branch of branches) {
     if (cities && !cities.has(branch.city)) continue;
+    if (managers && (branch.area_manager == null || !managers.has(branch.area_manager))) continue;
     if (filters.scooter === "yes" && !branch.scooter) continue;
     if (filters.scooter === "no" && branch.scooter) continue;
     if (dutyHours) {
@@ -220,6 +236,24 @@ export function cityOptions(
  * ready — 22-hour branches are the second most common shape in the current
  * sheet and would have been invisible behind three hardcoded chips.
  */
+/**
+ * The area managers to offer, alphabetically.
+ *
+ * Alphabetical rather than by branch count, unlike the cities: an agent opening
+ * this list is looking for one name they already have in mind, and a
+ * frequency-ordered list of people is a list you have to read all of.
+ */
+export function managerOptions(branches: BranchView[]): { manager: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const branch of branches) {
+    if (!branch.area_manager) continue;
+    counts.set(branch.area_manager, (counts.get(branch.area_manager) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([manager, count]) => ({ manager, count }))
+    .sort((a, b) => a.manager.localeCompare(b.manager));
+}
+
 export function dutyHourOptions(branches: BranchView[]): { hours: number; count: number }[] {
   const counts = new Map<number, number>();
   for (const branch of branches) {

@@ -138,16 +138,24 @@ export function useVirtualRows({
  * How many cards fit side by side, measured rather than guessed.
  *
  * The column count cannot come from a Tailwind breakpoint here: the list pane is
- * half the screen when the map is open and all of it when the map is closed, so
- * the same viewport width yields different column counts. The virtualizer needs
- * the real number to compute row positions, so it is derived from the element's
- * own width.
+ * a quarter of the screen narrower when the map is open, and narrower again when
+ * the map is dragged wider, so the same viewport width yields different column
+ * counts. The virtualizer needs the real number to compute row positions, so it
+ * is derived from the element's own width.
+ *
+ * Returns a **callback ref**, not a ref object, and that is the whole point. The
+ * grid element does not exist for the first render — the list shows skeletons
+ * while the directory loads, and an empty state when a search matches nothing —
+ * so a `ref.current` read in a mount effect finds null, bails, and never looks
+ * again: the observer is never attached and the list stays at one column for the
+ * rest of the session. A callback ref fires whenever the element appears or is
+ * replaced, which is exactly when the measurement has to be redone.
  */
-export function useColumnCount(ref: React.RefObject<HTMLElement | null>, minCardWidth: number) {
+export function useColumnCount(minCardWidth: number) {
+  const [element, setElement] = useState<HTMLElement | null>(null);
   const [columns, setColumns] = useState(1);
 
   useEffect(() => {
-    const element = ref.current;
     if (!element) return;
     const measure = () => {
       const width = element.clientWidth;
@@ -157,7 +165,7 @@ export function useColumnCount(ref: React.RefObject<HTMLElement | null>, minCard
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [ref, minCardWidth]);
+  }, [element, minCardWidth]);
 
-  return columns;
+  return { gridRef: setElement, columns };
 }

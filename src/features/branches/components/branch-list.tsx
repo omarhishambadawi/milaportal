@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { SearchX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -13,9 +13,14 @@ interface Props {
   loading: boolean;
   selected: string | null;
   favourites: ReadonlySet<string>;
+  /** Folded query tokens, passed down so cards can highlight what matched. */
+  tokens: readonly string[];
+  /** What is typed, verbatim — the empty state quotes it back. */
+  query: string;
   onSelect: (branchNo: string | null) => void;
   onToggleFavourite: (branchNo: string) => void;
   onResetFilters: () => void;
+  onClearSearch: () => void;
   filtered: boolean;
   className?: string;
 }
@@ -25,14 +30,16 @@ export function BranchList({
   loading,
   selected,
   favourites,
+  tokens,
+  query,
   onSelect,
   onToggleFavourite,
   onResetFilters,
+  onClearSearch,
   filtered,
   className,
 }: Props) {
-  const gridRef = useRef<HTMLDivElement | null>(null);
-  const columns = useColumnCount(gridRef, CARD_MIN_WIDTH);
+  const { gridRef, columns } = useColumnCount(CARD_MIN_WIDTH);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [expandedExtra, setExpandedExtra] = useState(0);
 
@@ -90,7 +97,11 @@ export function BranchList({
   if (loading) {
     return (
       <div className={cn("overflow-hidden", className)}>
+        {/* Measured too, so the skeletons come up in the same number of columns
+            the real cards will, and the first paint of the list is not a
+            re-flow. */}
         <div
+          ref={gridRef}
           className="grid gap-3 p-0.5"
           style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
         >
@@ -103,6 +114,7 @@ export function BranchList({
   }
 
   if (branches.length === 0) {
+    const searched = query.trim().length > 0;
     return (
       <div
         className={cn(
@@ -110,17 +122,39 @@ export function BranchList({
           className,
         )}
       >
-        <SearchX className="h-10 w-10 text-muted-foreground/50" aria-hidden />
-        <p className="mt-3 text-sm font-medium text-foreground">No branches match</p>
-        <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+        <span className="grid h-12 w-12 place-items-center rounded-full bg-muted" aria-hidden>
+          <SearchX className="h-6 w-6 text-muted-foreground/70" />
+        </span>
+        <p className="mt-3 text-sm font-medium text-foreground">
+          {searched ? (
+            <>
+              Nothing matches{" "}
+              <span className="font-semibold" dir="auto">
+                “{query.trim()}”
+              </span>
+            </>
+          ) : filtered ? (
+            "No branches match these filters"
+          ) : (
+            "The directory is empty"
+          )}
+        </p>
+        <p className="mt-1.5 max-w-sm text-xs leading-relaxed text-muted-foreground">
           {filtered
-            ? "Try a shorter search, or clear a filter or two — a branch code, city, phone number or area manager name will all find it."
-            : "The directory is empty. An administrator can populate it from the import page."}
+            ? "A branch code, city, address, phone number or area manager name will all find a branch. Try fewer words, or drop a filter."
+            : "An administrator can populate it from the import page."}
         </p>
         {filtered && (
-          <Button variant="outline" size="sm" className="mt-4" onClick={onResetFilters}>
-            Clear filters
-          </Button>
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
+            {searched && (
+              <Button variant="outline" size="sm" onClick={onClearSearch}>
+                Clear search
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={onResetFilters}>
+              Reset everything
+            </Button>
+          </div>
         )}
       </div>
     );
@@ -157,6 +191,7 @@ export function BranchList({
                   expanded={branch.branch_no === expanded}
                   selected={branch.branch_no === selected}
                   favourite={favourites.has(branch.branch_no)}
+                  tokens={tokens}
                   onToggleExpand={toggleExpand}
                   onSelect={onSelect}
                   onToggleFavourite={onToggleFavourite}

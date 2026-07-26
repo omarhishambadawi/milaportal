@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   EMPTY_FILTERS,
+  activeFilterCount,
   cityOptions,
   computeStats,
   decorate,
   dutyHourOptions,
   filterBranches,
+  managerOptions,
 } from "../search";
 import type { Branch } from "../types";
 
@@ -187,6 +189,43 @@ describe("filters", () => {
     );
     expect(codes(results)).toEqual(["P0210"]);
   });
+
+  it("filters by area manager", () => {
+    const results = filterBranches(
+      FIXTURE,
+      { ...EMPTY_FILTERS, managers: ["DR / Ahmed Elshikh"] },
+      NO_FAVOURITES,
+    );
+    expect(codes(results).sort()).toEqual(["P0021", "P0210"]);
+  });
+
+  it("excludes branches with no area manager from a manager filter", () => {
+    const results = filterBranches(
+      FIXTURE,
+      { ...EMPTY_FILTERS, managers: ["DR / Ahmed Elshikh"] },
+      NO_FAVOURITES,
+    );
+    expect(codes(results)).not.toContain("المستودع");
+  });
+});
+
+describe("activeFilterCount", () => {
+  it("ignores the search box", () => {
+    expect(activeFilterCount({ ...EMPTY_FILTERS, query: "riyadh" })).toBe(0);
+  });
+
+  it("counts each selected value, and the scooter tri-state once", () => {
+    expect(
+      activeFilterCount({
+        ...EMPTY_FILTERS,
+        cities: ["الرياض", "جدة"],
+        dutyHours: [24],
+        managers: ["DR / Ahmed Elshikh"],
+        scooter: "yes",
+        favouritesOnly: true,
+      }),
+    ).toBe(6);
+  });
 });
 
 describe("derived options", () => {
@@ -201,6 +240,13 @@ describe("derived options", () => {
 
   it("orders city chips by how many branches each holds", () => {
     expect(cityOptions(FIXTURE)[0]).toMatchObject({ city: "الرياض", english: "Riyadh", count: 2 });
+  });
+
+  it("lists area managers alphabetically with their branch counts", () => {
+    expect(managerOptions(FIXTURE)).toEqual([
+      { manager: "DR / Ahmed Elshikh", count: 2 },
+      { manager: "DR / Mohamed Abd Elmohsen", count: 1 },
+    ]);
   });
 
   it("derives duty-hour chips from the data, longest first", () => {

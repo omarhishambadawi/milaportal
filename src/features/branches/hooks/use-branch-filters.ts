@@ -5,11 +5,13 @@ import {
   computeStats,
   dutyHourOptions,
   filterBranches,
+  managerOptions,
+  tokenize,
   type BranchFilters,
   type ScooterFilter,
 } from "../search";
 import type { BranchView } from "../types";
-import { useFavourites, useRecentSearches } from "./use-branch-prefs";
+import { useFavourites, useRecentBranches, useRecentSearches } from "./use-branch-prefs";
 
 /**
  * In-memory filter state, surviving SPA navigation but not a refresh.
@@ -27,6 +29,7 @@ export function useBranchFilters(branches: BranchView[]) {
   const [filters, setFilters] = useState<BranchFilters>(() => branchFilterCache ?? EMPTY_FILTERS);
   const { favourites, toggleFavourite } = useFavourites();
   const { recent, rememberSearch, clearRecent } = useRecentSearches();
+  const { recentBranches, rememberBranch, clearRecentBranches } = useRecentBranches();
 
   branchFilterCache = filters;
 
@@ -74,12 +77,42 @@ export function useBranchFilters(branches: BranchView[]) {
     [],
   );
 
+  const toggleManager = useCallback(
+    (manager: string) =>
+      setFilters((current) => ({
+        ...current,
+        managers: current.managers.includes(manager)
+          ? current.managers.filter((entry) => entry !== manager)
+          : [...current.managers, manager],
+      })),
+    [],
+  );
+
   const toggleFavouritesOnly = useCallback(
     () => setFilters((current) => ({ ...current, favouritesOnly: !current.favouritesOnly })),
     [],
   );
 
   const reset = useCallback(() => setFilters(EMPTY_FILTERS), []);
+
+  /** Clear every chip but keep whatever is typed. */
+  const clearFilters = useCallback(
+    () => setFilters((current) => ({ ...EMPTY_FILTERS, query: current.query })),
+    [],
+  );
+
+  /**
+   * Jump straight to one branch.
+   *
+   * Backs the recently-viewed and favourites shortcuts, and it *replaces* the
+   * filter state rather than adding to it: picking "P0021" out of a list must
+   * show P0021, not "no branches match" because a city chip left over from ten
+   * minutes ago excludes it.
+   */
+  const focusBranch = useCallback(
+    (branchNo: string) => setFilters({ ...EMPTY_FILTERS, query: branchNo }),
+    [],
+  );
 
   // The whole point of the feature lives on this line: one pass over an array
   // of pre-decorated branches, recomputed only when the query, a chip or the
@@ -94,23 +127,41 @@ export function useBranchFilters(branches: BranchView[]) {
   const stats = useMemo(() => computeStats(branches), [branches]);
   const cities = useMemo(() => cityOptions(branches), [branches]);
   const dutyHours = useMemo(() => dutyHourOptions(branches), [branches]);
+  const managers = useMemo(() => managerOptions(branches), [branches]);
+
+  /**
+   * The query's tokens, memoized so the cards can highlight their matches.
+   *
+   * Referential stability matters here rather than the arithmetic: `BranchCard`
+   * is memoized, and a fresh array per render would defeat that for every
+   * mounted card on every keystroke — the exact cost the memo exists to avoid.
+   */
+  const tokens = useMemo(() => tokenize(filters.query), [filters.query]);
 
   return {
     filters,
     results,
+    tokens,
     stats,
     cities,
     dutyHours,
+    managers,
     favourites,
     toggleFavourite,
     recent,
     rememberSearch,
     clearRecent,
+    recentBranches,
+    rememberBranch,
+    clearRecentBranches,
     setQuery,
     toggleCity,
     toggleScooter,
     toggleDutyHours,
+    toggleManager,
     toggleFavouritesOnly,
+    focusBranch,
+    clearFilters,
     reset,
   };
 }

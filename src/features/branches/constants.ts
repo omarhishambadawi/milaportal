@@ -143,4 +143,21 @@ export const TEMPLATE_FILE_NAME = "milaserv-branch-directory-template.xlsx";
 /** localStorage keys for the per-user, per-device conveniences. */
 export const FAVOURITES_KEY = "milaserv.branches.favourites";
 export const RECENT_SEARCHES_KEY = "milaserv.branches.recent";
+export const RECENT_BRANCHES_KEY = "milaserv.branches.recent-branches";
+/** Remembered map width, as a percentage of the split. */
+export const MAP_WIDTH_KEY = "milaserv.branches.map-width";
+export const MAP_VISIBLE_KEY = "milaserv.branches.map";
 export const MAX_RECENT_SEARCHES = 6;
+/**
+ * Branches kept in the "recently viewed" row.
+ *
+ * Six, to match the recent searches and because the row has to survive on one
+ * line of a laptop screen. It is a shortcut back to the call you just took, not
+ * a history feature.
+ */
+export const MAX_RECENT_BRANCHES = 6;
+
+/** Default share of the split the map takes, as a percentage. */
+export const MAP_DEFAULT_WIDTH = 28;
+export const MAP_MIN_WIDTH = 18;
+export const MAP_MAX_WIDTH = 55;

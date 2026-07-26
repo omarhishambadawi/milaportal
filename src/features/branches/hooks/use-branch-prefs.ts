@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { FAVOURITES_KEY, MAX_RECENT_SEARCHES, RECENT_SEARCHES_KEY } from "../constants";
+import {
+  FAVOURITES_KEY,
+  MAX_RECENT_BRANCHES,
+  MAX_RECENT_SEARCHES,
+  RECENT_BRANCHES_KEY,
+  RECENT_SEARCHES_KEY,
+} from "../constants";
 
 /**
  * Per-device conveniences: starred branches and recent searches.
@@ -55,6 +61,42 @@ export function useFavourites() {
   }, []);
 
   return { favourites, toggleFavourite: toggle };
+}
+
+/**
+ * Branch codes this device opened most recently, newest first.
+ *
+ * The shortcut a call-floor agent actually needs and the directory did not have:
+ * the same handful of branches come up all afternoon, and finding one again meant
+ * retyping its code. Recorded on *open* rather than on hover or render, so the
+ * list holds branches somebody actually looked at.
+ */
+export function useRecentBranches() {
+  const [recentBranches, setRecentBranches] = useState<string[]>([]);
+
+  useEffect(() => {
+    setRecentBranches(readList(RECENT_BRANCHES_KEY));
+  }, []);
+
+  const remember = useCallback((branchNo: string) => {
+    if (!branchNo) return;
+    setRecentBranches((current) => {
+      if (current[0] === branchNo) return current;
+      const next = [branchNo, ...current.filter((entry) => entry !== branchNo)].slice(
+        0,
+        MAX_RECENT_BRANCHES,
+      );
+      writeList(RECENT_BRANCHES_KEY, next);
+      return next;
+    });
+  }, []);
+
+  const clear = useCallback(() => {
+    setRecentBranches([]);
+    writeList(RECENT_BRANCHES_KEY, []);
+  }, []);
+
+  return { recentBranches, rememberBranch: remember, clearRecentBranches: clear };
 }
 
 export function useRecentSearches() {
