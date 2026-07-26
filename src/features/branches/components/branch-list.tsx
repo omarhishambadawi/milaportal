@@ -40,40 +40,17 @@ export function BranchList({
   className,
 }: Props) {
   const { gridRef, columns } = useColumnCount(CARD_MIN_WIDTH);
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [expandedExtra, setExpandedExtra] = useState(0);
 
-  /**
-   * One card open at a time.
-   *
-   * Not a stylistic preference: the virtualizer models exactly one variable-height
-   * row (see `useVirtualRows`), which is what lets every other row position be
-   * arithmetic. Allowing two open cards would mean measuring every row.
-   */
-  const toggleExpand = useCallback((branchNo: string) => {
-    setExpanded((current) => (current === branchNo ? null : branchNo));
-  }, []);
-
-  const expandedIndex = expanded
-    ? branches.findIndex((branch) => branch.branch_no === expanded)
-    : -1;
-
-  // A card that scrolls out of the filtered set takes its expansion with it —
-  // otherwise the layout reserves space for a panel nobody can see.
-  useEffect(() => {
-    if (expanded && expandedIndex === -1) {
-      setExpanded(null);
-      setExpandedExtra(0);
-    }
-  }, [expanded, expandedIndex]);
-
+  // Every card is the same height now that none of them expands, so the
+  // virtualizer's variable-row support goes unused: no index is taller, and
+  // nothing adds to it.
   const { scrollRef, totalHeight, rows, scrollToIndex } = useVirtualRows({
     count: branches.length,
     itemsPerRow: columns,
     rowHeight: CARD_HEIGHT,
     gap: GAP,
-    expandedIndex: expandedIndex >= 0 ? expandedIndex : null,
-    expandedExtra,
+    expandedIndex: null,
+    expandedExtra: 0,
   });
 
   /**
@@ -91,8 +68,6 @@ export function BranchList({
     // Reacting to `rows` would re-run this on every scroll frame.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, branches, columns, scrollToIndex]);
-
-  const onMeasureExpanded = useCallback((height: number) => setExpandedExtra(height), []);
 
   if (loading) {
     return (
@@ -165,8 +140,7 @@ export function BranchList({
       ref={scrollRef}
       className={cn(
         "overflow-y-auto overscroll-contain [scrollbar-width:thin]",
-        // Room for the last card's shadow, and for the expanded panel of a card
-        // opened at the very bottom.
+        // Room for the last card's shadow.
         "pb-4",
         className,
       )}
@@ -188,14 +162,11 @@ export function BranchList({
                 <BranchCard
                   key={branch.branch_no}
                   branch={branch}
-                  expanded={branch.branch_no === expanded}
                   selected={branch.branch_no === selected}
                   favourite={favourites.has(branch.branch_no)}
                   tokens={tokens}
-                  onToggleExpand={toggleExpand}
                   onSelect={onSelect}
                   onToggleFavourite={onToggleFavourite}
-                  onMeasureExpanded={branch.branch_no === expanded ? onMeasureExpanded : undefined}
                 />
               ))}
             </div>

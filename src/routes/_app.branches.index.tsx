@@ -4,9 +4,7 @@ import {
   ChevronDown,
   Download,
   Map as MapIcon,
-  MapPin,
   PanelRightClose,
-  PhoneOutgoing,
   ShieldAlert,
   Upload,
 } from "lucide-react";
@@ -22,18 +20,11 @@ import {
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
-import { toast } from "sonner";
-import { copyText } from "@/features/branches/clipboard";
 import { BranchList } from "@/features/branches/components/branch-list";
 import { BranchMapSurface } from "@/features/branches/components/branch-map-surface";
 import { BranchSearchBar } from "@/features/branches/components/branch-search-bar";
 import { BranchDirectoryMeta } from "@/features/branches/components/branch-stats";
-import {
-  MAX_MAP_WAYPOINTS,
-  allContactNumbers,
-  exportBranches,
-  multiStopMapUrl,
-} from "@/features/branches/export";
+import { exportBranches } from "@/features/branches/export";
 import { useBranchDirectory } from "@/features/branches/hooks/use-branch-directory";
 import { useBranchFilters } from "@/features/branches/hooks/use-branch-filters";
 import { useDirectoryFreshness } from "@/features/branches/hooks/use-directory-freshness";
@@ -124,29 +115,6 @@ function BranchDirectory() {
     );
   }
 
-  const copyAllNumbers = () => {
-    const text = allContactNumbers(results);
-    if (!text) {
-      toast.error("None of the matching branches has a phone number on file.");
-      return;
-    }
-    copyText(text, `${results.length} contact numbers`);
-  };
-
-  const openAllOnMap = () => {
-    const url = multiStopMapUrl(results);
-    if (!url) {
-      toast.error("None of the matching branches has coordinates.");
-      return;
-    }
-    if (results.length > MAX_MAP_WAYPOINTS) {
-      toast.info(`Opening the first ${MAX_MAP_WAYPOINTS} branches`, {
-        description: "Google Maps accepts a limited number of stops in one route.",
-      });
-    }
-    window.open(url, "_blank", "noopener,noreferrer");
-  };
-
   const showMapPanel = map.showPanel;
 
   return (
@@ -207,14 +175,6 @@ function BranchDirectory() {
                 {filtered ? `${results.length} matching branches` : "All branches"}
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={copyAllNumbers}>
-                <PhoneOutgoing className="h-4 w-4" />
-                Copy all contact numbers
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={openAllOnMap}>
-                <MapPin className="h-4 w-4" />
-                Open on Google Maps
-              </DropdownMenuItem>
               {canExport && (
                 <DropdownMenuItem onClick={() => exportBranches(results, { filtered })}>
                   <Download className="h-4 w-4" />

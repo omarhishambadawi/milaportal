@@ -54,40 +54,9 @@ export async function exportBranches(
   toast.success(`Exported ${rows.length} ${rows.length === 1 ? "branch" : "branches"}`);
 }
 
-/** Every phone number on screen, one per line, for a bulk paste. */
-export function allContactNumbers(branches: BranchView[]): string {
-  const lines: string[] = [];
-  for (const branch of branches) {
-    const number = branch.phoneE164 ?? branch.phoneDisplay;
-    if (number) lines.push(`${branch.branch_no}\t${number}`);
-  }
-  return lines.join("\n");
-}
-
-/**
- * A Google Maps directions URL through every branch on screen.
- *
- * Capped, because the "open all filtered branches on the map" request runs into
- * a hard limit: Google Maps accepts an origin, a destination and a handful of
- * waypoints, and a URL naming 145 branches is silently truncated rather than
- * rejected. Ten is comfortably inside what the endpoint honours, and the caller
- * warns when the filter holds more.
+/*
+ * "Copy all contact numbers" and "Open every filtered branch on Google Maps"
+ * lived here. Both were removed with the page's Actions menu: the bulk paste
+ * duplicated the per-card copy for a list nobody pastes whole, and the
+ * multi-stop URL answered a route-planning question this directory is not for.
  */
-export const MAX_MAP_WAYPOINTS = 10;
-
-export function multiStopMapUrl(branches: BranchView[]): string | null {
-  const points = branches
-    .filter((branch) => branch.hasCoords)
-    .slice(0, MAX_MAP_WAYPOINTS)
-    .map((branch) => `${branch.latitude},${branch.longitude}`);
-  if (points.length === 0) return null;
-  if (points.length === 1) {
-    return `https://www.google.com/maps/search/?api=1&query=${points[0]}`;
-  }
-  const origin = points[0];
-  const destination = points[points.length - 1];
-  const waypoints = points.slice(1, -1);
-  const params = new URLSearchParams({ api: "1", origin, destination });
-  if (waypoints.length > 0) params.set("waypoints", waypoints.join("|"));
-  return `https://www.google.com/maps/dir/?${params.toString()}`;
-}
