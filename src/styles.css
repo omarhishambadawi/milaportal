@@ -469,6 +469,26 @@ html.theme-vt *::after {
 }
 
 /*
+ * Sticky elements with `backdrop-filter` (Orders table header/footer, Users
+ * table toolbar, notification popovers) composite their pixels *through* the
+ * scroll content beneath. During the view-transition snapshot capture the
+ * blurred output for the OLD and NEW palettes differs by a fraction, and the
+ * cross-fade replays that difference as a visible flicker on those exact
+ * strips. Disabling the filter for the duration of the swap (both view-
+ * transition and the fallback token interpolation) makes the blurred layer a
+ * flat translucent panel in both snapshots, which cross-fades cleanly.
+ * Animations (Recharts, spinners) are frozen for the same reason: a running
+ * animation puts the NEW snapshot at a different phase than the OLD one.
+ */
+html.theme-switching *,
+html.theme-vt * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  animation-play-state: paused !important;
+}
+
+
+/*
  * The view-transition cross-fade — the primary path (see src/lib/theme.tsx).
  * Two complete snapshots dissolved on the compositor, so no frame can show a
  * half-updated page and the browser recalculates style once rather than once
