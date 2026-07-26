@@ -55,6 +55,21 @@ function reportOrigin(request: Request): string | null {
   }
 }
 
+/**
+ * Google Maps Platform origins.
+ *
+ * The Maps JavaScript SDK is not a single script: the bootstrap on
+ * maps.googleapis.com loads further modules from maps.gstatic.com, fetches tiles
+ * and icons as images from both plus googleusercontent, and issues XHRs back to
+ * maps.googleapis.com for viewport data. Omitting any one of them produces a
+ * grey rectangle rather than an obvious failure, which is why they are listed
+ * together here rather than discovered one console error at a time.
+ */
+const GOOGLE_MAPS_SCRIPT = "https://maps.googleapis.com https://maps.gstatic.com";
+const GOOGLE_MAPS_CONNECT = "https://maps.googleapis.com https://maps.gstatic.com";
+const GOOGLE_MAPS_IMG =
+  "https://maps.googleapis.com https://maps.gstatic.com https://*.googleapis.com https://*.ggpht.com https://*.googleusercontent.com";
+
 /** Origins the app legitimately talks to (Supabase REST, Auth, Storage, Realtime). */
 function connectSources(): string {
   const urls = new Set<string>(["'self'"]);
@@ -68,6 +83,7 @@ function connectSources(): string {
       /* malformed env value - skip rather than emit a broken directive */
     }
   }
+  for (const origin of GOOGLE_MAPS_CONNECT.split(" ")) urls.add(origin);
   return [...urls].join(" ");
 }
 
@@ -84,9 +100,11 @@ function reportOnlyCsp(): string {
     "default-src 'self'",
     // 'unsafe-inline' is required by SSR hydration today; the value of this
     // directive is that it still blocks loading script from any foreign origin.
-    "script-src 'self' 'unsafe-inline'",
+    `script-src 'self' 'unsafe-inline' ${GOOGLE_MAPS_SCRIPT}`,
+    // The Maps SDK writes inline style attributes on every tile and control, so
+    // 'unsafe-inline' is already required here and no maps origin need be added.
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: https:",
+    `img-src 'self' data: blob: https: ${GOOGLE_MAPS_IMG}`,
     "font-src 'self' data:",
     `connect-src ${connect}`,
     "worker-src 'self' blob:",

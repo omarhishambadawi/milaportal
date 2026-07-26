@@ -47,6 +47,8 @@ export const AUDIT_ACTION_LABEL = {
   "user.password_changed_self": "Changed their own password",
   "user.password_changed_via_recovery": "Set a password via recovery link",
   "user.temporary_password_expired": "Temporary password expired and was rotated",
+  "branches.imported": "Imported the Branch Directory",
+  "branches.rolled_back": "Rolled the Branch Directory back",
 } as const satisfies Record<AuditAction, string>;
 
 /**
@@ -62,6 +64,10 @@ export const SENSITIVE_AUDIT_ACTIONS: readonly AuditAction[] = [
   "user.owner_granted",
   "user.password_set_by_admin",
   "user.deactivated",
+  // A rollback silently replaces every branch record with an older copy. It is
+  // the one branch action that can undo someone else's correction without
+  // leaving a trace in the data itself.
+  "branches.rolled_back",
 ];
 
 export function auditActionLabel(action: string): string {

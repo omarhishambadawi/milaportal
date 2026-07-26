@@ -11,7 +11,10 @@
     "jsx": "react-jsx",
     "module": "ESNext",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["vite/client"],
+    /* `google.maps` is an ambient global supplied by the SDK's <script> tag, so
+       its types have to be listed here rather than imported — nothing in the
+       source can `import` a namespace that only exists at runtime. */
+    "types": ["vite/client", "google.maps"],
 
     /* Bundler mode */
     "moduleResolution": "Bundler",

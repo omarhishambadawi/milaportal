@@ -41,21 +41,134 @@ export type Database = {
         }
         Relationships: []
       }
+      branch_imports: {
+        Row: {
+          actor_role: string | null
+          file_name: string | null
+          id: string
+          imported_at: string
+          imported_by: string | null
+          mode: string
+          notes: string | null
+          reverted_from: string | null
+          rows_added: number
+          rows_failed: number
+          rows_ignored: number
+          rows_removed: number
+          rows_total: number
+          rows_updated: number
+          snapshot: Json
+          snapshot_rows: number
+          validation_summary: Json
+        }
+        Insert: {
+          actor_role?: string | null
+          file_name?: string | null
+          id?: string
+          imported_at?: string
+          imported_by?: string | null
+          mode: string
+          notes?: string | null
+          reverted_from?: string | null
+          rows_added?: number
+          rows_failed?: number
+          rows_ignored?: number
+          rows_removed?: number
+          rows_total?: number
+          rows_updated?: number
+          snapshot?: Json
+          snapshot_rows?: number
+          validation_summary?: Json
+        }
+        Update: {
+          actor_role?: string | null
+          file_name?: string | null
+          id?: string
+          imported_at?: string
+          imported_by?: string | null
+          mode?: string
+          notes?: string | null
+          reverted_from?: string | null
+          rows_added?: number
+          rows_failed?: number
+          rows_ignored?: number
+          rows_removed?: number
+          rows_total?: number
+          rows_updated?: number
+          snapshot?: Json
+          snapshot_rows?: number
+          validation_summary?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "branch_imports_reverted_from_fkey"
+            columns: ["reverted_from"]
+            isOneToOne: false
+            referencedRelation: "branch_imports"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       branches: {
         Row: {
+          active: boolean
+          address: string | null
+          area_manager: string | null
+          area_manager_phone: string | null
           branch_no: string
           city: string
           created_at: string
+          duty_hours: number | null
+          email: string | null
+          friday_hours: string | null
+          latitude: number | null
+          longitude: number | null
+          maps_url: string | null
+          phone: string | null
+          scooter: boolean
+          scooter_note: string | null
+          updated_at: string
+          working_hours: string | null
         }
         Insert: {
+          active?: boolean
+          address?: string | null
+          area_manager?: string | null
+          area_manager_phone?: string | null
           branch_no: string
           city: string
           created_at?: string
+          duty_hours?: number | null
+          email?: string | null
+          friday_hours?: string | null
+          latitude?: number | null
+          longitude?: number | null
+          maps_url?: string | null
+          phone?: string | null
+          scooter?: boolean
+          scooter_note?: string | null
+          updated_at?: string
+          working_hours?: string | null
         }
         Update: {
+          active?: boolean
+          address?: string | null
+          area_manager?: string | null
+          area_manager_phone?: string | null
           branch_no?: string
           city?: string
           created_at?: string
+          duty_hours?: number | null
+          email?: string | null
+          friday_hours?: string | null
+          latitude?: number | null
+          longitude?: number | null
+          maps_url?: string | null
+          phone?: string | null
+          scooter?: boolean
+          scooter_note?: string | null
+          updated_at?: string
+          working_hours?: string | null
         }
         Relationships: []
       }

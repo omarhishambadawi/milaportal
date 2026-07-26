@@ -108,12 +108,22 @@ export const queryKeys = {
   },
 
   branches: {
-    /** Invalidation boundary — sweeps both the picker list and the admin table. */
+    /** Invalidation boundary — sweeps the picker, the directory and the import log. */
     all: () => ["branches"] as const,
     /** Branch picker used by the order and complaint forms. */
     list: () => ["branches", "list"] as const,
     /** Full rows for the admin management table. */
     admin: () => ["branches", "admin"] as const,
+    /** Every active branch, with every column — the Branch Directory's dataset. */
+    directory: () => ["branches", "directory"] as const,
+    /** One branch, for the preview panel shown beside a branch picker. */
+    preview: (branchNo: string | null) => ["branches", "preview", branchNo] as const,
+    /**
+     * Import history. Nested under `branches` on purpose: an import IS a branch
+     * write, so the single `invalidateQueries(branches.all())` an import already
+     * fires refreshes the history table too rather than leaving it one run behind.
+     */
+    imports: (limit: number) => ["branches", "imports", limit] as const,
   },
 
   notifications: {

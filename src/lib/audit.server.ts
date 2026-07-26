@@ -34,6 +34,10 @@ export const AUDIT_ACTIONS = {
   passwordChangedViaRecovery: "user.password_changed_via_recovery",
   /** A temporary password passed its deadline and was rotated away. */
   temporaryPasswordExpired: "user.temporary_password_expired",
+  /** A workbook was imported into the Branch Directory. */
+  branchesImported: "branches.imported",
+  /** A previous state of the Branch Directory was restored. */
+  branchesRolledBack: "branches.rolled_back",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

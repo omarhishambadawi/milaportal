@@ -85,7 +85,7 @@ function AppLayout() {
         : []),
       ...(canCallCenter ? [{ to: "/call-center", label: "Calls", icon: Headphones }] : []),
       ...(canUsers ? [{ to: "/admin/users", label: "Users", icon: Users }] : []),
-      ...(canBranches ? [{ to: "/admin/branches", label: "Branches", icon: MapPin }] : []),
+      ...(canBranches ? [{ to: "/branches", label: "Branches", icon: MapPin }] : []),
       ...(isAdministrator(role)
         ? [{ to: "/admin/yeastar", label: "Yeastar", icon: PhoneCall }]
         : []),

@@ -25,6 +25,7 @@ import { ORDER_TYPES, DELIVERY_TYPES, TEAMS, CURRENCY, formatOrderNo } from "@/l
 import { cn } from "@/lib/utils";
 import { useOrderForm } from "@/features/orders/hooks/use-order-form";
 import { OrderActivityTimeline } from "@/features/orders/components/order-activity-timeline";
+import { BranchPreviewPanel } from "@/features/branches/components/branch-preview-panel";
 
 export const Route = createFileRoute("/_app/orders/new")({
   head: () => ({ meta: [{ title: "New Order" }] }),
@@ -250,6 +251,16 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                   placeholder="—"
                 />
               </div>
+
+              {/* Branch preview. Appears the moment a branch is chosen so the
+                  questions a customer asks next — is it open, does it deliver,
+                  what is the address — are answered without leaving a
+                  half-typed order. */}
+              {form.branch_no && (
+                <div className="md:col-span-2">
+                  <BranchPreviewPanel branchNo={form.branch_no} />
+                </div>
+              )}
               <div className="space-y-2">
                 <Label>Order value ({CURRENCY})</Label>
                 <Input
