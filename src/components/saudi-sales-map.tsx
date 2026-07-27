@@ -156,8 +156,12 @@ function usePrefersReducedMotion() {
 
 export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
   const [hoverName, setHoverName] = useState<string | null>(null);
+  const [pinned, setPinned] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const cityRefs = useRef<Map<string, SVGCircleElement>>(new Map());
+  const tooltipId = "saudi-map-tooltip";
+  const liveRegionId = "saudi-map-live";
   const reducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
