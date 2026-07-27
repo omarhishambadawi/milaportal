@@ -749,6 +749,8 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                 hover.count > 0 ? Math.round(((hover.completed ?? 0) / hover.count) * 100) : null;
               return (
                 <div
+                  id={tooltipId}
+                  role="tooltip"
                   className="pointer-events-none absolute z-10 w-[min(280px,86vw)] sm:w-[280px] md:w-[300px] rounded-2xl border border-border/50 bg-popover/95 backdrop-blur-2xl px-3.5 py-3 sm:px-4 sm:py-3.5 text-popover-foreground shadow-2xl ring-1 ring-black/5 dark:ring-white/10 animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-1 duration-200 ease-out"
                   style={{
                     left: `${leftPct}%`,
