@@ -1,4 +1,5 @@
 import type { Branch, BranchView } from "./types";
+import { extractDistrict } from "./district";
 import {
   cityAliases,
   cityEnglish,
@@ -62,6 +63,9 @@ export function decorate(branches: Branch[]): BranchView[] {
       navLink: navLink(branch),
       hasCoords: branch.latitude != null && branch.longitude != null,
       cityEnglish: cityEnglish(branch.city),
+      // Parsed here with everything else derived per branch, not in the card:
+      // this runs once per fetched dataset, a card renders many times.
+      district: extractDistrict(branch.address, branch.city),
     };
   });
 }

@@ -111,31 +111,24 @@ interface Props {
   filters: BranchFilters;
   resultCount: number;
   cities: { city: string; english: string | null; count: number }[];
-  dutyHours: { hours: number; count: number }[];
   managers: { manager: string; count: number }[];
   favouriteCount: number;
   onToggleCity: (city: string) => void;
   onToggleScooter: (value: "yes" | "no") => void;
-  onToggleDutyHours: (hours: number) => void;
   onToggleManager: (manager: string) => void;
   onToggleFavourites: () => void;
-  /** Clears the chips but keeps whatever is typed in the search box. */
-  onClearFilters: () => void;
 }
 
 export function BranchFiltersDrawer({
   filters,
   resultCount,
   cities,
-  dutyHours,
   managers,
   favouriteCount,
   onToggleCity,
   onToggleScooter,
-  onToggleDutyHours,
   onToggleManager,
   onToggleFavourites,
-  onClearFilters,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [managerQuery, setManagerQuery] = useState("");
@@ -185,7 +178,7 @@ export function BranchFiltersDrawer({
               ? `${resultCount} ${resultCount === 1 ? "branch" : "branches"} match ${count} ${
                   count === 1 ? "filter" : "filters"
                 }`
-              : "Narrow the directory by city, delivery, hours or area manager."}
+              : "Narrow the directory by city, delivery or area manager."}
           </SheetDescription>
         </SheetHeader>
 
@@ -216,21 +209,12 @@ export function BranchFiltersDrawer({
             </Group>
           )}
 
-          {dutyHours.length > 0 && (
-            <Group label="Working hours">
-              {dutyHours.map(({ hours, count: branches }) => (
-                <Row
-                  key={hours}
-                  active={filters.dutyHours.includes(hours)}
-                  onClick={() => onToggleDutyHours(hours)}
-                  count={branches}
-                  icon={Clock}
-                >
-                  {dutyHoursLabel(hours)}
-                </Row>
-              ))}
-            </Group>
-          )}
+          {/* A "Working hours" group used to sit here, one row per duty-hour
+              bucket. Nobody filtered by it: an agent with a customer on the line
+              wants a named branch or a city, and the hours they need are on the
+              card of the branch they already found. It cost a group of six rows
+              in the panel and a chip in the bar to answer a question nobody was
+              asking. The duty-hours *badge* on the card stays. */}
 
           {cities.length > 0 && (
             <Group label="City" scroll>
@@ -284,17 +268,10 @@ export function BranchFiltersDrawer({
           )}
         </div>
 
-        <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border/60 px-5 py-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onClearFilters}
-            disabled={count === 0}
-            className="text-muted-foreground"
-          >
-            <X className="h-3.5 w-3.5" />
-            Clear filters
-          </Button>
+        {/* Clearing filters lives outside this panel, beside the Filters button,
+            because the one moment you most want it is when you are looking at a
+            list that is too narrow — and that is a moment you are not in here. */}
+        <div className="flex shrink-0 items-center justify-end border-t border-border/60 px-5 py-3">
           <Button size="sm" onClick={() => setOpen(false)}>
             Show {resultCount} {resultCount === 1 ? "branch" : "branches"}
           </Button>

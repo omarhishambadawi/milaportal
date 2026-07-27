@@ -44,7 +44,6 @@ function BranchDirectory() {
     tokens,
     stats,
     cities,
-    dutyHours,
     managers,
     favourites,
     toggleFavourite,
@@ -57,7 +56,6 @@ function BranchDirectory() {
     setQuery,
     toggleCity,
     toggleScooter,
-    toggleDutyHours,
     toggleManager,
     toggleFavouritesOnly,
     focusBranch,
@@ -202,7 +200,6 @@ function BranchDirectory() {
           resultCount={results.length}
           totalCount={branches.length}
           cities={cities}
-          dutyHours={dutyHours}
           managers={managers}
           favourites={favourites}
           recent={recent}
@@ -214,7 +211,6 @@ function BranchDirectory() {
           onClearRecentBranches={clearRecentBranches}
           onToggleCity={toggleCity}
           onToggleScooter={toggleScooter}
-          onToggleDutyHours={toggleDutyHours}
           onToggleManager={toggleManager}
           onToggleFavourites={toggleFavouritesOnly}
           onClearFilters={clearFilters}

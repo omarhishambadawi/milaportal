@@ -86,7 +86,6 @@ interface Props {
   resultCount: number;
   totalCount: number;
   cities: { city: string; english: string | null; count: number }[];
-  dutyHours: { hours: number; count: number }[];
   managers: { manager: string; count: number }[];
   favourites: ReadonlySet<string>;
   recent: string[];
@@ -99,7 +98,6 @@ interface Props {
   onClearRecentBranches: () => void;
   onToggleCity: (city: string) => void;
   onToggleScooter: (value: "yes" | "no") => void;
-  onToggleDutyHours: (hours: number) => void;
   onToggleManager: (manager: string) => void;
   onToggleFavourites: () => void;
   onClearFilters: () => void;
@@ -112,7 +110,6 @@ export function BranchSearchBar({
   resultCount,
   totalCount,
   cities,
-  dutyHours,
   managers,
   favourites,
   recent,
@@ -124,7 +121,6 @@ export function BranchSearchBar({
   onClearRecentBranches,
   onToggleCity,
   onToggleScooter,
-  onToggleDutyHours,
   onToggleManager,
   onToggleFavourites,
   onClearFilters,
@@ -364,16 +360,28 @@ export function BranchSearchBar({
           filters={filters}
           resultCount={resultCount}
           cities={cities}
-          dutyHours={dutyHours}
           managers={managers}
           favouriteCount={favourites.size}
           onToggleCity={onToggleCity}
           onToggleScooter={onToggleScooter}
-          onToggleDutyHours={onToggleDutyHours}
           onToggleManager={onToggleManager}
           onToggleFavourites={onToggleFavourites}
-          onClearFilters={onClearFilters}
         />
+
+        {/* Clearing filters is one click from the top of the page, not two from
+            inside a drawer. Shown only when there is something to clear, so it
+            never sits there greyed out taking up the space. */}
+        {filterCount > 0 && (
+          <Button
+            variant="ghost"
+            onClick={onClearFilters}
+            title="Clear all filters"
+            className="h-12 shrink-0 gap-1.5 px-3 text-muted-foreground hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+            <span className="hidden sm:inline">Clear</span>
+          </Button>
+        )}
       </div>
 
       {/* Active filters, in one scrollable line. The drawer hides *how* the list
@@ -401,14 +409,6 @@ export function BranchSearchBar({
               </span>
             </Pill>
           )}
-          {filters.dutyHours.map((hours) => (
-            <Pill key={hours} onRemove={() => onToggleDutyHours(hours)}>
-              <span className="inline-flex items-center gap-1">
-                <Clock className="h-3 w-3" />
-                {dutyHoursLabel(hours)}
-              </span>
-            </Pill>
-          ))}
           {filters.cities.map((city) => (
             <Pill key={city} onRemove={() => onToggleCity(city)}>
               <span className="inline-flex items-center gap-1">
@@ -422,14 +422,6 @@ export function BranchSearchBar({
               {manager}
             </Pill>
           ))}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onClearFilters}
-            className="h-7 shrink-0 px-2 text-xs text-muted-foreground"
-          >
-            Clear all
-          </Button>
         </div>
       )}
     </div>

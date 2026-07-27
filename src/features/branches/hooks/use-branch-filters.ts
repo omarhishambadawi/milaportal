@@ -3,7 +3,6 @@ import {
   EMPTY_FILTERS,
   cityOptions,
   computeStats,
-  dutyHourOptions,
   filterBranches,
   managerOptions,
   tokenize,
@@ -66,16 +65,12 @@ export function useBranchFilters(branches: BranchView[]) {
     [],
   );
 
-  const toggleDutyHours = useCallback(
-    (hours: number) =>
-      setFilters((current) => ({
-        ...current,
-        dutyHours: current.dutyHours.includes(hours)
-          ? current.dutyHours.filter((entry) => entry !== hours)
-          : [...current.dutyHours, hours],
-      })),
-    [],
-  );
+  /*
+   * There is no `toggleDutyHours` any more: the Working Hours filter is gone from
+   * the panel. `BranchFilters.dutyHours` and the predicate behind it are left
+   * alone rather than ripped out — the filter engine is not what changed here,
+   * and an empty array is exactly what it already means by "every duration".
+   */
 
   const toggleManager = useCallback(
     (manager: string) =>
@@ -126,7 +121,6 @@ export function useBranchFilters(branches: BranchView[]) {
   // Branches: 3" while a search is typed answers a question nobody asked.
   const stats = useMemo(() => computeStats(branches), [branches]);
   const cities = useMemo(() => cityOptions(branches), [branches]);
-  const dutyHours = useMemo(() => dutyHourOptions(branches), [branches]);
   const managers = useMemo(() => managerOptions(branches), [branches]);
 
   /**
@@ -144,7 +138,6 @@ export function useBranchFilters(branches: BranchView[]) {
     tokens,
     stats,
     cities,
-    dutyHours,
     managers,
     favourites,
     toggleFavourite,
@@ -157,7 +150,6 @@ export function useBranchFilters(branches: BranchView[]) {
     setQuery,
     toggleCity,
     toggleScooter,
-    toggleDutyHours,
     toggleManager,
     toggleFavouritesOnly,
     focusBranch,

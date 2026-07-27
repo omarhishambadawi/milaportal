@@ -43,6 +43,11 @@ export interface BranchView extends Branch {
   hasCoords: boolean;
   /** English name for the city when known, for search and for the map. */
   cityEnglish: string | null;
+  /**
+   * District (حي), read out of the address — there is no column for it. Null
+   * whenever the address does not state one clearly; see `extractDistrict`.
+   */
+  district: string | null;
 }
 
 /** How an uploaded workbook is reconciled with the branches already stored. */

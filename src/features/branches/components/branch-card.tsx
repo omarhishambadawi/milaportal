@@ -5,6 +5,7 @@ import {
   Check,
   Clock,
   Copy,
+  ExternalLink,
   MapPin,
   Navigation,
   Phone,
@@ -22,27 +23,25 @@ import type { BranchView } from "../types";
 /**
  * Card height, in pixels.
  *
- * A single fixed number, and the virtualizer depends on it being true: every
- * row position is computed from it rather than measured. That is why the address
- * below is line-clamped and every row has a fixed height — a card that grew to
- * fit a long address would silently desynchronize the whole list's scroll
+ * A single fixed number, and the virtualizer depends on it being true: every row
+ * position is computed from it rather than measured. That is why the address is
+ * clamped at three lines and every other row has a fixed height — a card that
+ * grew to fit its content would silently desynchronize the whole list's scroll
  * geometry.
  *
- * It has grown twice, from 244px, and both times for the same reason: the card
- * stopped hiding things. There is no expander now. Everything the directory
- * knows about a branch is on the face of it — the nine fields an agent reads out
- * during a call, and below a divider the four that get looked up occasionally
- * (coordinates, maps link, delivery note, last updated). Nothing about a branch
- * costs a click.
+ * It has grown with every pass that took something out of hiding, and this one
+ * grouped what was left into labelled sections: contact, location, hours, area
+ * manager, map. Nothing about a branch costs a click, and every value an agent
+ * reads to a customer has its own copy button.
  */
-export const CARD_HEIGHT = 364;
+export const CARD_HEIGHT = 520;
 
 /**
  * The card's 1px border, top and bottom.
  *
  * Subtracted from the inner section's height so that CARD_HEIGHT is the card's
- * *outer* height — which is what the virtualizer positions rows by. Without
- * this the article measures 366px in a 364px slot, and every gap in the list is
+ * *outer* height — which is what the virtualizer positions rows by. Without this
+ * the article measures 522px in a 520px slot, and every gap in the list is
  * quietly 2px short of the one the layout asks for.
  */
 const CARD_BORDER = 2;
@@ -52,6 +51,20 @@ export const CARD_CONTENT_HEIGHT = CARD_HEIGHT - CARD_BORDER;
 
 /** Minimum width one card needs before a second column is worth it. */
 export const CARD_MIN_WIDTH = 340;
+
+/**
+ * Lines the address may take before it clamps.
+ *
+ * Three, which is enough for every address in the current sheet at every column
+ * width — the longest wraps to two in a wide column and three in a narrow one.
+ * The box is always three lines tall rather than growing into them, because the
+ * virtualizer needs this card's height to be knowable without measuring it. The
+ * full text is on the element's `title` and one copy button away regardless.
+ */
+const ADDRESS_LINES = 3;
+
+/** Line height of the card's body text, in pixels. Matches `leading-[15px]`. */
+const ADDRESS_LINE_HEIGHT = 15;
 
 interface Props {
   branch: BranchView;
@@ -94,16 +107,8 @@ function useCopied(): [boolean, (value: string, label: string) => void] {
   return [copied, copy];
 }
 
-/** Icon-only copy, for values that sit inline beside their own label. */
-function CopyButton({
-  value,
-  label,
-  className,
-}: {
-  value: string;
-  label: string;
-  className?: string;
-}) {
+/** Per-value copy. Every field an agent dictates has one of these. */
+function CopyButton({ value, label }: { value: string; label: string }) {
   const [copied, copy] = useCopied();
   return (
     <button
@@ -118,8 +123,7 @@ function CopyButton({
         "grid h-5 w-5 shrink-0 place-items-center rounded transition-colors",
         copied
           ? "text-[var(--positive)]"
-          : "text-muted-foreground/60 hover:bg-accent hover:text-accent-foreground",
-        className,
+          : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
       )}
     >
       {copied ? <Check className="h-3 w-3" strokeWidth={3} /> : <Copy className="h-3 w-3" />}
@@ -127,45 +131,57 @@ function CopyButton({
   );
 }
 
-/**
- * One line of the card's operational block.
- *
- * Every row is either a fixed one line (`truncate`) or a fixed two
- * (`line-clamp-2`), never "as tall as the content" — see CARD_HEIGHT for why the
- * card's height has to be knowable without measuring it.
- */
-function Row({
+/** A group of related fields, under a quiet heading. */
+function Section({
+  title,
   icon: Icon,
   children,
   className,
 }: {
+  title: string;
   icon: typeof MapPin;
   children: React.ReactNode;
   className?: string;
 }) {
   return (
-    <div className={cn("flex items-start gap-2 text-xs", className)}>
-      <Icon className="mt-[3px] h-3.5 w-3.5 shrink-0 text-muted-foreground/70" aria-hidden />
-      <div className="min-w-0 flex-1">{children}</div>
-    </div>
+    <section className={cn("min-w-0", className)}>
+      <h4 className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+        <Icon className="h-3 w-3 opacity-80" aria-hidden />
+        {title}
+      </h4>
+      <div className="space-y-1">{children}</div>
+    </section>
   );
 }
 
-/** One cell of the reference block under the divider: small label, small value. */
-function Detail({ label, children }: { label: string; children: React.ReactNode }) {
+/**
+ * One labelled value, optionally with its own copy button.
+ *
+ * A three-column grid rather than a flex row so that the labels of every field
+ * in every section line up down the card — the thing that lets an agent find
+ * "District" without reading the ones above it.
+ */
+function Field({
+  label,
+  children,
+  copy,
+}: {
+  label: string;
+  children: React.ReactNode;
+  copy?: React.ReactNode;
+}) {
   return (
-    <div className="flex min-w-0 items-center gap-1.5">
-      <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/80">
+    <div className="grid grid-cols-[3.75rem_minmax(0,1fr)_1.25rem] items-start gap-x-2">
+      <span className="pt-[2px] text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </span>
-      <span className="flex min-w-0 flex-1 items-center gap-1 text-[11px] text-foreground/90">
-        {children}
-      </span>
+      <div className="min-w-0 text-[11px] leading-[15px] text-foreground/90">{children}</div>
+      {copy ?? <span aria-hidden />}
     </div>
   );
 }
 
-/** Placeholder for a reference field this branch has nothing in. */
+/** Placeholder for a field this branch has nothing in. */
 function Absent() {
   return <span className="text-muted-foreground/50">—</span>;
 }
@@ -212,7 +228,7 @@ function BranchCardInner({
         className="flex shrink-0 flex-col px-4 pb-3 pl-5 pt-3.5"
         style={{ height: CARD_CONTENT_HEIGHT }}
       >
-        {/* Header — code and how long it opens, city beneath, delivery beside */}
+        {/* HEADER — code, how long it opens, city, delivery, favourite */}
         <div className="flex shrink-0 items-start justify-between gap-2">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -285,136 +301,218 @@ function BranchCardInner({
           </div>
         </div>
 
-        {/* Branch phone — the number the call is about, at reading size. Copying
-            and dialling it are in the action bar rather than repeated here. */}
+        {/* CONTACT — the number the call is about, at reading size. No section
+            heading: a phone number at 14px mono next to a handset icon is not a
+            thing anyone has to have labelled. */}
         <div className="mt-2.5 flex h-9 shrink-0 items-center gap-2 rounded-lg border border-border/50 bg-muted/40 px-2.5">
           <Phone className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" aria-hidden />
           {branch.phoneDisplay ? (
-            phoneLink ? (
-              <a
-                href={phoneLink}
-                onClick={(event) => event.stopPropagation()}
-                className="min-w-0 flex-1 truncate font-mono text-sm font-semibold text-foreground hover:text-primary hover:underline"
-                dir="ltr"
-              >
-                <Highlight text={branch.phoneDisplay} tokens={tokens} />
-              </a>
-            ) : (
-              <span
-                className="min-w-0 flex-1 truncate font-mono text-sm font-semibold text-foreground"
-                dir="ltr"
-              >
-                {branch.phoneDisplay}
-              </span>
-            )
+            <>
+              {phoneLink ? (
+                <a
+                  href={phoneLink}
+                  onClick={(event) => event.stopPropagation()}
+                  className="min-w-0 flex-1 truncate font-mono text-sm font-semibold text-foreground hover:text-primary hover:underline"
+                  dir="ltr"
+                >
+                  <Highlight text={branch.phoneDisplay} tokens={tokens} />
+                </a>
+              ) : (
+                <span
+                  className="min-w-0 flex-1 truncate font-mono text-sm font-semibold text-foreground"
+                  dir="ltr"
+                >
+                  {branch.phoneDisplay}
+                </span>
+              )}
+              <CopyButton value={phoneValue ?? ""} label="Branch phone" />
+            </>
           ) : (
-            <span className="flex-1 text-xs text-muted-foreground/70">No phone on file</span>
+            <span className="flex-1 text-xs text-muted-foreground">No phone on file</span>
           )}
         </div>
 
-        {/* Address, hours and the area manager — what an agent reads out. */}
-        <div className="mt-2.5 min-h-0 flex-1 space-y-2">
-          <Row icon={MapPin}>
-            <span className="line-clamp-2 leading-snug text-foreground/90" dir="auto">
-              {branch.address ? (
-                <Highlight text={branch.address} tokens={tokens} />
+        <div className="mt-2.5 min-h-0 flex-1 space-y-2.5">
+          {/* LOCATION — district first: it is the part an agent says out loud
+              when a customer asks where the branch is. */}
+          <Section title="Location" icon={MapPin}>
+            <Field
+              label="District"
+              copy={
+                branch.district ? (
+                  <CopyButton value={branch.district} label="District" />
+                ) : undefined
+              }
+            >
+              {branch.district ? (
+                <span className="block truncate font-medium" dir="auto" title={branch.district}>
+                  <Highlight text={branch.district} tokens={tokens} />
+                </span>
               ) : (
-                <span className="text-muted-foreground/70">No address on file</span>
+                <Absent />
               )}
-            </span>
-          </Row>
+            </Field>
 
-          <Row icon={Clock}>
-            <span className="block truncate text-foreground/90">
-              {branch.working_hours ?? (
-                <span className="text-muted-foreground/70">Hours not recorded</span>
-              )}
-            </span>
-            <span className="block truncate text-muted-foreground">
-              Friday · {branch.friday_hours ?? "not recorded"}
-            </span>
-          </Row>
+            <Field
+              label="Address"
+              copy={
+                branch.address ? <CopyButton value={branch.address} label="Address" /> : undefined
+              }
+            >
+              {/* The box is always three lines tall, not "up to three".
+                  Reserving the space rather than growing into it is what keeps
+                  every card exactly CARD_HEIGHT at every column width — the same
+                  address wraps to two lines in a wide column and three in a
+                  narrow one, and a card that grew by a line when the map panel
+                  was dragged would desynchronize the list's scroll geometry. */}
+              <span
+                className="block break-words"
+                style={{
+                  display: "-webkit-box",
+                  WebkitBoxOrient: "vertical",
+                  WebkitLineClamp: ADDRESS_LINES,
+                  overflow: "hidden",
+                  height: ADDRESS_LINES * ADDRESS_LINE_HEIGHT,
+                }}
+                dir="auto"
+                title={branch.address ?? undefined}
+              >
+                {branch.address ? <Highlight text={branch.address} tokens={tokens} /> : <Absent />}
+              </span>
+            </Field>
+          </Section>
 
-          <Row icon={UserRound}>
-            <span className="block truncate text-foreground/90" dir="auto">
+          {/* WORKING HOURS — side by side rather than stacked. Both values are
+              short and fixed-shape ("07 AM - 03 AM"), and an agent comparing the
+              weekday line to the Friday one wants them on the same eye line. */}
+          <Section title="Working hours" icon={Clock}>
+            <div className="grid grid-cols-2 gap-x-2">
+              <div className="min-w-0">
+                <span className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Weekdays
+                </span>
+                <span
+                  className="block truncate text-[11px] leading-[15px] text-foreground/90"
+                  title={branch.working_hours ?? undefined}
+                >
+                  {branch.working_hours ?? <Absent />}
+                </span>
+              </div>
+              <div className="min-w-0">
+                <span className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Friday
+                </span>
+                <span
+                  className="block truncate text-[11px] leading-[15px] text-foreground/90"
+                  title={branch.friday_hours ?? undefined}
+                >
+                  {branch.friday_hours ?? <Absent />}
+                </span>
+              </div>
+            </div>
+          </Section>
+
+          {/* AREA MANAGER */}
+          <Section title="Area manager" icon={UserRound}>
+            <Field label="Name">
               {branch.area_manager ? (
-                <Highlight text={branch.area_manager} tokens={tokens} />
+                <span className="block truncate" dir="auto" title={branch.area_manager}>
+                  <Highlight text={branch.area_manager} tokens={tokens} />
+                </span>
               ) : (
-                <span className="text-muted-foreground/70">No area manager</span>
+                <Absent />
               )}
-            </span>
-            <span className="flex items-center gap-1">
+            </Field>
+            <Field
+              label="Phone"
+              copy={
+                managerPhone ? <CopyButton value={managerPhone} label="Manager phone" /> : undefined
+              }
+            >
               {branch.managerPhoneDisplay ? (
-                <>
-                  <span
-                    className="min-w-0 truncate font-mono text-[11px] text-muted-foreground"
-                    dir="ltr"
-                  >
-                    <Highlight text={branch.managerPhoneDisplay} tokens={tokens} />
-                  </span>
-                  <CopyButton value={managerPhone ?? ""} label="Manager phone" />
-                </>
+                <span className="block truncate font-mono" dir="ltr">
+                  <Highlight text={branch.managerPhoneDisplay} tokens={tokens} />
+                </span>
               ) : (
-                <span className="text-[11px] text-muted-foreground/70">No manager phone</span>
+                <Absent />
               )}
-            </span>
-          </Row>
-        </div>
+            </Field>
+          </Section>
 
-        {/* Reference fields. Below a divider because they are looked up rather
-            than read out — but on the card, because a click to see a coordinate
-            is still a click. Every cell renders even when empty, so the card's
-            height stays the one the virtualizer was promised. */}
-        <div className="mt-2.5 grid shrink-0 grid-cols-2 gap-x-3 gap-y-1 border-t border-border/50 pt-2.5">
-          <Detail label="Coords">
-            {coordinates ? (
-              <>
-                {/* Titled because a narrow card truncates it, and half a
-                    coordinate is worse than none. */}
-                <span className="min-w-0 truncate font-mono" dir="ltr" title={coordinates}>
+          {/* MAP — the link in full, and the coordinates as one copyable pair */}
+          <Section
+            title="Map & coordinates"
+            icon={Navigation}
+            className="border-t border-border/50 pt-2.5"
+          >
+            <Field
+              label="Link"
+              copy={
+                branch.mapsLink ? (
+                  <CopyButton value={branch.mapsLink} label="Maps link" />
+                ) : undefined
+              }
+            >
+              {branch.mapsLink ? (
+                <a
+                  href={branch.mapsLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(event) => event.stopPropagation()}
+                  title={branch.mapsLink}
+                  className="inline-flex max-w-full items-start gap-1 text-primary hover:underline"
+                  dir="ltr"
+                >
+                  <span
+                    className="min-w-0 break-all"
+                    style={{
+                      display: "-webkit-box",
+                      WebkitBoxOrient: "vertical",
+                      WebkitLineClamp: 2,
+                      overflow: "hidden",
+                    }}
+                  >
+                    {branch.mapsLink}
+                  </span>
+                  <ExternalLink className="mt-[2px] h-3 w-3 shrink-0" aria-hidden />
+                </a>
+              ) : (
+                <Absent />
+              )}
+            </Field>
+            <Field
+              label="Coords"
+              copy={
+                coordinates ? <CopyButton value={coordinates} label="Coordinates" /> : undefined
+              }
+            >
+              {coordinates ? (
+                <span className="block truncate font-mono" dir="ltr" title={coordinates}>
                   {coordinates}
                 </span>
-                <CopyButton value={coordinates} label="Coordinates" />
-              </>
-            ) : (
-              <Absent />
-            )}
-          </Detail>
+              ) : (
+                <Absent />
+              )}
+            </Field>
+          </Section>
+        </div>
 
-          <Detail label="Updated">{formatUpdated(branch.updated_at) ?? <Absent />}</Detail>
-
-          <Detail label="Map">
-            {branch.mapsLink ? (
-              <a
-                href={branch.mapsLink}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(event) => event.stopPropagation()}
-                className="min-w-0 truncate text-primary hover:underline"
-              >
-                Google Maps
-              </a>
-            ) : (
-              <Absent />
-            )}
-          </Detail>
-
-          <Detail label="Delivery">
-            {branch.scooter_note ? (
-              <span className="min-w-0 truncate" dir="auto" title={branch.scooter_note}>
-                {branch.scooter_note}
-              </span>
-            ) : (
-              <Absent />
-            )}
-          </Detail>
+        {/* Delivery note and freshness: the two things nobody dictates, on one
+            quiet line rather than in a section of their own. */}
+        <div className="mt-2 flex shrink-0 items-center gap-2 text-[10px] text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate" dir="auto" title={branch.scooter_note ?? ""}>
+            {branch.scooter_note ? `Delivery · ${branch.scooter_note}` : "No delivery note"}
+          </span>
+          {formatUpdated(branch.updated_at) && (
+            <span className="shrink-0">Updated {formatUpdated(branch.updated_at)}</span>
+          )}
         </div>
 
         {/* The three things agents actually do with a branch. Equal widths so the
             bar reads as one control rather than a row of odds and ends, and
             disabled rather than absent when a branch is missing the data — a
             button that moves between cards is one you have to look for. */}
-        <div className="mt-2.5 grid shrink-0 grid-cols-3 gap-1.5 border-t border-border/50 pt-2.5">
+        <div className="mt-2 grid shrink-0 grid-cols-3 gap-1.5 border-t border-border/50 pt-2.5">
           {phoneLink ? (
             <Button
               variant="outline"
@@ -512,6 +610,7 @@ export function contactBlock(branch: BranchView): string {
   return [
     `Branch: ${branch.branch_no}`,
     `City: ${branch.city}`,
+    branch.district ? `District: ${branch.district}` : null,
     branch.address ? `Address: ${branch.address}` : null,
     branch.phoneDisplay ? `Phone: ${branch.phoneDisplay}` : null,
     branch.area_manager ? `Area manager: ${branch.area_manager}` : null,
@@ -550,18 +649,13 @@ export function BranchCardSkeleton() {
         <div className="h-5 w-20 rounded-full bg-muted/70" />
       </div>
       <div className="mt-3 h-9 rounded-lg bg-muted/50" />
-      <div className="mt-3 space-y-2.5">
-        <div className="h-3 w-full rounded bg-muted/70" />
-        <div className="h-3 w-4/5 rounded bg-muted/70" />
-        <div className="h-3 w-2/3 rounded bg-muted/70" />
-        <div className="h-3 w-1/2 rounded bg-muted/70" />
-      </div>
-      <div className="mt-4 grid grid-cols-2 gap-2">
-        <div className="h-3 rounded bg-muted/70" />
-        <div className="h-3 rounded bg-muted/70" />
-        <div className="h-3 rounded bg-muted/70" />
-        <div className="h-3 rounded bg-muted/70" />
-      </div>
+      {[0, 1, 2, 3].map((section) => (
+        <div key={section} className="mt-3 space-y-1.5">
+          <div className="h-2 w-16 rounded bg-muted/60" />
+          <div className="h-3 w-full rounded bg-muted/70" />
+          <div className="h-3 w-3/4 rounded bg-muted/70" />
+        </div>
+      ))}
       <div className="mt-4 grid grid-cols-3 gap-1.5">
         <div className="h-8 rounded bg-muted/70" />
         <div className="h-8 rounded bg-muted/70" />
