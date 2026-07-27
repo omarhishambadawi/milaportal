@@ -287,7 +287,30 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
     return out;
   }, [cities, totalCompleted]);
 
-  const hover = placed.find((p) => p.name === hoverName) ?? null;
+  const activeName = pinned ?? hoverName;
+  const hover = placed.find((p) => p.name === activeName) ?? null;
+  const sortedByRank = useMemo(() => [...placed].sort((a, b) => a.rank - b.rank), [placed]);
+
+  const focusCityByOffset = (currentName: string, offset: number) => {
+    const idx = sortedByRank.findIndex((p) => p.name === currentName);
+    if (idx < 0) return;
+    const nextIdx = (idx + offset + sortedByRank.length) % sortedByRank.length;
+    const next = sortedByRank[nextIdx];
+    setPinned(next.name);
+    setHoverName(next.name);
+    cityRefs.current.get(next.name)?.focus();
+  };
+
+  const ariaLabelFor = (p: Placed) => {
+    const parts = [
+      `${p.name}, rank ${p.rank} of ${placed.length}`,
+      `${fmtSAR(p.sales)} completed sales`,
+      `${p.count} ${p.count === 1 ? "order" : "orders"}`,
+      `${(p.share * 100).toFixed(1)} percent share`,
+    ];
+    return parts.join(", ");
+  };
+
   const unmapped = cities.filter((c) => !lookupCoords(c.name));
 
   return (
