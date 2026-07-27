@@ -156,8 +156,12 @@ function usePrefersReducedMotion() {
 
 export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
   const [hoverName, setHoverName] = useState<string | null>(null);
+  const [pinned, setPinned] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const cityRefs = useRef<Map<string, SVGCircleElement>>(new Map());
+  const tooltipId = "saudi-map-tooltip";
+  const liveRegionId = "saudi-map-live";
   const reducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
@@ -283,7 +287,30 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
     return out;
   }, [cities, totalCompleted]);
 
-  const hover = placed.find((p) => p.name === hoverName) ?? null;
+  const activeName = pinned ?? hoverName;
+  const hover = placed.find((p) => p.name === activeName) ?? null;
+  const sortedByRank = useMemo(() => [...placed].sort((a, b) => a.rank - b.rank), [placed]);
+
+  const focusCityByOffset = (currentName: string, offset: number) => {
+    const idx = sortedByRank.findIndex((p) => p.name === currentName);
+    if (idx < 0) return;
+    const nextIdx = (idx + offset + sortedByRank.length) % sortedByRank.length;
+    const next = sortedByRank[nextIdx];
+    setPinned(next.name);
+    setHoverName(next.name);
+    cityRefs.current.get(next.name)?.focus();
+  };
+
+  const ariaLabelFor = (p: Placed) => {
+    const parts = [
+      `${p.name}, rank ${p.rank} of ${placed.length}`,
+      `${fmtSAR(p.sales)} completed sales`,
+      `${p.count} ${p.count === 1 ? "order" : "orders"}`,
+      `${(p.share * 100).toFixed(1)} percent share`,
+    ];
+    return parts.join(", ");
+  };
+
   const unmapped = cities.filter((c) => !lookupCoords(c.name));
 
   return (
@@ -616,22 +643,95 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                 return { ...p, hitR };
               })
               .sort((a, b) => b.hitR - a.hitR)
-              .map((p) => (
-                <circle
-                  key={`hit-${p.name}`}
-                  cx={p.cx}
-                  cy={p.cy}
-                  r={p.hitR}
-                  fill="transparent"
-                  style={{ cursor: "pointer" }}
-                  onMouseEnter={() => setHoverName(p.name)}
-                  onMouseLeave={() => setHoverName((n) => (n === p.name ? null : n))}
-                  onTouchStart={() => setHoverName(p.name)}
-                >
-                  <title>{p.name}</title>
-                </circle>
-              ))}
+              .map((p) => {
+                const isActive = activeName === p.name;
+                return (
+                  <circle
+                    key={`hit-${p.name}`}
+                    ref={(el) => {
+                      if (el) cityRefs.current.set(p.name, el);
+                      else cityRefs.current.delete(p.name);
+                    }}
+                    cx={p.cx}
+                    cy={p.cy}
+                    r={p.hitR}
+                    fill="transparent"
+                    tabIndex={0}
+                    role="button"
+                    aria-label={ariaLabelFor(p)}
+                    aria-describedby={isActive ? tooltipId : undefined}
+                    aria-pressed={pinned === p.name}
+                    style={{ cursor: "pointer", outline: "none" }}
+                    onMouseEnter={() => setHoverName(p.name)}
+                    onMouseLeave={() => setHoverName((n) => (n === p.name ? null : n))}
+                    onTouchStart={() => setHoverName(p.name)}
+                    onFocus={() => {
+                      setHoverName(p.name);
+                      setPinned(p.name);
+                    }}
+                    onBlur={(e) => {
+                      // Only clear when focus leaves the map entirely.
+                      const svg = svgRef.current;
+                      const next = e.relatedTarget as Node | null;
+                      if (!svg || !next || !svg.contains(next)) {
+                        setPinned((cur) => (cur === p.name ? null : cur));
+                        setHoverName((cur) => (cur === p.name ? null : cur));
+                      }
+                    }}
+                    onClick={() => {
+                      setPinned((cur) => (cur === p.name ? null : p.name));
+                      setHoverName(p.name);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setPinned((cur) => (cur === p.name ? null : p.name));
+                      } else if (e.key === "Escape") {
+                        setPinned(null);
+                        setHoverName(null);
+                        (e.currentTarget as SVGCircleElement).blur();
+                      } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+                        e.preventDefault();
+                        focusCityByOffset(p.name, 1);
+                      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+                        e.preventDefault();
+                        focusCityByOffset(p.name, -1);
+                      } else if (e.key === "Home") {
+                        e.preventDefault();
+                        const first = sortedByRank[0];
+                        if (first) {
+                          setPinned(first.name);
+                          setHoverName(first.name);
+                          cityRefs.current.get(first.name)?.focus();
+                        }
+                      } else if (e.key === "End") {
+                        e.preventDefault();
+                        const last = sortedByRank[sortedByRank.length - 1];
+                        if (last) {
+                          setPinned(last.name);
+                          setHoverName(last.name);
+                          cityRefs.current.get(last.name)?.focus();
+                        }
+                      }
+                    }}
+                    className="focus-visible:[stroke:var(--ring)] focus-visible:[stroke-width:2.5]"
+                  >
+                    <title>{p.name}</title>
+                  </circle>
+                );
+              })}
           </svg>
+
+          {/* Screen-reader live region — announces the active city on focus/hover. */}
+          <div
+            id={liveRegionId}
+            aria-live="polite"
+            aria-atomic="true"
+            className="sr-only"
+          >
+            {hover ? ariaLabelFor(hover) : ""}
+          </div>
+
 
           {hover &&
             (() => {
@@ -649,6 +749,8 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                 hover.count > 0 ? Math.round(((hover.completed ?? 0) / hover.count) * 100) : null;
               return (
                 <div
+                  id={tooltipId}
+                  role="tooltip"
                   className="pointer-events-none absolute z-10 w-[min(280px,86vw)] sm:w-[280px] md:w-[300px] rounded-2xl border border-border/50 bg-popover/95 backdrop-blur-2xl px-3.5 py-3 sm:px-4 sm:py-3.5 text-popover-foreground shadow-2xl ring-1 ring-black/5 dark:ring-white/10 animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-1 duration-200 ease-out"
                   style={{
                     left: `${leftPct}%`,
