@@ -723,15 +723,9 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
           </svg>
 
           {/* Screen-reader live region — announces the active city on focus/hover. */}
-          <div
-            id={liveRegionId}
-            aria-live="polite"
-            aria-atomic="true"
-            className="sr-only"
-          >
+          <div id={liveRegionId} aria-live="polite" aria-atomic="true" className="sr-only">
             {hover ? ariaLabelFor(hover) : ""}
           </div>
-
 
           {hover &&
             (() => {
