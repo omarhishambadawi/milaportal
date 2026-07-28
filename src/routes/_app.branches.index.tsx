@@ -37,7 +37,8 @@ export const Route = createFileRoute("/_app/branches/")({
 });
 
 function BranchDirectory() {
-  const { branches, isLoading, error, canView, canManage, canExport } = useBranchDirectory();
+  const { branches, isLoading, error, canView, canManage, canExport, canUseActions } =
+    useBranchDirectory();
   const {
     filters,
     results,
@@ -160,37 +161,40 @@ function BranchDirectory() {
             {map.visible ? "Hide map" : "Show map"}
           </Button>
 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm">
-                Actions
-                <ChevronDown className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-60">
-              <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-                {filtered ? `${results.length} matching branches` : "All branches"}
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {canExport && (
-                <DropdownMenuItem onClick={() => exportBranches(results, { filtered })}>
-                  <Download className="h-4 w-4" />
-                  Export {filtered ? "filtered" : "all"} to Excel
-                </DropdownMenuItem>
-              )}
-              {canManage && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem asChild>
-                    <Link to="/branches/import">
-                      <Upload className="h-4 w-4" />
-                      Import branches
-                    </Link>
+          {/* Owner, Admin, Supervisor and Auditor only. See `canUseActions`. */}
+          {canUseActions && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  Actions
+                  <ChevronDown className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-60">
+                <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+                  {filtered ? `${results.length} matching branches` : "All branches"}
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {canExport && (
+                  <DropdownMenuItem onClick={() => exportBranches(results, { filtered })}>
+                    <Download className="h-4 w-4" />
+                    Export {filtered ? "filtered" : "all"} to Excel
                   </DropdownMenuItem>
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
+                )}
+                {canManage && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem asChild>
+                      <Link to="/branches/import">
+                        <Upload className="h-4 w-4" />
+                        Import branches
+                      </Link>
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
       </div>
 

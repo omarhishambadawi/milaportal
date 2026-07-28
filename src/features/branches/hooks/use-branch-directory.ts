@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth, isAdministrator } from "@/lib/auth";
 import { hasPerm } from "@/lib/permissions";
+import { isAgentRole } from "@/lib/roles";
 import { queryKeys } from "@/lib/query-keys";
 import { decorate } from "../search";
 import type { Branch, BranchView } from "../types";
@@ -64,6 +65,19 @@ export function useBranchDirectory() {
   const canRollback = isAdministrator(role);
   const canExport = hasPerm(role, permissions, "export_reports") || canManage;
 
+  /**
+   * Whether to offer the Actions menu at all.
+   *
+   * Withheld from the two agent roles by role, not by permission. An agent uses
+   * this page mid-call to find one branch and read it out; exporting the
+   * directory to a spreadsheet and importing a new one are not things they do,
+   * and a menu that is there for everyone but only ever useful to four people is
+   * a menu three quarters of the floor learns to ignore. It was also frequently
+   * *empty* for them — an agent without `export_reports` opened it to a heading
+   * and nothing else.
+   */
+  const canUseActions = !isAgentRole(role) && (canExport || canManage);
+
   const query = useQuery({
     queryKey: queryKeys.branches.directory(),
     queryFn: fetchBranches,
@@ -85,5 +99,6 @@ export function useBranchDirectory() {
     canManage,
     canRollback,
     canExport,
+    canUseActions,
   };
 }

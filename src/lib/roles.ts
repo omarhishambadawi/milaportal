@@ -172,19 +172,30 @@ export const ROLE_TONE: Record<AppRole, string> = {
 };
 
 /**
- * Roles that carry an Agent Code.
+ * The roles that are agents: the two that actually take orders.
  *
- * Only the two agent roles do. Owner, Admin, Supervisor and Auditor are not
- * agents: they take no orders, so an agent code on them is meaningless and was
- * previously rendered as an empty field and accepted by the create/edit forms.
+ * Everything else on the platform — Owner, Admin, Supervisor, Auditor — is
+ * looking at the floor rather than working it. That distinction is not the same
+ * as any permission: an agent can be granted `export_reports` and still not be
+ * someone the directory's administrative controls are addressed to.
  */
-export const AGENT_CODE_ROLES = [
-  "customer_care",
-  "telesales",
-] as const satisfies readonly AppRole[];
+export const AGENT_ROLES = ["customer_care", "telesales"] as const satisfies readonly AppRole[];
+
+export function isAgentRole(role: string | null | undefined): boolean {
+  return isAppRole(role) && (AGENT_ROLES as readonly string[]).includes(role);
+}
+
+/**
+ * Roles that carry an Agent Code — the agent roles, and only them.
+ *
+ * Owner, Admin, Supervisor and Auditor take no orders, so an agent code on them
+ * is meaningless and was previously rendered as an empty field and accepted by
+ * the create/edit forms.
+ */
+export const AGENT_CODE_ROLES = AGENT_ROLES;
 
 export function roleHasAgentCode(role: string | null | undefined): boolean {
-  return isAppRole(role) && (AGENT_CODE_ROLES as readonly string[]).includes(role);
+  return isAgentRole(role);
 }
 
 /** Narrowing guard for values arriving from the database or an API boundary. */
