@@ -12,7 +12,8 @@ interface UseOrdersListDataArgs {
   status: string;
   mineOnly: boolean;
   userId: string | undefined;
-  isAdmin: boolean;
+  /** Mirrors `OrderFilterState.canFilterAgents` — see the note there. */
+  canFilterAgents: boolean;
   term: string;
   searching: boolean;
   filterKey: OrdersFilters;
@@ -37,7 +38,7 @@ export function useOrdersListData({
   status,
   mineOnly,
   userId,
-  isAdmin,
+  canFilterAgents,
   term,
   searching,
   filterKey,
@@ -76,7 +77,7 @@ export function useOrdersListData({
         _from: from,
         _to: to,
         _team: team,
-        _agent: isAdmin && agent !== "all" ? agent : null,
+        _agent: canFilterAgents && agent !== "all" ? agent : null,
         _status: status,
         _mine: mineOnly && !!userId,
         _q: searching ? term : null,

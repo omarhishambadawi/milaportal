@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+﻿import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -24,7 +24,7 @@ import { STATUSES, STATUS_STYLES, TEAMS, fmtSAR, formatOrderNo } from "@/lib/bra
 import { cn } from "@/lib/utils";
 import { DateRangePicker } from "@/components/date-range-picker";
 import { PAGE_SIZE_OPTIONS } from "@/features/orders/constants";
-import { fmtOrderDate, fmtOrderDateShort } from "@/features/orders/utils";
+import { fmtOrderDate } from "@/features/orders/utils";
 import { CopyableOrderNo } from "@/features/orders/components/copyable-order-no";
 import { TeamBadge } from "@/features/orders/components/team-badge";
 import { StatusBadge } from "@/features/orders/components/status-badge";
@@ -52,7 +52,7 @@ function OrdersList() {
     status: f.status,
     mineOnly: f.mineOnly,
     userId: f.userId,
-    isAdmin: f.isAdmin,
+    canFilterAgents: f.canFilterAgents,
     term: f.term,
     searching: f.searching,
     filterKey: f.filterKey,
@@ -98,10 +98,25 @@ function OrdersList() {
     <div className="space-y-4">
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 sm:flex sm:flex-wrap sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight truncate">Orders</h1>
-          <p className="text-xs sm:text-sm text-muted-foreground truncate">
+          <h1 className="truncate text-xl font-semibold tracking-tight sm:text-2xl">Orders</h1>
+          {/* The day name, not just the date. A list of one day's orders is read
+              against the shift it belongs to â€” "Monday" tells an agent what they
+              are looking at in a way "28/07/2026" makes them work out. Absent
+              for a multi-day range, where naming one weekday would describe only
+              the first of them. */}
+          {!f.searching && (
+            <p className="truncate text-xs sm:text-sm">
+              {f.dateParts.weekday && (
+                <span className="font-semibold text-foreground">{f.dateParts.weekday}</span>
+              )}
+              <span className={cn("text-muted-foreground", f.dateParts.weekday && "ml-1.5")}>
+                {f.dateParts.date}
+              </span>
+            </p>
+          )}
+          <p className="truncate text-xs text-muted-foreground sm:text-sm">
             <span className="font-medium text-foreground">{total}</span>{" "}
-            {f.mineOnly ? "of your" : ""} orders · {f.searching ? "search results" : f.dateLabel}
+            {f.mineOnly ? "of your" : ""} orders{f.searching ? " آ· search results" : ""}
           </p>
         </div>
         <div className="flex gap-2 items-center shrink-0">
@@ -126,7 +141,7 @@ function OrdersList() {
           <div className="relative flex-1 min-w-[200px] lg:max-w-xs">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Search order, invoice, customer, phone…"
+              placeholder="Search order, invoice, customer, phoneâ€¦"
               value={f.q}
               maxLength={80}
               onChange={(e) => {
@@ -157,7 +172,9 @@ function OrdersList() {
               ))}
             </SelectContent>
           </Select>
-          {f.isAdmin && (
+          {/* `view_all_agents`, not administrator â€” an Auditor reviews other
+              people's work and holds it by default. */}
+          {f.canFilterAgents && (
             <Select value={f.agent} onValueChange={(v) => f.onFilterChange(() => f.setAgent(v))}>
               <SelectTrigger className="h-10 w-[180px]">
                 <SelectValue placeholder="Agent" />
@@ -203,7 +220,7 @@ function OrdersList() {
         </CardContent>
       </Card>
 
-      {/* KPI summary: 3 cards — Cash · Wasfaty · Total (each shows sales + completed sales + total/completed orders split) */}
+      {/* KPI summary: 3 cards â€” Cash آ· Wasfaty آ· Total (each shows sales + completed sales + total/completed orders split) */}
       <div className="grid gap-3 sm:grid-cols-3">
         <KpiCard
           label="Cash"
@@ -234,8 +251,22 @@ function OrdersList() {
 
       <Card>
         <CardContent className="p-0">
-          {/* Desktop / tablet table — raw table so overflow-x-auto works correctly */}
-          <div className="hidden md:block w-full overflow-x-auto">
+          {/*
+            One table at every width, scrolled sideways on a phone.
+
+            This replaces a bespoke mobile card list that rendered below `md`.
+            The cards read well but they were a second layout of the same rows
+            with their own truncation rules, and a column that was added to the
+            table did not appear in them â€” the verified rail, the agent code and
+            the delivery type were all desktop-only facts. A phone user
+            reconciling invoices could not see what a desktop user could.
+
+            A raw <table> rather than the ui/table wrapper, because the wrapper's
+            own overflow container fights an outer one. `min-w` is what forces
+            the horizontal scroll rather than letting eleven columns crush
+            themselves into 380px.
+          */}
+          <div className="w-full overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
             <table
               className="w-full caption-bottom text-sm border-separate border-spacing-0"
               style={{ minWidth: 1200 }}
@@ -283,7 +314,7 @@ function OrdersList() {
                       colSpan={11}
                       className="text-center text-muted-foreground py-14 border-b border-border/50"
                     >
-                      Loading…
+                      Loadingâ€¦
                     </td>
                   </tr>
                 )}
@@ -339,7 +370,7 @@ function OrdersList() {
 
                       <td
                         className={cn(
-                          "px-3 text-xs text-muted-foreground whitespace-nowrap tabular-nums",
+                          "whitespace-nowrap px-3 text-xs tabular-nums text-muted-foreground",
                           cellCls,
                         )}
                       >
@@ -348,7 +379,7 @@ function OrdersList() {
                       <td className={cn("px-3 text-sm", cellCls)}>
                         <div className="truncate font-semibold text-foreground leading-tight">
                           {o.customer_name || (
-                            <span className="text-muted-foreground font-normal">—</span>
+                            <span className="text-muted-foreground font-normal">â€”</span>
                           )}
                         </div>
                         {o.customer_phone && (
@@ -359,7 +390,7 @@ function OrdersList() {
                       </td>
                       <td className={cn("px-3 text-sm", cellCls)}>
                         <div className="truncate text-foreground leading-tight">
-                          {o.agent_name || <span className="text-muted-foreground">—</span>}
+                          {o.agent_name || <span className="text-muted-foreground">â€”</span>}
                         </div>
                         {o.agent_code && (
                           <div className="mt-0.5 truncate text-[11px] text-muted-foreground font-mono">
@@ -380,7 +411,7 @@ function OrdersList() {
                       </td>
                       <td className={cn("px-3 text-sm", cellCls)}>
                         <div className="font-mono font-medium truncate leading-tight">
-                          {o.branch_no ?? "—"}
+                          {o.branch_no ?? "â€”"}
                         </div>
                         {o.city && (
                           <div className="mt-0.5 text-[11px] text-muted-foreground truncate">
@@ -437,118 +468,6 @@ function OrdersList() {
             </table>
           </div>
 
-          {/* Mobile card list */}
-          <div className="md:hidden divide-y">
-            {isLoading && (
-              <div className="text-center text-muted-foreground py-10 text-sm">Loading…</div>
-            )}
-            {!isLoading && pageRows.length === 0 && (
-              <div className="text-center text-muted-foreground py-10 text-sm">No orders found</div>
-            )}
-            {pageRows.map((o: any) => {
-              const editable = canEditOrder(o);
-              const canVerifyRow = canVerifyOrder(o);
-              const verified = !!o.call_center_verified;
-              return (
-                <div
-                  key={o.id}
-                  className={cn(
-                    "relative p-4 transition-colors active:bg-accent/40",
-                    verified && "bg-[var(--tint-row)] border-l-[3px] border-l-primary pl-[13px]",
-                  )}
-                >
-                  <div className="flex items-start gap-3">
-                    <div onClick={(e) => e.stopPropagation()} className="pt-1">
-                      <Checkbox
-                        checked={verified}
-                        disabled={!canVerifyRow}
-                        onCheckedChange={(v) => toggleVerified(o, !!v)}
-                        aria-label="Call Center invoice verified"
-                      />
-                    </div>
-                    <div
-                      className="min-w-0 flex-1"
-                      onClick={() => navigate({ to: "/orders/$id", params: { id: o.id } })}
-                    >
-                      <div className="flex items-start gap-2 flex-wrap">
-                        <div className="flex flex-col items-start gap-1 min-w-0">
-                          <CopyableOrderNo
-                            value={formatOrderNo(o.team, o.display_no)}
-                            alwaysShowIcon
-                          />
-                          <TeamBadge team={o.team} />
-                        </div>
-
-                        <span className="text-xs text-muted-foreground ml-auto">
-                          {fmtOrderDateShort(o.order_date)}
-                        </span>
-                      </div>
-                      <div className="mt-2 text-sm font-medium truncate">
-                        {o.customer_name || (
-                          <span className="text-muted-foreground font-normal">No customer</span>
-                        )}
-                      </div>
-                      {o.customer_phone && (
-                        <div className="text-xs text-muted-foreground font-mono truncate">
-                          {o.customer_phone}
-                        </div>
-                      )}
-                      <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                        <div className="min-w-0">
-                          <dt className="text-muted-foreground">Agent</dt>
-                          <dd className="truncate">{o.agent_name || "—"}</dd>
-                        </div>
-                        <div className="min-w-0">
-                          <dt className="text-muted-foreground">Invoice</dt>
-                          <dd className="truncate font-mono">{o.invoice_no || "—"}</dd>
-                        </div>
-                        <div className="min-w-0">
-                          <dt className="text-muted-foreground">Type</dt>
-                          <dd className="truncate">{o.order_type}</dd>
-                        </div>
-                        <div className="min-w-0">
-                          <dt className="text-muted-foreground">Branch</dt>
-                          <dd className="truncate font-mono">
-                            {o.branch_no ?? "—"}
-                            {o.city ? ` · ${o.city}` : ""}
-                          </dd>
-                        </div>
-                      </dl>
-                    </div>
-                    <div className="flex flex-col items-end gap-2 shrink-0">
-                      <div className="text-sm font-mono font-semibold whitespace-nowrap tabular-nums">
-                        {fmtSAR(o.invoice_value)}
-                      </div>
-                      <div onClick={(e) => e.stopPropagation()}>
-                        {editable ? (
-                          <Select value={o.status} onValueChange={(v) => updateStatus(o, v)}>
-                            <SelectTrigger
-                              className={cn(
-                                "h-7 border px-2 text-[11px] font-medium rounded-md w-[112px]",
-                                STATUS_STYLES[o.status] ?? "",
-                              )}
-                            >
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {STATUSES.map((s) => (
-                                <SelectItem key={s} value={s}>
-                                  {s}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <StatusBadge s={o.status} />
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
           <div className="sticky bottom-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 flex flex-wrap items-center justify-between gap-3 p-3 border-t text-sm">
             <div className="text-muted-foreground">
               {total === 0 ? (
@@ -557,7 +476,7 @@ function OrdersList() {
                 <>
                   Showing{" "}
                   <span className="font-medium text-foreground">
-                    {rangeStart}–{rangeEnd}
+                    {rangeStart}â€“{rangeEnd}
                   </span>{" "}
                   of <span className="font-medium text-foreground">{total}</span> orders
                 </>

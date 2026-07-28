@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { format } from "date-fns";
 import type { DateRange } from "react-day-picker";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth, isAdministrator } from "@/lib/auth";
@@ -10,7 +9,7 @@ import type { OrdersFilters } from "@/lib/query-keys";
 import { useAgentDirectory } from "@/lib/directory";
 import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, PAGE_SIZE_STORAGE_KEY } from "../constants";
 import type { OrdersFilterCache } from "../types";
-import { applyOrderFilters, normalizeSearchTerm, toISO } from "../utils";
+import { applyOrderFilters, describeDateRange, normalizeSearchTerm, toISO } from "../utils";
 
 // In-memory filter cache. Survives SPA navigation (e.g. edit an order and come
 // back) but is wiped on a full page refresh because the JS module reloads.
@@ -35,6 +34,17 @@ export function useOrdersListFilters() {
   const canVerifyAll = isAdmin || hasPerm(role, profile?.permissions as any, "verify_all_orders");
   const canVerifyOwn = hasPerm(role, profile?.permissions as any, "verify_own_orders");
   const canExport = hasPerm(role, profile?.permissions as any, "export_reports");
+  /**
+   * Who may narrow the list to one agent.
+   *
+   * `view_all_agents` rather than `isAdmin`, which is what it was. An Auditor's
+   * entire job is reviewing other people's work and the role holds this
+   * permission by default, yet the filter was hidden from them — so the one role
+   * that most needs to look at a single agent's day was the one role that
+   * could not. Supervisor holds it too. The two agent roles do not, which is the
+   * line that was actually intended.
+   */
+  const canFilterAgents = hasPerm(role, profile?.permissions as any, "view_all_agents");
 
   const today = new Date();
   const initial = ordersFilterCache;
@@ -140,16 +150,14 @@ export function useOrdersListFilters() {
       status,
       mineOnly,
       userId: user?.id,
-      isAdmin,
+      canFilterAgents,
       agent,
       term,
     });
 
-  const dateLabel = useMemo(() => {
-    if (!range?.from) return "Pick a date";
-    if (!range.to || toISO(range.from) === toISO(range.to)) return format(range.from, "PP");
-    return `${format(range.from, "PP")} — ${format(range.to, "PP")}`;
-  }, [range]);
+  /** Weekday and date, split so the header can emphasise the day name. */
+  const dateParts = useMemo(() => describeDateRange(range?.from, range?.to), [range]);
+  const dateLabel = dateParts.weekday ? `${dateParts.weekday}, ${dateParts.date}` : dateParts.date;
 
   // Reset to first page when filters change
   const onFilterChange = (fn: () => void) => {
@@ -169,6 +177,7 @@ export function useOrdersListFilters() {
     canVerifyAll,
     canVerifyOwn,
     canExport,
+    canFilterAgents,
     // filter state + setters
     range,
     setRange,
@@ -193,6 +202,7 @@ export function useOrdersListFilters() {
     searching,
     filterKey,
     dateLabel,
+    dateParts,
     onFilterChange,
     applyFilters,
     // lookups
