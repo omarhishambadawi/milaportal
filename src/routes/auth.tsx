@@ -146,12 +146,8 @@ function AuthPage() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                aria-describedby="password-help"
               />
-              <p id="password-help" className="text-[11px] text-muted-foreground">
-                Use the password provided by your administrator. Trouble signing in? Use “Forgot?”
-                to reset it.
-              </p>
+
             </div>
             <Button type="submit" className="w-full" disabled={busy}>
               {busy ? "Signing in…" : "Sign in"}
