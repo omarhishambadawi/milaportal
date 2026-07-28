@@ -1,3 +1,5 @@
+import type { ReferenceKind } from "./normalize";
+
 /** A branch as stored, one row of `public.branches`. */
 export interface Branch {
   branch_no: string;
@@ -48,6 +50,19 @@ export interface BranchView extends Branch {
    * whenever the address does not state one clearly; see `extractDistrict`.
    */
   district: string | null;
+  /**
+   * Set when this row is a facility rather than a pharmacy — head office,
+   * regional office or a warehouse. Null for every numbered branch, which is
+   * what lets the card badge only the rows that need the warning.
+   */
+  reference: ReferenceKind | null;
+  /**
+   * The address with the leading city segment removed, which is the only part
+   * worth showing on a card that already names the city in its header.
+   */
+  addressLine: string | null;
+  /** Short, readable stand-in for the Google Maps URL, e.g. "maps.app.goo.gl". */
+  mapsLabel: string | null;
 }
 
 /** How an uploaded workbook is reconciled with the branches already stored. */

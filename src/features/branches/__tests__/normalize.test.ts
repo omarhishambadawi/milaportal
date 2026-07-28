@@ -5,7 +5,9 @@ import {
   cleanCell,
   foldText,
   formatE164,
+  formatLocal,
   isNumberedBranch,
+  referenceKind,
   mapsLink,
   navLink,
   parseCoordinate,
@@ -100,6 +102,16 @@ describe("parsePhone", () => {
 
   it("formats for display in dialable groups", () => {
     expect(formatE164("+966599089497")).toBe("+966 59 908 9497");
+  });
+
+  it("displays the local form, which is the one anybody actually says", () => {
+    expect(formatLocal("+966599089497")).toBe("0599089497");
+    // Landlines take the trunk zero too — Riyadh's 011, Jeddah's 012.
+    expect(formatLocal("+966112345678")).toBe("0112345678");
+  });
+
+  it("leaves a number it cannot read as a Saudi one untouched", () => {
+    expect(formatLocal("+4915112345678")).toBe("+4915112345678");
   });
 });
 
@@ -244,5 +256,29 @@ describe("isNumberedBranch", () => {
     expect(isNumberedBranch("P0701")).toBe(true);
     expect(isNumberedBranch("المستودع")).toBe(false);
     expect(isNumberedBranch("الادارة العامة")).toBe(false);
+  });
+});
+
+describe("referenceKind", () => {
+  it("names the three facility rows the sheet carries", () => {
+    expect(referenceKind("الادارة العامة")).toBe("head-office");
+    expect(referenceKind("الإدارة الفرعية")).toBe("regional-office");
+    expect(referenceKind("المستودع")).toBe("warehouse");
+  });
+
+  it("reads through the sheet's spelling drift and the importer's suffix", () => {
+    // ة/ه and أ/إ/ا vary row to row; "المستودع-2" is the second warehouse.
+    expect(referenceKind("الاداره العامه")).toBe("head-office");
+    expect(referenceKind("المستودع-2")).toBe("warehouse");
+    expect(referenceKind("المستودع 2")).toBe("warehouse");
+  });
+
+  it("says nothing about a numbered pharmacy, which needs no badge", () => {
+    expect(referenceKind("P0001")).toBeNull();
+    expect(referenceKind("p0701")).toBeNull();
+  });
+
+  it("still flags an unrecognised non-pharmacy code rather than passing it off as a branch", () => {
+    expect(referenceKind("مبنى التدريب")).toBe("other");
   });
 });

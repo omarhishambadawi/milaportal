@@ -69,6 +69,41 @@ export function extractDistrict(
   return candidate.length <= MAX_LENGTH ? candidate : null;
 }
 
+/**
+ * The address minus its leading city segment.
+ *
+ * The card header already names the city, in Arabic and in English. Repeating
+ * it as the first thing in the address below costs a line on every card in the
+ * directory to say something the eye read two rows ago — and on a page built to
+ * show as many branches at once as possible, that line is the expensive kind.
+ *
+ * What is left is the district and the street, joined by a middle dot rather
+ * than the sheet's slashes: the slashes are a spreadsheet convention, and
+ * "حي الحزم · ش علي النقيب" reads as two facts where "حي الحزم/ش علي النقيب"
+ * reads as a path.
+ *
+ * Conservative in the same way `extractDistrict` is. Only the *first* segment is
+ * ever dropped, and only when it is recognizably the branch's own city, so an
+ * address that does not follow the sheet's convention is returned untouched
+ * rather than silently losing its first line.
+ */
+export function addressWithoutCity(
+  address: string | null | undefined,
+  city: string | null | undefined,
+): string | null {
+  if (!address) return null;
+  const segments = address
+    .split(SEGMENT)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (segments.length === 0) return null;
+  // A one-segment address that *is* the city carries nothing else; anything
+  // else is the whole address and is kept as-is.
+  const rest = segments.length > 1 && isCity(segments[0], city) ? segments.slice(1) : segments;
+  const joined = rest.join(" · ");
+  return joined.length > 0 ? joined : null;
+}
+
 /** Is this segment the branch's own city, in any spelling we know? */
 function isCity(segment: string, city: string | null | undefined): boolean {
   const folded = foldText(segment);

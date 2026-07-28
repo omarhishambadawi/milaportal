@@ -261,8 +261,11 @@ describe("derived options", () => {
 describe("decorate", () => {
   it("precomputes display numbers and links once", () => {
     const [first] = FIXTURE;
-    expect(first.phoneDisplay).toBe("+966 59 908 9497");
-    expect(first.managerPhoneDisplay).toBe("+966 50 073 3054");
+    // Displayed in the local form agents read aloud; E.164 is kept alongside it
+    // for `tel:` links and the export.
+    expect(first.phoneDisplay).toBe("0599089497");
+    expect(first.managerPhoneDisplay).toBe("0500733054");
+    expect(first.phoneE164).toBe("+966599089497");
     expect(first.cityEnglish).toBe("Riyadh");
     expect(first.hasCoords).toBe(true);
     // The comma is percent-encoded by URLSearchParams, which Google decodes.
@@ -274,5 +277,17 @@ describe("decorate", () => {
     const warehouse = FIXTURE.find((entry) => entry.branch_no === "المستودع");
     expect(warehouse?.hasCoords).toBe(false);
     expect(warehouse?.mapsLink).toBeNull();
+  });
+
+  it("flags the facility rows as reference locations and leaves pharmacies alone", () => {
+    const warehouse = FIXTURE.find((entry) => entry.branch_no === "المستودع");
+    expect(warehouse?.reference).toBe("warehouse");
+    expect(FIXTURE.find((entry) => entry.branch_no.startsWith("P"))?.reference).toBeNull();
+  });
+
+  it("drops the city from the address, since the card header already carries it", () => {
+    const [first] = FIXTURE;
+    expect(first.addressLine).not.toContain("الرياض");
+    expect(first.addressLine).toContain("الحزم");
   });
 });

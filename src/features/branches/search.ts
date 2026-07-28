@@ -1,14 +1,16 @@
+import { mapUrlLabel } from "@/lib/geo";
 import type { Branch, BranchView } from "./types";
-import { extractDistrict } from "./district";
+import { addressWithoutCity, extractDistrict } from "./district";
 import {
   cityAliases,
   cityEnglish,
   foldText,
-  formatE164,
+  formatLocal,
   mapsLink,
   navLink,
   parsePhone,
   phoneSearchForms,
+  referenceKind,
 } from "./normalize";
 
 /**
@@ -51,21 +53,30 @@ export function decorate(branches: Branch[]): BranchView[] {
       ].join(" "),
     );
 
+    const link = mapsLink(branch);
+
     return {
       ...branch,
       haystack,
       phoneDigits: `${phone.digits} ${managerPhone.digits}`.trim(),
       phoneE164: phone.e164,
       managerPhoneE164: managerPhone.e164,
-      phoneDisplay: phone.e164 ? formatE164(phone.e164) : phone.display,
-      managerPhoneDisplay: managerPhone.e164 ? formatE164(managerPhone.e164) : managerPhone.display,
-      mapsLink: mapsLink(branch),
+      // Local form ("0599089497"), not E.164. `phoneE164` is still here for the
+      // `tel:` links and the export; this is what a human reads and copies.
+      phoneDisplay: phone.e164 ? formatLocal(phone.e164) : phone.display,
+      managerPhoneDisplay: managerPhone.e164
+        ? formatLocal(managerPhone.e164)
+        : managerPhone.display,
+      mapsLink: link,
+      mapsLabel: mapUrlLabel(link),
       navLink: navLink(branch),
       hasCoords: branch.latitude != null && branch.longitude != null,
       cityEnglish: cityEnglish(branch.city),
       // Parsed here with everything else derived per branch, not in the card:
       // this runs once per fetched dataset, a card renders many times.
       district: extractDistrict(branch.address, branch.city),
+      addressLine: addressWithoutCity(branch.address, branch.city),
+      reference: referenceKind(branch.branch_no),
     };
   });
 }

@@ -234,6 +234,23 @@ export function formatE164(e164: string): string {
   return `+${KSA_CC} ${nsn.slice(0, 2)} ${nsn.slice(2, 5)} ${nsn.slice(5)}`;
 }
 
+/**
+ * "+966599089497" → "0599089497" — the national form, and the only one anybody
+ * on this floor actually says.
+ *
+ * An agent reads a number off the card and either dials it or repeats it to a
+ * customer, and in both cases the country code is noise: nobody in Saudi Arabia
+ * writes their own number as +966, they write the trunk zero. The E.164 form is
+ * still what `phoneE164` carries, because that is what `tel:` links and the
+ * export need — this is a *display* format, deliberately unspaced so that
+ * copying it yields something that can be pasted straight into a dialler.
+ */
+export function formatLocal(e164: string): string {
+  const nsn = e164.replace(`+${KSA_CC}`, "");
+  if (nsn.length !== 9) return e164;
+  return `0${nsn}`;
+}
+
 /** `tel:` target — E.164 when we have it, else the digits as typed. */
 export function telHref(parsed: Pick<PhoneParse, "e164" | "digits">): string | null {
   if (parsed.e164) return `tel:${parsed.e164}`;
@@ -422,3 +439,45 @@ export const navLink = resolveNavUrl;
 export function isNumberedBranch(branchNo: string): boolean {
   return /^P\d{3,5}$/i.test(branchNo.trim());
 }
+
+/**
+ * What a non-pharmacy row in the directory actually is.
+ *
+ * Three of the codes in the master sheet name a facility rather than a shop:
+ * "الإدارة العامة" (head office), "الإدارة الفرعية" (regional office) and
+ * "المستودع" (warehouse, of which there are two). They are in the directory
+ * because agents genuinely need their address and their switchboard, but they
+ * are *reference locations*: no customer is ever sent to one to collect an
+ * order, and an agent who reads a warehouse address to a caller has made a real
+ * mistake. Until now nothing on the card said so — the rows looked exactly like
+ * a pharmacy whose branch code happened to be in Arabic.
+ *
+ * Matching is on folded text so the sheet's inconsistent hamza and ta-marbuta
+ * spellings ("الادارة" / "الإدارة", "العامة" / "العامه") all land, and the
+ * importer's disambiguating suffix ("المستودع-2") is stripped first.
+ *
+ * Returns null for a numbered pharmacy code — the common case, and the one that
+ * needs no badge.
+ */
+export type ReferenceKind = "head-office" | "regional-office" | "warehouse" | "other";
+
+export function referenceKind(branchNo: string): ReferenceKind | null {
+  const trimmed = branchNo.trim();
+  if (!trimmed || isNumberedBranch(trimmed)) return null;
+  // "المستودع-2" and "المستودع 2" are both the importer numbering a repeat.
+  const folded = foldText(trimmed)
+    .replace(/[-–—]?\s*\d+$/, "")
+    .trim();
+  if (folded.includes("مستودع")) return "warehouse";
+  if (folded.includes("فرعي")) return "regional-office";
+  if (folded.includes("عام")) return "head-office";
+  return "other";
+}
+
+/** Badge text for a reference location. */
+export const REFERENCE_LABEL: Record<ReferenceKind, string> = {
+  "head-office": "Head office",
+  "regional-office": "Regional office",
+  warehouse: "Warehouse",
+  other: "Reference location",
+};

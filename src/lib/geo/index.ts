@@ -45,6 +45,7 @@ export {
   MAX_WAYPOINTS,
   directionsUrl,
   mapSearchUrl,
+  mapUrlLabel,
   multiStopUrl,
   navigationUrl,
   resolveMapUrl,

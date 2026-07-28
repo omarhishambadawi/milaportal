@@ -99,6 +99,34 @@ export function resolveMapUrl(record: {
   return null;
 }
 
+/**
+ * A short, readable stand-in for a map URL.
+ *
+ * A Google Maps link is between 40 and 300 characters of opaque machinery, and
+ * printing it in full on a card buys nothing: nobody reads a URL, nobody types
+ * one back in, and the two things anyone does with it — open it, or copy it —
+ * are both buttons. What a reader does want to know is *which kind* of link it
+ * is, because a stored place link ("maps.app.goo.gl") names the pharmacy when it
+ * opens while a generated one only drops a pin.
+ *
+ * Returns null for anything that is not a URL, so callers can fall back rather
+ * than render "".
+ */
+export function mapUrlLabel(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const { hostname, pathname } = new URL(url);
+    const host = hostname.replace(/^www\./, "");
+    // Our own generated links are always a coordinate search; saying so is more
+    // use than repeating the host every card already shares.
+    if (host === "google.com" && pathname.startsWith("/maps/search"))
+      return "Coordinates on Google Maps";
+    return host;
+  } catch {
+    return null;
+  }
+}
+
 /** Navigation link for a record, or null without coordinates. */
 export function resolveNavUrl(record: {
   latitude?: number | null;
