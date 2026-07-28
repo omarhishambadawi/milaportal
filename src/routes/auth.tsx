@@ -146,7 +146,9 @@ function AuthPage() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                placeholder="Password"
               />
+
 
             </div>
             <Button type="submit" className="w-full" disabled={busy}>
