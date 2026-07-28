@@ -107,12 +107,11 @@ function OrdersList() {
           {!f.searching && (
             <p className="truncate text-xs sm:text-sm">
               {f.dateParts.weekday && (
-                <span className="font-semibold text-foreground">{f.dateParts.weekday}</span>
+                <span className="font-semibold text-foreground">{f.dateParts.weekday}, </span>
               )}
-              <span className={cn("text-muted-foreground", f.dateParts.weekday && "ml-1.5")}>
-                {f.dateParts.date}
-              </span>
+              <span className="text-muted-foreground">{f.dateParts.date}</span>
             </p>
+
           )}
           <p className="truncate text-xs text-muted-foreground sm:text-sm">
             <span className="font-medium text-foreground">{total}</span>{" "}

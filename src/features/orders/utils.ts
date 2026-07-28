@@ -22,7 +22,7 @@ export function describeDateRange(
   if (!from) return { weekday: null, date: "Pick a date" };
   const singleDay = !to || toISO(from) === toISO(to);
   if (singleDay) {
-    return { weekday: format(from, "EEEE"), date: format(from, "d MMMM yyyy") };
+    return { weekday: format(from, "EEEE"), date: format(from, "MMMM d, yyyy") };
   }
   return { weekday: null, date: `${format(from, "d MMM yyyy")} — ${format(to, "d MMM yyyy")}` };
 }

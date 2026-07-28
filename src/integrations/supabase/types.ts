@@ -59,9 +59,6 @@ export type Database = {
           rows_updated: number
           snapshot: Json
           snapshot_rows: number
-          source_file: string | null
-          source_file_size: number | null
-          source_file_type: string | null
           validation_summary: Json
         }
         Insert: {
@@ -81,9 +78,6 @@ export type Database = {
           rows_updated?: number
           snapshot?: Json
           snapshot_rows?: number
-          source_file?: string | null
-          source_file_size?: number | null
-          source_file_type?: string | null
           validation_summary?: Json
         }
         Update: {
@@ -103,9 +97,6 @@ export type Database = {
           rows_updated?: number
           snapshot?: Json
           snapshot_rows?: number
-          source_file?: string | null
-          source_file_size?: number | null
-          source_file_type?: string | null
           validation_summary?: Json
         }
         Relationships: [
