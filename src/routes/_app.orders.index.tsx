@@ -111,7 +111,6 @@ function OrdersList() {
               )}
               <span className="text-muted-foreground">{f.dateParts.date}</span>
             </p>
-
           )}
           <p className="truncate text-xs text-muted-foreground sm:text-sm">
             <span className="font-medium text-foreground">{total}</span>{" "}
