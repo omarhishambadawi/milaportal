@@ -6,23 +6,21 @@
 
 /*
  * ---------------------------------------------------------------------------
- * Theme transition: one clock for the whole app
+ * The design tokens
  * ---------------------------------------------------------------------------
- * Registering the design tokens as `<color>` makes them animatable, so a theme
- * swap is a single transition on <html> that ~30 custom properties ride. Every
- * surface, label, border, shadow and gradient in the app resolves from those
- * tokens, so they all move together by construction — there is no per-element
- * animation that could start late or finish early.
+ * Every surface, label, border, shadow and gradient in the app resolves from
+ * the properties registered below, so a theme change is one class flip on
+ * <html> and the whole tree repaints from a single source.
  *
- * The naive alternative (`* { transition: color, background-color … }`) is what
- * this replaces. It desynchronises badly: `color` and `fill` are inherited, so
- * any element that does not declare its own colour re-reads its parent's
- * *mid-transition* value every frame, which cancels and restarts its own
- * transition every frame. Text visibly chases the surfaces instead of moving
- * with them, and the effect compounds with nesting depth.
- *
- * Browsers without registered-property interpolation simply swap instantly —
- * no fade, but no glitch either.
+ * These were once *animated* — registered as `<color>` specifically so a theme
+ * swap could interpolate them on :root. That is gone (see
+ * `#theme-cross-fade` below and the long note in src/lib/theme.tsx): they
+ * inherit, so interpolating them invalidated inherited style for the entire
+ * document on every frame of the swap, which on a large table is well past the
+ * frame budget and shows as banding. The registrations stay because
+ * `--theme-dark` has to be a real `<number>` for the calc() in the logo and
+ * icon affordances at the bottom of this file, and because a typed property is
+ * still cheaper to resolve than an untyped one.
  */
 @property --background {
   syntax: "<color>";
@@ -166,7 +164,8 @@
 }
 
 /* Semantic tints that previously used raw `dark:` palette literals — as tokens
- * they ride the same clock instead of snapping a frame ahead. */
+ * they resolve from the same class flip as everything else rather than from a
+ * variant that lands a frame later. */
 @property --positive {
   syntax: "<color>";
   inherits: true;
@@ -268,8 +267,9 @@
   initial-value: oklch(98.2% 0.018 155.826 / 0.4);
 }
 
-/* 0 in light, 1 in dark. Lets non-colour theme affordances (the logo cross-fade,
- * the sun/moon swap) be driven off the same animation instead of their own. */
+/* 0 in light, 1 in dark. Lets non-colour theme affordances (the logo swap, the
+ * sun/moon rotation) be pure functions of the theme rather than each carrying
+ * its own transition, so they change in the same frame as the palette. */
 @property --theme-dark {
   syntax: "<number>";
   inherits: true;
@@ -424,35 +424,41 @@
 }
 
 /*
- * The single animation. Only <html> transitions; everything else inherits the
- * in-flight token values, so the entire tree is repainted from one interpolated
- * source every frame.
+ * The cross-fade layer, for browsers without view transitions.
+ *
+ * A single fixed element painted with the background colour currently on
+ * screen. `src/lib/theme.tsx` fades it up, flips the palette underneath it, and
+ * fades it back down — so the swap is one style recalculation that nobody sees,
+ * rather than a dozen over-budget frames of interpolating 49 inherited custom
+ * properties across the whole document.
+ *
+ * The z-index is the maximum a 32-bit signed int allows on purpose: this has to
+ * sit above dialogs, sheets, popovers and the toast stack, all of which layer
+ * themselves in the low hundreds.
  */
-:root {
-  transition-property:
-    --background, --foreground, --card, --card-foreground, --popover, --popover-foreground,
-    --primary, --primary-foreground, --secondary, --secondary-foreground, --muted,
-    --muted-foreground, --accent, --accent-foreground, --destructive, --destructive-foreground,
-    --success, --success-foreground, --warning, --warning-foreground, --border, --input, --ring,
-    --chart-1, --chart-2, --chart-3, --chart-4, --chart-5, --positive, --positive-alt, --negative,
-    --attention, --badge-violet, --badge-blue, --badge-emerald, --badge-amber, --tint-cash,
-    --tint-wasfaty, --tint-map, --tint-row, --tint-resolved, --map-land-top, --map-land-bottom,
-    --map-outline, --map-grid, --map-leader, --map-label, --map-label-halo, --theme-dark;
-  transition-duration: 0ms;
-  transition-timing-function: var(--theme-ease);
-}
-
-/* Armed only for the duration of an actual toggle, so nothing animates on first
- * paint, on hydration, or when another tab syncs the preference in. */
-html.theme-switching {
-  transition-duration: var(--theme-duration);
+#theme-cross-fade {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  pointer-events: none;
+  opacity: 0;
+  will-change: opacity;
+  /* Its own paint layer, so fading it never invalidates anything beneath. */
+  contain: strict;
+  /* The `html.theme-switching *` rules below freeze animations and strip
+   * transitions for the duration of the swap, and this element is inside that
+   * selector's reach. Its own fade must be exempt — it is the thing doing the
+   * covering. (Element.animate() is not a CSS animation and should be immune to
+   * animation-play-state anyway; stating it costs nothing and removes the
+   * question.) */
+  animation-play-state: running !important;
 }
 
 /*
  * Nothing below <html> gets its own transition during the swap. A component
- * with `transition-colors` would otherwise be easing *towards a value that is
- * itself still easing*, which lands it late — this pins every element to the
- * current token value, exactly in step.
+ * with `transition-colors` would otherwise still be easing when the cover layer
+ * comes back down, so the reveal would show it finishing — this pins every
+ * element to the current token value.
  *
  * `.theme-vt` is the same suppression for the view-transition path, where the
  * reason differs: there the tokens flip instantly, so a component with its own
@@ -474,8 +480,8 @@ html.theme-vt *::after {
  * scroll content beneath. During the view-transition snapshot capture the
  * blurred output for the OLD and NEW palettes differs by a fraction, and the
  * cross-fade replays that difference as a visible flicker on those exact
- * strips. Disabling the filter for the duration of the swap (both view-
- * transition and the fallback token interpolation) makes the blurred layer a
+ * strips. Disabling the filter for the duration of the swap (both the
+ * view-transition path and the cover-layer one) makes the blurred layer a
  * flat translucent panel in both snapshots, which cross-fades cleanly.
  * Animations (Recharts, spinners) are frozen for the same reason: a running
  * animation puts the NEW snapshot at a different phase than the OLD one.
@@ -486,7 +492,6 @@ html.theme-vt * {
   -webkit-backdrop-filter: none !important;
   animation-play-state: paused !important;
 }
-
 
 /*
  * The view-transition cross-fade — the primary path (see src/lib/theme.tsx).
@@ -515,11 +520,11 @@ html.theme-vt * {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  html.theme-switching {
-    transition-duration: 0ms;
+  /* The JS path already skips both animations under reduced motion; these cover
+   * a swap begun before the preference changed. */
+  #theme-cross-fade {
+    display: none;
   }
-  /* The JS path already skips startViewTransition under reduced motion; this
-   * covers a transition begun before the preference changed. */
   ::view-transition-old(root),
   ::view-transition-new(root) {
     animation: none;
