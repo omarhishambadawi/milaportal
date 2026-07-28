@@ -112,7 +112,7 @@ function AuthPage() {
           <BrandLogo size="auth" className="mx-auto -mb-1" />
           <CardTitle className="text-2xl leading-tight">MilaServ Portal</CardTitle>
           <CardDescription className="pt-1">
-            Sign in to access orders, complaints & call center analytics
+            Unify operations, manage orders, support teams, and monitor performance from one place.
           </CardDescription>
         </CardHeader>
         <CardContent>
