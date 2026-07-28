@@ -1,19 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import {
-  Bike,
-  Clock,
-  Copy,
-  ExternalLink,
-  Mail,
-  MapPin,
-  Navigation,
-  Phone,
-  UserRound,
-} from "lucide-react";
+import { Bike, Clock, Copy, ExternalLink, Info, MapPin, Navigation, Phone } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { queryKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 import { copyText } from "../clipboard";
+import { REFERENCE_LABEL, dutyHoursLabel } from "../normalize";
 import { decorate } from "../search";
 import type { Branch, BranchView } from "../types";
 import { contactBlock } from "./branch-card";
@@ -29,56 +20,70 @@ import { contactBlock } from "./branch-card";
  * Deliberately a *reusable* component rather than part of the order form: the
  * complaint form, the future Smart Branch Finder and the AI assistant all need
  * the same panel, and the Branch Directory is the single source of this data.
+ *
+ * The panel is also what tells the agent the code they just picked is *not* a
+ * pharmacy. The picker lists every row in the directory, head office and the
+ * warehouses included, and raising a customer order against a warehouse is a
+ * mistake nothing else on this form would catch.
  */
 
 /** Columns the panel renders. Explicitly listed to avoid pulling the geography blob. */
 const PREVIEW_COLUMNS =
   "branch_no,city,phone,area_manager,area_manager_phone,email,address,maps_url,latitude,longitude,scooter,scooter_note,working_hours,friday_hours,duty_hours,active,created_at,updated_at";
 
+/**
+ * One fact, with its own copy control.
+ *
+ * A two-column grid rather than the stacked label-over-value rows this replaces:
+ * stacking cost two lines per fact and put eight facts over sixteen lines in the
+ * middle of a form somebody is filling in. Same information, half the height.
+ */
 function Row({
   icon: Icon,
   label,
   value,
-  onCopy,
   href,
-  copyLabel,
+  copyValue,
+  mono,
 }: {
   icon: typeof MapPin;
   label: string;
   value: string | null;
-  onCopy?: () => void;
   href?: string | null;
-  copyLabel?: string;
+  copyValue?: string | null;
+  mono?: boolean;
 }) {
   if (!value) return null;
   return (
-    <div className="flex items-start gap-2 py-1">
-      <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
-      <div className="min-w-0 flex-1">
-        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
+    <div className="flex items-start gap-2 py-1.5">
+      <Icon className="mt-px h-3.5 w-3.5 shrink-0 text-muted-foreground/70" aria-hidden />
+      <span className="w-16 shrink-0 pt-px text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </span>
+      <div className={cn("min-w-0 flex-1 text-xs leading-[16px]", mono && "font-mono")}>
         {href ? (
           <a
             href={href}
-            target="_blank"
+            target={href.startsWith("tel:") ? undefined : "_blank"}
             rel="noopener noreferrer"
-            className="block truncate text-xs text-primary hover:underline"
-            dir="auto"
+            className="break-words text-primary hover:underline"
+            dir={mono ? "ltr" : "auto"}
           >
             {value}
           </a>
         ) : (
-          <p className="text-xs text-foreground/90" dir="auto">
+          <span className="block break-words text-foreground/90" dir={mono ? "ltr" : "auto"}>
             {value}
-          </p>
+          </span>
         )}
       </div>
-      {onCopy && (
+      {copyValue && (
         <button
           type="button"
-          onClick={onCopy}
-          aria-label={`Copy ${copyLabel ?? label}`}
-          title={`Copy ${copyLabel ?? label}`}
-          className="shrink-0 rounded p-1 text-muted-foreground/70 transition-colors hover:bg-accent hover:text-accent-foreground"
+          onClick={() => copyText(copyValue, label)}
+          aria-label={`Copy ${label.toLowerCase()}`}
+          title={`Copy ${label.toLowerCase()}`}
+          className="mt-px shrink-0 rounded p-0.5 text-muted-foreground/60 transition-colors hover:bg-accent hover:text-accent-foreground"
         >
           <Copy className="h-3 w-3" />
         </button>
@@ -112,8 +117,9 @@ export function BranchPreviewPanel({
       return decorate([row as unknown as Branch])[0] ?? null;
     },
     enabled: Boolean(code),
-    // Branch details change only on import. Holding them for the length of a
-    // call means switching between branches on the form is instant.
+    // Branch details change only on import or a card edit, and both invalidate
+    // the `branches` root. Holding them for the length of a call means switching
+    // between branches on the form is instant.
     staleTime: 5 * 60 * 1000,
   });
 
@@ -148,27 +154,51 @@ export function BranchPreviewPanel({
     );
   }
 
+  const referenceLabel = data.reference ? REFERENCE_LABEL[data.reference] : null;
+  const dutyLabel = data.duty_hours != null ? dutyHoursLabel(data.duty_hours) : null;
+
   return (
-    <div className={cn("rounded-xl border border-border/60 bg-card p-3 shadow-sm", className)}>
-      <div className="flex items-start justify-between gap-2 border-b border-border/50 pb-2">
+    <div
+      className={cn(
+        "overflow-hidden rounded-xl border bg-card shadow-sm dark:shadow-none dark:ring-1 dark:ring-inset dark:ring-white/[0.04]",
+        referenceLabel ? "border-[var(--attention)]/40" : "border-border/60",
+        className,
+      )}
+    >
+      <header className="flex items-start justify-between gap-2 border-b border-border/50 bg-muted/30 px-3 py-2 dark:bg-muted/20">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
             <span className="font-mono text-sm font-bold">{data.branch_no}</span>
-            {data.scooter ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-[var(--positive)]/12 px-2 py-0.5 text-[10px] font-semibold text-[var(--positive)]">
-                <Bike className="h-3 w-3" />
-                Scooter
-              </span>
-            ) : (
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                No scooter
+            <span className="truncate text-xs text-muted-foreground" dir="auto">
+              {data.city}
+              {data.cityEnglish && ` · ${data.cityEnglish}`}
+            </span>
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-1">
+            {dutyLabel && !referenceLabel && (
+              <span
+                className={cn(
+                  "rounded-full px-1.5 py-px text-[10px] font-semibold",
+                  data.duty_hours != null && data.duty_hours >= 24
+                    ? "bg-[var(--badge-violet)]/12 text-[var(--badge-violet)]"
+                    : "bg-muted text-muted-foreground",
+                )}
+              >
+                {dutyLabel}
               </span>
             )}
+            {!referenceLabel &&
+              (data.scooter ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-[var(--positive)]/12 px-1.5 py-px text-[10px] font-semibold text-[var(--positive)]">
+                  <Bike className="h-3 w-3" />
+                  {data.scooter_note ?? "Scooter"}
+                </span>
+              ) : (
+                <span className="rounded-full bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+                  No scooter
+                </span>
+              ))}
           </div>
-          <p className="truncate text-xs text-muted-foreground" dir="auto">
-            {data.city}
-            {data.cityEnglish && ` · ${data.cityEnglish}`}
-          </p>
         </div>
         <button
           type="button"
@@ -177,77 +207,83 @@ export function BranchPreviewPanel({
         >
           Copy all
         </button>
-      </div>
+      </header>
 
-      <div className="divide-y divide-border/40 py-1">
+      {referenceLabel && (
+        <p className="flex items-center gap-1.5 border-b border-[var(--attention)]/25 bg-[var(--attention)]/10 px-3 py-1.5 text-[11px] font-medium text-[var(--attention)]">
+          <Info className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          {referenceLabel} — a reference location, not a pharmacy. Customers are not sent here.
+        </p>
+      )}
+
+      <div className="divide-y divide-border/40 px-3 py-1">
+        <Row
+          icon={Phone}
+          label="Phone"
+          value={data.phoneDisplay}
+          href={data.phoneE164 ? `tel:${data.phoneE164}` : null}
+          copyValue={data.phoneDisplay}
+          mono
+        />
         <Row
           icon={MapPin}
           label="Address"
-          value={data.address}
-          onCopy={() => copyText(data.address ?? "", "Address")}
+          value={data.addressLine}
+          copyValue={data.address ?? data.addressLine}
         />
+        <Row icon={Clock} label="Hours" value={data.working_hours} />
+        <Row icon={Clock} label="Friday" value={data.friday_hours} />
         <Row
           icon={Phone}
-          label="Branch phone"
-          value={data.phoneDisplay}
-          href={data.phoneE164 ? `tel:${data.phoneE164}` : null}
-          onCopy={() => copyText(data.phoneE164 ?? data.phoneDisplay ?? "", "Branch phone")}
-        />
-        <Row icon={Clock} label="Working hours" value={data.working_hours} />
-        <Row icon={Clock} label="Friday hours" value={data.friday_hours} />
-        <Row icon={UserRound} label="Area manager" value={data.area_manager} />
-        <Row
-          icon={Phone}
-          label="Manager phone"
-          value={data.managerPhoneDisplay}
-          href={data.managerPhoneE164 ? `tel:${data.managerPhoneE164}` : null}
-          onCopy={() =>
-            copyText(data.managerPhoneE164 ?? data.managerPhoneDisplay ?? "", "Manager phone")
+          label="Manager"
+          value={
+            data.area_manager && data.managerPhoneDisplay
+              ? `${data.area_manager} · ${data.managerPhoneDisplay}`
+              : (data.area_manager ?? data.managerPhoneDisplay)
           }
+          copyValue={data.managerPhoneDisplay}
         />
-        <Row
-          icon={Mail}
-          label="Email"
-          value={data.email}
-          href={data.email ? `mailto:${data.email}` : null}
-          onCopy={() => copyText(data.email ?? "", "Email")}
-        />
+        {/* Email is gone. It is a shared mailbox nobody reads inside the length
+            of a phone call, and it was the one row on this panel that never
+            answered a question a customer had asked. */}
       </div>
 
-      <div className="flex flex-wrap gap-1.5 border-t border-border/50 pt-2">
-        {data.mapsLink && (
-          <>
+      {(data.mapsLink || data.navLink) && (
+        <div className="flex flex-wrap gap-1.5 border-t border-border/50 px-3 py-2">
+          {data.mapsLink && (
+            <>
+              <a
+                href={data.mapsLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded-md border border-border/70 px-2 py-1 text-[11px] font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
+              >
+                <ExternalLink className="h-3 w-3" />
+                Open map
+              </a>
+              <button
+                type="button"
+                onClick={() => copyText(data.mapsLink ?? "", "Maps link")}
+                className="inline-flex items-center gap-1 rounded-md border border-border/70 px-2 py-1 text-[11px] font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
+              >
+                <Copy className="h-3 w-3" />
+                Copy map link
+              </button>
+            </>
+          )}
+          {data.navLink && (
             <a
-              href={data.mapsLink}
+              href={data.navLink}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 rounded-md border border-border/70 px-2 py-1 text-[11px] font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
             >
-              <ExternalLink className="h-3 w-3" />
-              Open map
+              <Navigation className="h-3 w-3" />
+              Navigate
             </a>
-            <button
-              type="button"
-              onClick={() => copyText(data.mapsLink ?? "", "Maps link")}
-              className="inline-flex items-center gap-1 rounded-md border border-border/70 px-2 py-1 text-[11px] font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-            >
-              <Copy className="h-3 w-3" />
-              Copy map link
-            </button>
-          </>
-        )}
-        {data.navLink && (
-          <a
-            href={data.navLink}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 rounded-md border border-border/70 px-2 py-1 text-[11px] font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
-            <Navigation className="h-3 w-3" />
-            Navigate
-          </a>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
