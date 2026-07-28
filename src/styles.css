@@ -365,6 +365,13 @@
   --map-leader: oklch(0.66 0.015 220);
   --map-label: oklch(0.29 0.03 255);
   --map-label-halo: oklch(1 0 0);
+  /* Heat ramp for the dashboard map's bubbles. Was three hard-coded HSL
+   * literals inside the component, which meant the same three colours were
+   * painted onto a near-white land mass and a near-black one — the "Low"
+   * teal in particular sat at about 2:1 against the dark map. */
+  --heat-low: oklch(0.62 0.11 195);
+  --heat-mid: oklch(0.72 0.16 65);
+  --heat-high: oklch(0.6 0.22 25);
   --theme-dark: 0;
   color-scheme: light;
 }
@@ -420,6 +427,11 @@
   --map-leader: oklch(0.55 0.018 220);
   --map-label: oklch(0.95 0.01 210);
   --map-label-halo: oklch(0.21 0.022 255);
+  /* Lifted and slightly desaturated against the dark land mass; the ordering
+   * (cool → warm → hot) is what carries the meaning, not the absolute hue. */
+  --heat-low: oklch(0.75 0.12 195);
+  --heat-mid: oklch(0.82 0.16 70);
+  --heat-high: oklch(0.7 0.19 25);
   --theme-dark: 1;
 }
 

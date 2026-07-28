@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fmtSAR } from "@/lib/branches";
+import { cn } from "@/lib/utils";
 import { KSA_OUTLINE_PATH, MAP_HEIGHT, MAP_WIDTH, projectPoint } from "@/lib/ksa-geo";
 import { MapPin, TrendingUp } from "lucide-react";
 
@@ -141,6 +142,33 @@ type Placed = CitySales & {
   anchor: "start" | "end" | "middle";
 };
 
+/**
+ * The heat ramp, as theme tokens rather than literals.
+ *
+ * These were three hard-coded HSL values, so the same teal/amber/red was
+ * painted onto a near-white land mass and a near-black one — the "Low" teal in
+ * particular sat around 2:1 against the dark map, which is not a colour anyone
+ * can read a rank off. The tokens carry a light and a dark value each; the
+ * ordering cool → warm → hot is what encodes the tier, not the absolute hue.
+ */
+const HEAT = {
+  low: "var(--heat-low)",
+  mid: "var(--heat-mid)",
+  high: "var(--heat-high)",
+} as const;
+
+/**
+ * A colour derived from one of the heat tokens.
+ *
+ * `${color}66` — appending a hex alpha pair — is what the literals allowed and
+ * what a `var()` does not: it produces `var(--heat-low)66`, which is not a
+ * colour and silently drops the declaration. Every translucent use goes through
+ * here instead.
+ */
+function heatAlpha(color: string, percent: number): string {
+  return `color-mix(in oklab, ${color} ${percent}%, transparent)`;
+}
+
 function usePrefersReducedMotion() {
   const [reduced, setReduced] = useState(false);
   useEffect(() => {
@@ -174,8 +202,7 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
   const tierOf = (ratio: number): "low" | "mid" | "high" =>
     ratio < 0.34 ? "low" : ratio < 0.67 ? "mid" : "high";
 
-  const colorFor = (tier: "low" | "mid" | "high") =>
-    tier === "low" ? "hsl(184 66% 44%)" : tier === "mid" ? "hsl(38 92% 50%)" : "hsl(0 78% 58%)";
+  const colorFor = (tier: "low" | "mid" | "high") => HEAT[tier];
 
   const totalCompleted = useMemo(() => cities.reduce((s, c) => s + (c.sales || 0), 0), [cities]);
 
@@ -355,8 +382,10 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
           <svg
             ref={svgRef}
             viewBox={`0 0 ${W} ${H}`}
-            className="block w-full h-auto"
-            style={{ maxHeight: "min(64vh, 560px)" }}
+            // Shorter on a phone than it was, because the map is no longer the
+            // only way to read this: the ranked list below it wants to be above
+            // the fold too, and 64vh of bubbles left it entirely off screen.
+            className="block h-auto max-h-[min(44vh,420px)] w-full sm:max-h-[min(64vh,560px)]"
             preserveAspectRatio="xMidYMid meet"
             role="img"
             aria-label="Saudi Arabia sales heat map"
@@ -727,6 +756,16 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
             {hover ? ariaLabelFor(hover) : ""}
           </div>
 
+          {/*
+            The floating readout, on pointer-sized screens only.
+
+            On a phone it was the worst of both worlds: a 280px card anchored to
+            a bubble inside a map that is itself about 340px wide, so it covered
+            most of the country and was routinely clipped by the map's own
+            `overflow-hidden` when the city sat near an edge. Below `sm` the same
+            content renders in the panel underneath the map instead, where it has
+            the full width and cannot be cut off.
+          */}
           {hover &&
             (() => {
               const labelAbove = hover.labelY < hover.cy;
@@ -739,89 +778,94 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
               const yShift = flipBelow
                 ? `calc(${hover.r + 18}px)`
                 : `calc(-100% - ${hover.r + 16}px)`;
-              const completionRate =
-                hover.count > 0 ? Math.round(((hover.completed ?? 0) / hover.count) * 100) : null;
               return (
                 <div
                   id={tooltipId}
                   role="tooltip"
-                  className="pointer-events-none absolute z-10 w-[min(280px,86vw)] sm:w-[280px] md:w-[300px] rounded-2xl border border-border/50 bg-popover/95 backdrop-blur-2xl px-3.5 py-3 sm:px-4 sm:py-3.5 text-popover-foreground shadow-2xl ring-1 ring-black/5 dark:ring-white/10 animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-1 duration-200 ease-out"
+                  className="pointer-events-none absolute z-10 hidden w-[280px] rounded-2xl border border-border/50 bg-popover/95 px-4 py-3.5 text-popover-foreground shadow-2xl ring-1 ring-black/5 duration-200 ease-out animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-1 backdrop-blur-2xl sm:block md:w-[300px] dark:ring-white/10"
                   style={{
                     left: `${leftPct}%`,
                     top: `${topPct}%`,
                     transform: `translate(${xShift}, ${yShift})`,
-                    maxWidth: "min(320px, 92vw)",
-                    boxShadow: `0 24px 48px -24px ${hover.color}66, 0 0 0 1px color-mix(in oklab, ${hover.color} 22%, transparent), 0 2px 8px -2px rgba(0,0,0,0.12)`,
+                    boxShadow: `0 24px 48px -24px ${heatAlpha(hover.color, 40)}, 0 0 0 1px ${heatAlpha(
+                      hover.color,
+                      22,
+                    )}, 0 2px 8px -2px rgba(0,0,0,0.12)`,
                   }}
                 >
-                  {/* Header — city + rank chip */}
-                  <div className="mb-2.5 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span
-                        className="h-2.5 w-2.5 rounded-full shrink-0 ring-2 ring-background"
-                        style={{
-                          background: hover.color,
-                          boxShadow: `0 0 12px ${hover.color}`,
-                        }}
-                      />
-                      <span className="font-semibold text-[14px] sm:text-[15px] leading-tight truncate text-foreground">
-                        {hover.name}
-                      </span>
-                    </div>
-                    <span
-                      className="text-[10px] font-bold uppercase tracking-wider shrink-0 rounded-full px-2 py-0.5"
-                      style={{
-                        background: `color-mix(in oklab, ${hover.color} 14%, transparent)`,
-                        color: hover.color,
-                      }}
-                    >
-                      #{hover.rank}
-                    </span>
-                  </div>
-
-                  {/* Hero metric */}
-                  <div className="mb-3 rounded-xl bg-muted/40 px-3 py-2">
-                    <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                      Completed sales
-                    </div>
-                    <div className="mt-0.5 text-[15px] sm:text-base font-bold tabular-nums text-foreground">
-                      {fmtSAR(hover.sales)}
-                    </div>
-                  </div>
-
-                  {/* Secondary rows */}
-                  <div className="space-y-1.5 text-[11px] sm:text-xs">
-                    <Row label="Total sales" value={fmtSAR(hover.total ?? hover.sales)} />
-                    <Row label="Total orders" value={String(hover.count)} />
-                    <Row label="Share of total" value={`${(hover.share * 100).toFixed(1)}%`} />
-                    {completionRate != null && (
-                      <Row label="Completion rate" value={`${completionRate}%`} />
-                    )}
-                  </div>
-
-                  {/* Share bar */}
-                  <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-muted/60">
-                    <div
-                      className="h-full rounded-full transition-all duration-500 ease-out"
-                      style={{
-                        width: `${Math.min(100, hover.share * 100)}%`,
-                        background: `linear-gradient(90deg, ${hover.color}, color-mix(in oklab, ${hover.color} 55%, white))`,
-                      }}
-                    />
-                  </div>
+                  <CityDetail city={hover} />
                 </div>
               );
             })()}
         </div>
 
+        {/*
+          Mobile: the readout as a panel, and a ranked list to drive it.
+
+          Hitting a 12px bubble with a thumb is not a way to read a chart, and it
+          was the only way in. The list is the same data in the order anyone
+          actually wants it, each row is a 40px target, and tapping one pins the
+          city so the map and the panel both follow.
+        */}
+        <div className="mt-3 sm:hidden">
+          {hover ? (
+            <div
+              className="rounded-2xl border border-border/50 bg-popover/95 px-3.5 py-3 text-popover-foreground"
+              style={{ boxShadow: `inset 0 0 0 1px ${heatAlpha(hover.color, 22)}` }}
+            >
+              <CityDetail city={hover} />
+            </div>
+          ) : (
+            <p className="rounded-2xl border border-dashed border-border/60 px-3.5 py-3 text-center text-xs text-muted-foreground">
+              Tap a city on the map, or pick one below.
+            </p>
+          )}
+
+          {sortedByRank.length > 0 && (
+            <ul className="mt-2 divide-y divide-border/40 overflow-hidden rounded-2xl border border-border/50">
+              {sortedByRank.map((p) => (
+                <li key={`row-${p.name}`}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPinned((cur) => (cur === p.name ? null : p.name));
+                      setHoverName((cur) => (cur === p.name ? null : p.name));
+                    }}
+                    aria-pressed={pinned === p.name}
+                    className={cn(
+                      "flex min-h-10 w-full items-center gap-2.5 px-3 py-2 text-left transition-colors",
+                      activeName === p.name ? "bg-accent/60" : "active:bg-accent/40",
+                    )}
+                  >
+                    <span className="w-5 shrink-0 text-[11px] font-semibold tabular-nums text-muted-foreground">
+                      {p.rank}
+                    </span>
+                    <span
+                      aria-hidden
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ background: p.color }}
+                    />
+                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium" dir="auto">
+                      {displayLabel(p.name)}
+                    </span>
+                    <span className="shrink-0 text-[12px] font-semibold tabular-nums">
+                      {fmtSAR(p.sales)}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
         {/* Legend + hint */}
         <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
           <div className="flex items-center gap-3 rounded-full border border-border/50 bg-background/60 px-3 py-1.5">
-            <LegendDot color="hsl(184 66% 44%)" label="Low" />
+            <LegendDot color={HEAT.low} label="Low" />
             <span className="h-3 w-px bg-border/70" />
-            <LegendDot color="hsl(38 92% 50%)" label="Medium" />
+            <LegendDot color={HEAT.mid} label="Medium" />
             <span className="h-3 w-px bg-border/70" />
-            <LegendDot color="hsl(0 78% 58%)" label="High" />
+            <LegendDot color={HEAT.high} label="High" />
           </div>
           <span className="ml-auto text-[11px] text-muted-foreground/80">
             Bubble size ∝ completed sales
@@ -839,6 +883,69 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
 
 function slug(s: string) {
   return s.replace(/[^a-zA-Z0-9]+/g, "_");
+}
+
+/**
+ * The readout for one city.
+ *
+ * Extracted so the floating tooltip and the mobile panel are the same thing
+ * rather than two copies that drift — the tooltip had already grown four
+ * `sm:` type-size overrides trying to be both.
+ */
+function CityDetail({ city }: { city: Placed }) {
+  const completionRate =
+    city.count > 0 ? Math.round(((city.completed ?? 0) / city.count) * 100) : null;
+
+  return (
+    <>
+      <div className="mb-2.5 flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            className="h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-background"
+            style={{
+              background: city.color,
+              boxShadow: `0 0 12px ${heatAlpha(city.color, 70)}`,
+            }}
+          />
+          <span className="truncate text-[15px] font-semibold leading-tight text-foreground">
+            {displayLabel(city.name)}
+          </span>
+        </div>
+        <span
+          className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+          style={{ background: heatAlpha(city.color, 14), color: city.color }}
+        >
+          #{city.rank}
+        </span>
+      </div>
+
+      <div className="mb-3 rounded-xl bg-muted/40 px-3 py-2">
+        <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+          Completed sales
+        </div>
+        <div className="mt-0.5 text-base font-bold tabular-nums text-foreground">
+          {fmtSAR(city.sales)}
+        </div>
+      </div>
+
+      <div className="space-y-1.5 text-xs">
+        <Row label="Total sales" value={fmtSAR(city.total ?? city.sales)} />
+        <Row label="Total orders" value={String(city.count)} />
+        <Row label="Share of total" value={`${(city.share * 100).toFixed(1)}%`} />
+        {completionRate != null && <Row label="Completion rate" value={`${completionRate}%`} />}
+      </div>
+
+      <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-muted/60">
+        <div
+          className="h-full rounded-full transition-all duration-500 ease-out"
+          style={{
+            width: `${Math.min(100, city.share * 100)}%`,
+            background: `linear-gradient(90deg, ${city.color}, color-mix(in oklab, ${city.color} 55%, var(--card)))`,
+          }}
+        />
+      </div>
+    </>
+  );
 }
 
 function Row({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
@@ -859,7 +966,7 @@ function LegendDot({ color, label }: { color: string; label: string }) {
     <span className="inline-flex items-center gap-1.5">
       <span
         className="h-2.5 w-2.5 rounded-full ring-2 ring-background"
-        style={{ background: color, boxShadow: `0 0 8px ${color}66` }}
+        style={{ background: color, boxShadow: `0 0 8px ${heatAlpha(color, 40)}` }}
       />
       <span className="font-medium">{label}</span>
     </span>
