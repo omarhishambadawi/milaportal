@@ -20,6 +20,7 @@ import {
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
+import { BranchEditDialog } from "@/features/branches/components/branch-edit-dialog";
 import { BranchList } from "@/features/branches/components/branch-list";
 import { BranchMapSurface } from "@/features/branches/components/branch-map-surface";
 import { BranchSearchBar } from "@/features/branches/components/branch-search-bar";
@@ -30,6 +31,7 @@ import { useBranchFilters } from "@/features/branches/hooks/use-branch-filters";
 import { useDirectoryFreshness } from "@/features/branches/hooks/use-directory-freshness";
 import { LIST_PANEL_ID, MAP_PANEL_ID, useMapPanel } from "@/features/branches/hooks/use-map-panel";
 import { hasActiveFilters } from "@/features/branches/search";
+import type { BranchView } from "@/features/branches/types";
 
 export const Route = createFileRoute("/_app/branches/")({
   head: () => ({ meta: [{ title: "Branch Directory — MilaServ Portal" }] }),
@@ -69,6 +71,8 @@ function BranchDirectory() {
 
   const [selected, setSelected] = useState<string | null>(null);
   const [mobileMapOpen, setMobileMapOpen] = useState(false);
+  /** The branch whose edit dialog is open, or null. */
+  const [editing, setEditing] = useState<BranchView | null>(null);
 
   const byCode = useMemo(
     () => new Map(branches.map((branch) => [branch.branch_no, branch])),
@@ -244,8 +248,10 @@ function BranchDirectory() {
               favourites={favourites}
               tokens={tokens}
               query={filters.query}
+              canEdit={canManage}
               onSelect={handleSelect}
               onToggleFavourite={toggleFavourite}
+              onEdit={setEditing}
               onResetFilters={reset}
               onClearSearch={() => setQuery("")}
               filtered={filtered}
@@ -299,6 +305,11 @@ function BranchDirectory() {
           />
         </SheetContent>
       </Sheet>
+
+      {/* Owner, Admin and Supervisor — the same `admin_access` the server
+          function checks, so the button is never offered to someone the write
+          would refuse. */}
+      <BranchEditDialog branch={editing} onClose={() => setEditing(null)} />
     </div>
   );
 }

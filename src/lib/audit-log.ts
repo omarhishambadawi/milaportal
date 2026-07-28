@@ -49,6 +49,7 @@ export const AUDIT_ACTION_LABEL = {
   "user.temporary_password_expired": "Temporary password expired and was rotated",
   "branches.imported": "Imported the Branch Directory",
   "branches.rolled_back": "Rolled the Branch Directory back",
+  "branches.updated": "Edited a branch",
 } as const satisfies Record<AuditAction, string>;
 
 /**

@@ -302,6 +302,95 @@ export const branchImportApply = createServerFn({ method: "POST" })
     };
   });
 
+/**
+ * Correcting one branch, from its card, without a workbook.
+ *
+ * The gap this closes: a phone number changes, or an address is written wrong,
+ * and the only way to fix it was to obtain the master sheet, edit the row, and
+ * re-import — which touches every branch in the file to change one field, and
+ * which nobody does for a typo. So typos stayed.
+ *
+ * Deliberately narrower than an import in three ways:
+ *
+ *   - `branch_no` identifies the row and is never itself writable. Renaming a
+ *     branch code is a re-key of a column that `orders.branch_no` points at, and
+ *     it is not a thing an edit dialog should be able to do by accident.
+ *   - `active` is not writable either. Deactivating a branch is what a Replace
+ *     import means and what a rollback undoes; doing it from a card would leave
+ *     no history entry to restore from.
+ *   - There is no snapshot, and therefore no rollback of a single edit. The
+ *     import history describes whole-directory states; interleaving per-field
+ *     edits into it would make "restore the directory as it stood before this
+ *     import" mean something it does not. The audit log records the before and
+ *     after of every changed field instead, which is the recoverable form for a
+ *     change this size.
+ *
+ * Same `admin_access` gate as an import, which is the same gate the branches RLS
+ * policy applies — owner, admin and supervisor.
+ */
+const BranchEditSchema = z.object({
+  branch_no: z.string().min(1).max(64),
+  city: z.string().min(1).max(120),
+  phone: z.string().max(32).nullable(),
+  area_manager: z.string().max(160).nullable(),
+  area_manager_phone: z.string().max(32).nullable(),
+  email: z.string().max(200).nullable(),
+  address: z.string().max(500).nullable(),
+  maps_url: z.string().max(1000).nullable(),
+  latitude: z.number().min(-90).max(90).nullable(),
+  longitude: z.number().min(-180).max(180).nullable(),
+  scooter: z.boolean(),
+  scooter_note: z.string().max(200).nullable(),
+  working_hours: z.string().max(200).nullable(),
+  friday_hours: z.string().max(200).nullable(),
+  duty_hours: z.number().min(0).max(24).nullable(),
+});
+
+type BranchEdit = z.infer<typeof BranchEditSchema>;
+
+export const branchUpdate = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: BranchEdit) => BranchEditSchema.parse(d))
+  .handler(async ({ data, context }) => {
+    await assertCanManageBranches(context.supabase, context.userId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    const { branch_no: branchNo, ...fields } = data;
+
+    // Read first, so the audit entry can name what actually changed rather than
+    // listing every field the form submitted. An edit dialog posts all of them
+    // whether or not they were touched.
+    const { data: before, error: readError } = await supabaseAdmin
+      .from("branches")
+      .select(SNAPSHOT_COLUMNS)
+      .eq("branch_no", branchNo)
+      .maybeSingle();
+    if (readError) throw new Error(readError.message);
+    if (!before) throw new Error(`No branch with the code ${branchNo}`);
+
+    const changed: Record<string, { from: unknown; to: unknown }> = {};
+    for (const [key, next] of Object.entries(fields)) {
+      const previous = (before as Record<string, unknown>)[key] ?? null;
+      if (previous !== (next ?? null)) changed[key] = { from: previous, to: next ?? null };
+    }
+    if (Object.keys(changed).length === 0) return { branchNo, changed: 0 };
+
+    const { error } = await supabaseAdmin
+      .from("branches")
+      .update({ ...fields, updated_at: new Date().toISOString() })
+      .eq("branch_no", branchNo);
+    if (error) throw new Error(error.message);
+
+    await logAdminAction({
+      actorId: context.userId,
+      targetUserId: null,
+      action: AUDIT_ACTIONS.branchUpdated,
+      details: { branchNo, fields: changed },
+    });
+
+    return { branchNo, changed: Object.keys(changed).length };
+  });
+
 export const branchImportHistory = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d?: { limit?: number }) =>

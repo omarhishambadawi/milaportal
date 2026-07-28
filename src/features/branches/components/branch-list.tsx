@@ -17,8 +17,11 @@ interface Props {
   tokens: readonly string[];
   /** What is typed, verbatim — the empty state quotes it back. */
   query: string;
+  /** Whether this user may correct a branch in place. */
+  canEdit?: boolean;
   onSelect: (branchNo: string | null) => void;
   onToggleFavourite: (branchNo: string) => void;
+  onEdit?: (branch: BranchView) => void;
   onResetFilters: () => void;
   onClearSearch: () => void;
   filtered: boolean;
@@ -32,8 +35,10 @@ export function BranchList({
   favourites,
   tokens,
   query,
+  canEdit,
   onSelect,
   onToggleFavourite,
+  onEdit,
   onResetFilters,
   onClearSearch,
   filtered,
@@ -165,8 +170,10 @@ export function BranchList({
                   selected={branch.branch_no === selected}
                   favourite={favourites.has(branch.branch_no)}
                   tokens={tokens}
+                  canEdit={canEdit}
                   onSelect={onSelect}
                   onToggleFavourite={onToggleFavourite}
+                  onEdit={onEdit}
                 />
               ))}
             </div>

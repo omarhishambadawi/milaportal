@@ -38,6 +38,8 @@ export const AUDIT_ACTIONS = {
   branchesImported: "branches.imported",
   /** A previous state of the Branch Directory was restored. */
   branchesRolledBack: "branches.rolled_back",
+  /** One branch was corrected in place, from its card, without an import. */
+  branchUpdated: "branches.updated",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
