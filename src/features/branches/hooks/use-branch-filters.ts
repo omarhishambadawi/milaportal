@@ -90,6 +90,16 @@ export function useBranchFilters(branches: BranchView[]) {
 
   const reset = useCallback(() => setFilters(EMPTY_FILTERS), []);
 
+  /**
+   * Replace the whole filter set at once.
+   *
+   * Exists for Locator mode, which parks whatever the agent had narrowed the
+   * directory to, clears it so the nearest branches are all actually present in
+   * the list to be scrolled to and highlighted, and puts it back on close. Every
+   * other setter here is a toggle, and a toggle cannot restore a snapshot.
+   */
+  const replaceFilters = useCallback((next: BranchFilters) => setFilters(next), []);
+
   /** Clear every chip but keep whatever is typed. */
   const clearFilters = useCallback(
     () => setFilters((current) => ({ ...EMPTY_FILTERS, query: current.query })),
@@ -154,6 +164,7 @@ export function useBranchFilters(branches: BranchView[]) {
     toggleFavouritesOnly,
     focusBranch,
     clearFilters,
+    replaceFilters,
     reset,
   };
 }

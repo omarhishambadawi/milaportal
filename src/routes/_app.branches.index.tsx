@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   Download,
@@ -22,15 +22,17 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { cn } from "@/lib/utils";
 import { BranchEditDialog } from "@/features/branches/components/branch-edit-dialog";
 import { BranchList } from "@/features/branches/components/branch-list";
+import { BranchLocatorPanel } from "@/features/branches/components/branch-locator-panel";
 import { BranchMapSurface } from "@/features/branches/components/branch-map-surface";
 import { BranchSearchBar } from "@/features/branches/components/branch-search-bar";
 import { BranchDirectoryMeta } from "@/features/branches/components/branch-stats";
 import { exportBranches } from "@/features/branches/export";
 import { useBranchDirectory } from "@/features/branches/hooks/use-branch-directory";
 import { useBranchFilters } from "@/features/branches/hooks/use-branch-filters";
+import { useBranchLocator } from "@/features/branches/hooks/use-branch-locator";
 import { useDirectoryFreshness } from "@/features/branches/hooks/use-directory-freshness";
 import { LIST_PANEL_ID, MAP_PANEL_ID, useMapPanel } from "@/features/branches/hooks/use-map-panel";
-import { hasActiveFilters } from "@/features/branches/search";
+import { EMPTY_FILTERS, hasActiveFilters, type BranchFilters } from "@/features/branches/search";
 import type { BranchView } from "@/features/branches/types";
 
 export const Route = createFileRoute("/_app/branches/")({
@@ -63,8 +65,11 @@ function BranchDirectory() {
     toggleFavouritesOnly,
     focusBranch,
     clearFilters,
+    replaceFilters,
     reset,
   } = useBranchFilters(branches);
+
+  const locator = useBranchLocator(branches);
 
   const { lastUpdated } = useDirectoryFreshness(branches);
   const map = useMapPanel();
@@ -104,6 +109,51 @@ function BranchDirectory() {
     },
     [focusBranch, rememberBranch],
   );
+
+  /**
+   * Picking a locator result.
+   *
+   * Sets rather than toggles, unlike `handleSelect`: a result row is a
+   * destination, and clicking the one already showing should keep showing it
+   * rather than clear the highlight the agent just asked for. Everything that
+   * happens next is the directory's existing selection behaviour — `BranchList`
+   * scrolls the row into view, `GoogleMap` pans and zooms to the pin and opens
+   * its info card — which is exactly why the locator does none of it itself.
+   */
+  const handleLocatorSelect = useCallback(
+    (branchNo: string) => {
+      setSelected(branchNo);
+      rememberBranch(branchNo);
+    },
+    [rememberBranch],
+  );
+
+  /**
+   * Whatever the directory was narrowed to before locator mode took over.
+   *
+   * Parked rather than discarded: an agent who had filtered to Jeddah, took a
+   * call, located a customer and closed the locator expects Jeddah back. Held in
+   * a ref because restoring it is an event, not something any render reads.
+   */
+  const parkedFilters = useRef<BranchFilters | null>(null);
+  const { open: openLocatorMode, close: closeLocatorMode } = locator;
+
+  const openLocator = useCallback(() => {
+    parkedFilters.current = filters;
+    // Cleared for the duration: a city chip left on from earlier would exclude
+    // the nearest branch from the list, and a result that highlights a card
+    // which is not rendered is a click that appears to do nothing.
+    replaceFilters(EMPTY_FILTERS);
+    setSelected(null);
+    openLocatorMode();
+  }, [filters, replaceFilters, openLocatorMode]);
+
+  const closeLocator = useCallback(() => {
+    closeLocatorMode();
+    setSelected(null);
+    replaceFilters(parkedFilters.current ?? EMPTY_FILTERS);
+    parkedFilters.current = null;
+  }, [closeLocatorMode, replaceFilters]);
 
   const filtered = hasActiveFilters(filters);
 
@@ -202,28 +252,46 @@ function BranchDirectory() {
         </div>
       </div>
 
+      {/* Locator mode takes over the search strip and leaves everything below
+          it — cards, map, the resizable split — exactly where it was. */}
       <div className="shrink-0">
-        <BranchSearchBar
-          filters={filters}
-          resultCount={results.length}
-          totalCount={branches.length}
-          cities={cities}
-          managers={managers}
-          favourites={favourites}
-          recent={recent}
-          recentBranches={recentBranches}
-          byCode={byCode}
-          onQueryChange={setQuery}
-          onCommitQuery={rememberSearch}
-          onClearRecent={clearRecent}
-          onClearRecentBranches={clearRecentBranches}
-          onToggleCity={toggleCity}
-          onToggleScooter={toggleScooter}
-          onToggleManager={toggleManager}
-          onToggleFavourites={toggleFavouritesOnly}
-          onClearFilters={clearFilters}
-          onFocusBranch={handleFocusBranch}
-        />
+        {locator.active ? (
+          <BranchLocatorPanel
+            query={locator.query}
+            origin={locator.origin}
+            results={locator.results}
+            error={locator.error}
+            searching={locator.searching}
+            selected={selected}
+            onQueryChange={locator.setQuery}
+            onSearch={locator.search}
+            onSelect={handleLocatorSelect}
+            onClose={closeLocator}
+          />
+        ) : (
+          <BranchSearchBar
+            filters={filters}
+            resultCount={results.length}
+            totalCount={branches.length}
+            cities={cities}
+            managers={managers}
+            favourites={favourites}
+            recent={recent}
+            recentBranches={recentBranches}
+            byCode={byCode}
+            onQueryChange={setQuery}
+            onCommitQuery={rememberSearch}
+            onClearRecent={clearRecent}
+            onClearRecentBranches={clearRecentBranches}
+            onToggleCity={toggleCity}
+            onToggleScooter={toggleScooter}
+            onToggleManager={toggleManager}
+            onToggleFavourites={toggleFavouritesOnly}
+            onClearFilters={clearFilters}
+            onFocusBranch={handleFocusBranch}
+            onOpenLocator={openLocator}
+          />
+        )}
       </div>
 
       {error ? (

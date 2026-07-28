@@ -42,6 +42,14 @@ export {
 } from "./distance";
 
 export {
+  rankByDistance,
+  straightLineProvider,
+  type DistanceProvider,
+  type RankOptions,
+  type Ranked,
+} from "./ranking";
+
+export {
   MAX_WAYPOINTS,
   directionsUrl,
   mapSearchUrl,

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { History, Search, Star, X } from "lucide-react";
+import { Crosshair, History, Search, Star, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { BranchFilters } from "../search";
 import type { BranchView } from "../types";
@@ -83,6 +84,8 @@ interface Props {
   onClearFilters: () => void;
   /** Show one branch, clearing whatever was filtered. */
   onFocusBranch: (branchNo: string) => void;
+  /** Hand the strip over to Locator mode. */
+  onOpenLocator: () => void;
 }
 
 export function BranchSearchBar({
@@ -105,6 +108,7 @@ export function BranchSearchBar({
   onToggleFavourites,
   onClearFilters,
   onFocusBranch,
+  onOpenLocator,
 }: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -167,171 +171,187 @@ export function BranchSearchBar({
 
   return (
     <div className="space-y-2">
-      {/* The panel is a sibling of the input inside this wrapper, so focus
-          moving from the box to a chip inside it never leaves the wrapper —
-          which is how the panel stays open for keyboard users instead of
-          closing on a Tab, and closes the moment focus goes anywhere else. */}
-      <div
-        className="relative min-w-0"
-        onFocus={() => setPanelOpen(true)}
-        onBlur={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-            setPanelOpen(false);
-          }
-        }}
-      >
-        <Search
-          className="pointer-events-none absolute left-4 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-muted-foreground"
-          aria-hidden
-        />
-        <input
-          ref={inputRef}
-          value={filters.query}
-          onChange={(event) => onQueryChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              onCommitQuery(filters.query);
+      <div className="flex items-start gap-2">
+        {/* The panel is a sibling of the input inside this wrapper, so focus
+            moving from the box to a chip inside it never leaves the wrapper —
+            which is how the panel stays open for keyboard users instead of
+            closing on a Tab, and closes the moment focus goes anywhere else. */}
+        <div
+          className="relative min-w-0 flex-1"
+          onFocus={() => setPanelOpen(true)}
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
               setPanelOpen(false);
             }
           }}
-          type="search"
-          autoComplete="off"
-          spellCheck={false}
-          placeholder="Search a branch code, city, address, phone or area manager…"
-          aria-label="Search branches"
-          className={cn(
-            "h-12 w-full rounded-xl border bg-card pl-12 pr-32 text-sm font-medium shadow-sm sm:text-base",
-            "placeholder:font-normal placeholder:text-muted-foreground/70",
-            "transition-[border-color,box-shadow] duration-150",
-            "border-border/70 hover:border-border",
-            "focus:border-primary focus:outline-none focus:ring-4 focus:ring-primary/15",
-            // Safari renders a native clear affordance on type=search that
-            // collides with the count badge.
-            "[&::-webkit-search-cancel-button]:appearance-none",
-          )}
-        />
+        >
+          <Search
+            className="pointer-events-none absolute left-4 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
+          <input
+            ref={inputRef}
+            value={filters.query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                onCommitQuery(filters.query);
+                setPanelOpen(false);
+              }
+            }}
+            type="search"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="Search a branch code, city, address, phone or area manager…"
+            aria-label="Search branches"
+            className={cn(
+              "h-12 w-full rounded-xl border bg-card pl-12 pr-32 text-sm font-medium shadow-sm sm:text-base",
+              "placeholder:font-normal placeholder:text-muted-foreground/70",
+              "transition-[border-color,box-shadow] duration-150",
+              "border-border/70 hover:border-border",
+              "focus:border-primary focus:outline-none focus:ring-4 focus:ring-primary/15",
+              // Safari renders a native clear affordance on type=search that
+              // collides with the count badge.
+              "[&::-webkit-search-cancel-button]:appearance-none",
+            )}
+          />
 
-        <div className="absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-2">
-          {filters.query ? (
-            <>
-              <span
-                className="hidden text-xs font-medium tabular-nums text-muted-foreground sm:inline"
-                aria-live="polite"
-              >
-                {resultCount} of {totalCount}
-              </span>
-              <button
-                type="button"
-                aria-label="Clear search"
-                onClick={() => {
-                  onQueryChange("");
-                  inputRef.current?.focus();
-                }}
-                className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </>
-          ) : (
-            <kbd className="hidden items-center gap-1 rounded-md border border-border/70 bg-muted px-2 py-1 font-sans text-[11px] font-medium text-muted-foreground sm:inline-flex">
-              {isMac ? "⌘" : "Ctrl"} K
-            </kbd>
+          <div className="absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-2">
+            {filters.query ? (
+              <>
+                <span
+                  className="hidden text-xs font-medium tabular-nums text-muted-foreground sm:inline"
+                  aria-live="polite"
+                >
+                  {resultCount} of {totalCount}
+                </span>
+                <button
+                  type="button"
+                  aria-label="Clear search"
+                  onClick={() => {
+                    onQueryChange("");
+                    inputRef.current?.focus();
+                  }}
+                  className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </>
+            ) : (
+              <kbd className="hidden items-center gap-1 rounded-md border border-border/70 bg-muted px-2 py-1 font-sans text-[11px] font-medium text-muted-foreground sm:inline-flex">
+                {isMac ? "⌘" : "Ctrl"} K
+              </kbd>
+            )}
+          </div>
+
+          {showPanel && (
+            <div className="absolute left-0 right-0 top-full z-30 mt-2 max-h-[60vh] overflow-y-auto rounded-xl border border-border/70 bg-popover p-3 shadow-xl animate-in fade-in slide-in-from-top-1 duration-150 [scrollbar-width:thin]">
+              {recentCards.length > 0 && (
+                <section>
+                  <header className="flex items-center justify-between px-1 pb-2">
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      <History className="h-3 w-3" />
+                      Recently viewed
+                    </span>
+                    <button
+                      type="button"
+                      onClick={onClearRecentBranches}
+                      className="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                    >
+                      Clear
+                    </button>
+                  </header>
+                  <div className="flex flex-wrap gap-1.5">
+                    {recentCards.map((branch) => (
+                      <BranchChip
+                        key={branch.branch_no}
+                        branch={branch}
+                        onPick={() => pick(branch.branch_no)}
+                      />
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {favouriteCards.length > 0 && (
+                <section
+                  className={cn(recentCards.length > 0 && "mt-3 border-t border-border/50 pt-3")}
+                >
+                  <header className="px-1 pb-2">
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      <Star className="h-3 w-3" />
+                      Favourites
+                    </span>
+                  </header>
+                  <div className="flex flex-wrap gap-1.5">
+                    {favouriteCards.map((branch) => (
+                      <BranchChip
+                        key={branch.branch_no}
+                        branch={branch}
+                        starred
+                        onPick={() => pick(branch.branch_no)}
+                      />
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {recent.length > 0 && (
+                <section
+                  className={cn(
+                    (recentCards.length > 0 || favouriteCards.length > 0) &&
+                      "mt-3 border-t border-border/50 pt-3",
+                  )}
+                >
+                  <header className="flex items-center justify-between px-1 pb-1">
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      <Search className="h-3 w-3" />
+                      Recent searches
+                    </span>
+                    <button
+                      type="button"
+                      onClick={onClearRecent}
+                      className="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                    >
+                      Clear
+                    </button>
+                  </header>
+                  {recent.map((term) => (
+                    <button
+                      key={term}
+                      type="button"
+                      onClick={() => {
+                        onQueryChange(term);
+                        setPanelOpen(false);
+                        inputRef.current?.focus();
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+                    >
+                      <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <span className="truncate" dir="auto">
+                        {term}
+                      </span>
+                    </button>
+                  ))}
+                </section>
+              )}
+            </div>
           )}
         </div>
 
-        {showPanel && (
-          <div className="absolute left-0 right-0 top-full z-30 mt-2 max-h-[60vh] overflow-y-auto rounded-xl border border-border/70 bg-popover p-3 shadow-xl animate-in fade-in slide-in-from-top-1 duration-150 [scrollbar-width:thin]">
-            {recentCards.length > 0 && (
-              <section>
-                <header className="flex items-center justify-between px-1 pb-2">
-                  <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    <History className="h-3 w-3" />
-                    Recently viewed
-                  </span>
-                  <button
-                    type="button"
-                    onClick={onClearRecentBranches}
-                    className="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                  >
-                    Clear
-                  </button>
-                </header>
-                <div className="flex flex-wrap gap-1.5">
-                  {recentCards.map((branch) => (
-                    <BranchChip
-                      key={branch.branch_no}
-                      branch={branch}
-                      onPick={() => pick(branch.branch_no)}
-                    />
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {favouriteCards.length > 0 && (
-              <section
-                className={cn(recentCards.length > 0 && "mt-3 border-t border-border/50 pt-3")}
-              >
-                <header className="px-1 pb-2">
-                  <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    <Star className="h-3 w-3" />
-                    Favourites
-                  </span>
-                </header>
-                <div className="flex flex-wrap gap-1.5">
-                  {favouriteCards.map((branch) => (
-                    <BranchChip
-                      key={branch.branch_no}
-                      branch={branch}
-                      starred
-                      onPick={() => pick(branch.branch_no)}
-                    />
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {recent.length > 0 && (
-              <section
-                className={cn(
-                  (recentCards.length > 0 || favouriteCards.length > 0) &&
-                    "mt-3 border-t border-border/50 pt-3",
-                )}
-              >
-                <header className="flex items-center justify-between px-1 pb-1">
-                  <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    <Search className="h-3 w-3" />
-                    Recent searches
-                  </span>
-                  <button
-                    type="button"
-                    onClick={onClearRecent}
-                    className="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                  >
-                    Clear
-                  </button>
-                </header>
-                {recent.map((term) => (
-                  <button
-                    key={term}
-                    type="button"
-                    onClick={() => {
-                      onQueryChange(term);
-                      setPanelOpen(false);
-                      inputRef.current?.focus();
-                    }}
-                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-                  >
-                    <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <span className="truncate" dir="auto">
-                      {term}
-                    </span>
-                  </button>
-                ))}
-              </section>
-            )}
-          </div>
-        )}
+        {/* Beside the search box, not inside it: locator mode answers a
+            different question ("who is nearest to my customer") from the one
+            this box answers ("where is the branch I already know"), and burying
+            it in the filter row would put a mode switch among value pickers. */}
+        <Button
+          variant="outline"
+          onClick={onOpenLocator}
+          title="Find the branches nearest a customer"
+          className="h-12 shrink-0 gap-2 px-3 sm:px-4"
+        >
+          <Crosshair className="h-4 w-4" />
+          <span className="hidden sm:inline">Branch Locator</span>
+        </Button>
       </div>
 
       {/* One compact line of dropdowns under the box. Each trigger names its own
