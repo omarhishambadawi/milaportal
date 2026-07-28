@@ -100,7 +100,7 @@ function OrdersList() {
         <div className="min-w-0">
           <h1 className="truncate text-xl font-semibold tracking-tight sm:text-2xl">Orders</h1>
           {/* The day name, not just the date. A list of one day's orders is read
-              against the shift it belongs to â€” "Monday" tells an agent what they
+              against the shift it belongs to — "Monday" tells an agent what they
               are looking at in a way "28/07/2026" makes them work out. Absent
               for a multi-day range, where naming one weekday would describe only
               the first of them. */}
@@ -116,7 +116,7 @@ function OrdersList() {
           )}
           <p className="truncate text-xs text-muted-foreground sm:text-sm">
             <span className="font-medium text-foreground">{total}</span>{" "}
-            {f.mineOnly ? "of your" : ""} orders{f.searching ? " آ· search results" : ""}
+            {f.mineOnly ? "of your" : ""} orders{f.searching ? " · search results" : ""}
           </p>
         </div>
         <div className="flex gap-2 items-center shrink-0">
@@ -141,7 +141,7 @@ function OrdersList() {
           <div className="relative flex-1 min-w-[200px] lg:max-w-xs">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Search order, invoice, customer, phoneâ€¦"
+              placeholder="Search order, invoice, customer, phone…"
               value={f.q}
               maxLength={80}
               onChange={(e) => {
@@ -172,7 +172,7 @@ function OrdersList() {
               ))}
             </SelectContent>
           </Select>
-          {/* `view_all_agents`, not administrator â€” an Auditor reviews other
+          {/* `view_all_agents`, not administrator — an Auditor reviews other
               people's work and holds it by default. */}
           {f.canFilterAgents && (
             <Select value={f.agent} onValueChange={(v) => f.onFilterChange(() => f.setAgent(v))}>
@@ -220,7 +220,7 @@ function OrdersList() {
         </CardContent>
       </Card>
 
-      {/* KPI summary: 3 cards â€” Cash آ· Wasfaty آ· Total (each shows sales + completed sales + total/completed orders split) */}
+      {/* KPI summary: 3 cards — Cash · Wasfaty · Total (each shows sales + completed sales + total/completed orders split) */}
       <div className="grid gap-3 sm:grid-cols-3">
         <KpiCard
           label="Cash"
@@ -257,7 +257,7 @@ function OrdersList() {
             This replaces a bespoke mobile card list that rendered below `md`.
             The cards read well but they were a second layout of the same rows
             with their own truncation rules, and a column that was added to the
-            table did not appear in them â€” the verified rail, the agent code and
+            table did not appear in them — the verified rail, the agent code and
             the delivery type were all desktop-only facts. A phone user
             reconciling invoices could not see what a desktop user could.
 
@@ -314,7 +314,7 @@ function OrdersList() {
                       colSpan={11}
                       className="text-center text-muted-foreground py-14 border-b border-border/50"
                     >
-                      Loadingâ€¦
+                      Loading…
                     </td>
                   </tr>
                 )}
@@ -379,7 +379,7 @@ function OrdersList() {
                       <td className={cn("px-3 text-sm", cellCls)}>
                         <div className="truncate font-semibold text-foreground leading-tight">
                           {o.customer_name || (
-                            <span className="text-muted-foreground font-normal">â€”</span>
+                            <span className="text-muted-foreground font-normal">—</span>
                           )}
                         </div>
                         {o.customer_phone && (
@@ -390,7 +390,7 @@ function OrdersList() {
                       </td>
                       <td className={cn("px-3 text-sm", cellCls)}>
                         <div className="truncate text-foreground leading-tight">
-                          {o.agent_name || <span className="text-muted-foreground">â€”</span>}
+                          {o.agent_name || <span className="text-muted-foreground">—</span>}
                         </div>
                         {o.agent_code && (
                           <div className="mt-0.5 truncate text-[11px] text-muted-foreground font-mono">
@@ -411,7 +411,7 @@ function OrdersList() {
                       </td>
                       <td className={cn("px-3 text-sm", cellCls)}>
                         <div className="font-mono font-medium truncate leading-tight">
-                          {o.branch_no ?? "â€”"}
+                          {o.branch_no ?? "—"}
                         </div>
                         {o.city && (
                           <div className="mt-0.5 text-[11px] text-muted-foreground truncate">
@@ -476,7 +476,7 @@ function OrdersList() {
                 <>
                   Showing{" "}
                   <span className="font-medium text-foreground">
-                    {rangeStart}â€“{rangeEnd}
+                    {rangeStart}–{rangeEnd}
                   </span>{" "}
                   of <span className="font-medium text-foreground">{total}</span> orders
                 </>

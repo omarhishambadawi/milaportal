@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+﻿import { createFileRoute } from "@tanstack/react-router";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -8,27 +8,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  ResponsiveContainer,
-  Tooltip,
-  CartesianGrid,
-  PieChart,
-  Pie,
-  Cell,
-  Legend,
-  AreaChart,
-  Area,
-} from "recharts";
+import { Suspense, lazy } from "react";
 import { fmtSAR } from "@/lib/branches";
 import { Download, ShieldAlert } from "lucide-react";
 import { DateRangePicker } from "@/components/date-range-picker";
 import { SaudiSalesMap } from "@/components/saudi-sales-map";
-import { COLORS, STATUS_COLORS } from "@/features/dashboard/constants";
 import { exportDashboard } from "@/features/dashboard/export";
+import { SalesChartsSkeleton } from "@/features/dashboard/components/sales-charts-skeleton";
 import { SectionTitle } from "@/features/dashboard/components/section-title";
 import { StatCard } from "@/features/dashboard/components/stat-card";
 import { DashKpiCard } from "@/features/dashboard/components/dash-kpi-card";
@@ -36,6 +22,20 @@ import { DeliveryMatrix } from "@/features/dashboard/components/delivery-matrix"
 import { useDashboardFilters } from "@/features/dashboard/hooks/use-dashboard-filters";
 import { useDashboardData } from "@/features/dashboard/hooks/use-dashboard-data";
 import { useDashboardExportData } from "@/features/dashboard/hooks/use-dashboard-export-data";
+
+/**
+ * Recharts, deferred.
+ *
+ * The library is 364KB minified — by a wide margin the largest thing this app
+ * ships that is not the XLSX writer, and that has been lazy for a while. As a
+ * static import of this route it was fetched before React rendered anything, so
+ * the KPI cards, the stat tiles and the delivery matrix — none of which involve
+ * a chart — waited behind a charting library. Now the numbers paint off this
+ * route's own chunk and the charts arrive when they arrive.
+ */
+const SalesCharts = lazy(() =>
+  import("@/features/dashboard/components/sales-charts").then((m) => ({ default: m.SalesCharts })),
+);
 
 export const Route = createFileRoute("/_app/dashboard")({
   head: () => ({ meta: [{ title: "Dashboard — MilaServ Portal" }] }),
@@ -229,182 +229,10 @@ function Dashboard() {
         </Card>
       </div>
 
-      {/* Sales charts */}
-      <div className="grid lg:grid-cols-2 gap-3 sm:gap-4">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Daily sales trend</CardTitle>
-          </CardHeader>
-          <CardContent className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={d.dailyData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="dailyAll" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--color-chart-1)" stopOpacity={0.35} />
-                    <stop offset="100%" stopColor="var(--color-chart-1)" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="dailyCompleted" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#16a34a" stopOpacity={0.4} />
-                    <stop offset="100%" stopColor="#16a34a" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid
-                  vertical={false}
-                  strokeDasharray="3 3"
-                  stroke="var(--color-border)"
-                />
-                <XAxis
-                  dataKey="date"
-                  tick={{ fontSize: 11 }}
-                  tickMargin={6}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <YAxis tick={{ fontSize: 11 }} axisLine={false} tickLine={false} width={48} />
-                <Tooltip
-                  formatter={(v: any) => fmtSAR(v)}
-                  contentStyle={{
-                    borderRadius: 8,
-                    border: "1px solid var(--color-border)",
-                    fontSize: 12,
-                  }}
-                />
-                <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
-                <Area
-                  type="monotone"
-                  dataKey="total"
-                  name="All"
-                  stroke="var(--color-chart-1)"
-                  strokeWidth={2}
-                  fill="url(#dailyAll)"
-                  activeDot={{ r: 4 }}
-                  isAnimationActive
-                  animationDuration={500}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="completed"
-                  name="Completed"
-                  stroke="#16a34a"
-                  strokeWidth={2}
-                  fill="url(#dailyCompleted)"
-                  activeDot={{ r: 4 }}
-                  isAnimationActive
-                  animationDuration={600}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Orders by status</CardTitle>
-          </CardHeader>
-          <CardContent className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={d.statusData} dataKey="value" nameKey="name" outerRadius={80} label>
-                  {d.statusData.map((s, i) => (
-                    <Cell key={i} fill={STATUS_COLORS[s.name] ?? COLORS[i % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Legend />
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Sales by team</CardTitle>
-          </CardHeader>
-          <CardContent className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={d.teamData}>
-                <CartesianGrid
-                  vertical={false}
-                  strokeDasharray="3 3"
-                  stroke="var(--color-border)"
-                />
-                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(v: any) => fmtSAR(v)} />
-                <Bar
-                  dataKey="sales"
-                  name="Completed sales"
-                  fill="var(--color-chart-2)"
-                  radius={[4, 4, 0, 0]}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Top agents by sales</CardTitle>
-          </CardHeader>
-          <CardContent className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={d.agentSalesData} layout="vertical">
-                <CartesianGrid
-                  horizontal={false}
-                  strokeDasharray="3 3"
-                  stroke="var(--color-border)"
-                />
-                <XAxis type="number" tick={{ fontSize: 11 }} />
-                <YAxis type="category" dataKey="name" width={130} tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(v: any) => fmtSAR(v)} />
-                <Bar dataKey="sales" fill="var(--color-chart-3)" radius={[0, 4, 4, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Sales by branch (top 10)</CardTitle>
-          </CardHeader>
-          <CardContent className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={d.branchData} layout="vertical">
-                <CartesianGrid
-                  horizontal={false}
-                  strokeDasharray="3 3"
-                  stroke="var(--color-border)"
-                />
-                <XAxis type="number" tick={{ fontSize: 11 }} />
-                <YAxis type="category" dataKey="name" width={80} tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(v: any) => fmtSAR(v)} />
-                <Bar dataKey="sales" fill="var(--color-chart-4)" radius={[0, 4, 4, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Sales by city</CardTitle>
-          </CardHeader>
-          <CardContent className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={d.cityData} layout="vertical">
-                <CartesianGrid
-                  horizontal={false}
-                  strokeDasharray="3 3"
-                  stroke="var(--color-border)"
-                />
-                <XAxis type="number" tick={{ fontSize: 11 }} />
-                <YAxis type="category" dataKey="name" width={90} tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(v: any) => fmtSAR(v)} />
-                <Bar dataKey="sales" fill="var(--color-chart-5)" radius={[0, 4, 4, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Sales charts — behind a lazy boundary; see sales-charts.tsx */}
+      <Suspense fallback={<SalesChartsSkeleton />}>
+        <SalesCharts data={d} />
+      </Suspense>
 
       {/* Geographic heat map */}
       <div>
@@ -457,14 +285,14 @@ function Dashboard() {
         <div className="grid lg:grid-cols-2 gap-3 sm:gap-4 mt-3 min-w-0">
           <div className="min-w-0">
             <DeliveryMatrix
-              title="Sales by branch × delivery method"
+              title="Sales by branch أ— delivery method"
               matrix={d.deliveryBranchMatrix}
               methods={d.deliveryMethods}
             />
           </div>
           <div className="min-w-0">
             <DeliveryMatrix
-              title="Sales by city × delivery method"
+              title="Sales by city أ— delivery method"
               matrix={d.deliveryCityMatrix}
               methods={d.deliveryMethods}
             />
