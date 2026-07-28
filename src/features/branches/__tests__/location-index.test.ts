@@ -1,0 +1,279 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  buildLocationIndex,
+  editDistance,
+  normalizePlace,
+  resolvePlace,
+  searchLocations,
+} from "../location-index";
+import { resolveOrigin } from "../locator";
+import { decorate } from "../search";
+import type { Branch } from "../types";
+
+function branch(overrides: Partial<Branch> & Pick<Branch, "branch_no" | "city">): Branch {
+  return {
+    phone: null,
+    area_manager: null,
+    area_manager_phone: null,
+    email: null,
+    address: null,
+    maps_url: null,
+    latitude: null,
+    longitude: null,
+    scooter: false,
+    scooter_note: null,
+    working_hours: null,
+    friday_hours: null,
+    duty_hours: null,
+    active: true,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
+/**
+ * Shaped after the real sheet: `city / district / street`, Arabic only, with
+ * the same district name reused across cities — which is the case the whole
+ * disambiguation path exists for.
+ */
+const INDEX = buildLocationIndex(
+  decorate([
+    branch({
+      branch_no: "P0001",
+      city: "الرياض",
+      address: "الرياض/ حي الحزم /ش علي النقيب",
+      latitude: 24.5372826,
+      longitude: 46.6456098,
+    }),
+    branch({
+      branch_no: "P0002",
+      city: "الرياض",
+      address: "الرياض/ حي الروضة",
+      latitude: 24.7,
+      longitude: 46.78,
+    }),
+    branch({
+      branch_no: "P0003",
+      city: "الرياض",
+      address: "الرياض/ حي الروضة /شارع خالد",
+      latitude: 24.72,
+      longitude: 46.8,
+    }),
+    branch({
+      branch_no: "P0021",
+      city: "جدة",
+      address: "جدة/حي الروضة",
+      latitude: 21.55,
+      longitude: 39.16,
+    }),
+    branch({
+      branch_no: "P0022",
+      city: "جدة",
+      address: "جدة/حراج الصواريخ",
+      latitude: 21.4858,
+      longitude: 39.1925,
+    }),
+    // No coordinates: must contribute to no centroid at all.
+    branch({ branch_no: "المستودع", city: "الرياض", address: "الرياض/السلي" }),
+  ]),
+);
+
+const find = (query: string) => searchLocations(INDEX, query, 8).map((match) => match.entry);
+
+describe("normalizePlace", () => {
+  it("drops the words that classify a place instead of naming it", () => {
+    // The whole point: an agent types either form and both must land together.
+    expect(normalizePlace("حي الحزم")).toBe(normalizePlace("الحزم"));
+    expect(normalizePlace("شارع علي النقيب")).toBe(normalizePlace("علي النقيب"));
+    expect(normalizePlace("مدينة الرياض")).toBe(normalizePlace("الرياض"));
+    expect(normalizePlace("محافظة جدة")).toBe(normalizePlace("جدة"));
+  });
+
+  it("strips the country, however it is written", () => {
+    expect(normalizePlace("المملكة العربية السعودية الرياض")).toBe(normalizePlace("الرياض"));
+    expect(normalizePlace("Riyadh, Saudi Arabia")).toBe(normalizePlace("riyadh"));
+  });
+
+  it("folds Arabic orthography and case through foldText", () => {
+    expect(normalizePlace("الطائف")).toBe(normalizePlace("الطايف"));
+    expect(normalizePlace("مكة")).toBe(normalizePlace("مكه"));
+    expect(normalizePlace("JEDDAH")).toBe(normalizePlace("jeddah"));
+  });
+
+  it("returns nothing for a string that is only classifiers", () => {
+    expect(normalizePlace("حي")).toBe("");
+    expect(normalizePlace("  شارع  ")).toBe("");
+  });
+});
+
+describe("editDistance", () => {
+  it("measures small typos", () => {
+    expect(editDistance("riyadh", "riyadh", 2)).toBe(0);
+    expect(editDistance("riyad", "riyadh", 2)).toBe(1);
+    expect(editDistance("ryiadh", "riyadh", 2)).toBe(2);
+  });
+
+  it("abandons anything past the budget rather than measuring it", () => {
+    // The early exit is what keeps a per-keystroke scan cheap; all it has to
+    // promise is "greater than max".
+    expect(editDistance("jeddah", "riyadh", 2)).toBeGreaterThan(2);
+    expect(editDistance("a", "aaaaaaaaaa", 2)).toBeGreaterThan(2);
+  });
+});
+
+describe("buildLocationIndex", () => {
+  it("indexes cities, districts and areas", () => {
+    const kinds = new Set(INDEX.entries.map((entry) => entry.kind));
+    expect(kinds).toEqual(new Set(["city", "district", "area"]));
+  });
+
+  it("takes a city's point from the centroid of its located branches", () => {
+    const [riyadh] = find("الرياض").filter((entry) => entry.kind === "city");
+    // Mean of the three located Riyadh branches. The warehouse has no
+    // coordinates and must not drag the centre toward zero.
+    expect(riyadh.point.lat).toBeCloseTo((24.5372826 + 24.7 + 24.72) / 3, 5);
+    expect(riyadh.branchCount).toBe(3);
+  });
+
+  it("takes a district's point from the centroid of the branches inside it", () => {
+    const [rawdah] = find("الروضة").filter(
+      (entry) => entry.kind === "district" && entry.city === "الرياض",
+    );
+    expect(rawdah.branchCount).toBe(2);
+    expect(rawdah.point.lat).toBeCloseTo((24.7 + 24.72) / 2, 5);
+    expect(rawdah.point.lng).toBeCloseTo((46.78 + 46.8) / 2, 5);
+  });
+
+  it("gives cities their English name and aliases", () => {
+    const [jeddah] = find("jeddah");
+    expect(jeddah.kind).toBe("city");
+    expect(jeddah.english).toBe("Jeddah");
+    // The alias table is the existing one the directory search already uses.
+    expect(find("jiddah")[0]?.name).toBe("جدة");
+  });
+
+  it("indexes a third address segment as an area", () => {
+    // "الرياض/ حي الحزم /ش علي النقيب" — the street is neither the city nor the
+    // district, so it lands as an area. The classifier "ش" is stripped, which is
+    // why the query below has to work without it.
+    const [street] = find("علي النقيب");
+    expect(street.kind).toBe("area");
+    expect(street.city).toBe("الرياض");
+  });
+
+  it("follows extractDistrict on the second segment, whatever it names", () => {
+    // "جدة/حراج الصواريخ" is a market, not a حي — but the sheet's convention is
+    // `city / area / street`, so the positional rule in `extractDistrict` calls
+    // it the district and the index agrees rather than inventing a second
+    // opinion about what an address part is.
+    const [market] = find("حراج الصواريخ");
+    expect(market.kind).toBe("district");
+    expect(market.city).toBe("جدة");
+  });
+
+  it("never indexes a place backed only by branches with no coordinates", () => {
+    // "السلي" appears once, on the warehouse, which has no location — so it
+    // could only ever resolve to nowhere.
+    expect(find("السلي")).toHaveLength(0);
+  });
+});
+
+describe("searchLocations", () => {
+  it("matches exactly, ignoring the classifier prefix", () => {
+    expect(find("حي الحزم")[0].name).toContain("الحزم");
+    expect(find("الحزم")[0].name).toContain("الحزم");
+  });
+
+  it("matches on a prefix, which is what drives autocomplete", () => {
+    expect(find("الحز").some((entry) => entry.name.includes("الحزم"))).toBe(true);
+  });
+
+  it("tolerates a typo", () => {
+    // One transposition in a six-letter name.
+    expect(find("جده")[0].name).toBe("جدة");
+    expect(find("riyad").some((entry) => entry.english === "Riyadh")).toBe(true);
+  });
+
+  it("matches Arabic written without the definite article", () => {
+    expect(find("روضة").some((entry) => entry.name.includes("الروضة"))).toBe(true);
+  });
+
+  it("ranks cities above districts and areas when scores tie", () => {
+    const [first] = find("الرياض");
+    expect(first.kind).toBe("city");
+  });
+
+  it("returns nothing for a query that is only noise words", () => {
+    expect(find("حي شارع")).toHaveLength(0);
+  });
+});
+
+describe("resolvePlace", () => {
+  it("asks which city when one name belongs to several", () => {
+    // "الروضة" is a district in both Riyadh and Jeddah. Silently taking the one
+    // with more branches would send the customer to the wrong city.
+    const resolution = resolvePlace(INDEX, "الروضة");
+    expect(resolution.status).toBe("ambiguous");
+    if (resolution.status !== "ambiguous") return;
+    expect(resolution.choices).toHaveLength(2);
+    expect(new Set(resolution.choices.map((entry) => entry.city))).toEqual(
+      new Set(["الرياض", "جدة"]),
+    );
+  });
+
+  it("does not ask when the name is unique", () => {
+    const resolution = resolvePlace(INDEX, "الحزم");
+    expect(resolution.status).toBe("found");
+  });
+
+  it("does not ask when the tie is only a weak fuzzy match", () => {
+    // Ambiguity is worth a question when several places match *well*; two
+    // near-misses are just a weak result, and prompting on them would turn
+    // every typo into a dialog.
+    const resolution = resolvePlace(INDEX, "زقاق مجهول تماما");
+    expect(resolution.status).toBe("none");
+  });
+});
+
+describe("resolveOrigin over the index", () => {
+  it("surfaces the ambiguity to the caller rather than choosing", async () => {
+    const { origin, choices, error } = await resolveOrigin("الروضة", INDEX);
+    expect(origin).toBeNull();
+    expect(error).toBeNull();
+    expect(choices).toHaveLength(2);
+  });
+
+  it("builds, resolves and ranks with the network torn out", async () => {
+    // The brief's hard requirement, enforced rather than asserted in prose:
+    // `fetch` and `XMLHttpRequest` are replaced with throwing stubs, so a future
+    // edit that reaches for a geocoding call fails here rather than on a
+    // call-floor machine that has lost its connection.
+    const boom = vi.fn(() => {
+      throw new Error("network access attempted");
+    });
+    vi.stubGlobal("fetch", boom);
+    vi.stubGlobal("XMLHttpRequest", boom);
+
+    try {
+      const offline = buildLocationIndex(
+        decorate([
+          branch({
+            branch_no: "P1",
+            city: "تبوك",
+            address: "تبوك/ حي المروج",
+            latitude: 28.3838,
+            longitude: 36.5662,
+          }),
+        ]),
+      );
+
+      expect(searchLocations(offline, "tabuk")[0].entry.name).toBe("تبوك");
+      const { origin } = await resolveOrigin("المروج", offline);
+      expect(origin?.point.lat).toBeCloseTo(28.3838, 4);
+      expect(boom).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

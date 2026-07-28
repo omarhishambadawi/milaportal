@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Ban,
   Bike,
+  Building2,
   Crosshair,
   Info,
   Loader2,
@@ -9,12 +10,14 @@ import {
   Navigation,
   Phone,
   Search,
+  Signpost,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { describeDistance, formatDistance } from "@/lib/geo";
 import { cn } from "@/lib/utils";
 import { REFERENCE_LABEL } from "../normalize";
+import type { LocationEntry, LocationKind } from "../location-index";
 import type { LocatorResult, ResolvedOrigin } from "../locator";
 
 /**
@@ -30,16 +33,34 @@ import type { LocatorResult, ResolvedOrigin } from "../locator";
  * choice has to be one click away rather than a re-search.
  */
 
+/** One icon per gazetteer kind, so the list is scannable without reading it. */
+const KIND_ICON: Record<LocationKind, typeof MapPin> = {
+  city: Building2,
+  district: MapPin,
+  area: Signpost,
+};
+
+const KIND_LABEL: Record<LocationKind, string> = {
+  city: "City",
+  district: "District",
+  area: "Area",
+};
+
 interface Props {
   query: string;
   origin: ResolvedOrigin | null;
   results: LocatorResult[];
+  /** Places sharing the typed name across several cities. */
+  choices: LocationEntry[];
+  /** Live autocomplete for what is currently typed. */
+  suggestions: LocationEntry[];
   error: string | null;
   searching: boolean;
   /** The branch currently highlighted in the directory, if it is one of ours. */
   selected: string | null;
   onQueryChange: (value: string) => void;
   onSearch: (value: string) => void;
+  onChooseLocation: (entry: LocationEntry) => void;
   onSelect: (branchNo: string) => void;
   onClose: () => void;
 }
@@ -48,20 +69,34 @@ export function BranchLocatorPanel({
   query,
   origin,
   results,
+  choices,
+  suggestions,
   error,
   searching,
   selected,
   onQueryChange,
   onSearch,
+  onChooseLocation,
   onSelect,
   onClose,
 }: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const [suggestOpen, setSuggestOpen] = useState(false);
 
   // Locator mode is entered to type a location, so the caret starts there.
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  // Only while the box has focus AND there is something to offer. An
+  // autocomplete that stays open after a submit covers the results it produced.
+  const showSuggestions = suggestOpen && suggestions.length > 0;
+
+  const pickSuggestion = (entry: LocationEntry) => {
+    setSuggestOpen(false);
+    onChooseLocation(entry);
+    inputRef.current?.blur();
+  };
 
   return (
     <section
@@ -87,11 +122,24 @@ export function BranchLocatorPanel({
       <form
         onSubmit={(event) => {
           event.preventDefault();
+          setSuggestOpen(false);
           onSearch(query);
         }}
         className="flex items-center gap-2"
       >
-        <div className="relative min-w-0 flex-1">
+        {/* The suggestion list is a sibling of the input inside this wrapper, so
+            focus moving from the box into a suggestion never leaves the wrapper
+            — which is how the list survives a Tab and still closes the moment
+            focus goes anywhere else. Same device as the directory search. */}
+        <div
+          className="relative min-w-0 flex-1"
+          onFocus={() => setSuggestOpen(true)}
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+              setSuggestOpen(false);
+            }
+          }}
+        >
           <MapPin
             className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
             aria-hidden
@@ -99,13 +147,25 @@ export function BranchLocatorPanel({
           <input
             ref={inputRef}
             value={query}
-            onChange={(event) => onQueryChange(event.target.value)}
+            onChange={(event) => {
+              onQueryChange(event.target.value);
+              setSuggestOpen(true);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && showSuggestions) {
+                event.stopPropagation();
+                setSuggestOpen(false);
+              }
+            }}
             type="search"
             autoComplete="off"
             spellCheck={false}
-            placeholder="Customer location — coordinates, a Google Maps link, a district or a city…"
+            placeholder="Customer location — a city, district, coordinates or a Maps link…"
             aria-label="Customer location"
             aria-describedby="locator-origin"
+            aria-expanded={showSuggestions}
+            aria-controls="locator-suggestions"
+            role="combobox"
             className={cn(
               "h-11 w-full rounded-lg border bg-card pl-10 pr-3 text-sm font-medium shadow-sm",
               "placeholder:font-normal placeholder:text-muted-foreground/70",
@@ -114,6 +174,21 @@ export function BranchLocatorPanel({
               "[&::-webkit-search-cancel-button]:appearance-none",
             )}
           />
+
+          {showSuggestions && (
+            <ul
+              id="locator-suggestions"
+              role="listbox"
+              aria-label="Matching places"
+              className="absolute left-0 right-0 top-full z-30 mt-1.5 overflow-hidden rounded-lg border border-border/70 bg-popover shadow-xl duration-150 animate-in fade-in slide-in-from-top-1"
+            >
+              {suggestions.map((entry) => (
+                <li key={entry.id} role="option" aria-selected={false}>
+                  <SuggestionRow entry={entry} onPick={() => pickSuggestion(entry)} />
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
         <Button type="submit" className="h-11 shrink-0 gap-1.5 px-4" disabled={searching}>
           {searching ? (
@@ -133,7 +208,13 @@ export function BranchLocatorPanel({
           <span className="text-destructive">{error}</span>
         ) : origin ? (
           <span className="text-muted-foreground">
-            <span className="font-mono text-foreground/80" dir="ltr">
+            <span
+              className={cn(
+                "text-foreground/80",
+                origin.kind === "place" ? "font-medium" : "font-mono",
+              )}
+              dir="auto"
+            >
               {origin.label}
             </span>
             {" · "}
@@ -141,10 +222,29 @@ export function BranchLocatorPanel({
           </span>
         ) : (
           <span className="text-muted-foreground/70">
-            Paste a location pin, or type a city or district.
+            Type a city or district, or paste a location pin.
           </span>
         )}
       </p>
+
+      {/* Ambiguity is a question, not a guess. "الروضة" is a district in
+          Riyadh, in Jeddah and in Dammam, and quietly taking the one with the
+          most branches would send a customer to the wrong city. */}
+      {choices.length > 0 && (
+        <div className="mt-2 rounded-lg border border-[var(--attention)]/40 bg-[var(--attention)]/10 p-2">
+          <p className="flex items-center gap-1.5 px-0.5 pb-1.5 text-[11px] font-medium text-[var(--attention)]">
+            <Info className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            That name exists in more than one city. Which one?
+          </p>
+          <ul className="overflow-hidden rounded-md border border-border/50 bg-card">
+            {choices.map((entry) => (
+              <li key={entry.id} className="border-b border-border/40 last:border-b-0">
+                <SuggestionRow entry={entry} onPick={() => onChooseLocation(entry)} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {origin && results.length === 0 && !searching && (
         <p className="mt-2 rounded-lg border border-dashed border-border/70 px-3 py-4 text-center text-xs text-muted-foreground">
@@ -176,6 +276,50 @@ export function BranchLocatorPanel({
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * One place, in the autocomplete list or the city chooser.
+ *
+ * Shared by both on purpose: they are the same question ("which place did you
+ * mean") asked at two moments, and two components would drift on the day the
+ * kind badge or the branch count changes.
+ */
+function SuggestionRow({ entry, onPick }: { entry: LocationEntry; onPick: () => void }) {
+  const Icon = KIND_ICON[entry.kind];
+  const context = entry.kind === "city" ? entry.english : (entry.cityEnglish ?? entry.city);
+
+  return (
+    <button
+      type="button"
+      onClick={onPick}
+      aria-label={`${entry.name}${context ? `, ${context}` : ""}, ${KIND_LABEL[entry.kind]}, ${
+        entry.branchCount === 1 ? "1 branch" : `${entry.branchCount} branches`
+      }`}
+      className={cn(
+        "flex w-full items-center gap-2.5 px-2.5 py-2 text-left",
+        "transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
+      )}
+    >
+      <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px] font-medium text-foreground" dir="auto">
+          {entry.name}
+        </span>
+        {context && (
+          <span className="block truncate text-[11px] text-muted-foreground" dir="auto">
+            {context}
+          </span>
+        )}
+      </span>
+      <span className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {KIND_LABEL[entry.kind]}
+      </span>
+      <span className="w-10 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground">
+        {entry.branchCount} {entry.branchCount === 1 ? "br" : "brs"}
+      </span>
+    </button>
   );
 }
 

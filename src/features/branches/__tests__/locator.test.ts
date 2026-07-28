@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
+import { buildLocationIndex } from "../location-index";
 import { rankNearestBranches, resolveOrigin } from "../locator";
 import { decorate } from "../search";
 import type { Branch } from "../types";
@@ -55,11 +56,13 @@ const BRANCHES = decorate([
   branch({ branch_no: "المستودع", city: "الرياض", address: "الرياض/السلي" }),
 ]);
 
+const INDEX = buildLocationIndex(BRANCHES);
+
 const NEAR_HAZM = { lat: 24.54, lng: 46.65 };
 
 describe("resolveOrigin", () => {
   it("reads a bare coordinate pair", async () => {
-    const { origin } = await resolveOrigin("24.5372826, 46.6456098", BRANCHES);
+    const { origin } = await resolveOrigin("24.5372826, 46.6456098", INDEX);
     expect(origin?.kind).toBe("coordinates");
     expect(origin?.point.lat).toBeCloseTo(24.5372826, 5);
     expect(origin?.point.lng).toBeCloseTo(46.6456098, 5);
@@ -67,7 +70,7 @@ describe("resolveOrigin", () => {
 
   it("accepts the separators people actually paste", async () => {
     for (const input of ["24.5372 46.6456", "24.5372;46.6456", "  24.5372 , 46.6456  "]) {
-      const { origin } = await resolveOrigin(input, BRANCHES);
+      const { origin } = await resolveOrigin(input, INDEX);
       expect(origin?.point.lat).toBeCloseTo(24.5372, 3);
     }
   });
@@ -79,7 +82,7 @@ describe("resolveOrigin", () => {
       "https://maps.google.com/?q=24.5372826,46.6456098",
     ];
     for (const url of cases) {
-      const { origin } = await resolveOrigin(url, BRANCHES);
+      const { origin } = await resolveOrigin(url, INDEX);
       expect(origin?.kind).toBe("map-link");
       expect(origin?.point.lat).toBeCloseTo(24.5372826, 5);
     }
@@ -88,59 +91,65 @@ describe("resolveOrigin", () => {
   it("rejects a swapped pair rather than putting the customer in the ocean", async () => {
     // 46.64 N, 24.53 E is in Russia. A swap is the failure mode that survives
     // eyeballing, because both halves still look like Saudi numbers.
-    const { origin, error } = await resolveOrigin("46.6456098, 24.5372826", BRANCHES);
+    const { origin, error } = await resolveOrigin("46.6456098, 24.5372826", INDEX);
     expect(origin).toBeNull();
     expect(error).toMatch(/outside Saudi Arabia/i);
   });
 
   it("does not read two numbers out of a street address as a location", async () => {
     // "شارع 60" and "حي 4" are numbers in prose, not a coordinate pair.
-    const { origin } = await resolveOrigin("شارع 60 حي 4", BRANCHES);
+    const { origin } = await resolveOrigin("شارع 60 حي 4", INDEX);
     expect(origin?.kind).not.toBe("coordinates");
   });
 
-  it("falls back to the area of the branches whose text matches", async () => {
-    // One match: the origin is that branch's own position, and the copy says so.
-    const single = await resolveOrigin("الحزم", BRANCHES);
-    expect(single.origin?.kind).toBe("directory-area");
-    expect(single.origin?.point.lat).toBeCloseTo(24.5372826, 3);
-    expect(single.origin?.detail).toMatch(/approximate/i);
-
-    // Several matches: the origin is their centre, and the count is stated so an
-    // agent can see whether it was one street or a whole city.
-    const many = await resolveOrigin("الرياض", BRANCHES);
-    expect(many.origin?.kind).toBe("directory-area");
-    expect(many.origin?.detail).toMatch(/2 matching branches/);
-    // Between the two Riyadh branches, not on top of either.
-    expect(many.origin?.point.lat).toBeCloseTo((24.5372826 + 24.5912) / 2, 3);
+  it("resolves a district to the centre of its branches", async () => {
+    // "حي الحزم" holds one branch, so the district centroid is that branch.
+    const { origin } = await resolveOrigin("الحزم", INDEX);
+    expect(origin?.kind).toBe("place");
+    expect(origin?.entry?.kind).toBe("district");
+    expect(origin?.point.lat).toBeCloseTo(24.5372826, 5);
+    expect(origin?.detail).toMatch(/approximate/i);
   });
 
-  it("refuses a query that matches every branch, which has said nothing", async () => {
-    // Every fixture branch is `active`, so this matches all of them; answering
-    // with the centre of the country would be worse than declining.
-    const { origin, error } = await resolveOrigin("الرياض جدة", BRANCHES);
+  it("resolves a city to the centroid of every branch in it", async () => {
+    const { origin } = await resolveOrigin("الرياض", INDEX);
+    expect(origin?.entry?.kind).toBe("city");
+    // The mean of the two locatable Riyadh branches — the warehouse has no
+    // coordinates and so contributes nothing.
+    expect(origin?.point.lat).toBeCloseTo((24.5372826 + 24.5912) / 2, 5);
+    expect(origin?.detail).toMatch(/2 branches/);
+  });
+
+  it("resolves an English city name", async () => {
+    const { origin } = await resolveOrigin("jeddah", INDEX);
+    expect(origin?.entry?.kind).toBe("city");
+    expect(origin?.point.lat).toBeCloseTo(21.4858, 4);
+  });
+
+  it("refuses a query that names no place in the directory", async () => {
+    const { origin, error } = await resolveOrigin("زقاق لا وجود له", INDEX);
     expect(origin).toBeNull();
-    expect(error).toMatch(/could not place/i);
+    expect(error).toMatch(/no city, district or area/i);
   });
 
   it("treats an empty box as nothing to do, not as a failure", async () => {
-    const { origin, error } = await resolveOrigin("   ", BRANCHES);
+    const { origin, error } = await resolveOrigin("   ", INDEX);
     expect(origin).toBeNull();
     expect(error).toBeNull();
   });
 
-  it("prefers a geocoder over the directory guess when one is supplied", async () => {
+  it("prefers a geocoder over the local gazetteer when one is supplied", async () => {
     const geocode = async () => ({ lat: 21.4858, lng: 39.1925 });
-    const { origin } = await resolveOrigin("some street in Jeddah", BRANCHES, geocode);
+    const { origin } = await resolveOrigin("some street in Jeddah", INDEX, geocode);
     expect(origin?.detail).toBe("Geocoded address");
     expect(origin?.point.lat).toBeCloseTo(21.4858, 4);
   });
 
   it("ignores a geocoder that returns a point outside the country", async () => {
     const geocode = async () => ({ lat: 51.5, lng: -0.12 });
-    const { origin, error } = await resolveOrigin("London", BRANCHES, geocode);
+    const { origin, error } = await resolveOrigin("London", INDEX, geocode);
     expect(origin).toBeNull();
-    expect(error).toMatch(/could not place/i);
+    expect(error).toMatch(/no city, district or area/i);
   });
 });
 

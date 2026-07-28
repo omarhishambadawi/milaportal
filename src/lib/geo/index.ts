@@ -23,6 +23,7 @@ export {
   KSA_CENTER,
   boundsOf,
   centerOf,
+  centroidOf,
   formatLatLng,
   isValidLatLng,
   isWithin,

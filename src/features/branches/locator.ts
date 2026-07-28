@@ -1,7 +1,5 @@
 import {
   KSA_BOUNDS,
-  boundsOf,
-  centerOf,
   formatLatLng,
   isWithin,
   parseCoordinatePair,
@@ -10,7 +8,13 @@ import {
   type LatLng,
   type Ranked,
 } from "@/lib/geo";
-import { foldText } from "./normalize";
+import {
+  describeLocation,
+  describeLocationSource,
+  resolvePlace,
+  type LocationEntry,
+  type LocationIndex,
+} from "./location-index";
 import type { BranchView } from "./types";
 
 /**
@@ -33,19 +37,26 @@ export type LocatorResult = Ranked<BranchView>;
  * *from*. "2.3 km from the pin they sent" and "2.3 km from the middle of Riyadh"
  * are different claims, and only one of them is worth repeating on a call.
  */
-export type OriginKind = "coordinates" | "map-link" | "directory-area";
+export type OriginKind = "coordinates" | "map-link" | "place";
 
 export interface ResolvedOrigin {
   point: LatLng;
-  /** The point itself, formatted for display. */
+  /** What the agent should read back: a place name, or the coordinates. */
   label: string;
   kind: OriginKind;
   /** One line describing how this was derived, shown under the input. */
   detail: string;
+  /** The gazetteer entry behind a `place` origin, for the map and the chip. */
+  entry?: LocationEntry;
 }
 
 export interface OriginResolution {
   origin: ResolvedOrigin | null;
+  /**
+   * Several places share the typed name and sit in different cities. The agent
+   * picks; nothing is guessed on their behalf.
+   */
+  choices: LocationEntry[];
   /** Set only when the input was something we tried and failed to place. */
   error: string | null;
 }
@@ -121,53 +132,6 @@ function parsePastedPoint(text: string): PointParse {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Falling back to the directory's own geography                              */
-/* -------------------------------------------------------------------------- */
-
-/**
- * A coarse origin derived from the branches that match the words typed.
- *
- * Not a geocoder, and the UI never calls it one. It exists because "الحزم" and
- * "Jeddah" are the two things an agent types when they do not have a pin, and
- * the directory already knows roughly where those are — every branch carries a
- * folded haystack of its city, district and address. The centre of the branches
- * that match is a defensible "somewhere around there".
- *
- * Two guards keep it honest. A query matching *every* branch has told us
- * nothing, so it is refused rather than answered with the centre of the country.
- * And the result is labelled with how many branches backed it, so an agent can
- * see at a glance whether it was one street or a whole region.
- */
-function directoryAreaOrigin(text: string, branches: readonly BranchView[]): ResolvedOrigin | null {
-  const tokens = foldText(text).split(" ").filter(Boolean);
-  if (tokens.length === 0) return null;
-
-  const mappable = branches.filter((branch) => branch.hasCoords);
-  if (mappable.length === 0) return null;
-
-  const matches = mappable.filter((branch) =>
-    tokens.every((token) => branch.haystack.includes(token)),
-  );
-  if (matches.length === 0 || matches.length === mappable.length) return null;
-
-  const box = boundsOf(
-    matches.map((branch) => ({ lat: branch.latitude as number, lng: branch.longitude as number })),
-  );
-  if (!box) return null;
-
-  const point = centerOf(box);
-  return {
-    point,
-    label: formatLatLng(point, 4),
-    kind: "directory-area",
-    detail:
-      matches.length === 1
-        ? `Approximate area of ${matches[0].branch_no} — no exact address lookup available yet`
-        : `Approximate centre of ${matches.length} matching branches — not an exact address`,
-  };
-}
-
-/* -------------------------------------------------------------------------- */
 /* Resolution                                                                  */
 /* -------------------------------------------------------------------------- */
 
@@ -175,24 +139,40 @@ const OUT_OF_RANGE =
   "Those coordinates are outside Saudi Arabia. Check that latitude comes first — a swapped pair still looks plausible.";
 
 const UNPLACEABLE =
-  "Could not place that. Paste coordinates (24.5372, 46.6456) or a Google Maps link, or type a city or district.";
+  "No city, district or area in the directory matches that. Try a city name, or paste coordinates or a Google Maps link.";
+
+/** An origin built from a gazetteer entry. */
+export function originFromPlace(entry: LocationEntry): ResolvedOrigin {
+  return {
+    point: entry.point,
+    label: describeLocation(entry),
+    kind: "place",
+    detail: describeLocationSource(entry),
+    entry,
+  };
+}
 
 /**
  * Where the customer is.
  *
- * Ordered by how much the answer can be trusted: an explicit pair beats a link,
- * a link beats a geocoder, and a geocoder beats guessing from the directory.
+ * Ordered by how much the answer can be trusted: an explicit coordinate pair
+ * beats a link, a link beats a geocoder, and a geocoder beats the local
+ * gazetteer — which is last not because it is bad but because it answers with
+ * the centre of a district rather than a doorstep.
+ *
+ * `geocode` is the seam a real provider drops into and is unused today; the
+ * gazetteer below is what makes place names work without one.
  */
 export async function resolveOrigin(
   text: string,
-  branches: readonly BranchView[],
+  index: LocationIndex,
   geocode?: Geocoder,
 ): Promise<OriginResolution> {
   const trimmed = text.trim();
-  if (!trimmed) return { origin: null, error: null };
+  if (!trimmed) return { origin: null, choices: [], error: null };
 
   const pasted = parsePastedPoint(trimmed);
-  if (pasted.outOfRange) return { origin: null, error: OUT_OF_RANGE };
+  if (pasted.outOfRange) return { origin: null, choices: [], error: OUT_OF_RANGE };
   if (pasted.point && pasted.kind) {
     return {
       origin: {
@@ -204,6 +184,7 @@ export async function resolveOrigin(
             ? "Read from the pasted Google Maps link"
             : "Exact coordinates",
       },
+      choices: [],
       error: null,
     };
   }
@@ -218,15 +199,21 @@ export async function resolveOrigin(
           kind: "coordinates",
           detail: "Geocoded address",
         },
+        choices: [],
         error: null,
       };
     }
   }
 
-  const area = directoryAreaOrigin(trimmed, branches);
-  if (area) return { origin: area, error: null };
+  const place = resolvePlace(index, trimmed);
+  if (place.status === "found") {
+    return { origin: originFromPlace(place.entry), choices: [], error: null };
+  }
+  if (place.status === "ambiguous") {
+    return { origin: null, choices: place.choices, error: null };
+  }
 
-  return { origin: null, error: UNPLACEABLE };
+  return { origin: null, choices: [], error: UNPLACEABLE };
 }
 
 /* -------------------------------------------------------------------------- */

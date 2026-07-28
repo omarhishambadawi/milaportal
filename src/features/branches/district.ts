@@ -45,16 +45,26 @@ const NAMES_ITSELF = /(^|\s)ح[يى](\s|$)/;
  */
 const MAX_LENGTH = 40;
 
+/**
+ * The address split on the separators the sheet uses, trimmed and non-empty.
+ *
+ * Exported because the location index walks the same segments this file already
+ * knows how to cut — a second `split(/[/\\|،,]+/)` somewhere else is a second
+ * definition of what an address part is.
+ */
+export function addressSegments(address: string | null | undefined): string[] {
+  if (!address) return [];
+  return address
+    .split(SEGMENT)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+}
+
 export function extractDistrict(
   address: string | null | undefined,
   city: string | null | undefined,
 ): string | null {
-  if (!address) return null;
-
-  const segments = address
-    .split(SEGMENT)
-    .map((segment) => segment.trim())
-    .filter(Boolean);
+  const segments = addressSegments(address);
   if (segments.length === 0) return null;
 
   const named = segments.find((segment) => NAMES_ITSELF.test(segment));
@@ -63,7 +73,7 @@ export function extractDistrict(
   // No self-naming segment, so fall back to position — but only for an address
   // that actually follows the convention by leading with the city. "King Fahd
   // Road, Riyadh" must not report a street as a district.
-  if (segments.length < 2 || !isCity(segments[0], city)) return null;
+  if (segments.length < 2 || !isCitySegment(segments[0], city)) return null;
 
   const candidate = segments[1];
   return candidate.length <= MAX_LENGTH ? candidate : null;
@@ -91,21 +101,18 @@ export function addressWithoutCity(
   address: string | null | undefined,
   city: string | null | undefined,
 ): string | null {
-  if (!address) return null;
-  const segments = address
-    .split(SEGMENT)
-    .map((segment) => segment.trim())
-    .filter(Boolean);
+  const segments = addressSegments(address);
   if (segments.length === 0) return null;
   // A one-segment address that *is* the city carries nothing else; anything
   // else is the whole address and is kept as-is.
-  const rest = segments.length > 1 && isCity(segments[0], city) ? segments.slice(1) : segments;
+  const rest =
+    segments.length > 1 && isCitySegment(segments[0], city) ? segments.slice(1) : segments;
   const joined = rest.join(" · ");
   return joined.length > 0 ? joined : null;
 }
 
 /** Is this segment the branch's own city, in any spelling we know? */
-function isCity(segment: string, city: string | null | undefined): boolean {
+export function isCitySegment(segment: string, city: string | null | undefined): boolean {
   const folded = foldText(segment);
   if (!folded) return false;
   for (const alias of cityAliases(city)) {

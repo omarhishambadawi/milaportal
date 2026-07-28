@@ -130,6 +130,32 @@ export function boundsOf(points: readonly LatLng[]): Bounds | null {
   return { south, west, north, east };
 }
 
+/**
+ * Centre of mass of a set of points.
+ *
+ * Distinct from `centerOf(boundsOf(points))`, and the difference matters for
+ * the location index: the box centre is decided entirely by the two extreme
+ * points, so one outlying branch on the edge of a district drags the "centre"
+ * halfway out to it while the six clustered branches that actually define the
+ * place get no say. The mean is what "the middle of this district" means.
+ *
+ * A plain arithmetic mean rather than a spherical one: over the few kilometres
+ * a Saudi district spans, the difference is centimetres.
+ */
+export function centroidOf(points: readonly LatLng[]): LatLng | null {
+  if (points.length === 0) return null;
+  let lat = 0;
+  let lng = 0;
+  for (const point of points) {
+    lat += point.lat;
+    lng += point.lng;
+  }
+  return {
+    lat: roundCoordinate(lat / points.length),
+    lng: roundCoordinate(lng / points.length),
+  };
+}
+
 export function centerOf(bounds: Bounds): LatLng {
   return {
     lat: (bounds.south + bounds.north) / 2,

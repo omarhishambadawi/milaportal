@@ -260,11 +260,14 @@ function BranchDirectory() {
             query={locator.query}
             origin={locator.origin}
             results={locator.results}
+            choices={locator.choices}
+            suggestions={locator.suggestions}
             error={locator.error}
             searching={locator.searching}
             selected={selected}
             onQueryChange={locator.setQuery}
             onSearch={locator.search}
+            onChooseLocation={locator.chooseLocation}
             onSelect={handleLocatorSelect}
             onClose={closeLocator}
           />
