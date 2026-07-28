@@ -177,12 +177,23 @@ async function deactivate(supabaseAdmin: any, codes: string[]) {
   }
 }
 
+/**
+ * Ceiling on a stored workbook, in base64 characters.
+ *
+ * ~7MB of base64 is ~5MB of file, which is an order of magnitude above any real
+ * branch sheet (the current one is under 60KB) and below the point where a
+ * single row makes the table awkward. A file past this still imports — the
+ * rows are what matter — it just is not kept for re-download.
+ */
+const MAX_SOURCE_FILE_B64 = 7_000_000;
+
 export const branchImportApply = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator(
     (d: {
       mode: z.infer<typeof ModeSchema>;
       fileName?: string;
+      sourceFile?: { base64: string; type: string; size: number };
       rows: BranchRow[];
       validation?: z.infer<typeof ValidationSchema>;
     }) =>
@@ -190,6 +201,17 @@ export const branchImportApply = createServerFn({ method: "POST" })
         .object({
           mode: ModeSchema,
           fileName: z.string().max(260).optional(),
+          // The workbook itself, so an administrator can get their own file back
+          // rather than an export that has lost the rejected rows and the columns
+          // the template does not carry. Optional: an import applied through the
+          // API without one is still a valid import.
+          sourceFile: z
+            .object({
+              base64: z.string().max(MAX_SOURCE_FILE_B64),
+              type: z.string().max(200),
+              size: z.number().int().min(0),
+            })
+            .optional(),
           // Bounded so a malformed or hostile request cannot ask the server to
           // hold an unbounded array in memory. The network has ~1000 branches;
           // 20000 is far above any real sheet and far below a problem.
@@ -273,6 +295,9 @@ export const branchImportApply = createServerFn({ method: "POST" })
         validation_summary: data.validation ?? {},
         snapshot: before,
         snapshot_rows: before.length,
+        source_file: data.sourceFile?.base64 ?? null,
+        source_file_type: data.sourceFile?.type ?? null,
+        source_file_size: data.sourceFile?.size ?? null,
       })
       .select("id")
       .single();
@@ -443,6 +468,79 @@ export const branchImportHistory = createServerFn({ method: "GET" })
       notes: row.notes as string | null,
       restorable: (row.snapshot_rows as number) > 0,
     }));
+  });
+
+/**
+ * The most recent uploaded workbook, for editing offline and uploading again.
+ *
+ * Two calls rather than one, and deliberately: `branchImportLastFileMeta` is
+ * cheap and tells the page whether to offer a download button and what to label
+ * it, while `branchImportLastFile` transfers the bytes and only runs when
+ * somebody presses that button. Folding the file into the metadata would mean
+ * every visit to the import page pulls a spreadsheet nobody asked for.
+ *
+ * "Most recent" means the newest entry that *has* a file. A rollback has no
+ * upload behind it and imports predating the column have none either, so the
+ * newest entry is frequently not the answer.
+ */
+const SOURCE_META_COLUMNS = "id,imported_at,file_name,source_file_type,source_file_size";
+
+export interface LastImportFileMeta {
+  id: string;
+  importedAt: string;
+  fileName: string | null;
+  type: string | null;
+  size: number | null;
+}
+
+export const branchImportLastFileMeta = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }): Promise<LastImportFileMeta | null> => {
+    await assertCanManageBranches(context.supabase, context.userId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    const { data, error } = await supabaseAdmin
+      .from("branch_imports")
+      .select(SOURCE_META_COLUMNS)
+      .not("source_file", "is", null)
+      .order("imported_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data) return null;
+
+    return {
+      id: data.id as string,
+      importedAt: data.imported_at as string,
+      fileName: (data.file_name as string | null) ?? null,
+      type: (data.source_file_type as string | null) ?? null,
+      size: (data.source_file_size as number | null) ?? null,
+    };
+  });
+
+export const branchImportLastFile = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await assertCanManageBranches(context.supabase, context.userId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    const { data, error } = await supabaseAdmin
+      .from("branch_imports")
+      .select("file_name,source_file,source_file_type")
+      .not("source_file", "is", null)
+      .order("imported_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data?.source_file) throw new Error("No uploaded file has been kept yet");
+
+    return {
+      fileName: (data.file_name as string | null) ?? "branches.xlsx",
+      type:
+        (data.source_file_type as string | null) ??
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      base64: data.source_file as string,
+    };
   });
 
 export const branchImportRollback = createServerFn({ method: "POST" })

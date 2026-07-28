@@ -124,6 +124,12 @@ export const queryKeys = {
      * fires refreshes the history table too rather than leaving it one run behind.
      */
     imports: (limit: number) => ["branches", "imports", limit] as const,
+    /**
+     * Metadata for the newest import that still carries its uploaded workbook.
+     * Under `branches` so an import refreshes it: the file just uploaded is the
+     * one the download button should hand back next.
+     */
+    lastImportFile: () => ["branches", "last-import-file"] as const,
   },
 
   notifications: {

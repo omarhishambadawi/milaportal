@@ -3,6 +3,7 @@ import { useRef, useState } from "react";
 import {
   ArrowLeft,
   Download,
+  FileDown,
   FileSpreadsheet,
   Loader2,
   ShieldAlert,
@@ -10,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { BUSINESS_TIMEZONE } from "@/lib/timezone";
 import { cn } from "@/lib/utils";
 import { ImportHistoryTable } from "@/features/branches/components/import-history-table";
 import { ImportPreviewPanel } from "@/features/branches/components/import-preview-panel";
@@ -22,6 +24,29 @@ export const Route = createFileRoute("/_app/branches/import")({
   head: () => ({ meta: [{ title: "Import Branches — MilaServ Portal" }] }),
   component: BranchImportPage,
 });
+
+/** "48 KB". One decimal past a megabyte, none below it — nobody needs "48.3 KB". */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${Math.round(kb)} KB`;
+  return `${(kb / 1024).toFixed(1)} MB`;
+}
+
+function formatUploadedAt(iso: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: BUSINESS_TIMEZONE,
+    }).format(new Date(iso));
+  } catch {
+    return iso;
+  }
+}
 
 function BranchImportPage() {
   const { canManage, canRollback } = useBranchDirectory();
@@ -39,6 +64,8 @@ function BranchImportPage() {
     history,
     historyLoading,
     summary,
+    lastUpload,
+    downloadLastUpload,
   } = useBranchImport();
 
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -76,10 +103,40 @@ function BranchImportPage() {
             Upload the master workbook. Nothing is written until you review the preview and confirm.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => downloadImportTemplate()}>
-          <Download className="h-4 w-4" />
-          Download template
-        </Button>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {/* The working loop is: get the current sheet, edit it offline, map
+              the columns, upload it again. The first step had no answer inside
+              the portal — the file lived on whoever ran the last import's
+              laptop. Offered only when one has actually been kept, so it is
+              never a button that explains itself with an error. */}
+          {lastUpload && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={downloadLastUpload.isPending}
+              onClick={() => downloadLastUpload.mutate()}
+              title={`${lastUpload.fileName ?? "Workbook"} · uploaded ${formatUploadedAt(
+                lastUpload.importedAt,
+              )}`}
+            >
+              {downloadLastUpload.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <FileDown className="h-4 w-4" />
+              )}
+              Last upload
+              {lastUpload.size != null && (
+                <span className="text-xs font-normal text-muted-foreground">
+                  {formatBytes(lastUpload.size)}
+                </span>
+              )}
+            </Button>
+          )}
+          <Button variant="outline" size="sm" onClick={() => downloadImportTemplate()}>
+            <Download className="h-4 w-4" />
+            Download template
+          </Button>
+        </div>
       </div>
 
       {/* Upload */}
