@@ -21,7 +21,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { BranchEditDialog } from "@/features/branches/components/branch-edit-dialog";
-import { BranchList } from "@/features/branches/components/branch-list";
+import { BranchList, type BranchFocusRequest } from "@/features/branches/components/branch-list";
 import { BranchLocatorPanel } from "@/features/branches/components/branch-locator-panel";
 import { BranchMapSurface } from "@/features/branches/components/branch-map-surface";
 import { BranchSearchBar } from "@/features/branches/components/branch-search-bar";
@@ -75,6 +75,15 @@ function BranchDirectory() {
   const map = useMapPanel();
 
   const [selected, setSelected] = useState<string | null>(null);
+  /**
+   * The card a locator result asked to be shown, and how many times it has asked.
+   *
+   * Separate from `selected` because the two mean different things. Selection is
+   * a state the map, the list and the locator row all read; this is an event —
+   * "scroll there and flash it" — that must be able to repeat for a branch that
+   * is already selected.
+   */
+  const [focusRequest, setFocusRequest] = useState<BranchFocusRequest | null>(null);
   const [mobileMapOpen, setMobileMapOpen] = useState(false);
   /** The branch whose edit dialog is open, or null. */
   const [editing, setEditing] = useState<BranchView | null>(null);
@@ -115,14 +124,19 @@ function BranchDirectory() {
    *
    * Sets rather than toggles, unlike `handleSelect`: a result row is a
    * destination, and clicking the one already showing should keep showing it
-   * rather than clear the highlight the agent just asked for. Everything that
-   * happens next is the directory's existing selection behaviour — `BranchList`
-   * scrolls the row into view, `GoogleMap` pans and zooms to the pin and opens
-   * its info card — which is exactly why the locator does none of it itself.
+   * rather than clear the highlight the agent just asked for.
+   *
+   * Two things are set, not one. `selected` is the state the map pin, the card
+   * ring and the locator row all share — that is the synchronization, and it is
+   * the directory's existing behaviour rather than anything the locator does
+   * itself. `focusRequest` is the accompanying event: scroll to the card and
+   * flash it. The nonce increments on every click, including a repeat click on
+   * the same row, so "show me that one again" is always answered.
    */
   const handleLocatorSelect = useCallback(
     (branchNo: string) => {
       setSelected(branchNo);
+      setFocusRequest((current) => ({ branchNo, nonce: (current?.nonce ?? 0) + 1 }));
       rememberBranch(branchNo);
     },
     [rememberBranch],
@@ -145,12 +159,14 @@ function BranchDirectory() {
     // which is not rendered is a click that appears to do nothing.
     replaceFilters(EMPTY_FILTERS);
     setSelected(null);
+    setFocusRequest(null);
     openLocatorMode();
   }, [filters, replaceFilters, openLocatorMode]);
 
   const closeLocator = useCallback(() => {
     closeLocatorMode();
     setSelected(null);
+    setFocusRequest(null);
     replaceFilters(parkedFilters.current ?? EMPTY_FILTERS);
     parkedFilters.current = null;
   }, [closeLocatorMode, replaceFilters]);
@@ -316,6 +332,7 @@ function BranchDirectory() {
               branches={results}
               loading={isLoading}
               selected={selected}
+              focus={focusRequest}
               favourites={favourites}
               tokens={tokens}
               query={filters.query}

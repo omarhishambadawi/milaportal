@@ -1,6 +1,6 @@
 ﻿import { describe, expect, it, vi } from "vitest";
 import { buildLocationIndex } from "../location-index";
-import { rankNearestBranches, resolveOrigin } from "../locator";
+import { rankNearestBranches, resolveOrigin, type OriginLocality } from "../locator";
 import { decorate } from "../search";
 import type { Branch } from "../types";
 
@@ -243,5 +243,131 @@ describe("rankNearestBranches", () => {
     const ranked = await rankNearestBranches(NEAR_HAZM, BRANCHES, { provider });
     expect(ranked[0].item.branch_no).toBe("P0021");
     expect(ranked[0].distance.source).toBe("road");
+  });
+
+  it("attaches a delivery band to every result", async () => {
+    const ranked = await rankNearestBranches(NEAR_HAZM, BRANCHES);
+    for (const entry of ranked) {
+      expect(entry.eta.label).toMatch(/^≈ /);
+      expect(entry.eta.minMinutes).toBeGreaterThanOrEqual(20);
+    }
+  });
+});
+
+/**
+ * Locality-aware ranking.
+ *
+ * A fixture built for the one case that matters and is hard to see: a branch in
+ * the customer's own neighbourhood that is *slightly farther* than one across the
+ * district boundary. Two branches due north and due south of the origin, 900m and
+ * 1200m away, so the answer flips on locality alone rather than on rounding.
+ */
+describe("rankNearestBranches with a resolved locality", () => {
+  const ORIGIN = { lat: 24.65, lng: 46.7 };
+
+  /** 1200 m south of the origin, in the origin's own district. */
+  const IN_DISTRICT = branch({
+    branch_no: "P0100",
+    city: "الرياض",
+    address: "الرياض/ حي الحزم /ش علي النقيب",
+    latitude: 24.639209,
+    longitude: 46.7,
+  });
+
+  /** 900 m north of the origin, a different district in the same city. */
+  const NEARER = branch({
+    branch_no: "P0200",
+    city: "الرياض",
+    address: "الرياض/ حي العليا /ش التخصصي",
+    latitude: 24.658094,
+    longitude: 46.7,
+  });
+
+  const LOCAL = decorate([IN_DISTRICT, NEARER]);
+
+  const IN_HAZM: OriginLocality = {
+    city: "الرياض",
+    district: "حي الحزم",
+    street: null,
+    precision: "district",
+  };
+
+  it("prefers the same neighbourhood over a marginally nearer one across the boundary", async () => {
+    const ranked = await rankNearestBranches(ORIGIN, LOCAL, { locality: IN_HAZM });
+    expect(ranked.map((entry) => entry.item.branch_no)).toEqual(["P0100", "P0200"]);
+    expect(ranked[0].sameDistrict).toBe(true);
+    expect(ranked[0].eta.minMinutes).toBe(20);
+    // And the one across the boundary is banded to say why it lost.
+    expect(ranked[1].sameDistrict).toBe(false);
+    expect(ranked[1].eta.minMinutes).toBe(30);
+  });
+
+  it("orders on distance alone when the origin is only a point", async () => {
+    const ranked = await rankNearestBranches(ORIGIN, LOCAL);
+    expect(ranked.map((entry) => entry.item.branch_no)).toEqual(["P0200", "P0100"]);
+    expect(ranked[0].sameCity).toBe(false);
+  });
+
+  it("does not believe the district of a city-wide match", async () => {
+    // A city centroid carries whatever neighbourhood sits on it. Treating that as
+    // the customer's would hand a 20–30 band to a branch picked by an accident of
+    // geometry, so at city precision only the city name counts — and the nearer
+    // branch wins again.
+    const ranked = await rankNearestBranches(ORIGIN, LOCAL, {
+      locality: { ...IN_HAZM, precision: "city" },
+    });
+    expect(ranked.map((entry) => entry.item.branch_no)).toEqual(["P0200", "P0100"]);
+    expect(ranked[0].sameDistrict).toBe(false);
+    expect(ranked[0].sameCity).toBe(true);
+  });
+
+  it("counts a shared street as the same neighbourhood", async () => {
+    // The sheet does not always write a حي segment, and two addresses on one
+    // street in one city are in the same neighbourhood whether it did or not.
+    const ranked = await rankNearestBranches(ORIGIN, LOCAL, {
+      locality: {
+        city: "الرياض",
+        district: null,
+        street: "ش علي النقيب",
+        precision: "street",
+      },
+    });
+    expect(ranked[0].item.branch_no).toBe("P0100");
+    expect(ranked[0].sameStreet).toBe(true);
+    expect(ranked[0].sameDistrict).toBe(true);
+  });
+
+  it("does not match a street name against a different city", async () => {
+    // "ش علي النقيب" in Jeddah is not the Riyadh one, and there is a street with
+    // the same name in most Saudi cities.
+    const ranked = await rankNearestBranches(ORIGIN, LOCAL, {
+      locality: {
+        city: "جدة",
+        district: null,
+        street: "ش علي النقيب",
+        precision: "street",
+      },
+    });
+    expect(ranked.every((entry) => !entry.sameStreet)).toBe(true);
+    expect(ranked.every((entry) => !entry.sameCity)).toBe(true);
+  });
+
+  it("does not let the same neighbourhood outrank a genuinely nearer branch", async () => {
+    // The preference is bounded by the distance that feeds the same band. A
+    // same-district branch 12 km out must not beat a 900 m one across the road.
+    const spread = decorate([
+      branch({
+        branch_no: "P0300",
+        city: "الرياض",
+        address: "الرياض/ حي الحزم",
+        latitude: 24.65,
+        longitude: 46.81864, // ~12 km east
+      }),
+      IN_DISTRICT,
+      NEARER,
+    ]);
+    const ranked = await rankNearestBranches(ORIGIN, spread, { locality: IN_HAZM });
+    expect(ranked[0].item.branch_no).toBe("P0100");
+    expect(ranked[ranked.length - 1].item.branch_no).toBe("P0300");
   });
 });

@@ -1,6 +1,6 @@
 import { mapUrlLabel } from "@/lib/geo";
 import type { Branch, BranchView } from "./types";
-import { addressWithoutCity, extractDistrict } from "./district";
+import { addressWithoutCity, extractDistrict, extractStreet } from "./district";
 import {
   cityAliases,
   cityEnglish,
@@ -75,6 +75,7 @@ export function decorate(branches: Branch[]): BranchView[] {
       // Parsed here with everything else derived per branch, not in the card:
       // this runs once per fetched dataset, a card renders many times.
       district: extractDistrict(branch.address, branch.city),
+      street: extractStreet(branch.address, branch.city),
       addressLine: addressWithoutCity(branch.address, branch.city),
       reference: referenceKind(branch.branch_no),
     };

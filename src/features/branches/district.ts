@@ -80,6 +80,37 @@ export function extractDistrict(
 }
 
 /**
+ * The street, or whatever the address names after the district.
+ *
+ * The mirror image of `extractDistrict` and deliberately built on the same two
+ * rules, so the pair can never disagree about where the district ends: whatever
+ * follows the self-naming حي segment, or — for an address that leads with its
+ * city — whatever follows the positional district at index 1.
+ *
+ * Several trailing segments are joined rather than the first being picked. The
+ * sheet occasionally writes "ش علي النقيب/بجوار البنك" (a street and a
+ * landmark), and both halves are what an agent reads out.
+ */
+export function extractStreet(
+  address: string | null | undefined,
+  city: string | null | undefined,
+): string | null {
+  const segments = addressSegments(address);
+  if (segments.length === 0) return null;
+
+  const named = segments.findIndex((segment) => NAMES_ITSELF.test(segment));
+  if (named >= 0) {
+    const rest = segments.slice(named + 1);
+    return rest.length > 0 ? rest.join(" · ") : null;
+  }
+
+  // Without a self-naming district, only the `city / district / street` shape is
+  // trustworthy — and it needs all three parts to have a street at all.
+  if (segments.length < 3 || !isCitySegment(segments[0], city)) return null;
+  return segments.slice(2).join(" · ");
+}
+
+/**
  * The address minus its leading city segment.
  *
  * The card header already names the city, in Arabic and in English. Repeating

@@ -1,14 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  Ban,
-  Bike,
   Building2,
   Crosshair,
   Info,
   Loader2,
   MapPin,
   Navigation,
-  Phone,
   Search,
   Signpost,
   Store,
@@ -48,6 +45,20 @@ const KIND_LABEL: Record<LocationKind, string> = {
   area: "Area",
   branch: "Branch",
 };
+
+/**
+ * Height of the results list, in pixels.
+ *
+ * Fixed rather than grown-into, so that finding ten branches does not push the
+ * directory below it off the screen — the card an agent is about to be scrolled
+ * to has to still be visible when they click. One row is four lines of text plus
+ * its padding, ~76px; five of those is the list an agent can take in without
+ * scrolling, and everything past the fifth is one flick away.
+ *
+ * A max-height rather than a height: three results should occupy the room three
+ * results need, not leave two rows of empty box under them.
+ */
+const RESULTS_MAX_HEIGHT = 5 * 76;
 
 interface Props {
   query: string;
@@ -260,12 +271,18 @@ export function BranchLocatorPanel({
           <div className="mt-2 flex items-center gap-1.5 px-0.5 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
             <Info className="h-3 w-3 shrink-0" aria-hidden />
             {/* Stated once, above the list, rather than repeated on every row.
-                The "≈" on each distance carries it after the first read. */}
-            Nearest {results.length} · straight-line distance, approximate — the drive will be
-            longer
+                The "≈" on each estimate carries it after the first read. */}
+            Nearest {results.length} · soonest first · estimated under normal conditions, never
+            exact
           </div>
 
-          <ol className="divide-y divide-border/40 overflow-hidden rounded-lg border border-border/50 bg-card">
+          {/* Fixed height with its own scrollbar. The list is a finder, and a
+              finder that grows until it pushes the branch cards off the screen
+              defeats the click it exists to invite. */}
+          <ol
+            className="divide-y divide-border/40 overflow-y-auto overscroll-contain rounded-lg border border-border/50 bg-card [scrollbar-width:thin]"
+            style={{ maxHeight: RESULTS_MAX_HEIGHT }}
+          >
             {results.map((result, index) => (
               <LocatorRow
                 key={result.item.branch_no}
@@ -326,8 +343,28 @@ function SuggestionRow({ entry, onPick }: { entry: LocationEntry; onPick: () => 
   );
 }
 
+/** "about 25 to 30 minutes" — the estimate as a screen reader should say it. */
+function spokenDelivery(result: LocatorResult): string {
+  const { minMinutes, maxMinutes } = result.eta;
+  return maxMinutes == null
+    ? `about ${minMinutes} minutes or more`
+    : `about ${minMinutes} to ${maxMinutes} minutes`;
+}
+
 /**
  * One result.
+ *
+ * Six things and no more: the code, the city, the neighbourhood, the street, how
+ * far, and when it would arrive. The phone number and the scooter badge that used
+ * to sit here are on the card this row scrolls to, and both were answering a
+ * question the agent has not asked yet — *which* branch comes first, and this row
+ * has to answer that in one glance.
+ *
+ * Laid out the way a maps result is: the identifier small above, the place name
+ * large, the address narrowing beneath it, and the arrival time in its own column
+ * on the right. The city is the prominent line because it is the thing that
+ * disqualifies a result fastest — a Riyadh branch in a list for a Jeddah customer
+ * is wrong no matter how near it claims to be.
  *
  * The row is a button and Navigate is a sibling link, never a link nested inside
  * the button — nesting them produces a control that is one thing to a mouse and
@@ -346,115 +383,172 @@ function LocatorRow({
 }) {
   const branch = result.item;
   const referenceLabel = branch.reference ? REFERENCE_LABEL[branch.reference] : null;
-  const phoneLink = branch.phoneE164 ? `tel:${branch.phoneE164}` : null;
+
+  // English leads when there is one, because that is the form an agent reads out
+  // in a mixed-language call; the sheet's own spelling follows it rather than
+  // being replaced by it.
+  const cityPrimary = branch.cityEnglish ?? branch.city;
+  const citySecondary = branch.cityEnglish ? branch.city : null;
+
+  // The district and the street when the address parsed into them, and the
+  // address line itself when it did not — an unparsed address is still the only
+  // thing that distinguishes two branches in the same city.
+  const parsedAddress = Boolean(branch.district || branch.street);
+  const fallbackAddress = parsedAddress ? null : branch.addressLine;
 
   return (
-    <li className={cn("flex items-stretch gap-1 transition-colors", active && "bg-primary/10")}>
-      <button
-        type="button"
-        onClick={() => onSelect(branch.branch_no)}
-        aria-current={active ? "true" : undefined}
-        // Spelled out because the row's own text reads as a run of fragments;
-        // this is the sentence somebody listening actually needs.
-        aria-label={`${branch.branch_no} in ${branch.cityEnglish ?? branch.city}, ${describeDistance(
-          result.distance,
-        )}. Show on the map.`}
+    <li className="relative">
+      {/* Selected-row rail. The same device the branch card uses for the same
+          state, so the two highlights read as one selection rather than two. */}
+      <span
+        aria-hidden
         className={cn(
-          "flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-2 text-left",
-          "transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
+          "absolute inset-y-0 left-0 z-10 w-[3px] bg-primary transition-opacity duration-200",
+          active ? "opacity-100" : "opacity-0",
+        )}
+      />
+
+      <div
+        className={cn(
+          "flex items-stretch transition-colors duration-150",
+          active && "bg-primary/[0.07] dark:bg-primary/[0.12]",
         )}
       >
-        <span
-          aria-hidden
+        <button
+          type="button"
+          onClick={() => onSelect(branch.branch_no)}
+          aria-current={active ? "true" : undefined}
+          // Spelled out because the row's own text reads as a run of fragments;
+          // this is the sentence somebody listening actually needs.
+          aria-label={[
+            `${branch.branch_no} in ${cityPrimary}`,
+            branch.district,
+            branch.street,
+            describeDistance(result.distance),
+            `estimated delivery ${spokenDelivery(result)}`,
+            "Show this branch below.",
+          ]
+            .filter(Boolean)
+            .join(". ")}
           className={cn(
-            "grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] font-bold tabular-nums",
-            active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground",
+            "group flex min-w-0 flex-1 items-start gap-2.5 px-2.5 py-2 text-left",
+            "transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
+            !active && "hover:bg-accent/40",
           )}
         >
-          {rank}
-        </span>
+          <span
+            aria-hidden
+            className={cn(
+              "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] font-bold tabular-nums transition-colors duration-150",
+              active
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground group-hover:bg-primary/15 group-hover:text-primary",
+            )}
+          >
+            {rank}
+          </span>
 
-        <span className="min-w-0 flex-1">
-          <span className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate font-mono text-[13px] font-bold text-foreground">
-              {branch.branch_no}
+          <span className="min-w-0 flex-1">
+            {/* The code, as a maps result labels its category: present, findable,
+                and not competing with the place name underneath it. */}
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate font-mono text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {branch.branch_no}
+              </span>
+              {referenceLabel && (
+                // Kept where the phone and the scooter badge were dropped: this
+                // is not branch detail, it is a warning that the row is not a
+                // pharmacy and no customer should be sent to it.
+                <span className="shrink-0 rounded-full bg-[var(--attention)]/12 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-[var(--attention)]">
+                  {referenceLabel}
+                </span>
+              )}
             </span>
-            {referenceLabel ? (
-              <span className="shrink-0 rounded-full bg-[var(--attention)]/12 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-[var(--attention)]">
-                {referenceLabel}
+
+            <span
+              className="block truncate text-[14px] font-semibold leading-5 tracking-tight text-foreground"
+              dir="auto"
+            >
+              {cityPrimary}
+              {citySecondary && (
+                <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">
+                  {citySecondary}
+                </span>
+              )}
+            </span>
+
+            {branch.district && (
+              <span className="mt-px flex min-w-0 items-center gap-1 text-[11.5px] leading-4 text-foreground/75">
+                <MapPin className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
+                <span className="truncate" dir="auto" title={branch.district}>
+                  {branch.district}
+                </span>
               </span>
-            ) : branch.scooter ? (
-              <span
-                title={branch.scooter_note ?? "Scooter delivery available"}
-                className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-[var(--positive)]/12 px-1.5 py-px text-[9px] font-semibold text-[var(--positive)]"
-              >
-                <Bike className="h-2.5 w-2.5" aria-hidden />
-                Scooter
+            )}
+
+            {branch.street && (
+              <span className="flex min-w-0 items-center gap-1 text-[11.5px] leading-4 text-muted-foreground">
+                <Signpost className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
+                <span className="truncate" dir="auto" title={branch.street}>
+                  {branch.street}
+                </span>
               </span>
-            ) : (
-              <span
-                title="No scooter delivery"
-                className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-muted px-1.5 py-px text-[9px] font-medium text-muted-foreground"
-              >
-                <Ban className="h-2.5 w-2.5" aria-hidden />
-                No scooter
+            )}
+
+            {fallbackAddress && (
+              <span className="flex min-w-0 items-center gap-1 text-[11.5px] leading-4 text-muted-foreground">
+                <MapPin className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
+                <span className="truncate" dir="auto" title={fallbackAddress}>
+                  {fallbackAddress}
+                </span>
               </span>
             )}
           </span>
-          <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-            <span className="truncate" dir="auto">
-              {branch.city}
-              {branch.cityEnglish && ` · ${branch.cityEnglish}`}
+
+          {/* Arrival, then distance. In that order and at those sizes because the
+              question is "how soon", and the kilometres are the working rather
+              than the answer. */}
+          <span className="shrink-0 pl-1 text-right" title={result.eta.detail}>
+            <span className="block text-[9px] font-medium uppercase tracking-wide text-muted-foreground/80">
+              Est. delivery
+            </span>
+            <span
+              className={cn(
+                "block whitespace-nowrap text-[13px] font-semibold leading-4 tabular-nums transition-colors duration-150",
+                active ? "text-primary" : "text-foreground",
+              )}
+            >
+              {result.eta.label}
+            </span>
+            <span className="mt-px block whitespace-nowrap text-[10px] leading-4 tabular-nums text-muted-foreground">
+              {formatDistance(result.distance.metres)} away
             </span>
           </span>
-        </span>
+        </button>
 
-        <span className="shrink-0 text-right">
-          <span className="block text-[13px] font-semibold tabular-nums text-foreground">
-            ≈ {formatDistance(result.distance.metres)}
-          </span>
-          <span className="block text-[10px] text-muted-foreground">straight line</span>
-        </span>
-      </button>
-
-      <span className="flex shrink-0 items-center gap-0.5 pr-1.5">
-        {phoneLink ? (
-          <a
-            href={phoneLink}
-            title={`Call ${branch.phoneDisplay}`}
-            aria-label={`Call ${branch.branch_no} on ${branch.phoneDisplay}`}
-            className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 font-mono text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-            dir="ltr"
-          >
-            <Phone className="h-3 w-3 shrink-0" aria-hidden />
-            <span className="hidden md:inline">{branch.phoneDisplay}</span>
-          </a>
-        ) : (
-          <span className="px-1.5 text-[11px] text-muted-foreground/50" title="No phone on file">
-            —
-          </span>
-        )}
-
-        {branch.navLink ? (
-          <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-[11px]" asChild>
-            <a href={branch.navLink} target="_blank" rel="noopener noreferrer">
-              <Navigation className="h-3 w-3" />
-              <span className="hidden sm:inline">Navigate</span>
+        <span className="flex shrink-0 items-center pr-1.5">
+          {branch.navLink ? (
+            <a
+              href={branch.navLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open directions in Google Maps"
+              aria-label={`Directions to ${branch.branch_no} in Google Maps`}
+              className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              <Navigation className="h-3.5 w-3.5" aria-hidden />
             </a>
-          </Button>
-        ) : (
-          <Button
-            variant="outline"
-            size="sm"
-            disabled
-            className="h-7 gap-1 px-2 text-[11px]"
-            title="No coordinates on file"
-          >
-            <Navigation className="h-3 w-3" />
-            <span className="hidden sm:inline">Navigate</span>
-          </Button>
-        )}
-      </span>
+          ) : (
+            <span
+              aria-hidden
+              title="No coordinates on file"
+              className="grid h-7 w-7 place-items-center text-muted-foreground/25"
+            >
+              <Navigation className="h-3.5 w-3.5" />
+            </span>
+          )}
+        </span>
+      </div>
     </li>
   );
 }

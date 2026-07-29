@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearGeocodeCache, geocodeWithOpenStreetMap } from "../geocode-nominatim";
 
 /** A Nominatim response body for a point in Dammam. */
-function hit(lat: number, lng: number) {
+function hit(lat: number, lng: number, extra: Record<string, unknown> = {}) {
   return {
     ok: true,
-    json: async () => [{ lat: String(lat), lon: String(lng) }],
+    json: async () => [{ lat: String(lat), lon: String(lng), ...extra }],
   } as unknown as Response;
 }
 
@@ -20,15 +20,53 @@ describe("geocodeWithOpenStreetMap", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const first = await geocodeWithOpenStreetMap("حي الفيصلية الدمام");
-    expect(first?.lat).toBeCloseTo(26.4207, 4);
+    expect(first?.point.lat).toBeCloseTo(26.4207, 4);
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     // The cache is keyed on the normalized form, so a differently-typed spelling
     // of the same query is also a hit — which is the point of reusing
     // `normalizePlace` rather than the raw string.
     const second = await geocodeWithOpenStreetMap("  حي  الفيصليه  الدمام ");
-    expect(second?.lat).toBeCloseTo(26.4207, 4);
+    expect(second?.point.lat).toBeCloseTo(26.4207, 4);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the names around the point, which is what earns a locality band", async () => {
+    // Without these the origin is a bare coordinate and every result is banded on
+    // kilometres alone — the neighbourhood is the whole reason for asking for
+    // `addressdetails`.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        hit(21.4858, 39.1925, {
+          addresstype: "road",
+          address: { road: "شارع فلسطين", suburb: "حي الرويس", city: "جدة" },
+        }),
+      ),
+    );
+
+    const found = await geocodeWithOpenStreetMap("شارع فلسطين جدة");
+    expect(found?.city).toBe("جدة");
+    expect(found?.district).toBe("حي الرويس");
+    expect(found?.street).toBe("شارع فلسطين");
+    expect(found?.precision).toBe("street");
+  });
+
+  it("reports a city-wide match as such, so its district is not believed", async () => {
+    // A city centroid carries whatever neighbourhood happens to sit on it.
+    // `precision` is how the ranker knows not to treat that as the customer's.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        hit(24.7136, 46.6753, {
+          addresstype: "city",
+          address: { city: "الرياض", suburb: "حي العليا" },
+        }),
+      ),
+    );
+
+    const found = await geocodeWithOpenStreetMap("الرياض");
+    expect(found?.precision).toBe("city");
   });
 
   it("constrains the request to Saudi Arabia", async () => {
@@ -45,6 +83,7 @@ describe("geocodeWithOpenStreetMap", () => {
 
     expect(seen[0]).toContain("countrycodes=sa");
     expect(seen[0]).toContain("limit=1");
+    expect(seen[0]).toContain("addressdetails=1");
   });
 
   it("rejects a result outside Saudi Arabia even when the API returns one", async () => {

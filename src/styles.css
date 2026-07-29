@@ -593,6 +593,63 @@ html.theme-vt * {
   opacity: var(--theme-dark);
 }
 
+/*
+ * The branch card's "here it is" flash, played when a locator result is clicked.
+ *
+ * An overlay inside the card rather than a class on the card itself, for two
+ * reasons. The card sets `overflow-hidden`, so an outward glow would be clipped
+ * — hence `inset` shadows, which read as a soft inner halo and cannot be cut
+ * off. And the card is absolutely positioned by the virtualizer with its own
+ * hover transform, so animating the element itself would fight both; an overlay
+ * animates nothing that affects layout.
+ *
+ * Re-triggered by remounting the overlay under a new React key, which restarts
+ * a CSS animation without the class-off-then-on dance. Ends invisible and
+ * `forwards`, so the selected card is left with its ordinary selected ring.
+ */
+@keyframes branch-card-flash {
+  0% {
+    opacity: 0;
+    transform: scale(1.01);
+  }
+  12% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  55% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Reduced motion still needs the answer to "which card", so the highlight stays
+ * and only the movement goes. */
+@keyframes branch-card-flash-still {
+  0%,
+  55% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.branch-card-flash {
+  opacity: 0;
+  box-shadow:
+    inset 0 0 0 2px color-mix(in oklab, var(--color-primary) 65%, transparent),
+    inset 0 0 24px 2px color-mix(in oklab, var(--color-primary) 22%, transparent);
+  animation: branch-card-flash 1500ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .branch-card-flash {
+    animation-name: branch-card-flash-still;
+  }
+}
+
 .theme-icon-sun {
   opacity: calc(1 - var(--theme-dark));
   transform: rotate(calc(var(--theme-dark) * 90deg)) scale(calc(1 - 0.5 * var(--theme-dark)));

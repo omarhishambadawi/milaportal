@@ -66,7 +66,13 @@ export function useBranchLocator(branches: BranchView[]) {
   /** Rank the directory around a point that is already decided. */
   const rankAround = useCallback(
     async (next: ResolvedOrigin, mine: number) => {
-      const ranked = await rankNearestBranches(next.point, branches, { limit: LOCATOR_LIMIT });
+      const ranked = await rankNearestBranches(next.point, branches, {
+        limit: LOCATOR_LIMIT,
+        // Passed, not dropped: without it every result is ranked and banded on
+        // kilometres alone, which is the whole point of having resolved a
+        // neighbourhood in the first place.
+        locality: next.locality,
+      });
       if (mine !== token.current) return;
       setOrigin(next);
       setResults(ranked);

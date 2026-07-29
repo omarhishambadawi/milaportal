@@ -83,6 +83,15 @@ interface Props {
   tokens: readonly string[];
   /** Whether this user may correct a branch in place. */
   canEdit?: boolean;
+  /**
+   * Non-zero when this card was just jumped to from the locator, and a different
+   * non-zero number every time it is asked for again.
+   *
+   * The value itself is meaningless — it is a nonce, and it is the *change* that
+   * matters. Clicking the same result twice must flash the card twice, and a
+   * boolean cannot express "again".
+   */
+  emphasis?: number;
   onSelect: (branchNo: string) => void;
   onToggleFavourite: (branchNo: string) => void;
   onEdit?: (branch: BranchView) => void;
@@ -189,6 +198,7 @@ function BranchCardInner({
   favourite,
   tokens,
   canEdit,
+  emphasis = 0,
   onSelect,
   onToggleFavourite,
   onEdit,
@@ -218,6 +228,18 @@ function BranchCardInner({
           : "border-border/60 hover:border-primary/30",
       )}
     >
+      {/* "This is the one you clicked." Keyed by the nonce so that asking for the
+          same card again remounts this element and replays the animation from the
+          start — the point of the flash is answering "where did it go", and a
+          second click that does nothing visible fails to answer it. */}
+      {emphasis > 0 && (
+        <span
+          key={emphasis}
+          aria-hidden
+          className="branch-card-flash pointer-events-none absolute inset-0 z-20 rounded-xl"
+        />
+      )}
+
       {/* Selection accent. A left rail rather than a full tint so the card's own
           colour coding (scooter, hours, reference) stays readable when selected. */}
       <span

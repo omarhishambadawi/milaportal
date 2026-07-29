@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { SearchX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -8,10 +8,28 @@ import { BranchCard, BranchCardSkeleton, CARD_HEIGHT, CARD_MIN_WIDTH } from "./b
 
 const GAP = 12;
 
+/**
+ * "Take me to this card, and flash it when you get there."
+ *
+ * A branch plus a nonce rather than a bare branch code, because the request is an
+ * event and not a state: clicking the same locator result twice has to scroll and
+ * flash twice, and a code that has not changed cannot say so.
+ */
+export interface BranchFocusRequest {
+  branchNo: string;
+  nonce: number;
+}
+
 interface Props {
   branches: BranchView[];
   loading: boolean;
   selected: string | null;
+  /**
+   * Set when something outside the list asked for a card — today, a locator
+   * result. Distinct from `selected`, which is also set by clicking a card that
+   * is already on screen and must not yank the scroll position.
+   */
+  focus?: BranchFocusRequest | null;
   favourites: ReadonlySet<string>;
   /** Folded query tokens, passed down so cards can highlight what matched. */
   tokens: readonly string[];
@@ -32,6 +50,7 @@ export function BranchList({
   branches,
   loading,
   selected,
+  focus,
   favourites,
   tokens,
   query,
@@ -73,6 +92,29 @@ export function BranchList({
     // Reacting to `rows` would re-run this on every scroll frame.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, branches, columns, scrollToIndex]);
+
+  /**
+   * An explicit request from outside the list: scroll whether or not it is visible.
+   *
+   * Unguarded on visibility, unlike the effect above, and that is the difference
+   * between the two. A locator result is a promise to *show* the agent a card —
+   * landing them next to it because it happened to be four rows down and
+   * technically rendered leaves them hunting for the thing that just flashed.
+   *
+   * Guarded on the nonce instead, because the effect also re-runs whenever the
+   * branch array changes identity — which a background refetch does. Without this
+   * the list would yank back to a card clicked minutes ago while the agent was
+   * reading a different one. A request naming a branch that is not in the list
+   * yet is deliberately left unhandled so that it is honoured if it arrives.
+   */
+  const honoured = useRef(0);
+  useEffect(() => {
+    if (!focus || focus.nonce === honoured.current) return;
+    const index = branches.findIndex((entry) => entry.branch_no === focus.branchNo);
+    if (index < 0) return;
+    honoured.current = focus.nonce;
+    scrollToIndex(index);
+  }, [focus, branches, scrollToIndex]);
 
   if (loading) {
     return (
@@ -171,6 +213,7 @@ export function BranchList({
                   favourite={favourites.has(branch.branch_no)}
                   tokens={tokens}
                   canEdit={canEdit}
+                  emphasis={focus?.branchNo === branch.branch_no ? focus.nonce : 0}
                   onSelect={onSelect}
                   onToggleFavourite={onToggleFavourite}
                   onEdit={onEdit}

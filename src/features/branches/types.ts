@@ -61,6 +61,12 @@ export interface BranchView extends Branch {
    * worth showing on a card that already names the city in its header.
    */
   addressLine: string | null;
+  /**
+   * Whatever the address names after the district — usually a street, sometimes
+   * a street and a landmark. Null when the address does not follow the sheet's
+   * `city / district / street` shape; see `extractStreet`.
+   */
+  street: string | null;
   /** Short, readable stand-in for the Google Maps URL, e.g. "maps.app.goo.gl". */
   mapsLabel: string | null;
 }
