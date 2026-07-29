@@ -123,9 +123,46 @@ describe("editDistance", () => {
 });
 
 describe("buildLocationIndex", () => {
-  it("indexes cities, districts and areas", () => {
+  it("indexes cities, districts, areas and the branches themselves", () => {
     const kinds = new Set(INDEX.entries.map((entry) => entry.kind));
-    expect(kinds).toEqual(new Set(["city", "district", "area"]));
+    expect(kinds).toEqual(new Set(["city", "district", "area", "branch"]));
+  });
+
+  it("resolves a branch by its code, at that branch's exact position", () => {
+    const [hit] = find("P0021");
+    expect(hit.kind).toBe("branch");
+    expect(hit.branchNo).toBe("P0021");
+    // Not a centroid — the branch's own recorded coordinate.
+    expect(hit.point.lat).toBeCloseTo(21.55, 5);
+    expect(hit.point.lng).toBeCloseTo(39.16, 5);
+  });
+
+  it("resolves a branch by a chunk of its full written address", () => {
+    const [hit] = find("ش علي النقيب");
+    // The street is also indexed as an area; either is a correct answer for
+    // this query, and both point at the same branch.
+    expect(hit.point.lat).toBeCloseTo(24.5372826, 4);
+  });
+
+  it("does not match a branch on fields that are not a location", () => {
+    // The crude fallback this engine replaced matched the whole search
+    // haystack, so a district query could hit a branch because of its area
+    // manager's name or its phone number.
+    const withManager = buildLocationIndex(
+      decorate([
+        branch({
+          branch_no: "P9",
+          city: "الرياض",
+          address: "الرياض/ حي النخيل",
+          area_manager: "DR / Hazem Ali",
+          phone: "+966599089497",
+          latitude: 24.6,
+          longitude: 46.7,
+        }),
+      ]),
+    );
+    expect(searchLocations(withManager, "Hazem")).toHaveLength(0);
+    expect(searchLocations(withManager, "599089497")).toHaveLength(0);
   });
 
   it("takes a city's point from the centroid of its located branches", () => {
@@ -206,6 +243,20 @@ describe("searchLocations", () => {
 
   it("returns nothing for a query that is only noise words", () => {
     expect(find("حي شارع")).toHaveLength(0);
+  });
+
+  it("can find every indexed place by its own name", () => {
+    // The completeness invariant for the bigram postings lists. Scoring now
+    // runs only over candidates the postings hand it, so a gap in those lists
+    // would silently make places unfindable — and nothing else in this suite
+    // would notice, because each other test names one specific place.
+    for (const entry of INDEX.entries) {
+      const found = searchLocations(INDEX, entry.name, 50);
+      expect(
+        found.some((match) => match.entry.id === entry.id),
+        `"${entry.name}" (${entry.kind}) is indexed but not findable by its own name`,
+      ).toBe(true);
+    }
   });
 });
 

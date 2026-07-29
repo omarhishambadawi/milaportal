@@ -25,7 +25,7 @@ import type { BranchView } from "./types";
  * its result array.
  */
 
-export type LocationKind = "city" | "district" | "area";
+export type LocationKind = "city" | "district" | "area" | "branch";
 
 export interface LocationEntry {
   /** Stable across rebuilds of the same dataset; used as a React key. */
@@ -41,6 +41,8 @@ export interface LocationEntry {
   /** Centre of mass of the branches that back this place. */
   point: LatLng;
   branchCount: number;
+  /** Set on a `branch` entry: the code, so a hit can name the branch itself. */
+  branchNo?: string;
   /** Folded, prefix-stripped primary name. The key exact and prefix tests use. */
   key: string;
   /** Every folded string that should match this entry, `key` included. */
@@ -49,6 +51,24 @@ export interface LocationEntry {
 
 export interface LocationIndex {
   entries: readonly LocationEntry[];
+  /**
+   * Bigram → indices into `entries`, built once so a keystroke costs a handful
+   * of map lookups instead of a pass over every entry and every one of its
+   * terms. See `candidateIndices` for how the lists are combined — the short
+   * answer is "rarest first", because "ال" is in nearly every Saudi place name
+   * and its list is therefore almost the whole gazetteer.
+   */
+  byBigram: ReadonlyMap<string, readonly number[]>;
+  /** First character → entry indices, for one-character queries. */
+  byFirstChar: ReadonlyMap<string, readonly number[]>;
+}
+
+/** Overlapping two-character windows: "riyadh" → ri, iy, ya, ad, dh. */
+function bigrams(text: string): string[] {
+  if (text.length < 2) return [];
+  const out: string[] = [];
+  for (let i = 0; i < text.length - 1; i += 1) out.push(text.slice(i, i + 2));
+  return out;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -178,6 +198,9 @@ interface Bucket {
   name: string;
   city: string | null;
   points: LatLng[];
+  /** Extra folded strings this bucket answers to — a branch's code and address. */
+  extraTerms?: string[];
+  branchNo?: string;
 }
 
 function positionOf(branch: BranchView): LatLng | null {
@@ -204,6 +227,10 @@ function bucketKey(kind: LocationKind, city: string | null, name: string): strin
  *   - **area** — any other address segment: streets, markets, landmarks. Noisy,
  *     ranked last, and included because "حراج الصواريخ" is a real thing a
  *     customer says and the sheet does record it.
+ *   - **branch** — the branch itself, answering to its code and its full written
+ *     address. This is the "search the uploaded dataset" step: an agent who
+ *     types "P0021" or pastes the whole address line has named a location just
+ *     as precisely as a district, and its point is exact rather than a centroid.
  *
  * Only branches with coordinates contribute. A place backed by nothing
  * locatable cannot be an origin, so indexing it would offer the agent a
@@ -239,6 +266,22 @@ export function buildLocationIndex(branches: readonly BranchView[]): LocationInd
       if (segment.length > 40) continue;
       add("area", segment, branch.city, point);
     }
+
+    // The branch itself. Keyed by code so two branches never share a bucket,
+    // and answering to its full address so pasting an address line works.
+    buckets.set(`branch::${normalizePlace(branch.branch_no)}`, {
+      name: branch.branch_no,
+      city: branch.city,
+      points: [point],
+      branchNo: branch.branch_no,
+      // Address only. Deliberately *not* the manager's name or the phone
+      // number: matching a location query against those is what the crude
+      // fallback this replaced used to do, and "الحزم" hitting a branch because
+      // its area manager is called Hazem is a wrong answer that looks right.
+      extraTerms: [branch.address, branch.addressLine].filter((value): value is string =>
+        Boolean(value),
+      ),
+    });
   }
 
   const entries: LocationEntry[] = [];
@@ -250,6 +293,10 @@ export function buildLocationIndex(branches: readonly BranchView[]): LocationInd
     const key = normalizePlace(bucket.name);
 
     const terms = new Set<string>([key, withoutArticle(key)]);
+    for (const extra of bucket.extraTerms ?? []) {
+      const normalized = normalizePlace(extra);
+      if (normalized) terms.add(normalized);
+    }
 
     // Cities carry a curated English/transliteration table. Districts do not —
     // the sheet writes them in Arabic only — which is the main reason English
@@ -271,12 +318,35 @@ export function buildLocationIndex(branches: readonly BranchView[]): LocationInd
       cityEnglish: bucket.city ? cityEnglish(bucket.city) : english,
       point,
       branchCount: bucket.points.length,
+      branchNo: bucket.branchNo,
       key,
       terms: [...terms].filter(Boolean),
     });
   }
 
-  return { entries };
+  // Postings. Built once here so a keystroke costs a few map lookups instead of
+  // a pass over every entry and every one of its terms.
+  const byBigram = new Map<string, number[]>();
+  const byFirstChar = new Map<string, number[]>();
+  const push = (map: Map<string, number[]>, gram: string, index: number) => {
+    const list = map.get(gram);
+    if (list) {
+      // Terms of one entry share bigrams constantly; the list is append-ordered
+      // so the duplicate is always the tail.
+      if (list[list.length - 1] !== index) list.push(index);
+    } else {
+      map.set(gram, [index]);
+    }
+  };
+
+  entries.forEach((entry, index) => {
+    for (const term of entry.terms) {
+      if (term.length > 0) push(byFirstChar, term[0], index);
+      for (const gram of bigrams(term)) push(byBigram, gram, index);
+    }
+  });
+
+  return { entries, byBigram, byFirstChar };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -296,8 +366,15 @@ const SCORE = {
   fuzzy: 4,
 } as const;
 
-/** Cities first when everything else ties: they are curated, areas are guessed. */
-const KIND_RANK: Record<LocationKind, number> = { city: 0, district: 1, area: 2 };
+/**
+ * Cities first when everything else ties: they are curated, areas are guessed.
+ *
+ * `branch` sits last not because it is least trustworthy — its point is exact —
+ * but because it is the most specific: someone who types a name matching both a
+ * district and a branch inside it almost always means the district. An exact
+ * code match scores 0 and outranks any of this regardless.
+ */
+const KIND_RANK: Record<LocationKind, number> = { city: 0, district: 1, area: 2, branch: 3 };
 
 export interface LocationMatch {
   entry: LocationEntry;
@@ -329,10 +406,57 @@ function scoreEntry(entry: LocationEntry, query: string, budget: number): number
 }
 
 /**
+ * Entries worth scoring for this query.
+ *
+ * Uses the query's **rarest** bigrams, not all of them, and that detail is the
+ * whole value of the index in Arabic. "ال" opens most Saudi place names, so its
+ * posting list is very nearly the entire gazetteer; a union over every gram is
+ * therefore barely narrower than a full scan. Measured over a synthetic set of
+ * typical queries: ~65% of the index with every gram, ~30% with the rarest ones.
+ * The remaining 30% is Arabic's fault rather than the index's — place names here
+ * share a great deal of surface, and no bigram scheme escapes that entirely.
+ *
+ * Correctness of dropping the common grams:
+ *
+ *   - An exact, prefix or substring match contains the query verbatim, so it
+ *     appears in the posting list of *every* query gram — including whichever
+ *     one is rarest. Never missed.
+ *   - A match within `budget` edits has at most `2 * budget` of its bigrams
+ *     disturbed, since one edit touches two overlapping windows. Taking
+ *     `2 * budget + 1` lists therefore guarantees at least one survives intact,
+ *     so the entry is still a candidate.
+ *
+ * When the query has fewer grams than that, all of them are used — which is the
+ * most that can be done, and matches what a full scan would have found anyway.
+ */
+function candidateIndices(index: LocationIndex, query: string, budget: number): readonly number[] {
+  if (query.length < 2) return index.byFirstChar.get(query[0]) ?? [];
+
+  const lists: (readonly number[])[] = [];
+  for (const gram of new Set(bigrams(query))) {
+    const postings = index.byBigram.get(gram);
+    // A gram absent from the index means no term contains it. For an exact or
+    // substring match that would be disqualifying, but a fuzzy match may still
+    // be within budget, so this only skips the list rather than the query.
+    if (postings) lists.push(postings);
+  }
+  if (lists.length === 0) return [];
+
+  lists.sort((a, b) => a.length - b.length);
+  const needed = Math.min(lists.length, 2 * budget + 1);
+
+  const seen = new Set<number>();
+  for (let i = 0; i < needed; i += 1) {
+    for (const entry of lists[i]) seen.add(entry);
+  }
+  return [...seen];
+}
+
+/**
  * Places matching what has been typed, best first.
  *
  * Runs on every keystroke — it backs the autocomplete as well as submission —
- * so it is one pass over the index with an early bail per entry.
+ * so it scores only the entries the postings lists put in front of it.
  */
 export function searchLocations(index: LocationIndex, query: string, limit = 8): LocationMatch[] {
   const normalized = normalizePlace(query);
@@ -341,7 +465,9 @@ export function searchLocations(index: LocationIndex, query: string, limit = 8):
   const budget = tolerance(normalized.length);
   const matches: LocationMatch[] = [];
 
-  for (const entry of index.entries) {
+  for (const position of candidateIndices(index, normalized, budget)) {
+    const entry = index.entries[position];
+    if (!entry) continue;
     const score = scoreEntry(entry, normalized, budget);
     if (score != null) matches.push({ entry, score });
   }
@@ -401,8 +527,11 @@ export function describeLocation(entry: LocationEntry): string {
   return city ? `${label} — ${city}` : label;
 }
 
-/** What an entry's centroid was derived from, for the origin line. */
+/** What an entry's point was derived from, for the origin line. */
 export function describeLocationSource(entry: LocationEntry): string {
+  // A branch entry is not a centroid at all — it is one recorded coordinate, so
+  // "centre of 1 branch" would understate what is actually known.
+  if (entry.kind === "branch") return "Exact position of this branch, from the directory";
   const scope = entry.kind === "city" ? "city" : entry.kind === "district" ? "district" : "area";
   const backing = entry.branchCount === 1 ? "1 branch" : `${entry.branchCount} branches`;
   return `Centre of the ${backing} in this ${scope} — approximate, from the directory`;

@@ -70,9 +70,19 @@ const GOOGLE_MAPS_CONNECT = "https://maps.googleapis.com https://maps.gstatic.co
 const GOOGLE_MAPS_IMG =
   "https://maps.googleapis.com https://maps.gstatic.com https://*.googleapis.com https://*.ggpht.com https://*.googleusercontent.com";
 
+/**
+ * Nominatim, the Branch Locator's geocoding fallback.
+ *
+ * Reached only when the local gazetteer cannot place a typed location, and only
+ * for `connect-src` — no script, no image, no frame comes from it. Omitting it
+ * would make the fallback fail silently under CSP, which looks exactly like
+ * "OpenStreetMap does not know that place".
+ */
+const NOMINATIM_CONNECT = "https://nominatim.openstreetmap.org";
+
 /** Origins the app legitimately talks to (Supabase REST, Auth, Storage, Realtime). */
 function connectSources(): string {
-  const urls = new Set<string>(["'self'"]);
+  const urls = new Set<string>(["'self'", NOMINATIM_CONNECT]);
   for (const raw of [process.env.SUPABASE_URL, process.env.VITE_SUPABASE_URL]) {
     if (!raw) continue;
     try {

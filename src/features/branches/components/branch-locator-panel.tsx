@@ -11,6 +11,7 @@ import {
   Phone,
   Search,
   Signpost,
+  Store,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -38,12 +39,14 @@ const KIND_ICON: Record<LocationKind, typeof MapPin> = {
   city: Building2,
   district: MapPin,
   area: Signpost,
+  branch: Store,
 };
 
 const KIND_LABEL: Record<LocationKind, string> = {
   city: "City",
   district: "District",
   area: "Area",
+  branch: "Branch",
 };
 
 interface Props {
@@ -213,7 +216,7 @@ export function BranchLocatorPanel({
                 "text-foreground/80",
                 origin.kind === "place" ? "font-medium" : "font-mono",
               )}
-              dir="auto"
+              dir={origin.kind === "place" ? "auto" : "ltr"}
             >
               {origin.label}
             </span>

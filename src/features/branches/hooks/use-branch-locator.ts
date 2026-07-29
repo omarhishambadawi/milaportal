@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
+import { geocodeWithOpenStreetMap } from "../geocode-nominatim";
 import { buildLocationIndex, searchLocations, type LocationEntry } from "../location-index";
 import {
   LOCATOR_LIMIT,
@@ -93,7 +94,9 @@ export function useBranchLocator(branches: BranchView[]) {
       }
 
       setSearching(true);
-      const resolution = await resolveOrigin(trimmed, index);
+      // The geocoder is passed on every search but reached only when the local
+      // index has nothing — `resolveOrigin` owns that ordering.
+      const resolution = await resolveOrigin(trimmed, index, geocodeWithOpenStreetMap);
       if (mine !== token.current) return;
 
       if (resolution.choices.length > 0) {

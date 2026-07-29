@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it, vi } from "vitest";
 import { buildLocationIndex } from "../location-index";
 import { rankNearestBranches, resolveOrigin } from "../locator";
 import { decorate } from "../search";
@@ -138,16 +138,59 @@ describe("resolveOrigin", () => {
     expect(error).toBeNull();
   });
 
-  it("prefers a geocoder over the local gazetteer when one is supplied", async () => {
-    const geocode = async () => ({ lat: 21.4858, lng: 39.1925 });
-    const { origin } = await resolveOrigin("some street in Jeddah", INDEX, geocode);
-    expect(origin?.detail).toBe("Geocoded address");
-    expect(origin?.point.lat).toBeCloseTo(21.4858, 4);
+  it("never reaches the geocoder when the local index answers", async () => {
+    // The cascade the brief specifies: local resolver, then the dataset, and
+    // OpenStreetMap only if both came up empty. A geocoder that fires on a
+    // query the directory could answer is a network call — and a bill, once
+    // this is Google — for something already known.
+    const geocode = vi.fn(async () => ({ lat: 0, lng: 0 }));
+
+    for (const local of ["الحزم", "الرياض", "jeddah", "P0001", "24.5372, 46.6456"]) {
+      await resolveOrigin(local, INDEX, geocode);
+    }
+    expect(geocode).not.toHaveBeenCalled();
+  });
+
+  it("does not reach the geocoder for an ambiguous local match either", async () => {
+    // The place *was* found; the only open question is which city. Asking a
+    // geocoder would swap a question the agent can answer for a guess they
+    // cannot check.
+    const ambiguous = buildLocationIndex(
+      decorate([
+        branch({
+          branch_no: "A1",
+          city: "الرياض",
+          address: "الرياض/ حي الروضة",
+          latitude: 24.7,
+          longitude: 46.78,
+        }),
+        branch({
+          branch_no: "A2",
+          city: "جدة",
+          address: "جدة/ حي الروضة",
+          latitude: 21.55,
+          longitude: 39.16,
+        }),
+      ]),
+    );
+    const geocode = vi.fn(async () => ({ lat: 0, lng: 0 }));
+    const { choices } = await resolveOrigin("الروضة", ambiguous, geocode);
+    expect(choices).toHaveLength(2);
+    expect(geocode).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the geocoder only when nothing local matches", async () => {
+    const geocode = vi.fn(async () => ({ lat: 26.4207, lng: 50.0888 }));
+    const { origin } = await resolveOrigin("حي لا يوجد في الدليل", INDEX, geocode);
+    expect(geocode).toHaveBeenCalledTimes(1);
+    expect(origin?.kind).toBe("geocoded");
+    expect(origin?.detail).toMatch(/openstreetmap/i);
+    expect(origin?.point.lat).toBeCloseTo(26.4207, 4);
   });
 
   it("ignores a geocoder that returns a point outside the country", async () => {
     const geocode = async () => ({ lat: 51.5, lng: -0.12 });
-    const { origin, error } = await resolveOrigin("London", INDEX, geocode);
+    const { origin, error } = await resolveOrigin("مكان مجهول تماما", INDEX, geocode);
     expect(origin).toBeNull();
     expect(error).toMatch(/no city, district or area/i);
   });

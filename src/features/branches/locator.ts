@@ -25,8 +25,8 @@ import type { BranchView } from "./types";
  * arrive later, and neither should force a change above this file.
  */
 
-/** The nearest branches to show. Five, per the brief. */
-export const LOCATOR_LIMIT = 5;
+/** The nearest branches to show. */
+export const LOCATOR_LIMIT = 10;
 
 export type LocatorResult = Ranked<BranchView>;
 
@@ -37,7 +37,7 @@ export type LocatorResult = Ranked<BranchView>;
  * *from*. "2.3 km from the pin they sent" and "2.3 km from the middle of Riyadh"
  * are different claims, and only one of them is worth repeating on a call.
  */
-export type OriginKind = "coordinates" | "map-link" | "place";
+export type OriginKind = "coordinates" | "map-link" | "place" | "geocoded";
 
 export interface ResolvedOrigin {
   point: LatLng;
@@ -155,13 +155,22 @@ export function originFromPlace(entry: LocationEntry): ResolvedOrigin {
 /**
  * Where the customer is.
  *
- * Ordered by how much the answer can be trusted: an explicit coordinate pair
- * beats a link, a link beats a geocoder, and a geocoder beats the local
- * gazetteer — which is last not because it is bad but because it answers with
- * the centre of a district rather than a doorstep.
+ * A strict cascade, and the order is the contract:
  *
- * `geocode` is the seam a real provider drops into and is unused today; the
- * gazetteer below is what makes place names work without one.
+ *   0. An explicit coordinate pair, or one read out of a pasted map link. The
+ *      agent has already given an exact answer; nothing else is consulted.
+ *   1. **The local resolver** — the gazetteer of cities, districts and areas
+ *      built from the uploaded dataset.
+ *   2. **The dataset itself** — branch codes and full written addresses, which
+ *      the gazetteer carries as `branch` entries, so steps 1 and 2 are one
+ *      lookup rather than two passes over the same index.
+ *   3. **`geocode`** — OpenStreetMap today, Google tomorrow. Reached only when
+ *      1 and 2 found nothing, which is what "never call OpenStreetMap if the
+ *      location was already resolved locally" means in code.
+ *
+ * An *ambiguous* local result also stops the cascade. The place was found; the
+ * only open question is which city, and asking a geocoder would replace a
+ * question the agent can answer with a guess they cannot check.
  */
 export async function resolveOrigin(
   text: string,
@@ -189,6 +198,16 @@ export async function resolveOrigin(
     };
   }
 
+  // Steps 1 and 2.
+  const place = resolvePlace(index, trimmed);
+  if (place.status === "found") {
+    return { origin: originFromPlace(place.entry), choices: [], error: null };
+  }
+  if (place.status === "ambiguous") {
+    return { origin: null, choices: place.choices, error: null };
+  }
+
+  // Step 3. Only now, and only if a provider was supplied.
   if (geocode) {
     const located = await geocode(trimmed);
     if (located && isWithin(located, KSA_BOUNDS)) {
@@ -196,21 +215,13 @@ export async function resolveOrigin(
         origin: {
           point: located,
           label: formatLatLng(located, 5),
-          kind: "coordinates",
-          detail: "Geocoded address",
+          kind: "geocoded",
+          detail: "Found on OpenStreetMap — outside the branch directory",
         },
         choices: [],
         error: null,
       };
     }
-  }
-
-  const place = resolvePlace(index, trimmed);
-  if (place.status === "found") {
-    return { origin: originFromPlace(place.entry), choices: [], error: null };
-  }
-  if (place.status === "ambiguous") {
-    return { origin: null, choices: place.choices, error: null };
   }
 
   return { origin: null, choices: [], error: UNPLACEABLE };
