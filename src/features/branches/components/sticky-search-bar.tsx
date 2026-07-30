@@ -104,7 +104,6 @@ export function StickySearchBar({
       )}
     >
       <div className="mx-auto flex max-w-[1600px] items-center gap-2 px-3 py-2 sm:px-4 lg:px-6 xl:px-8">
-
         <Crosshair className="hidden h-4 w-4 shrink-0 text-primary sm:block" aria-hidden />
 
         {selected ? (

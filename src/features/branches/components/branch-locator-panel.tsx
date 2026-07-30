@@ -72,7 +72,7 @@ const KIND_LABEL: Record<LocationKind, string> = {
  * padding. Named so the "about five rows" intent below survives the next spacing
  * change instead of quietly drifting to four and a half.
  */
-const RESULT_ROW_HEIGHT = 74;
+const RESULT_ROW_HEIGHT = 58;
 
 /** Visible rows before the list starts scrolling internally. */
 const VISIBLE_RESULTS = 5;
@@ -641,7 +641,6 @@ function DirectionsButton({
   );
 }
 
-
 /**
  * Distance, then the estimate under it.
  *
@@ -699,7 +698,6 @@ function DistanceBlock({ result, size }: { result: LocatorResult; size: "row" | 
   );
 }
 
-
 /**
  * The recommended branch.
  *
@@ -755,7 +753,7 @@ function RecommendedBranch({
           .filter(Boolean)
           .join(". ")}
         className={cn(
-          "flex min-w-0 flex-1 cursor-pointer items-start gap-3 px-2.5 py-2 text-left",
+          "flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 px-2.5 py-1.5 text-left",
           "transition-colors duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
           !active && "hover:bg-accent/30",
         )}
@@ -779,7 +777,7 @@ function RecommendedBranch({
           </span>
 
           <span
-            className="mt-0.5 block truncate text-[15px] font-semibold leading-5 tracking-tight text-foreground"
+            className="block truncate text-[13.5px] font-semibold leading-[18px] tracking-tight text-foreground"
             dir="auto"
           >
             {cityPrimary}
@@ -793,7 +791,7 @@ function RecommendedBranch({
           {/* District and street on one line, separated by a dot. Two icon rows
               cost two lines to carry a single address. */}
           {(branch.district || branch.street) && (
-            <span className="mt-px flex min-w-0 items-center gap-1 text-[11.5px] leading-4 text-muted-foreground">
+            <span className="flex min-w-0 items-center gap-1 text-[11px] leading-4 text-muted-foreground">
               <MapPin className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
               <span className="truncate" dir="auto">
                 {[branch.district, branch.street].filter(Boolean).join(" · ")}
@@ -955,7 +953,7 @@ function LocatorRow({
             .filter(Boolean)
             .join(". ")}
           className={cn(
-            "group flex min-w-0 flex-1 cursor-pointer items-start gap-2.5 px-2.5 py-1.5 text-left",
+            "group flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 px-2.5 py-1 text-left",
             // 200ms and on both colour and shadow: a row is a click target, and a
             // target that lifts very slightly under the pointer reads as pressable
             // in a way a background tint alone does not.
@@ -967,7 +965,7 @@ function LocatorRow({
           <span
             aria-hidden
             className={cn(
-              "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] font-bold tabular-nums transition-colors duration-150",
+              "grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] font-bold tabular-nums transition-colors duration-150",
               active
                 ? "bg-primary text-primary-foreground"
                 : "bg-muted text-muted-foreground group-hover:bg-primary/15 group-hover:text-primary",
@@ -997,7 +995,7 @@ function LocatorRow({
             </span>
 
             <span
-              className="block truncate text-[14px] font-semibold leading-5 tracking-tight text-foreground"
+              className="block truncate text-[13.5px] font-semibold leading-[18px] tracking-tight text-foreground"
               dir="auto"
             >
               {cityPrimary}
@@ -1015,7 +1013,7 @@ function LocatorRow({
                 that a middle dot supplies. The street keeps its own icon inside the
                 line so the two halves stay distinguishable at a glance. */}
             {addressLine && (
-              <span className="mt-px flex min-w-0 items-center gap-1 text-[11.5px] leading-4 text-muted-foreground">
+              <span className="flex min-w-0 items-center gap-1 text-[11px] leading-4 text-muted-foreground">
                 <MapPin className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
                 <span className="truncate" dir="auto" title={addressLine}>
                   {branch.district && <span className="text-foreground/75">{branch.district}</span>}

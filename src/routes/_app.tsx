@@ -162,7 +162,6 @@ function AppLayout() {
       // Locator's sticky bar) can sit beside the sidebar instead of over it.
       style={{ "--app-sidebar-w": expanded ? "16rem" : "76px" } as CSSProperties}
     >
-
       <AppSidebar
         nav={nav}
         activePath={activePath}
