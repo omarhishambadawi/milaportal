@@ -656,11 +656,12 @@ function DistanceBlock({ result, size }: { result: LocatorResult; size: "row" | 
   const hero = size === "hero";
 
   return (
-    <div className="flex flex-col items-end gap-1">
+    // Fixed width so the distance column lines up across every row, hero included.
+    <div className="flex w-[86px] shrink-0 flex-col items-end gap-0.5">
       <div
         className={cn(
           "whitespace-nowrap font-bold leading-none tabular-nums text-foreground",
-          hero ? "text-[26px]" : "text-lg",
+          hero ? "text-[20px]" : "text-base",
         )}
       >
         {formatDistance(result.distance.metres)}
@@ -668,12 +669,12 @@ function DistanceBlock({ result, size }: { result: LocatorResult; size: "row" | 
 
       {/* Directly under the distance, because the two are read as one statement:
           how far, and whether that distance can actually be served. */}
-      <CoverageBadge tier={tier} compact={!hero} />
+      <CoverageBadge tier={tier} compact />
 
       <div className="text-right">
         <div
           className={cn(
-            "whitespace-nowrap text-[9px] font-medium uppercase tracking-wide",
+            "whitespace-nowrap text-[9px] font-medium uppercase tracking-wide leading-3",
             tier === "outside" ? "text-muted-foreground/50" : "text-muted-foreground/80",
           )}
         >
@@ -683,7 +684,7 @@ function DistanceBlock({ result, size }: { result: LocatorResult; size: "row" | 
           title={result.eta.detail}
           className={cn(
             "whitespace-nowrap font-semibold leading-4 tabular-nums",
-            hero ? "text-[13px]" : "text-[11.5px]",
+            hero ? "text-[12px]" : "text-[11.5px]",
             // Demoted when the branch cannot deliver normally: an ETA for a
             // trip that needs an exception is not yet a real promise, and giving
             // it full weight beside a red badge invites reading past the badge.
@@ -696,6 +697,7 @@ function DistanceBlock({ result, size }: { result: LocatorResult; size: "row" | 
     </div>
   );
 }
+
 
 /**
  * The recommended branch.
