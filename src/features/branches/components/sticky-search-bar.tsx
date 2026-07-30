@@ -95,12 +95,15 @@ export function StickySearchBar({
       // of. Kept out of the accessibility tree and off the tab order while hidden.
       aria-hidden={!show}
       className={cn(
-        "fixed inset-x-0 top-0 z-30 border-b border-border/60 bg-background/85 backdrop-blur-md",
+        // Sits below the 4rem app header and to the right of the sidebar, whose
+        // current width the layout publishes as --app-sidebar-w.
+        "fixed right-0 left-0 top-16 z-20 md:left-[var(--app-sidebar-w)]",
+        "border-b border-border/60 bg-background/85 backdrop-blur-md",
         "shadow-sm transition-[opacity,transform] duration-200 ease-out",
         show ? "translate-y-0 opacity-100" : "pointer-events-none -translate-y-full opacity-0",
       )}
     >
-      <div className="mx-auto flex max-w-[1600px] items-center gap-2 px-3 py-2 sm:px-4 lg:px-6">
+      <div className="mx-auto flex max-w-[1600px] items-center gap-2 px-3 py-2 sm:px-4 lg:px-6 xl:px-8">
         <Crosshair className="hidden h-4 w-4 shrink-0 text-primary sm:block" aria-hidden />
 
         {selected ? (

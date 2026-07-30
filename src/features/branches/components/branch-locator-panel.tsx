@@ -72,7 +72,7 @@ const KIND_LABEL: Record<LocationKind, string> = {
  * padding. Named so the "about five rows" intent below survives the next spacing
  * change instead of quietly drifting to four and a half.
  */
-const RESULT_ROW_HEIGHT = 74;
+const RESULT_ROW_HEIGHT = 58;
 
 /** Visible rows before the list starts scrolling internally. */
 const VISIBLE_RESULTS = 5;
@@ -604,18 +604,21 @@ function DirectionsButton({
   const href = branchDirectionsUrl(origin.point, result.item);
   const label = `Directions from ${origin.label} to ${result.item.branch_no}`;
 
+  // A fixed-width column, so the action lines up vertically across every row.
+  const shape = "h-8 w-[104px] shrink-0 gap-1.5 px-2 text-xs";
+
   if (!href) {
     return (
       <span
         aria-hidden
         title="No coordinates on file for this branch"
         className={cn(
-          "inline-flex shrink-0 items-center justify-center gap-1 rounded-md text-muted-foreground/25",
-          compact ? "h-9 w-9" : "h-8 px-2",
+          "inline-flex items-center justify-center rounded-md text-muted-foreground/25",
+          shape,
         )}
       >
         <Navigation className="h-3.5 w-3.5" />
-        {!compact && <span className="text-xs">Directions</span>}
+        <span>Directions</span>
       </span>
     );
   }
@@ -625,17 +628,14 @@ function DirectionsButton({
       asChild
       size="sm"
       variant={compact ? "ghost" : "outline"}
-      // 36px square when compact — the smallest comfortable touch target, and the
-      // old 28px one was under every guideline for a control an agent taps on a
-      // tablet on the call floor.
-      className={cn("shrink-0 gap-1 px-2 text-xs", compact ? "h-9 w-9 px-0" : "h-8")}
+      className={shape}
       // The row underneath is a button too; without this, asking for directions
       // would also select the branch and scroll the page away.
       onClick={(event) => event.stopPropagation()}
     >
       <a href={href} target="_blank" rel="noopener noreferrer" title={label} aria-label={label}>
         <Navigation className="h-3.5 w-3.5" aria-hidden />
-        {compact ? <span className="sr-only">Directions</span> : "Directions"}
+        <span aria-hidden>Directions</span>
       </a>
     </Button>
   );
@@ -656,11 +656,12 @@ function DistanceBlock({ result, size }: { result: LocatorResult; size: "row" | 
   const hero = size === "hero";
 
   return (
-    <div className="flex flex-col items-end gap-1">
+    // Fixed width so the distance column lines up across every row, hero included.
+    <div className="flex w-[86px] shrink-0 flex-col items-end gap-0.5">
       <div
         className={cn(
           "whitespace-nowrap font-bold leading-none tabular-nums text-foreground",
-          hero ? "text-[26px]" : "text-lg",
+          hero ? "text-[20px]" : "text-base",
         )}
       >
         {formatDistance(result.distance.metres)}
@@ -668,12 +669,12 @@ function DistanceBlock({ result, size }: { result: LocatorResult; size: "row" | 
 
       {/* Directly under the distance, because the two are read as one statement:
           how far, and whether that distance can actually be served. */}
-      <CoverageBadge tier={tier} compact={!hero} />
+      <CoverageBadge tier={tier} compact />
 
       <div className="text-right">
         <div
           className={cn(
-            "whitespace-nowrap text-[9px] font-medium uppercase tracking-wide",
+            "whitespace-nowrap text-[9px] font-medium uppercase tracking-wide leading-3",
             tier === "outside" ? "text-muted-foreground/50" : "text-muted-foreground/80",
           )}
         >
@@ -683,7 +684,7 @@ function DistanceBlock({ result, size }: { result: LocatorResult; size: "row" | 
           title={result.eta.detail}
           className={cn(
             "whitespace-nowrap font-semibold leading-4 tabular-nums",
-            hero ? "text-[13px]" : "text-[11.5px]",
+            hero ? "text-[12px]" : "text-[11.5px]",
             // Demoted when the branch cannot deliver normally: an ETA for a
             // trip that needs an exception is not yet a real promise, and giving
             // it full weight beside a red badge invites reading past the badge.
@@ -752,7 +753,7 @@ function RecommendedBranch({
           .filter(Boolean)
           .join(". ")}
         className={cn(
-          "flex min-w-0 flex-1 cursor-pointer items-start gap-3 px-2.5 py-2 text-left",
+          "flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 px-2.5 py-1.5 text-left",
           "transition-colors duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
           !active && "hover:bg-accent/30",
         )}
@@ -776,7 +777,7 @@ function RecommendedBranch({
           </span>
 
           <span
-            className="mt-0.5 block truncate text-[15px] font-semibold leading-5 tracking-tight text-foreground"
+            className="block truncate text-[13.5px] font-semibold leading-[18px] tracking-tight text-foreground"
             dir="auto"
           >
             {cityPrimary}
@@ -790,7 +791,7 @@ function RecommendedBranch({
           {/* District and street on one line, separated by a dot. Two icon rows
               cost two lines to carry a single address. */}
           {(branch.district || branch.street) && (
-            <span className="mt-px flex min-w-0 items-center gap-1 text-[11.5px] leading-4 text-muted-foreground">
+            <span className="flex min-w-0 items-center gap-1 text-[11px] leading-4 text-muted-foreground">
               <MapPin className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
               <span className="truncate" dir="auto">
                 {[branch.district, branch.street].filter(Boolean).join(" · ")}
@@ -952,7 +953,7 @@ function LocatorRow({
             .filter(Boolean)
             .join(". ")}
           className={cn(
-            "group flex min-w-0 flex-1 cursor-pointer items-start gap-2.5 px-2.5 py-1.5 text-left",
+            "group flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 px-2.5 py-1 text-left",
             // 200ms and on both colour and shadow: a row is a click target, and a
             // target that lifts very slightly under the pointer reads as pressable
             // in a way a background tint alone does not.
@@ -964,7 +965,7 @@ function LocatorRow({
           <span
             aria-hidden
             className={cn(
-              "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] font-bold tabular-nums transition-colors duration-150",
+              "grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] font-bold tabular-nums transition-colors duration-150",
               active
                 ? "bg-primary text-primary-foreground"
                 : "bg-muted text-muted-foreground group-hover:bg-primary/15 group-hover:text-primary",
@@ -994,7 +995,7 @@ function LocatorRow({
             </span>
 
             <span
-              className="block truncate text-[14px] font-semibold leading-5 tracking-tight text-foreground"
+              className="block truncate text-[13.5px] font-semibold leading-[18px] tracking-tight text-foreground"
               dir="auto"
             >
               {cityPrimary}
@@ -1012,7 +1013,7 @@ function LocatorRow({
                 that a middle dot supplies. The street keeps its own icon inside the
                 line so the two halves stay distinguishable at a glance. */}
             {addressLine && (
-              <span className="mt-px flex min-w-0 items-center gap-1 text-[11.5px] leading-4 text-muted-foreground">
+              <span className="flex min-w-0 items-center gap-1 text-[11px] leading-4 text-muted-foreground">
                 <MapPin className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
                 <span className="truncate" dir="auto" title={addressLine}>
                   {branch.district && <span className="text-foreground/75">{branch.district}</span>}
