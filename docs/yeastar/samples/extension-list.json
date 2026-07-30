@@ -1,0 +1,254 @@
+{
+  "_note": "Authoritative extension roster — the only reliable way to tell an agent extension from a queue/IVR number.",
+  "_captured": "2026-07-30",
+  "_redaction": "External phone numbers, IPs and emails masked. Internal extension/queue numbers kept verbatim.",
+  "request": {
+    "method": "GET",
+    "endpoint": "/openapi/v1.0/extension/list",
+    "query": {
+      "page": 1,
+      "page_size": 200,
+      "access_token": "<redacted>"
+    }
+  },
+  "httpStatus": 200,
+  "errcode": 0,
+  "errmsg": "SUCCESS",
+  "response": {
+    "errcode": 0,
+    "errmsg": "SUCCESS",
+    "total_number": 28,
+    "data": [
+      {
+        "id": 100,
+        "online_status": {
+          "fxs_phone": {
+            "status": 0
+          },
+          "sip_phone": {
+            "status": 0
+          },
+          "linkus_desktop": {
+            "status": 0
+          },
+          "linkus_mobile": {
+            "status": 0
+          },
+          "linkus_web": {
+            "status": 1,
+            "ext_dev_type": "linkusweb"
+          }
+        },
+        "presence_status": "available",
+        "number": "4006",
+        "caller_id_name": "Fadwa Shawky",
+        "role_name": "Supervisor",
+        "email_addr": "redacted@example.com",
+        "mobile_number": "+201XXXXXXX67",
+        "timezone": "Global Time Zone[3 Saudi Arabia (Riyadh)]",
+        "custom_presence_status": "available"
+      },
+      {
+        "id": 101,
+        "online_status": {
+          "fxs_phone": {
+            "status": 0
+          },
+          "sip_phone": {
+            "status": 0
+          },
+          "linkus_desktop": {
+            "status": 0,
+            "ext_dev_type": "linkusdesktop"
+          },
+          "linkus_mobile": {
+            "status": 0
+          },
+          "linkus_web": {
+            "status": 0,
+            "ext_dev_type": "linkusweb"
+          }
+        },
+        "presence_status": "do_not_disturb",
+        "number": "4003",
+        "caller_id_name": "Rahaf Kassem",
+        "role_name": "Employee",
+        "email_addr": "redacted@example.com",
+        "mobile_number": "0128XXXXX67",
+        "timezone": "Global Time Zone[3 Saudi Arabia (Riyadh)]",
+        "custom_presence_status": "do_not_disturb"
+      },
+      {
+        "id": 102,
+        "online_status": {
+          "fxs_phone": {
+            "status": 0
+          },
+          "sip_phone": {
+            "status": 0
+          },
+          "linkus_desktop": {
+            "status": 0
+          },
+          "linkus_mobile": {
+            "status": 0
+          },
+          "linkus_web": {
+            "status": 0
+          }
+        },
+        "presence_status": "available",
+        "number": "4010",
+        "caller_id_name": "4010",
+        "role_name": "Employee",
+        "timezone": "Global Time Zone[3 Saudi Arabia (Riyadh)]",
+        "custom_presence_status": "available"
+      },
+      {
+        "id": 103,
+        "online_status": {
+          "fxs_phone": {
+            "status": 0
+          },
+          "sip_phone": {
+            "status": 0
+          },
+          "linkus_desktop": {
+            "status": 1,
+            "ext_dev_type": "linkusdesktop"
+          },
+          "linkus_mobile": {
+            "status": 0
+          },
+          "linkus_web": {
+            "status": 0
+          }
+        },
+        "presence_status": "do_not_disturb",
+        "number": "4002",
+        "caller_id_name": "Dalia Basyouni",
+        "role_name": "Employee",
+        "email_addr": "redacted@example.com",
+        "timezone": "Global Time Zone[3 Saudi Arabia (Riyadh)]",
+        "custom_presence_status": "do_not_disturb"
+      },
+      {
+        "id": 104,
+        "online_status": {
+          "fxs_phone": {
+            "status": 0
+          },
+          "sip_phone": {
+            "status": 0
+          },
+          "linkus_desktop": {
+            "status": 0
+          },
+          "linkus_mobile": {
+            "status": 0
+          },
+          "linkus_web": {
+            "status": 0
+          }
+        },
+        "presence_status": "do_not_disturb",
+        "number": "4001",
+        "caller_id_name": "Ahmed Wagdy",
+        "role_name": "Supervisor",
+        "email_addr": "redacted@example.com",
+        "timezone": "Global Time Zone[3 Saudi Arabia (Riyadh)]",
+        "custom_presence_status": "do_not_disturb"
+      },
+      {
+        "id": 105,
+        "online_status": {
+          "fxs_phone": {
+            "status": 0
+          },
+          "sip_phone": {
+            "status": 0
+          },
+          "linkus_desktop": {
+            "status": 0
+          },
+          "linkus_mobile": {
+            "status": 0
+          },
+          "linkus_web": {
+            "status": 0
+          }
+        },
+        "presence_status": "available",
+        "number": "4008",
+        "caller_id_name": "4008",
+        "role_name": "Supervisor",
+        "timezone": "Global Time Zone[3 Saudi Arabia (Riyadh)]",
+        "custom_presence_status": "available"
+      },
+      {
+        "id": 106,
+        "online_status": {
+          "fxs_phone": {
+            "status": 0
+          },
+          "sip_phone": {
+            "status": 0
+          },
+          "linkus_desktop": {
+            "status": 1,
+            "ext_dev_type": "linkusdesktop"
+          },
+          "linkus_mobile": {
+            "status": 0,
+            "ext_dev_type": "linkusmobile",
+            "status_list": [
+              {
+                "status": 0,
+                "ip": "81.10.55.128",
+                "linkus_dev_type": "android"
+              }
+            ]
+          },
+          "linkus_web": {
+            "status": 1,
+            "ext_dev_type": "linkusweb"
+          }
+        },
+        "presence_status": "do_not_disturb",
+        "number": "4000",
+        "caller_id_name": "Omar Badawi",
+        "role_name": "Administrator",
+        "email_addr": "redacted@example.com",
+        "mobile_number": "+201XXXXXXX70",
+        "timezone": "Global Time Zone[3 Saudi Arabia (Riyadh)]",
+        "custom_presence_status": "do_not_disturb"
+      },
+      {
+        "id": 107,
+        "online_status": {
+          "fxs_phone": {
+            "status": 0
+          },
+          "sip_phone": {
+            "status": 0
+          },
+          "linkus_desktop": {
+            "status": 0
+          },
+          "linkus_mobile": {
+            "status": 0
+          },
+          "linkus_web": {
+            "status": 0
+          }
+        },
+        "presence_status": "available",
+        "number": "4009",
+        "caller_id_name": "4009",
+        "role_name": "Employee",
+        "timezone": "Global Time Zone[3 Saudi Arabia (Riyadh)]",
+        "custom_presence_status": "available"
+      }
+    ]
+  }
+}

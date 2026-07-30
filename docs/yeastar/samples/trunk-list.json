@@ -1,0 +1,38 @@
+{
+  "_note": "Trunk roster — maps src_trunk/dst_trunk values seen in CDR.",
+  "_captured": "2026-07-30",
+  "_redaction": "External phone numbers, IPs and emails masked. Internal extension/queue numbers kept verbatim.",
+  "request": {
+    "method": "GET",
+    "endpoint": "/openapi/v1.0/trunk/list",
+    "query": {
+      "page": 1,
+      "page_size": 5,
+      "access_token": "<redacted>"
+    }
+  },
+  "httpStatus": 200,
+  "errcode": 0,
+  "errmsg": "SUCCESS",
+  "response": {
+    "errcode": 0,
+    "errmsg": "SUCCESS",
+    "total_number": 2,
+    "data": [
+      {
+        "id": 1,
+        "status": 1,
+        "name": "Mobily-SIP",
+        "type": "peer",
+        "host_port": "10.138.120.249:5060"
+      },
+      {
+        "id": 2,
+        "status": 1,
+        "name": "Backup_SIP",
+        "type": "peer",
+        "host_port": "10.178.1.67:5060"
+      }
+    ]
+  }
+}

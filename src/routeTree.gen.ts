@@ -28,6 +28,7 @@ import { Route as AppOrdersIdRouteImport } from './routes/_app.orders.$id'
 import { Route as AppComplaintsNewRouteImport } from './routes/_app.complaints.new'
 import { Route as AppComplaintsIdRouteImport } from './routes/_app.complaints.$id'
 import { Route as AppBranchesImportRouteImport } from './routes/_app.branches.import'
+import { Route as AppAdminYeastarDiagnosticsRouteImport } from './routes/_app.admin.yeastar-diagnostics'
 import { Route as AppAdminYeastarRouteImport } from './routes/_app.admin.yeastar'
 import { Route as AppAdminUsersRouteImport } from './routes/_app.admin.users'
 import { Route as AppAdminBranchesRouteImport } from './routes/_app.admin.branches'
@@ -131,6 +132,12 @@ const AppBranchesImportRoute = AppBranchesImportRouteImport.update({
   path: '/branches/import',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAdminYeastarDiagnosticsRoute =
+  AppAdminYeastarDiagnosticsRouteImport.update({
+    id: '/admin/yeastar-diagnostics',
+    path: '/admin/yeastar-diagnostics',
+    getParentRoute: () => AppRoute,
+  } as any)
 const AppAdminYeastarRoute = AppAdminYeastarRouteImport.update({
   id: '/admin/yeastar',
   path: '/admin/yeastar',
@@ -180,6 +187,7 @@ export interface FileRoutesByFullPath {
   '/admin/branches': typeof AppAdminBranchesRoute
   '/admin/users': typeof AppAdminUsersRoute
   '/admin/yeastar': typeof AppAdminYeastarRoute
+  '/admin/yeastar-diagnostics': typeof AppAdminYeastarDiagnosticsRoute
   '/branches/import': typeof AppBranchesImportRoute
   '/complaints/$id': typeof AppComplaintsIdRoute
   '/complaints/new': typeof AppComplaintsNewRoute
@@ -206,6 +214,7 @@ export interface FileRoutesByTo {
   '/admin/branches': typeof AppAdminBranchesRoute
   '/admin/users': typeof AppAdminUsersRoute
   '/admin/yeastar': typeof AppAdminYeastarRoute
+  '/admin/yeastar-diagnostics': typeof AppAdminYeastarDiagnosticsRoute
   '/branches/import': typeof AppBranchesImportRoute
   '/complaints/$id': typeof AppComplaintsIdRoute
   '/complaints/new': typeof AppComplaintsNewRoute
@@ -234,6 +243,7 @@ export interface FileRoutesById {
   '/_app/admin/branches': typeof AppAdminBranchesRoute
   '/_app/admin/users': typeof AppAdminUsersRoute
   '/_app/admin/yeastar': typeof AppAdminYeastarRoute
+  '/_app/admin/yeastar-diagnostics': typeof AppAdminYeastarDiagnosticsRoute
   '/_app/branches/import': typeof AppBranchesImportRoute
   '/_app/complaints/$id': typeof AppComplaintsIdRoute
   '/_app/complaints/new': typeof AppComplaintsNewRoute
@@ -262,6 +272,7 @@ export interface FileRouteTypes {
     | '/admin/branches'
     | '/admin/users'
     | '/admin/yeastar'
+    | '/admin/yeastar-diagnostics'
     | '/branches/import'
     | '/complaints/$id'
     | '/complaints/new'
@@ -288,6 +299,7 @@ export interface FileRouteTypes {
     | '/admin/branches'
     | '/admin/users'
     | '/admin/yeastar'
+    | '/admin/yeastar-diagnostics'
     | '/branches/import'
     | '/complaints/$id'
     | '/complaints/new'
@@ -315,6 +327,7 @@ export interface FileRouteTypes {
     | '/_app/admin/branches'
     | '/_app/admin/users'
     | '/_app/admin/yeastar'
+    | '/_app/admin/yeastar-diagnostics'
     | '/_app/branches/import'
     | '/_app/complaints/$id'
     | '/_app/complaints/new'
@@ -475,6 +488,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppBranchesImportRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/admin/yeastar-diagnostics': {
+      id: '/_app/admin/yeastar-diagnostics'
+      path: '/admin/yeastar-diagnostics'
+      fullPath: '/admin/yeastar-diagnostics'
+      preLoaderRoute: typeof AppAdminYeastarDiagnosticsRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/admin/yeastar': {
       id: '/_app/admin/yeastar'
       path: '/admin/yeastar'
@@ -527,6 +547,7 @@ interface AppRouteChildren {
   AppAdminBranchesRoute: typeof AppAdminBranchesRoute
   AppAdminUsersRoute: typeof AppAdminUsersRoute
   AppAdminYeastarRoute: typeof AppAdminYeastarRoute
+  AppAdminYeastarDiagnosticsRoute: typeof AppAdminYeastarDiagnosticsRoute
   AppBranchesImportRoute: typeof AppBranchesImportRoute
   AppComplaintsIdRoute: typeof AppComplaintsIdRoute
   AppComplaintsNewRoute: typeof AppComplaintsNewRoute
@@ -544,6 +565,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppAdminBranchesRoute: AppAdminBranchesRoute,
   AppAdminUsersRoute: AppAdminUsersRoute,
   AppAdminYeastarRoute: AppAdminYeastarRoute,
+  AppAdminYeastarDiagnosticsRoute: AppAdminYeastarDiagnosticsRoute,
   AppBranchesImportRoute: AppBranchesImportRoute,
   AppComplaintsIdRoute: AppComplaintsIdRoute,
   AppComplaintsNewRoute: AppComplaintsNewRoute,

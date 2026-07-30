@@ -1,0 +1,26 @@
+{
+  "_note": "Realtime queue calls. NOTE: real fields are waiting_list/active_list/ringing_list + scalar counts — NOT `data` or `queue_call_status_list`. errcode 60001 = queue idle, not unsupported.",
+  "_captured": "2026-07-30",
+  "_redaction": "External phone numbers, IPs and emails masked. Internal extension/queue numbers kept verbatim.",
+  "request": {
+    "method": "GET",
+    "endpoint": "/openapi/v1.0/queue/call_status",
+    "query": {
+      "queue_id": 1,
+      "access_token": "<redacted>"
+    }
+  },
+  "httpStatus": 200,
+  "errcode": 60001,
+  "errmsg": "DATA NOT FOUND",
+  "response": {
+    "errcode": 60001,
+    "errmsg": "DATA NOT FOUND",
+    "waiting_list": null,
+    "active_list": null,
+    "waiting_calls": 0,
+    "active_calls": 0,
+    "ringing_list": null,
+    "ringing_calls": 0
+  }
+}

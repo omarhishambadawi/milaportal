@@ -1,0 +1,31 @@
+{
+  "_note": "PBX model + firmware. Establishes which firmware this audit is valid for.",
+  "_captured": "2026-07-30",
+  "_redaction": "External phone numbers, IPs and emails masked. Internal extension/queue numbers kept verbatim.",
+  "request": {
+    "method": "GET",
+    "endpoint": "/openapi/v1.0/system/information",
+    "query": {
+      "access_token": "<redacted>"
+    }
+  },
+  "httpStatus": 200,
+  "errcode": 0,
+  "errmsg": "SUCCESS",
+  "response": {
+    "errcode": 0,
+    "errmsg": "SUCCESS",
+    "data": {
+      "device_name": "Shams_VOIP",
+      "model_name": "Yeastar P570",
+      "sn": "3633E3461744",
+      "hardware_version": "V2.00 0000-0000",
+      "firmware_version": "37.23.0.83",
+      "system_time": "30/07/2026 09:31:37 PM",
+      "up_time": 405080,
+      "system_date_format": "DD/MM/YYYY",
+      "system_time_format": "hh:mm:ss PM",
+      "timestamp": 1785436297
+    }
+  }
+}

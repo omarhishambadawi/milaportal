@@ -1,0 +1,102 @@
+{
+  "_note": "Authoritative queue roster. Members carry {value=extension_id, text=display name, text2=extension number}.",
+  "_captured": "2026-07-30",
+  "_redaction": "External phone numbers, IPs and emails masked. Internal extension/queue numbers kept verbatim.",
+  "request": {
+    "method": "GET",
+    "endpoint": "/openapi/v1.0/queue/list",
+    "query": {
+      "page": 1,
+      "page_size": 100,
+      "access_token": "<redacted>"
+    }
+  },
+  "httpStatus": 200,
+  "errcode": 0,
+  "errmsg": "SUCCESS",
+  "response": {
+    "errcode": 0,
+    "errmsg": "SUCCESS",
+    "total_number": 1,
+    "queue_list": [
+      {
+        "id": 1,
+        "number": "6400",
+        "name": "CC_Team",
+        "ring_strategy": "rrmemory",
+        "client_unique_ringtone": "",
+        "dynamic_agent_list": null,
+        "static_agent_list": [
+          {
+            "text": "Omar Badawi",
+            "text2": "4000",
+            "value": "106",
+            "type": "extension"
+          },
+          {
+            "text": "Ahmed Wagdy",
+            "text2": "4001",
+            "value": "104",
+            "type": "extension"
+          },
+          {
+            "text": "Dalia Basyouni",
+            "text2": "4002",
+            "value": "103",
+            "type": "extension"
+          },
+          {
+            "text": "Rahaf Kassem",
+            "text2": "4003",
+            "value": "101",
+            "type": "extension"
+          },
+          {
+            "text": "Rana Amin",
+            "text2": "4004",
+            "value": "113",
+            "type": "extension"
+          },
+          {
+            "text": "Shams Rafiq",
+            "text2": "4005",
+            "value": "108",
+            "type": "extension"
+          },
+          {
+            "text": "Fadwa Shawky",
+            "text2": "4006",
+            "value": "100",
+            "type": "extension"
+          }
+        ],
+        "manager_list": [
+          {
+            "text": "Omar Badawi",
+            "text2": "4000",
+            "value": "106",
+            "type": "extension"
+          },
+          {
+            "text": "Mariam El-Mekkawy",
+            "text2": "6666",
+            "value": "153",
+            "type": "extension"
+          },
+          {
+            "text": "Fayroz Ahmed",
+            "text2": "7777",
+            "value": "160",
+            "type": "extension"
+          },
+          {
+            "text": "Azza Essam",
+            "text2": "5555",
+            "value": "151",
+            "type": "extension"
+          }
+        ]
+      }
+    ]
+  }
+}

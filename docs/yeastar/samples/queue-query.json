@@ -1,0 +1,234 @@
+{
+  "_note": "Queue configuration. Requires `ids` (NOT queue_id) — confirmed via invalid_param_list.",
+  "_captured": "2026-07-30",
+  "_redaction": "External phone numbers, IPs and emails masked. Internal extension/queue numbers kept verbatim.",
+  "request": {
+    "method": "GET",
+    "endpoint": "/openapi/v1.0/queue/query",
+    "query": {
+      "ids": 1,
+      "access_token": "<redacted>"
+    }
+  },
+  "httpStatus": 200,
+  "errcode": 0,
+  "errmsg": "SUCCESS",
+  "response": {
+    "errcode": 0,
+    "errmsg": "SUCCESS",
+    "data": [
+      {
+        "id": 1,
+        "number": "6400",
+        "name": "CC_Team",
+        "ring_strategy": "rrmemory",
+        "moh": "default",
+        "max_wait_time": 1800,
+        "fail_dest": "ring_group",
+        "fail_dest_prefix": "",
+        "fail_dest_value": "1",
+        "agent_timeout": 30,
+        "retry_time": 30,
+        "wrap_up_time": 10,
+        "enb_ring_in_use": 0,
+        "agent_prompt": "",
+        "enb_auto_pause": 0,
+        "max_pause_miss_call": 3,
+        "enb_email_miss_call": 0,
+        "enb_email_abandon_call": 0,
+        "enb_email_sla_alarm": 0,
+        "callback_enb_request_email": 0,
+        "callback_enb_failed_email": 0,
+        "max_calls": 0,
+        "alert_info": "",
+        "enb_leave_empty": 0,
+        "enb_disallow_to_join_when_empty": 1,
+        "enb_callback": 0,
+        "callback_timeout": "queue_max_wait_time",
+        "callback_timeout_num": 180,
+        "callback_method": "digit",
+        "callback_press_key": "1",
+        "callback_outbound_prefix": "",
+        "callback_trigger_timeout": 0,
+        "sla_time": 60,
+        "sla_interval": 30,
+        "sla_alarm_threshold": 80,
+        "join_prompt": "",
+        "enb_announce_agent_id": 0,
+        "enb_announce_default_prompt": 0,
+        "enb_announce_pos": 0,
+        "enb_announce_hold_time": 0,
+        "caller_announce_freq": 30,
+        "sys_announce_prompt": "",
+        "sys_announce_freq": 60,
+        "satisfa_survey_prompt": "Rating-AR.wav",
+        "press_key": "",
+        "key_dest": "end_call",
+        "key_dest_prefix": "",
+        "key_dest_value": "",
+        "dynamic_agent_list": null,
+        "static_agent_list": [
+          {
+            "text": "Omar Badawi",
+            "text2": "4000",
+            "value": "106",
+            "type": "extension"
+          },
+          {
+            "text": "Ahmed Wagdy",
+            "text2": "4001",
+            "value": "104",
+            "type": "extension"
+          },
+          {
+            "text": "Dalia Basyouni",
+            "text2": "4002",
+            "value": "103",
+            "type": "extension"
+          },
+          {
+            "text": "Rahaf Kassem",
+            "text2": "4003",
+            "value": "101",
+            "type": "extension"
+          },
+          {
+            "text": "Rana Amin",
+            "text2": "4004",
+            "value": "113",
+            "type": "extension"
+          },
+          {
+            "text": "Shams Rafiq",
+            "text2": "4005",
+            "value": "108",
+            "type": "extension"
+          },
+          {
+            "text": "Fadwa Shawky",
+            "text2": "4006",
+            "value": "100",
+            "type": "extension"
+          }
+        ],
+        "manager_list": [
+          {
+            "text": "Omar Badawi",
+            "text2": "4000",
+            "value": "106",
+            "type": "extension"
+          },
+          {
+            "text": "Mariam El-Mekkawy",
+            "text2": "6666",
+            "value": "153",
+            "type": "extension"
+          },
+          {
+            "text": "Fayroz Ahmed",
+            "text2": "7777",
+            "value": "160",
+            "type": "extension"
+          },
+          {
+            "text": "Azza Essam",
+            "text2": "5555",
+            "value": "151",
+            "type": "extension"
+          }
+        ],
+        "satisfaction_survey_point_list": [
+          {
+            "k": "0",
+            "p": 0
+          },
+          {
+            "k": "1",
+            "p": 1
+          },
+          {
+            "k": "2",
+            "p": 2
+          },
+          {
+            "k": "3",
+            "p": 3
+          },
+          {
+            "k": "4",
+            "p": 4
+          },
+          {
+            "k": "5",
+            "p": 5
+          },
+          {
+            "k": "6",
+            "p": 0
+          },
+          {
+            "k": "7",
+            "p": 0
+          },
+          {
+            "k": "8",
+            "p": 0
+          },
+          {
+            "k": "9",
+            "p": 0
+          },
+          {
+            "k": "*",
+            "p": 0
+          }
+        ],
+        "enb_priority_queue": 0,
+        "weight": 10,
+        "enb_acceleration_weight": 0,
+        "acceleration": 30,
+        "enb_queue_call_log": 0,
+        "call_log_visible_type": "",
+        "call_log_specific_member": null,
+        "call_log_view_range": null,
+        "empty_defined_for_leave_empty": [
+          "1",
+          "2"
+        ],
+        "empty_defined_for_disallow_to_join_when_empty": [
+          "1",
+          "2"
+        ],
+        "satisfa_survey_end_prompt": "default",
+        "enable_time_condition": 0,
+        "timezone_id": 1,
+        "outoffice_dest": "end_call",
+        "outoffice_dest_prefix": "",
+        "outoffice_dest_value": "",
+        "holiday_dest": "end_call",
+        "holiday_dest_prefix": "",
+        "holiday_dest_value": "",
+        "ignore_holiday_dest": 0,
+        "enb_play_holiday_prompt_global": 0,
+        "enb_ip_phone_missed_call_display": 1,
+        "play_full_join_prompt": 1,
+        "ringback_tone": "",
+        "enb_custom_language": 0,
+        "prompt_language": "",
+        "client_unique_ringtone": "",
+        "leave_empty_no_agent_list": null,
+        "join_empty_no_agent_list": [
+          {
+            "no_agent_include_list": [
+              "1",
+              "2"
+            ],
+            "dest_to": "ring_group",
+            "dest_value": "1",
+            "dest_prefix": ""
+          }
+        ]
+      }
+    ]
+  }
+}

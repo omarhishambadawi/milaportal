@@ -1,0 +1,22 @@
+{
+  "_note": "Realtime agent status; array is `data`. errcode 60001 = no agents currently signed in, not unsupported.",
+  "_captured": "2026-07-30",
+  "_redaction": "External phone numbers, IPs and emails masked. Internal extension/queue numbers kept verbatim.",
+  "request": {
+    "method": "GET",
+    "endpoint": "/openapi/v1.0/queue/agent_status",
+    "query": {
+      "queue_id": 1,
+      "access_token": "<redacted>"
+    }
+  },
+  "httpStatus": 200,
+  "errcode": 60001,
+  "errmsg": "DATA NOT FOUND",
+  "response": {
+    "errcode": 60001,
+    "errmsg": "DATA NOT FOUND",
+    "total_number": 0,
+    "data": null
+  }
+}

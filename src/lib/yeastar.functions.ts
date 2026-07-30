@@ -11,6 +11,9 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { BUSINESS_UTC_OFFSET_MINUTES } from "@/lib/timezone";
 import { CALL_CENTER_VIEW_PERMISSIONS } from "@/lib/call-center-permissions";
 import { z } from "zod";
+// Type-only: erased at compile time, so the server-only diagnostics module is
+// never pulled into a client bundle.
+import type { DiagnosticsReport as YeastarDiagnosticsReport } from "@/lib/yeastar/diagnostics.server";
 
 async function assertAdmin(ctx: { supabase: any; userId: string }) {
   const { data, error } = await ctx.supabase.rpc("is_administrator", { _user_id: ctx.userId });
@@ -642,6 +645,47 @@ export const yeastarEndpointProbe = createServerFn({ method: "POST" })
       };
     },
   );
+
+// ---- Development-only endpoint diagnostics ---------------------------------
+//
+// Surfaces endpoint / request / status / body / parsed output / parse errors for
+// the endpoints this integration depends on, so a firmware field change is
+// visible immediately. Refuses to run outside development: it returns raw PBX
+// response bodies, which is a development affordance and not something to expose
+// from a production deployment even to an administrator.
+
+const devDiagnosticsInput = z.object({
+  windowDays: z.number().int().min(1).max(30).default(7),
+});
+
+export type DevDiagnosticsResult =
+  | { ok: false; devOnly: true }
+  | { ok: false; configured: false }
+  | { ok: false; configured: true; error: string }
+  | { ok: true; configured: true; report: YeastarDiagnosticsReport };
+
+export const yeastarDevDiagnostics = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => devDiagnosticsInput.parse(d ?? {}))
+  .handler(async ({ context, data }): Promise<DevDiagnosticsResult> => {
+    if (!import.meta.env.DEV) {
+      return { ok: false, devOnly: true };
+    }
+    await assertAdmin(context as any);
+    const { isConfigured } = await import("@/lib/yeastar/client.server");
+    if (!isConfigured()) return { ok: false, configured: false };
+    try {
+      const { runDiagnostics } = await import("@/lib/yeastar/diagnostics.server");
+      const report = await runDiagnostics(data.windowDays);
+      return { ok: true, configured: true, report };
+    } catch (err) {
+      return {
+        ok: false,
+        configured: true,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
 
 // ---- Agent mapping diagnostic (admin) --------------------------------------
 
