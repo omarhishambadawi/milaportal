@@ -156,7 +156,13 @@ function AppLayout() {
   const activeItem = nav.find((n) => n.to === activePath);
 
   return (
-    <div className="min-h-screen flex bg-muted/30">
+    <div
+      className="min-h-screen flex bg-muted/30"
+      // Published so fixed-position overlays inside routes (e.g. the Branch
+      // Locator's sticky bar) can sit beside the sidebar instead of over it.
+      style={{ "--app-sidebar-w": expanded ? "16rem" : "76px" } as React.CSSProperties}
+    >
+
       <AppSidebar
         nav={nav}
         activePath={activePath}
