@@ -792,68 +792,23 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
           {/*
             The floating readout, on pointer-sized screens only.
 
-            On a phone it was the worst of both worlds: a 280px card anchored to
-            a bubble inside a map that is itself about 340px wide, so it covered
-            most of the country and was routinely clipped by the map's own
-            `overflow-hidden` when the city sat near an edge. Below `sm` the same
-            content renders in the panel underneath the map instead, where it has
-            the full width and cannot be cut off.
+            Rendered into a portal on `document.body` and positioned with
+            `position: fixed` against the hovered bubble's own client rect, so
+            the map container's `overflow-hidden` (and any scroll parent) can no
+            longer clip it. The card measures itself and then flips above/below
+            and clamps left/right so it always stays inside the viewport.
+
+            Below `sm` the same content renders in the panel underneath the map.
           */}
-          {hover &&
-            (() => {
-              const labelAbove = hover.labelY < hover.cy;
-              const leftPct = (hover.cx / W) * 100;
-              const topPct = (hover.cy / H) * 100;
-              const flipBelow = labelAbove || hover.cy < H * 0.35;
-              const nearLeft = leftPct < 22;
-              const nearRight = leftPct > 78;
-              const xShift = nearLeft ? "0%" : nearRight ? "-100%" : "-50%";
+          {mounted && hover && (
+            <FloatingCityCard
+              key={hover.name}
+              id={tooltipId}
+              city={hover}
+              getAnchor={() => cityRefs.current.get(hover.name) ?? null}
+            />
+          )}
 
-              /**
-               * Clear the bubble, and clear the label too when the card lands on
-               * the same side the label was placed on.
-               *
-               * `flipBelow` only avoided the label in the case where the label was
-               * above. A northern city whose label was solved *below* it took both
-               * clauses — near the top edge, so flip below; label below, so the
-               * card was laid straight over the name. Measuring the label's own
-               * reach from the bubble centre covers every combination instead of
-               * enumerating them.
-               */
-              const labelIsBelow = hover.labelY > hover.cy;
-              const bubbleClearance = hover.r + 18;
-              const offset =
-                flipBelow === labelIsBelow
-                  ? Math.max(bubbleClearance, Math.abs(hover.labelY - hover.cy) + LABEL_HEIGHT + 12)
-                  : bubbleClearance;
-              const yShift = flipBelow ? `${offset}px` : `calc(-100% - ${offset}px)`;
-
-              return (
-                <div
-                  id={tooltipId}
-                  role="tooltip"
-                  // Opaque, and no backdrop blur. Both were working against the
-                  // thing this card is for: at 95% the grid, the bubbles and any
-                  // label underneath ghosted through the numbers, and the blur
-                  // smeared those same labels into an unreadable wash that looked
-                  // exactly like the text having disappeared. `z-30` puts it above
-                  // the SVG and the legend without needing to be the highest
-                  // thing on the page.
-                  className="pointer-events-none absolute z-30 hidden w-[280px] rounded-2xl border border-border/60 bg-popover px-4 py-3.5 text-popover-foreground duration-200 ease-out animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-1 sm:block md:w-[300px]"
-                  style={{
-                    left: `${leftPct}%`,
-                    top: `${topPct}%`,
-                    transform: `translate(${xShift}, ${yShift})`,
-                    boxShadow: `0 24px 48px -24px ${heatAlpha(hover.color, 40)}, 0 0 0 1px ${heatAlpha(
-                      hover.color,
-                      22,
-                    )}, 0 2px 8px -2px rgba(0,0,0,0.12)`,
-                  }}
-                >
-                  <CityDetail city={hover} />
-                </div>
-              );
-            })()}
         </div>
 
         {/*
