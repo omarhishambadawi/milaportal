@@ -39,23 +39,30 @@ interface Options {
 
 export interface VirtualResult {
   /**
-   * Attach to the element that scrolls.
+   * Attach to the element that *contains* the rows.
    *
-   * A callback ref rather than a ref object, and for the same reason as
-   * `useColumnCount` below: the scrolling element does not exist on the first
-   * render. The list shows skeletons while the directory loads and an empty state
-   * when nothing matches, and neither of those is the scroller. A mount effect
-   * reading `ref.current` therefore finds null, bails, and never runs again —
-   * leaving no scroll listener and no measured viewport for the rest of the
-   * session, which is a list frozen on its first screenful of rows above a
-   * full-height spacer. That is the blank area.
+   * Note what changed: this used to be the element that scrolled. The list no
+   * longer scrolls — the page does — so this is now the measuring reference, and
+   * how far it has travelled past the top of the viewport is what stands in for
+   * the old `scrollTop`.
+   *
+   * Still a callback ref rather than a ref object, and for the same reason as
+   * `useColumnCount` below: the element does not exist on the first render. The
+   * list shows skeletons while the directory loads and an empty state when
+   * nothing matches, and neither of those contains rows. A mount effect reading
+   * `ref.current` therefore finds null, bails, and never runs again — leaving no
+   * listener and no measured viewport for the rest of the session, which is a
+   * list frozen on its first screenful of rows above a full-height spacer. That
+   * is the blank area.
    */
   scrollRef: (element: HTMLDivElement | null) => void;
-  /** Height the inner spacer must have for the scrollbar to be honest. */
+  /** Height the inner spacer must have for the page's scrollbar to be honest. */
   totalHeight: number;
   rows: VirtualRow[];
-  /** Scroll a given item to the top of the viewport, allowing for the sticky offset. */
+  /** Scroll the page so a given item sits in the middle of the viewport. */
   scrollToIndex: (index: number) => void;
+  /** False until the container has been measured, so callers can report failure. */
+  canScroll: boolean;
 }
 
 export function useVirtualRows({
@@ -77,32 +84,50 @@ export function useVirtualRows({
     expandedIndex != null && itemsPerRow > 0 ? Math.floor(expandedIndex / itemsPerRow) : null;
   const extra = expandedRow != null ? expandedExtra : 0;
 
+  /**
+   * Track the page's scroll instead of a container's.
+   *
+   * The list used to be its own scroll port, which is what trapped the wheel: a
+   * reader who reached the end of the cards had nowhere for the gesture to go,
+   * because the element that consumed it was not the element that needed to move.
+   * Virtualizing against the window removes the inner port entirely — there is
+   * one scrollbar on the page and the cards are part of it.
+   *
+   * `-rect.top` is the substitute for `scrollTop`: how far the container's own
+   * top edge has travelled above the viewport's. Clamped at zero, because while
+   * the container is still below the fold the first row is the right one to draw.
+   *
+   * Read straight through with no rAF throttle, for the reason the element
+   * version documented: `requestAnimationFrame` does not run in a hidden
+   * document, so a throttled handler would queue a frame that never arrives and
+   * freeze the list on its first screenful. The spec already fires `scroll` from
+   * the same "update the rendering" step, so at most one event per frame gets
+   * here, and React drops the re-render when the derived value has not changed.
+   */
   useLayoutEffect(() => {
     const element = scroller;
     if (!element) return;
 
-    /**
-     * Read the scroll position straight through, without an rAF throttle.
-     *
-     * The throttle looked like free insurance and was not: `requestAnimationFrame`
-     * does not run while the document is hidden, so a list scrolled in a
-     * backgrounded or non-compositing document would queue a frame that never
-     * arrives and render its first screenful forever. It also was not buying
-     * much — the spec fires `scroll` from the same "update the rendering" step
-     * that drives rAF, so at most one event per frame reaches this handler
-     * anyway, and React drops the re-render when the value has not changed.
-     */
-    const onScroll = () => setScrollTop(element.scrollTop);
+    const measure = () => {
+      const rect = element.getBoundingClientRect();
+      setScrollTop(Math.max(0, -rect.top));
+      setViewport(window.innerHeight);
+    };
 
-    setScrollTop(element.scrollTop);
-    setViewport(element.clientHeight);
-    element.addEventListener("scroll", onScroll, { passive: true });
+    measure();
+    window.addEventListener("scroll", measure, { passive: true });
+    window.addEventListener("resize", measure);
 
-    const observer = new ResizeObserver(() => setViewport(element.clientHeight));
+    // The container's own geometry moves when the locator opens or collapses
+    // above it, which is a layout change rather than a scroll — no scroll event
+    // fires, so without this the window of drawn rows would be stale.
+    const observer = new ResizeObserver(measure);
     observer.observe(element);
+    if (element.parentElement) observer.observe(element.parentElement);
 
     return () => {
-      element.removeEventListener("scroll", onScroll);
+      window.removeEventListener("scroll", measure);
+      window.removeEventListener("resize", measure);
       observer.disconnect();
     };
   }, [scroller]);
@@ -135,31 +160,40 @@ export function useVirtualRows({
   }, [rowCount, scrollTop, viewport, pitch, overscan, expandedRow, extra, rowStart]);
 
   /**
-   * Scroll a row into view, centred when there is room for it.
+   * Scroll the page so a row sits in the middle of the viewport.
    *
-   * Top-aligning is what this used to do, and it is the reason a jump could
-   * "stop halfway": the row lands flush against the top edge of the scroller,
-   * so a card taller than the remaining viewport — which is what happens once
-   * the locator panel is open above it and has taken 300px of the column — is
-   * clipped at the bottom with no indication that there is more of it.
+   * Computed arithmetically rather than by calling `scrollIntoView` on the card,
+   * and that is forced by virtualization: the target card is very often not
+   * mounted at the moment the jump is requested — it is thirty rows down and
+   * outside the drawn window — so there is no element to ask. Row geometry is
+   * known by construction here, so the destination can be worked out without it,
+   * and the rows render as the page passes them.
    *
-   * Centring reserves the slack on both sides, so the whole card is visible
-   * whenever the viewport can hold it at all, and the destination reads as
-   * deliberate rather than as a scroll that ran out. When the viewport genuinely
-   * cannot fit one card, top alignment is the best available and is what the
-   * `max(0, …)` clamp falls back to.
+   * Centring rather than top-aligning is what stops the jump "halfway": a
+   * top-aligned card sits flush against the viewport edge, and anything taller
+   * than the remaining space is cut off with nothing to say so. The slack is
+   * split evenly instead, so the whole card is visible whenever the viewport can
+   * hold it, and it reads as a deliberate destination. `max(0, …)` covers the
+   * case of a viewport shorter than one card, where flush-to-top is the best
+   * available answer.
+   *
+   * Returns nothing but reports through `canScroll` whether it could act, so the
+   * caller can tell the user instead of appearing to ignore the click.
    */
   const scrollToIndex = useCallback(
     (index: number) => {
       if (!scroller || itemsPerRow <= 0) return;
+      const rect = scroller.getBoundingClientRect();
+      const documentTop = rect.top + window.scrollY;
       const start = rowStart(Math.floor(index / itemsPerRow));
-      const slack = Math.max(0, scroller.clientHeight - rowHeight);
-      scroller.scrollTo({ top: Math.max(0, start - slack / 2), behavior: "smooth" });
+      const slack = Math.max(0, window.innerHeight - rowHeight);
+      const top = Math.max(0, documentTop + start - slack / 2);
+      window.scrollTo({ top, behavior: "smooth" });
     },
     [scroller, itemsPerRow, rowStart, rowHeight],
   );
 
-  return { scrollRef: setScroller, totalHeight, rows, scrollToIndex };
+  return { scrollRef: setScroller, totalHeight, rows, scrollToIndex, canScroll: scroller != null };
 }
 
 /**

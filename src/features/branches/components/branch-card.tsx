@@ -214,6 +214,23 @@ function BranchCardInner({
   const referenceLabel = branch.reference ? REFERENCE_LABEL[branch.reference] : null;
   const isReference = referenceLabel != null;
 
+  /**
+   * Drives the one-shot elevation, restarted on every request.
+   *
+   * A CSS animation only replays if the class is genuinely removed and re-added,
+   * and the overlay's `key` trick is not available here — remounting the whole
+   * article would throw away the copy-confirmation state and re-run its
+   * transitions. Clearing the class for a single frame and setting it back is the
+   * cheap equivalent; the two extra renders happen once per selection.
+   */
+  const [lift, setLift] = useState(0);
+  useEffect(() => {
+    if (emphasis <= 0) return;
+    setLift(0);
+    const frame = requestAnimationFrame(() => setLift(emphasis));
+    return () => cancelAnimationFrame(frame);
+  }, [emphasis]);
+
   return (
     <article
       onClick={() => onSelect(branch.branch_no)}
@@ -223,9 +240,14 @@ function BranchCardInner({
         "transition-[box-shadow,border-color,transform] duration-200",
         "hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/5",
         "dark:hover:bg-card/80 dark:hover:ring-white/10",
+        // The persistent selected state: a brand-coloured border and ring that
+        // outlive the animation and stay until another branch is chosen, so an
+        // agent glancing back at the screen can still see which card is theirs
+        // long after the glow has faded.
         selected
-          ? "border-primary/60 shadow-md ring-1 ring-primary/30 dark:ring-primary/40"
+          ? "border-primary shadow-md ring-2 ring-primary/25 dark:ring-primary/35"
           : "border-border/60 hover:border-primary/30",
+        lift > 0 && "branch-card-lift",
       )}
     >
       {/* "This is the one you clicked." Keyed by the nonce so that asking for the

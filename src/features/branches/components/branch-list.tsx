@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SearchX } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useColumnCount, useVirtualRows } from "../hooks/use-virtual-rows";
@@ -68,7 +69,7 @@ export function BranchList({
   // Every card is the same height now that none of them expands, so the
   // virtualizer's variable-row support goes unused: no index is taller, and
   // nothing adds to it.
-  const { scrollRef, totalHeight, rows, scrollToIndex } = useVirtualRows({
+  const { scrollRef, totalHeight, rows, scrollToIndex, canScroll } = useVirtualRows({
     count: branches.length,
     itemsPerRow: columns,
     rowHeight: CARD_HEIGHT,
@@ -94,6 +95,23 @@ export function BranchList({
   }, [selected, branches, columns, scrollToIndex]);
 
   /**
+   * Why a focus request can legitimately not be honoured yet.
+   *
+   * Returning a reason rather than a boolean is what lets the effect below tell
+   * "wait, the data has not arrived" apart from "this branch is not in the list
+   * and never will be" — the first must stay silent and retry, the second is the
+   * only one worth interrupting an agent about.
+   */
+  const focusFailure = (index: number): string | null => {
+    if (index >= 0 && canScroll) return null;
+    if (loading || branches.length === 0) return null;
+    if (index < 0) {
+      return "That branch is not in the current list — clear the filters and try again.";
+    }
+    return "Unable to locate the branch card.";
+  };
+
+  /**
    * An explicit request from outside the list: scroll whether or not it is visible.
    *
    * Unguarded on visibility, unlike the effect above, and that is the difference
@@ -111,10 +129,22 @@ export function BranchList({
   useEffect(() => {
     if (!focus || focus.nonce === honoured.current) return;
     const index = branches.findIndex((entry) => entry.branch_no === focus.branchNo);
-    if (index < 0) return;
+
+    const failure = focusFailure(index);
+    if (failure) {
+      // Never a silent no-op. A click that scrolls nowhere reads as the app being
+      // broken, and the agent's next move is to click it again.
+      honoured.current = focus.nonce;
+      toast.error(failure);
+      return;
+    }
+    if (index < 0 || !canScroll) return;
+
     honoured.current = focus.nonce;
     scrollToIndex(index);
-  }, [focus, branches, scrollToIndex]);
+    // `focusFailure` is derived from values already listed here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus, branches, scrollToIndex, canScroll, loading]);
 
   if (loading) {
     return (
@@ -183,15 +213,10 @@ export function BranchList({
   }
 
   return (
-    <div
-      ref={scrollRef}
-      className={cn(
-        "overflow-y-auto overscroll-contain [scrollbar-width:thin]",
-        // Room for the last card's shadow.
-        "pb-4",
-        className,
-      )}
-    >
+    // No `overflow-y-auto` and no height cap: the page is the scroll port now, so
+    // this is a plain block that happens to be tall. That is the whole fix for
+    // the trapped-wheel bug — there is nothing left here to trap it.
+    <div ref={scrollRef} className={cn("pb-4", className)}>
       <div ref={gridRef} className="relative px-0.5" style={{ height: totalHeight }}>
         {rows.map((row) => {
           const first = row.index * columns;

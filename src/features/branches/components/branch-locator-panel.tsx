@@ -93,11 +93,14 @@ interface Props {
   searching: boolean;
   /** The branch currently highlighted in the directory, if it is one of ours. */
   selected: string | null;
+  /** Minimised to the summary bar after a selection. */
+  collapsed: boolean;
   onQueryChange: (value: string) => void;
   onCityChange: (value: string) => void;
   onSearch: (value: string) => void;
   onChooseLocation: (entry: LocationEntry) => void;
   onSelect: (branchNo: string) => void;
+  onExpand: () => void;
   onClose: () => void;
 }
 
@@ -112,20 +115,32 @@ export function BranchLocatorPanel({
   error,
   searching,
   selected,
+  collapsed,
   onQueryChange,
   onCityChange,
   onSearch,
   onChooseLocation,
   onSelect,
+  onExpand,
   onClose,
 }: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [suggestOpen, setSuggestOpen] = useState(false);
 
   // Locator mode is entered to type a location, so the caret starts there.
+  // Skipped while collapsed: there is no input to focus, and stealing focus on
+  // the frame the panel minimises would scroll the page back up.
   useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+    if (!collapsed) inputRef.current?.focus();
+  }, [collapsed]);
+
+  const chosen = selected ? results.find((entry) => entry.item.branch_no === selected) : undefined;
+
+  if (collapsed) {
+    return (
+      <SelectedSummary result={chosen} selected={selected} onExpand={onExpand} onClose={onClose} />
+    );
+  }
 
   // Only while the box has focus AND there is something to offer. An
   // autocomplete that stays open after a submit covers the results it produced.
@@ -386,6 +401,96 @@ export function BranchLocatorPanel({
           )}
         </>
       )}
+    </section>
+  );
+}
+
+/**
+ * The locator, minimised to one line after a branch has been chosen.
+ *
+ * Collapsed rather than closed, and that distinction is the whole feature: the
+ * search text, the city scope and the ranked results are all still in memory, so
+ * "Change search" reopens exactly what was there instead of making an agent
+ * retype a location mid-call. What it buys is vertical space — the panel at full
+ * height is most of a laptop screen, and once a branch is picked the thing worth
+ * looking at is the card below it.
+ *
+ * `result` can be missing even with a branch selected: the agent may have picked
+ * a card directly, or re-filtered the directory so the chosen branch is no longer
+ * among the locator's results. The code alone is still worth stating in that case,
+ * so the bar degrades to it rather than disappearing.
+ */
+function SelectedSummary({
+  result,
+  selected,
+  onExpand,
+  onClose,
+}: {
+  result: LocatorResult | undefined;
+  selected: string | null;
+  onExpand: () => void;
+  onClose: () => void;
+}) {
+  const branch = result?.item;
+  const city = branch ? (branch.cityEnglish ?? branch.city) : null;
+
+  return (
+    <section
+      aria-label="Branch Locator — selected branch"
+      className="flex items-center gap-3 rounded-xl border border-primary/30 bg-primary/[0.03] px-2.5 py-2 dark:bg-primary/[0.06]"
+    >
+      <span
+        aria-hidden
+        className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary ring-1 ring-inset ring-primary/20"
+      >
+        <Crosshair className="h-3.5 w-3.5" />
+      </span>
+
+      <div className="min-w-0 flex-1">
+        <p className="text-[9.5px] font-semibold uppercase tracking-wide text-primary">
+          Selected branch
+        </p>
+        <p className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <span className="font-mono text-[13px] font-bold text-foreground">{selected ?? "—"}</span>
+          {city && (
+            <span className="truncate text-[12px] font-medium text-foreground/80" dir="auto">
+              {city}
+            </span>
+          )}
+          {branch?.district && (
+            <span className="truncate text-[11px] text-muted-foreground" dir="auto">
+              {branch.district}
+            </span>
+          )}
+          {result && (
+            <span className="text-[11px] font-semibold tabular-nums text-foreground/70">
+              {formatDistance(result.distance.metres)}
+            </span>
+          )}
+          {result && !result.insideCoverage && <CoverageBadge inside={false} />}
+        </p>
+      </div>
+
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={onExpand}
+        className="h-8 shrink-0 gap-1.5 px-2.5 text-xs"
+      >
+        <Search className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">Change search</span>
+        <span className="sm:hidden">Search</span>
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={onClose}
+        aria-label="Close locator"
+        title="Close locator"
+        className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+      >
+        <X className="h-4 w-4" />
+      </Button>
     </section>
   );
 }

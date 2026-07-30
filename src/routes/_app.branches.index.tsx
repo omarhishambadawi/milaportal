@@ -84,6 +84,16 @@ function BranchDirectory() {
    * is already selected.
    */
   const [focusRequest, setFocusRequest] = useState<BranchFocusRequest | null>(null);
+  /**
+   * Whether the locator is minimised to its summary bar.
+   *
+   * A separate flag from `locator.active` because the two answer different
+   * questions: active is "is the agent locating a customer", collapsed is "have
+   * they finished and moved on to reading the branch". Collapsing must not touch
+   * the search, the city scope or the results — reopening has to show exactly
+   * what was there, so the state it hides has to stay put.
+   */
+  const [locatorCollapsed, setLocatorCollapsed] = useState(false);
   const [mobileMapOpen, setMobileMapOpen] = useState(false);
   /** The branch whose edit dialog is open, or null. */
   const [editing, setEditing] = useState<BranchView | null>(null);
@@ -98,14 +108,17 @@ function BranchDirectory() {
    *
    * Recorded here rather than in the card so it happens once per selection,
    * whether the branch was clicked in the list or picked off the map.
+   *
+   * Sets rather than toggles. Clicking the already-selected card used to clear
+   * it, which contradicts the rule that the highlight survives until *another*
+   * branch is chosen — an agent who clicked a card twice while reading it lost
+   * the border and the map pin for no reason they could name. Passing `null`
+   * still clears, which is how a click on empty map space deselects.
    */
   const handleSelect = useCallback(
     (branchNo: string | null) => {
-      setSelected((current) => {
-        const next = current === branchNo ? null : branchNo;
-        if (next) rememberBranch(next);
-        return next;
-      });
+      setSelected(branchNo);
+      if (branchNo) rememberBranch(branchNo);
     },
     [rememberBranch],
   );
@@ -138,6 +151,10 @@ function BranchDirectory() {
       setSelected(branchNo);
       setFocusRequest((current) => ({ branchNo, nonce: (current?.nonce ?? 0) + 1 }));
       rememberBranch(branchNo);
+      // The locator has done its job. Collapsing it to a one-line summary hands
+      // the screen back to the card the agent is now reading, without discarding
+      // the search that found it — see `locatorCollapsed`.
+      setLocatorCollapsed(true);
     },
     [rememberBranch],
   );
@@ -152,24 +169,33 @@ function BranchDirectory() {
   const parkedFilters = useRef<BranchFilters | null>(null);
   const { open: openLocatorMode, close: closeLocatorMode } = locator;
 
+  /*
+   * Opening and closing the locator no longer clears the selection.
+   *
+   * They both used to, and it was wrong in the same way: the branch an agent
+   * picked is the answer to the call they are still on, and reaching for the
+   * locator again — or shutting it because they were done with it — is not them
+   * saying "forget which branch". Only choosing a different branch does that.
+   */
   const openLocator = useCallback(() => {
     parkedFilters.current = filters;
     // Cleared for the duration: a city chip left on from earlier would exclude
     // the nearest branch from the list, and a result that highlights a card
     // which is not rendered is a click that appears to do nothing.
     replaceFilters(EMPTY_FILTERS);
-    setSelected(null);
-    setFocusRequest(null);
+    setLocatorCollapsed(false);
     openLocatorMode();
   }, [filters, replaceFilters, openLocatorMode]);
 
   const closeLocator = useCallback(() => {
     closeLocatorMode();
-    setSelected(null);
-    setFocusRequest(null);
+    setLocatorCollapsed(false);
     replaceFilters(parkedFilters.current ?? EMPTY_FILTERS);
     parkedFilters.current = null;
   }, [closeLocatorMode, replaceFilters]);
+
+  /** Reopen the collapsed locator with its search and city scope intact. */
+  const expandLocator = useCallback(() => setLocatorCollapsed(false), []);
 
   const filtered = hasActiveFilters(filters);
 
@@ -196,12 +222,17 @@ function BranchDirectory() {
   const showMapPanel = map.showPanel;
 
   return (
-    // Sized to the viewport rather than growing with content: the search box has
-    // to stay put while results scroll beneath it, and a page that scrolls as a
-    // whole cannot do that.
-    <div className="flex flex-col gap-3 h-[calc(100dvh-5.5rem)] sm:h-[calc(100dvh-6rem)] lg:h-[calc(100dvh-7rem)]">
+    // Grows with its content, so the page owns the only vertical scrollbar.
+    //
+    // This was pinned to the viewport so the search box could stay put while
+    // results scrolled beneath it. That bought a fixed header at the cost of the
+    // bug this sprint is about: the cards lived in their own scroll port, so a
+    // wheel gesture that reached the end of them had nowhere to go and the page
+    // felt stuck. Sticky positioning gives the same fixed header without a nested
+    // port, which is the trade the old comment did not have available.
+    <div className="flex flex-col gap-3">
       {/* Header */}
-      <div className="flex shrink-0 flex-wrap items-start justify-between gap-x-3 gap-y-2">
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
         <div className="min-w-0">
           <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Branch Directory</h1>
           <div className="mt-0.5">
@@ -278,8 +309,16 @@ function BranchDirectory() {
       </div>
 
       {/* Locator mode takes over the search strip and leaves everything below
-          it — cards, map, the resizable split — exactly where it was. */}
-      <div className="shrink-0">
+          it — cards, map, the resizable split — exactly where it was.
+
+          Deliberately *not* sticky. Pinning it was the obvious way to keep the
+          old fixed-header feel, and it is the wrong trade here: expanded, this
+          panel is most of a laptop viewport, so sticking it would permanently
+          spend the screen space that collapsing to the summary bar exists to give
+          back — and it would slide underneath the sticky map beside it. Scrolling
+          away is what "natural" means, and the summary bar is what keeps the
+          search one click away once a branch is chosen. */}
+      <div>
         {locator.active ? (
           <BranchLocatorPanel
             query={locator.query}
@@ -292,11 +331,13 @@ function BranchDirectory() {
             error={locator.error}
             searching={locator.searching}
             selected={selected}
+            collapsed={locatorCollapsed}
             onQueryChange={locator.setQuery}
             onCityChange={locator.setCity}
             onSearch={locator.search}
             onChooseLocation={locator.chooseLocation}
             onSelect={handleLocatorSelect}
+            onExpand={expandLocator}
             onClose={closeLocator}
           />
         ) : (
@@ -330,16 +371,38 @@ function BranchDirectory() {
           Could not load branches: {error.message}
         </div>
       ) : (
-        // `min-h-0` is what lets the list scroll instead of stretching this row:
-        // a flex child defaults to min-height:auto, which refuses to shrink below
-        // its content and pushes the overflow onto the page.
+        /*
+         * The split, in page flow rather than pinned to the viewport.
+         *
+         * `react-resizable-panels` styles both the group and each panel's inner
+         * wrapper for a fixed-height world: the group gets `height: 100%;
+         * overflow: hidden`, and every panel's inner div gets `max-height: 100%;
+         * overflow: auto`. Those were the nested scroll ports — a panel whose
+         * content is taller than the group scrolls *inside itself*, which is the
+         * trapped wheel. Both libraries' declarations are emitted before the
+         * `style` prop is spread, so passing `style` overrides them, and that is
+         * the documented escape hatch rather than a hack.
+         *
+         * Overriding rather than dropping the library keeps drag-to-resize, which
+         * is entirely a width concern and unaffected by any of this.
+         */
         <ResizablePanelGroup
           key={map.layoutKey}
           defaultLayout={map.defaultLayout}
           onLayoutChanged={map.remember}
-          className="min-h-0 flex-1"
+          // No `items-start`: the panels must keep the default `stretch`, so the
+          // map panel's box is as tall as the list beside it. A sticky element can
+          // only travel inside its containing block, so a map panel sized to its
+          // own content would let the map follow for one viewport and then scroll
+          // away with the box that ran out.
+          style={{ height: "auto", overflow: "visible" }}
         >
-          <ResizablePanel id={LIST_PANEL_ID} minSize={map.listMinWidth} className="min-w-0">
+          <ResizablePanel
+            id={LIST_PANEL_ID}
+            minSize={map.listMinWidth}
+            className="min-w-0"
+            style={{ overflow: "visible", maxHeight: "none" }}
+          >
             <BranchList
               branches={results}
               loading={isLoading}
@@ -355,16 +418,16 @@ function BranchDirectory() {
               onResetFilters={reset}
               onClearSearch={() => setQuery("")}
               filtered={filtered}
-              className="h-full"
             />
           </ResizablePanel>
 
           {showMapPanel && (
             <>
               {/* A wider grab area than the 1px line it draws — a hairline is a
-                  target nobody hits on the first try. */}
+                  target nobody hits on the first try. Sticky so the handle stays
+                  alongside the map it resizes. */}
               <ResizableHandle
-                className="mx-1.5 w-px bg-transparent after:w-4 hover:bg-primary/40 focus-visible:bg-primary/60 data-[dragging]:bg-primary/60"
+                className="sticky top-3 mx-1.5 h-[calc(100dvh-7rem)] w-px bg-transparent after:w-4 hover:bg-primary/40 focus-visible:bg-primary/60 data-[dragging]:bg-primary/60"
                 aria-label="Resize the map"
               />
               <ResizablePanel
@@ -372,14 +435,22 @@ function BranchDirectory() {
                 minSize={map.minWidth}
                 maxSize={map.maxWidth}
                 className="min-w-0"
+                // Overflow must stay visible here too, and for a second reason:
+                // `position: sticky` is measured against the nearest scrolling
+                // ancestor, so a panel wrapper with `overflow: auto` would make
+                // the map stick to the panel — which never scrolls — instead of to
+                // the viewport, and it would simply never move.
+                style={{ overflow: "visible", maxHeight: "none" }}
               >
-                <BranchMapSurface
-                  branches={results}
-                  selected={selected}
-                  onSelect={handleSelect}
-                  coverageCenter={coverageCenter}
-                  className="h-full"
-                />
+                <div className="sticky top-3 h-[calc(100dvh-7rem)]">
+                  <BranchMapSurface
+                    branches={results}
+                    selected={selected}
+                    onSelect={handleSelect}
+                    coverageCenter={coverageCenter}
+                    className="h-full"
+                  />
+                </div>
               </ResizablePanel>
             </>
           )}
