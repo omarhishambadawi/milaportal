@@ -8,19 +8,24 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { ShieldAlert, TriangleAlert, CheckCircle2 } from "lucide-react";
 import { useAuth, isAdministrator } from "@/lib/auth";
-import { yeastarDevDiagnostics } from "@/lib/yeastar.functions";
+import { yeastarDevDiagnostics, yeastarKpiValidation } from "@/lib/yeastar.functions";
 
 /**
- * Development-only Yeastar diagnostics.
+ * Yeastar diagnostics.
  *
- * Shows, per endpoint: the request, the HTTP status, the raw response body, the
- * parsed result from the normalization layer, and any parsing errors. The server
- * function behind it refuses to run outside development, so in production this
- * page renders its unavailable state and nothing else.
+ * Two halves, split along what is safe to expose from a deployed environment:
+ *
+ *   - Live KPI validation runs ANYWHERE an administrator can reach it. It
+ *     returns aggregates only — call counts, KPI totals, pass/fail invariants —
+ *     so the analytics can be validated against the real PBX, which is the only
+ *     place the Yeastar credentials exist.
+ *   - Endpoint probes are DEVELOPMENT ONLY. They return raw PBX response bodies
+ *     (caller numbers, DIDs, recording paths), so the server function behind
+ *     them refuses to run outside a development build.
  */
 export const Route = createFileRoute("/_app/admin/yeastar-diagnostics")({
   component: YeastarDiagnostics,
-  head: () => ({ meta: [{ title: "Yeastar Diagnostics (dev) · MilaServ Portal" }] }),
+  head: () => ({ meta: [{ title: "Yeastar Diagnostics · MilaServ Portal" }] }),
 });
 
 function Json({ data, max = "max-h-80" }: { data: unknown; max?: string }) {
@@ -37,6 +42,12 @@ function YeastarDiagnostics() {
   const runFn = useServerFn(yeastarDevDiagnostics);
   const run = useMutation({ mutationFn: () => runFn({ data: { windowDays } }) });
 
+  const [validationDays, setValidationDays] = useState(7);
+  const validateFn = useServerFn(yeastarKpiValidation);
+  const validate = useMutation({
+    mutationFn: () => validateFn({ data: { windowDays: validationDays } }),
+  });
+
   if (!isAdmin) {
     return (
       <div className="text-center py-16">
@@ -48,151 +59,239 @@ function YeastarDiagnostics() {
     );
   }
 
-  if (!isDev) {
-    return (
-      <div className="text-center py-16">
-        <TriangleAlert className="mx-auto h-10 w-10 text-muted-foreground" />
-        <p className="mt-2 text-sm text-muted-foreground">
-          This page is available in development builds only.
-        </p>
-      </div>
-    );
-  }
-
   const result = run.data;
   const report = result?.ok ? result.report : null;
+  const validation = validate.data?.ok ? validate.data.report : null;
 
   return (
     <div className="p-4 md:p-6 space-y-4 max-w-5xl">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Yeastar Diagnostics (dev)</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Yeastar Diagnostics</h1>
         <p className="text-sm text-muted-foreground">
-          Endpoint · Request · Response status · Response body · Parsed output · Parsing errors
+          Live KPI validation against the real PBX · endpoint probes (development builds only)
         </p>
       </div>
 
+      {/* ---- Live KPI validation — runs in every environment ---------------- */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Run probes</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-wrap items-end gap-3">
-          <div className="space-y-1">
-            <Label htmlFor="windowDays">CDR window (days)</Label>
-            <input
-              id="windowDays"
-              type="number"
-              min={1}
-              max={30}
-              value={windowDays}
-              onChange={(e) => setWindowDays(Number(e.target.value) || 7)}
-              className="h-9 w-28 rounded-md border border-input bg-background px-3 text-sm"
-            />
+          <CardTitle className="text-base">Live KPI validation</CardTitle>
+          <div className="text-xs text-muted-foreground">
+            Runs the production analytics pipeline over live CDR and re-derives every KPI
+            independently. Returns aggregates only — no raw response bodies and no per-call data —
+            so it is safe to run from a deployed environment.
           </div>
-          <Button onClick={() => run.mutate()} disabled={run.isPending}>
-            {run.isPending ? "Probing…" : "Run diagnostics"}
-          </Button>
-          {report && (
-            <span className="text-xs text-muted-foreground">
-              {report.cdrRowsInspected} CDR rows inspected · {report.at}
-            </span>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="space-y-1">
+              <Label htmlFor="validationDays">CDR window (days)</Label>
+              <input
+                id="validationDays"
+                type="number"
+                min={1}
+                max={30}
+                value={validationDays}
+                onChange={(e) => setValidationDays(Number(e.target.value) || 7)}
+                className="h-9 w-28 rounded-md border border-input bg-background px-3 text-sm"
+              />
+            </div>
+            <Button onClick={() => validate.mutate()} disabled={validate.isPending}>
+              {validate.isPending ? "Validating…" : "Run live KPI validation"}
+            </Button>
+            {validation && (
+              <span className="text-xs text-muted-foreground">
+                {validation.window.from} → {validation.window.to} · {validation.cdr.rowsInWindow}{" "}
+                rows → {validation.calls} calls · {validation.at}
+              </span>
+            )}
+          </div>
+
+          {validate.isError && <Json data={String(validate.error)} />}
+          {validate.data && !validate.data.ok && (
+            <div className="text-sm text-destructive">
+              {!validate.data.configured
+                ? "Yeastar is not configured (missing YEASTAR_* environment variables)."
+                : validate.data.error}
+            </div>
+          )}
+
+          {validation && (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                {validation.passed ? (
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                ) : (
+                  <TriangleAlert className="h-4 w-4 text-destructive" />
+                )}
+                <Badge
+                  variant={validation.passed ? "default" : "destructive"}
+                  className="font-normal"
+                >
+                  {validation.checks.filter((c) => c.passed).length}/{validation.checks.length}{" "}
+                  checks passed
+                </Badge>
+                {validation.cdr.truncated && (
+                  <Badge variant="destructive" className="font-normal">
+                    CDR truncated — window too large
+                  </Badge>
+                )}
+                <span className="text-xs text-muted-foreground">
+                  {validation.roster.extensionCount} extensions · queues{" "}
+                  {validation.roster.queueNumbers.join(", ") || "none"}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                {(
+                  [
+                    ["Total calls", validation.totals.total],
+                    ["Inbound", validation.totals.inbound],
+                    ["Outbound", validation.totals.outbound],
+                    ["Answered", validation.totals.answered],
+                    ["Missed", validation.totals.missed],
+                    ["Abandoned", validation.totals.abandoned],
+                    ["IVR-only", validation.totals.ivrOnly],
+                    ["Queue calls", validation.totals.queueCalls],
+                    ["Answer rate %", validation.totals.answerRate.toFixed(1)],
+                    ["Inbound answer %", validation.totals.inboundAnswerRate.toFixed(1)],
+                    ["Avg wait (s)", validation.totals.avgWaitSec.toFixed(1)],
+                    ["Avg talk (s)", validation.totals.avgTalkSec.toFixed(1)],
+                  ] as const
+                ).map(([label, value]) => (
+                  <div key={label} className="rounded border border-border/60 p-2">
+                    <div className="text-muted-foreground">{label}</div>
+                    <div className="text-sm font-semibold tabular-nums">{value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-1">
+                {validation.checks.map((c) => (
+                  <div
+                    key={c.name}
+                    className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-b border-border/50 py-1 text-xs"
+                  >
+                    <Badge
+                      variant={c.passed ? "secondary" : "destructive"}
+                      className="font-mono font-normal"
+                    >
+                      {c.name}
+                    </Badge>
+                    <span className="text-muted-foreground">{c.description}</span>
+                    {!c.passed && (
+                      <span className="font-mono text-destructive">
+                        expected {c.expected}, got {c.actual}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3 text-xs">
+                <div>
+                  <Label className="text-xs text-muted-foreground">Outcomes</Label>
+                  <Json data={validation.outcomes} max="max-h-52" />
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Leg roles</Label>
+                  <Json data={validation.legRoles} max="max-h-52" />
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">
+                    Legs per call
+                    <span className="block font-normal normal-case">
+                      all-1 means grouping is broken
+                    </span>
+                  </Label>
+                  <Json data={validation.legsPerCall} max="max-h-52" />
+                </div>
+              </div>
+
+              <div>
+                <Label className="text-xs text-muted-foreground">Retired field check</Label>
+                <div className="flex flex-wrap gap-2 mt-1">
+                  {validation.retiredFieldCheck.map((f) => (
+                    <Badge
+                      key={f.field}
+                      variant={f.occurrences === 0 ? "secondary" : "destructive"}
+                      className="font-mono font-normal"
+                    >
+                      {f.field}: {f.occurrences}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
 
-      {run.isError && (
+      {/* ---- Endpoint probes — development builds only ---------------------- */}
+      {!isDev ? (
         <Card>
-          <CardContent className="pt-6">
-            <Json data={String(run.error)} />
+          <CardContent className="pt-6 text-sm text-muted-foreground flex items-start gap-2">
+            <TriangleAlert className="h-4 w-4 mt-0.5 shrink-0" />
+            <span>
+              Endpoint probes are available in development builds only — they return raw PBX
+              response bodies. The live KPI validation above runs in every environment.
+            </span>
           </CardContent>
         </Card>
-      )}
-
-      {result && !result.ok && (
-        <Card>
-          <CardContent className="pt-6 text-sm text-muted-foreground">
-            {"devOnly" in result
-              ? "Diagnostics are disabled outside development."
-              : !result.configured
-                ? "Yeastar is not configured (missing YEASTAR_* environment variables)."
-                : result.error}
-          </CardContent>
-        </Card>
-      )}
-
-      {report?.kpiValidation && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex flex-wrap items-center gap-2">
-              {report.kpiValidation.passed ? (
-                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-              ) : (
-                <TriangleAlert className="h-4 w-4 text-destructive" />
+      ) : (
+        <>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Run probes (dev)</CardTitle>
+              <div className="text-xs text-muted-foreground">
+                Endpoint · Request · Response status · Response body · Parsed output · Parsing
+                errors
+              </div>
+            </CardHeader>
+            <CardContent className="flex flex-wrap items-end gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="windowDays">CDR window (days)</Label>
+                <input
+                  id="windowDays"
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={windowDays}
+                  onChange={(e) => setWindowDays(Number(e.target.value) || 7)}
+                  className="h-9 w-28 rounded-md border border-input bg-background px-3 text-sm"
+                />
+              </div>
+              <Button onClick={() => run.mutate()} disabled={run.isPending}>
+                {run.isPending ? "Probing…" : "Run diagnostics"}
+              </Button>
+              {report && (
+                <span className="text-xs text-muted-foreground">
+                  {report.cdrRowsInspected} CDR rows inspected · {report.at}
+                </span>
               )}
-              Live KPI validation
-              <Badge
-                variant={report.kpiValidation.passed ? "default" : "destructive"}
-                className="font-normal"
-              >
-                {report.kpiValidation.checks.filter((c) => c.passed).length}/
-                {report.kpiValidation.checks.length} checks passed
-              </Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              The production aggregation, run over the {report.kpiValidation.rows} live CDR rows
-              above ({report.kpiValidation.calls} calls), with every KPI independently re-derived
-              from the normalized calls. A failing check means a KPI does not match the PBX data it
-              claims to summarise.
-            </p>
+            </CardContent>
+          </Card>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-              {(
-                [
-                  ["Total calls", report.kpiValidation.totals.total],
-                  ["Inbound", report.kpiValidation.totals.inbound],
-                  ["Outbound", report.kpiValidation.totals.outbound],
-                  ["Answered", report.kpiValidation.totals.answered],
-                  ["Missed", report.kpiValidation.totals.missed],
-                  ["Abandoned", report.kpiValidation.totals.abandoned],
-                  ["IVR-only", report.kpiValidation.totals.ivrOnly],
-                  ["Queue calls", report.kpiValidation.totals.queueCalls],
-                  ["Answer rate %", report.kpiValidation.totals.answerRate.toFixed(1)],
-                  ["Inbound answer %", report.kpiValidation.totals.inboundAnswerRate.toFixed(1)],
-                  ["Avg wait (s)", report.kpiValidation.totals.avgWaitSec.toFixed(1)],
-                  ["Avg talk (s)", report.kpiValidation.totals.avgTalkSec.toFixed(1)],
-                ] as const
-              ).map(([label, value]) => (
-                <div key={label} className="rounded border border-border/60 p-2">
-                  <div className="text-muted-foreground">{label}</div>
-                  <div className="text-sm font-semibold tabular-nums">{value}</div>
-                </div>
-              ))}
-            </div>
+          {run.isError && (
+            <Card>
+              <CardContent className="pt-6">
+                <Json data={String(run.error)} />
+              </CardContent>
+            </Card>
+          )}
 
-            <div className="space-y-1">
-              {report.kpiValidation.checks.map((c) => (
-                <div
-                  key={c.name}
-                  className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-b border-border/50 py-1 text-xs"
-                >
-                  <Badge
-                    variant={c.passed ? "secondary" : "destructive"}
-                    className="font-mono font-normal"
-                  >
-                    {c.name}
-                  </Badge>
-                  <span className="text-muted-foreground">{c.description}</span>
-                  {!c.passed && (
-                    <span className="font-mono text-destructive">
-                      expected {c.expected}, got {c.actual}
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+          {result && !result.ok && (
+            <Card>
+              <CardContent className="pt-6 text-sm text-muted-foreground">
+                {"devOnly" in result
+                  ? "Endpoint probes are disabled outside development."
+                  : !result.configured
+                    ? "Yeastar is not configured (missing YEASTAR_* environment variables)."
+                    : result.error}
+              </CardContent>
+            </Card>
+          )}
+        </>
       )}
 
       {report?.retiredFieldCheck && (

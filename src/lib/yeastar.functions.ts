@@ -14,6 +14,7 @@ import { z } from "zod";
 // Type-only: erased at compile time, so the server-only diagnostics module is
 // never pulled into a client bundle.
 import type { DiagnosticsReport as YeastarDiagnosticsReport } from "@/lib/yeastar/diagnostics.server";
+import type { KpiValidationReport } from "@/lib/yeastar/kpi-validation.server";
 import type { NormalizationContext } from "@/lib/yeastar/normalize";
 
 async function assertAdmin(ctx: { supabase: any; userId: string }) {
@@ -677,6 +678,69 @@ export const yeastarDevDiagnostics = createServerFn({ method: "POST" })
     try {
       const { runDiagnostics } = await import("@/lib/yeastar/diagnostics.server");
       const report = await runDiagnostics(data.windowDays);
+      return { ok: true, configured: true, report };
+    } catch (err) {
+      return {
+        ok: false,
+        configured: true,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
+
+// ---- Live KPI validation (admin, production-safe) --------------------------
+//
+// Runs the real analytics pipeline over live CDR and re-derives every KPI
+// independently, so the numbers on the Call Center page can be validated
+// against the PBX in the environment where the Yeastar credentials actually
+// exist. Unlike `yeastarDevDiagnostics` this does NOT return raw response
+// bodies or any per-call data — only aggregates and pass/fail checks — which is
+// what makes it safe outside development. Administrator only; nothing is
+// persisted; every request is a read.
+
+const kpiValidationInput = z.object({
+  from: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+  to: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+  /** Used only when `from`/`to` are omitted. */
+  windowDays: z.number().int().min(1).max(30).default(7),
+});
+
+export type KpiValidationResult =
+  | { ok: false; configured: false }
+  | { ok: false; configured: true; error: string }
+  | { ok: true; configured: true; report: KpiValidationReport };
+
+/** `YYYY-MM-DD` for an epoch-ms instant in the business timezone. */
+function businessDay(atMs: number): string {
+  const off = Number(process.env.YEASTAR_UTC_OFFSET_MINUTES ?? BUSINESS_UTC_OFFSET_MINUTES);
+  return new Date(atMs + off * 60_000).toISOString().slice(0, 10);
+}
+
+export const yeastarKpiValidation = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => kpiValidationInput.parse(d ?? {}))
+  .handler(async ({ context, data }): Promise<KpiValidationResult> => {
+    await assertAdmin(context as any);
+    const { isConfigured } = await import("@/lib/yeastar/client.server");
+    if (!isConfigured()) return { ok: false, configured: false };
+    try {
+      const now = Date.now();
+      const to = data.to ?? businessDay(now);
+      const from = data.from ?? businessDay(now - (data.windowDays - 1) * 86_400_000);
+
+      // Same roster path analytics uses, including the DB fallback, so the
+      // validation exercises the exact context the KPIs were computed under.
+      const agents = await loadAgents((context as any).supabase);
+      const ctx = await buildNormalizationContext(agents.map((a) => a.ext));
+
+      const { runKpiValidation } = await import("@/lib/yeastar/kpi-validation.server");
+      const report = await runKpiValidation(from, to, ctx);
       return { ok: true, configured: true, report };
     } catch (err) {
       return {
