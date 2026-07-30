@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Building2,
-  Check,
   CheckCircle2,
   Crosshair,
   Info,
@@ -34,14 +33,18 @@ import { branchDirectionsUrl, type LocatorResult, type ResolvedOrigin } from "..
 /**
  * Locator mode, in the space the search bar occupies.
  *
- * Not a modal, not a drawer, not a page: it takes over the strip above the list
- * and leaves the directory — cards, map, resizable split — exactly where it was.
- * That is the whole design constraint. An agent enters locator mode mid-call and
- * the branch they were already looking at does not move.
+ * Not a modal, not a drawer, not a page: it takes over the strip above the cards
+ * and leaves them exactly where they were. That is the whole design constraint.
+ * An agent enters locator mode mid-call and the branch they were already looking
+ * at does not move.
  *
- * The results stay on screen after a selection, deliberately. Picking the
- * nearest branch and finding it unreachable is a normal outcome, and the second
- * choice has to be one click away rather than a re-search.
+ * Every size in here is deliberately tight. The panel sits above the content an
+ * agent is trying to read, so each row of chrome it spends is a row of branch card
+ * they do not see — which is why the heading is a 10px label rather than a
+ * heading block, the controls are 36px rather than 44px, and the district and
+ * street share one line. The floor is readability, not density for its own sake:
+ * the two things the eye needs to land on, the city and the distance, kept their
+ * size while everything around them gave some back.
  */
 
 /** One icon per gazetteer kind, so the list is scannable without reading it. */
@@ -64,12 +67,12 @@ const KIND_LABEL: Record<LocationKind, string> = {
 /**
  * Approximate height of one result row, in pixels.
  *
- * Four lines in the left column (code, city, district, street) against three
- * stacked metrics in the right one, plus 2.5 units of vertical padding. Named so
- * the "about five rows" intent below survives the next spacing change instead of
- * quietly drifting to four and a half.
+ * Three lines in the left column — code, city, then district and street sharing a
+ * line — against three stacked metrics on the right, plus 1.5 units of vertical
+ * padding. Named so the "about five rows" intent below survives the next spacing
+ * change instead of quietly drifting to four and a half.
  */
-const RESULT_ROW_HEIGHT = 88;
+const RESULT_ROW_HEIGHT = 74;
 
 /** Visible rows before the list starts scrolling internally. */
 const VISIBLE_RESULTS = 5;
@@ -168,21 +171,23 @@ export function BranchLocatorPanel({
   return (
     <section
       aria-label="Branch Locator"
-      className="rounded-xl border border-primary/30 bg-primary/[0.03] p-2.5 dark:bg-primary/[0.06]"
+      className="rounded-lg border border-primary/30 bg-primary/[0.03] p-2 dark:bg-primary/[0.06]"
     >
-      <div className="flex items-center justify-between gap-2 pb-2">
-        <h2 className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-primary">
-          <Crosshair className="h-3.5 w-3.5" aria-hidden />
+      {/* The title sits on the same line as the close control and is a label
+          rather than a heading block. It used to own a 32px strip of its own. */}
+      <div className="flex items-center justify-between gap-2 pb-1.5">
+        <h2 className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-primary">
+          <Crosshair className="h-3 w-3" aria-hidden />
           Branch Locator
         </h2>
         <Button
           variant="ghost"
           size="sm"
           onClick={onClose}
-          className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
+          className="h-6 gap-1 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
         >
           <X className="h-3.5 w-3.5" />
-          Close locator
+          Close
         </Button>
       </div>
 
@@ -210,7 +215,7 @@ export function BranchLocatorPanel({
           }}
         >
           <MapPin
-            className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+            className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
             aria-hidden
           />
           <input
@@ -236,7 +241,7 @@ export function BranchLocatorPanel({
             aria-controls="locator-suggestions"
             role="combobox"
             className={cn(
-              "h-11 w-full rounded-lg border bg-card pl-10 pr-3 text-sm font-medium shadow-sm",
+              "h-9 w-full rounded-md border bg-card pl-9 pr-2.5 text-[13px] font-medium shadow-sm",
               "placeholder:font-normal placeholder:text-muted-foreground/70",
               "border-border/70 transition-[border-color,box-shadow] duration-150 hover:border-border",
               "focus:border-primary focus:outline-none focus:ring-4 focus:ring-primary/15",
@@ -278,7 +283,7 @@ export function BranchLocatorPanel({
             <SelectTrigger
               aria-label="Limit the search to one city"
               className={cn(
-                "h-11 min-w-0 flex-1 gap-1.5 border-border/70 bg-card text-sm shadow-sm sm:w-40 sm:flex-none",
+                "h-9 min-w-0 flex-1 gap-1.5 border-border/70 bg-card text-[13px] shadow-sm sm:w-36 sm:flex-none",
                 city && "border-primary/50 font-medium text-foreground",
               )}
             >
@@ -300,7 +305,11 @@ export function BranchLocatorPanel({
             </SelectContent>
           </Select>
 
-          <Button type="submit" className="h-11 shrink-0 gap-1.5 px-4" disabled={searching}>
+          <Button
+            type="submit"
+            className="h-9 shrink-0 gap-1.5 px-3 text-[13px]"
+            disabled={searching}
+          >
             {searching ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
@@ -314,7 +323,7 @@ export function BranchLocatorPanel({
       {/* What the distances were measured from. An agent quoting a number to a
           customer needs to know whether it came from their pin or from the
           middle of a city. */}
-      <p id="locator-origin" className="mt-1.5 min-h-4 px-0.5 text-[11px] leading-4">
+      <p id="locator-origin" className="mt-1 min-h-4 px-0.5 text-[10.5px] leading-4">
         {error ? (
           <span className="text-destructive">{error}</span>
         ) : origin ? (
@@ -378,7 +387,7 @@ export function BranchLocatorPanel({
 
           {results.length > 1 && (
             <>
-              <div className="mt-2.5 flex items-center gap-1.5 px-0.5 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="mt-2 flex items-center gap-1.5 px-0.5 pb-1 text-[9.5px] font-medium uppercase tracking-wide text-muted-foreground">
                 <Info className="h-3 w-3 shrink-0" aria-hidden />
                 {/* Stated once, above the list, rather than repeated on every
                     row. The "≈" on each estimate carries it after the first
@@ -693,7 +702,13 @@ function DistanceBlock({ result, size }: { result: LocatorResult; size: "row" | 
  *
  * Not a second ranking — deriving a "best" branch by different rules from the
  * ones that ordered the list is how a panel ends up recommending its own third
- * row. This is `results[0]`, presented larger.
+ * row. This is `results[0]`, presented with more weight.
+ *
+ * One click, not two. The card *is* the button: a separate "Select branch" action
+ * underneath it was a second control for the thing the whole card already
+ * invites, and on a panel whose job is to shed height it cost a full row to say
+ * nothing new. Directions stays a sibling of that button rather than a child,
+ * because a link inside a button is one control to a mouse and two to a keyboard.
  */
 function RecommendedBranch({
   result,
@@ -714,100 +729,83 @@ function RecommendedBranch({
   return (
     <div
       className={cn(
-        "mt-2 overflow-hidden rounded-xl border bg-card transition-[border-color,box-shadow] duration-200",
+        "relative mt-1.5 flex items-stretch overflow-hidden rounded-lg border bg-card",
+        "transition-[border-color,box-shadow] duration-200",
         active
-          ? "border-primary/60 ring-1 ring-primary/30"
-          : "border-primary/30 hover:border-primary/50",
+          ? "border-primary ring-1 ring-primary/25"
+          : "border-primary/30 hover:border-primary/60 hover:shadow-sm",
       )}
     >
-      <div className="flex items-center gap-1.5 border-b border-primary/20 bg-primary/[0.07] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-primary dark:bg-primary/[0.12]">
-        <Star className="h-3 w-3 shrink-0 fill-current" aria-hidden />
-        Recommended branch
-      </div>
-
-      <div className="flex items-stretch">
-        <button
-          type="button"
-          onClick={() => onSelect(branch.branch_no)}
-          aria-current={active ? "true" : undefined}
-          aria-label={[
-            `Recommended: ${branch.branch_no} in ${cityPrimary}`,
-            branch.district,
-            branch.street,
-            describeDistance(result.distance),
-            `estimated delivery ${spokenDelivery(result)}`,
-            COVERAGE_BADGE[coverageTier(result.distance.metres)].label,
-            "Show this branch below.",
-          ]
-            .filter(Boolean)
-            .join(". ")}
-          className={cn(
-            "flex min-w-0 flex-1 items-start gap-3 px-3 py-2.5 text-left",
-            "transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
-            !active && "hover:bg-accent/40",
-          )}
-        >
-          <span className="min-w-0 flex-1">
-            <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-              <span className="font-mono text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                {branch.branch_no}
-              </span>
-              {referenceLabel && (
-                <span className="rounded-full bg-[var(--attention)]/12 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-[var(--attention)]">
-                  {referenceLabel}
-                </span>
-              )}
+      <button
+        type="button"
+        onClick={() => onSelect(branch.branch_no)}
+        aria-current={active ? "true" : undefined}
+        aria-label={[
+          `Recommended: ${branch.branch_no} in ${cityPrimary}`,
+          branch.district,
+          branch.street,
+          describeDistance(result.distance),
+          `estimated delivery ${spokenDelivery(result)}`,
+          COVERAGE_BADGE[coverageTier(result.distance.metres)].label,
+          "Show this branch below.",
+        ]
+          .filter(Boolean)
+          .join(". ")}
+        className={cn(
+          "flex min-w-0 flex-1 cursor-pointer items-start gap-3 px-2.5 py-2 text-left",
+          "transition-colors duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
+          !active && "hover:bg-accent/30",
+        )}
+      >
+        <span className="min-w-0 flex-1">
+          {/* The star and the code share the top line rather than the star owning
+              a banner of its own. The banner was 22px of chrome to say one word. */}
+          <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-primary">
+              <Star className="h-2.5 w-2.5 fill-current" aria-hidden />
+              Recommended
             </span>
-
-            <span
-              className="mt-0.5 block truncate text-base font-semibold leading-6 tracking-tight text-foreground"
-              dir="auto"
-            >
-              {cityPrimary}
-              {citySecondary && (
-                <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">
-                  {citySecondary}
-                </span>
-              )}
+            <span className="font-mono text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {branch.branch_no}
             </span>
-
-            {branch.district && (
-              <span className="flex min-w-0 items-center gap-1 text-[11.5px] leading-4 text-foreground/75">
-                <MapPin className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
-                <span className="truncate" dir="auto">
-                  {branch.district}
-                </span>
-              </span>
-            )}
-            {branch.street && (
-              <span className="flex min-w-0 items-center gap-1 text-[11.5px] leading-4 text-muted-foreground">
-                <Signpost className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
-                <span className="truncate" dir="auto">
-                  {branch.street}
-                </span>
+            {referenceLabel && (
+              <span className="rounded-full bg-[var(--attention)]/12 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-[var(--attention)]">
+                {referenceLabel}
               </span>
             )}
           </span>
 
-          <DistanceBlock result={result} size="hero" />
-        </button>
-      </div>
+          <span
+            className="mt-0.5 block truncate text-[15px] font-semibold leading-5 tracking-tight text-foreground"
+            dir="auto"
+          >
+            {cityPrimary}
+            {citySecondary && (
+              <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">
+                {citySecondary}
+              </span>
+            )}
+          </span>
 
-      {/* Both actions the recommendation invites, spelled out rather than implied.
-          The card body is already clickable, but an explicit primary button is
-          what makes "this is the one to use" an instruction instead of a hint —
-          and it gives the keyboard a labelled target that is not the whole card. */}
-      <div className="flex items-center gap-2 border-t border-border/40 px-2.5 py-2">
-        <Button
-          size="sm"
-          onClick={() => onSelect(branch.branch_no)}
-          className="h-8 flex-1 gap-1.5 text-xs"
-        >
-          <Check className="h-3.5 w-3.5" aria-hidden />
-          {active ? "Selected" : "Select branch"}
-        </Button>
-        <DirectionsButton result={result} origin={origin} />
-      </div>
+          {/* District and street on one line, separated by a dot. Two icon rows
+              cost two lines to carry a single address. */}
+          {(branch.district || branch.street) && (
+            <span className="mt-px flex min-w-0 items-center gap-1 text-[11.5px] leading-4 text-muted-foreground">
+              <MapPin className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
+              <span className="truncate" dir="auto">
+                {[branch.district, branch.street].filter(Boolean).join(" · ")}
+              </span>
+            </span>
+          )}
+        </span>
+
+        <DistanceBlock result={result} size="hero" />
+      </button>
+
+      {/* A sibling of the button, never nested inside it. */}
+      <span className="flex shrink-0 items-center border-l border-border/40 px-1">
+        <DirectionsButton result={result} origin={origin} compact />
+      </span>
     </div>
   );
 }
@@ -913,6 +911,10 @@ function LocatorRow({
   // thing that distinguishes two branches in the same city.
   const parsedAddress = Boolean(branch.district || branch.street);
   const fallbackAddress = parsedAddress ? null : branch.addressLine;
+  /** The whole address as one string, for the `title` and the empty check. */
+  const addressLine = parsedAddress
+    ? [branch.district, branch.street].filter(Boolean).join(" · ")
+    : fallbackAddress;
 
   return (
     <li className="relative">
@@ -950,7 +952,7 @@ function LocatorRow({
             .filter(Boolean)
             .join(". ")}
           className={cn(
-            "group flex min-w-0 flex-1 cursor-pointer items-start gap-2.5 px-3 py-2.5 text-left",
+            "group flex min-w-0 flex-1 cursor-pointer items-start gap-2.5 px-2.5 py-1.5 text-left",
             // 200ms and on both colour and shadow: a row is a click target, and a
             // target that lifts very slightly under the pointer reads as pressable
             // in a way a background tint alone does not.
@@ -1003,29 +1005,20 @@ function LocatorRow({
               )}
             </span>
 
-            {branch.district && (
-              <span className="mt-px flex min-w-0 items-center gap-1 text-[11.5px] leading-4 text-foreground/75">
+            {/* District and street on one line rather than two.
+                Both are still shown — that is what the row is for — but two icon
+                rows spent two lines carrying one address, and across five visible
+                results that was five lines of the panel's height for punctuation
+                that a middle dot supplies. The street keeps its own icon inside the
+                line so the two halves stay distinguishable at a glance. */}
+            {addressLine && (
+              <span className="mt-px flex min-w-0 items-center gap-1 text-[11.5px] leading-4 text-muted-foreground">
                 <MapPin className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
-                <span className="truncate" dir="auto" title={branch.district}>
-                  {branch.district}
-                </span>
-              </span>
-            )}
-
-            {branch.street && (
-              <span className="flex min-w-0 items-center gap-1 text-[11.5px] leading-4 text-muted-foreground">
-                <Signpost className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
-                <span className="truncate" dir="auto" title={branch.street}>
+                <span className="truncate" dir="auto" title={addressLine}>
+                  {branch.district && <span className="text-foreground/75">{branch.district}</span>}
+                  {branch.district && branch.street && " · "}
                   {branch.street}
-                </span>
-              </span>
-            )}
-
-            {fallbackAddress && (
-              <span className="flex min-w-0 items-center gap-1 text-[11.5px] leading-4 text-muted-foreground">
-                <MapPin className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
-                <span className="truncate" dir="auto" title={fallbackAddress}>
-                  {fallbackAddress}
+                  {!branch.district && !branch.street && fallbackAddress}
                 </span>
               </span>
             )}
