@@ -158,6 +158,15 @@ const HEAT = {
 } as const;
 
 /**
+ * Height of one city label's collision box, in SVG units.
+ *
+ * Shared by the label solver and the tooltip's offset calculation — they are
+ * reasoning about the same rectangle, and two copies of the number is how the
+ * card ends up half a line over the name it is describing.
+ */
+const LABEL_HEIGHT = 16;
+
+/**
  * A colour derived from one of the heat tokens.
  *
  * `${color}66` — appending a hex alpha pair — is what the literals allowed and
@@ -236,7 +245,7 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
       const tier = tierOf(ratio);
       const color = colorFor(tier);
       const labelW = Math.max(44, c.name.length * 7.6) + 6;
-      const labelH = 16;
+      const labelH = LABEL_HEIGHT;
       const gap = 8;
 
       const build = (dist: number) => [
@@ -593,41 +602,6 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
               );
             })}
 
-            {/* Labels */}
-            {placed.map((p) => {
-              const active = hoverName === p.name;
-              return (
-                <g
-                  key={`lbl-${p.name}`}
-                  style={{
-                    opacity: mounted ? 1 : 0,
-                    transition: "opacity 340ms ease 260ms",
-                    pointerEvents: "none",
-                  }}
-                >
-                  <text
-                    x={p.labelX}
-                    y={p.labelY}
-                    textAnchor={p.anchor}
-                    fontSize={11.5}
-                    fontWeight={active ? 700 : 600}
-                    strokeWidth={3.5}
-                    strokeOpacity={0.98}
-                    paintOrder="stroke"
-                    style={{
-                      fill: "var(--map-label)",
-                      stroke: "var(--map-label-halo)",
-                      letterSpacing: 0.15,
-                      fontFeatureSettings: '"kern"',
-                      textRendering: "geometricPrecision",
-                    }}
-                  >
-                    {displayLabel(p.name)}
-                  </text>
-                </g>
-              );
-            })}
-
             {/* Hover accent ring */}
             {hover && !reducedMotion && (
               <g style={{ pointerEvents: "none" }}>
@@ -657,6 +631,64 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                 </circle>
               </g>
             )}
+
+            {/*
+              Labels, painted last.
+
+              They used to come *before* the expanding accent ring and before the
+              hovered bubble's enlarged glow halo, so hovering a city drew its own
+              hover chrome straight over its name — the ring's stroke and the
+              halo's gradient both landed on the glyphs, and against the halo's
+              own background-coloured outline the text read as smeared or gone.
+              SVG has no z-index; paint order *is* the stacking, so the fix is to
+              be last rather than to fight it.
+
+              Within the pass the active city is sorted to the end as well. Labels
+              can legitimately overlap each other where the collision solver ran
+              out of candidate positions and fell back to clamping, and the one
+              the agent is pointing at should win that.
+            */}
+            {[...placed]
+              .sort((a, b) => Number(a.name === hoverName) - Number(b.name === hoverName))
+              .map((p) => {
+                const active = hoverName === p.name;
+                return (
+                  <g
+                    key={`lbl-${p.name}`}
+                    style={{
+                      opacity: mounted ? 1 : 0,
+                      transition: "opacity 340ms ease 260ms",
+                      pointerEvents: "none",
+                    }}
+                  >
+                    <text
+                      x={p.labelX}
+                      y={p.labelY}
+                      textAnchor={p.anchor}
+                      fontSize={11.5}
+                      fontWeight={active ? 700 : 600}
+                      // A wider, fully opaque halo than before. It is the only
+                      // thing separating a label from the bubble fill, the glow
+                      // gradient and the grid behind it, and at 0.98 the land mass
+                      // bled through the outline enough to soften every glyph.
+                      strokeWidth={active ? 4.5 : 4}
+                      strokeOpacity={1}
+                      strokeLinejoin="round"
+                      paintOrder="stroke"
+                      style={{
+                        fill: "var(--map-label)",
+                        stroke: "var(--map-label-halo)",
+                        letterSpacing: 0.15,
+                        fontFeatureSettings: '"kern"',
+                        textRendering: "geometricPrecision",
+                        transition: "stroke-width 200ms ease",
+                      }}
+                    >
+                      {displayLabel(p.name)}
+                    </text>
+                  </g>
+                );
+              })}
 
             {/* Hit-target layer */}
             {[...placed]
@@ -775,14 +807,38 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
               const nearLeft = leftPct < 22;
               const nearRight = leftPct > 78;
               const xShift = nearLeft ? "0%" : nearRight ? "-100%" : "-50%";
-              const yShift = flipBelow
-                ? `calc(${hover.r + 18}px)`
-                : `calc(-100% - ${hover.r + 16}px)`;
+
+              /**
+               * Clear the bubble, and clear the label too when the card lands on
+               * the same side the label was placed on.
+               *
+               * `flipBelow` only avoided the label in the case where the label was
+               * above. A northern city whose label was solved *below* it took both
+               * clauses — near the top edge, so flip below; label below, so the
+               * card was laid straight over the name. Measuring the label's own
+               * reach from the bubble centre covers every combination instead of
+               * enumerating them.
+               */
+              const labelIsBelow = hover.labelY > hover.cy;
+              const bubbleClearance = hover.r + 18;
+              const offset =
+                flipBelow === labelIsBelow
+                  ? Math.max(bubbleClearance, Math.abs(hover.labelY - hover.cy) + LABEL_HEIGHT + 12)
+                  : bubbleClearance;
+              const yShift = flipBelow ? `${offset}px` : `calc(-100% - ${offset}px)`;
+
               return (
                 <div
                   id={tooltipId}
                   role="tooltip"
-                  className="pointer-events-none absolute z-10 hidden w-[280px] rounded-2xl border border-border/50 bg-popover/95 px-4 py-3.5 text-popover-foreground shadow-2xl ring-1 ring-black/5 duration-200 ease-out animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-1 backdrop-blur-2xl sm:block md:w-[300px] dark:ring-white/10"
+                  // Opaque, and no backdrop blur. Both were working against the
+                  // thing this card is for: at 95% the grid, the bubbles and any
+                  // label underneath ghosted through the numbers, and the blur
+                  // smeared those same labels into an unreadable wash that looked
+                  // exactly like the text having disappeared. `z-30` puts it above
+                  // the SVG and the legend without needing to be the highest
+                  // thing on the page.
+                  className="pointer-events-none absolute z-30 hidden w-[280px] rounded-2xl border border-border/60 bg-popover px-4 py-3.5 text-popover-foreground duration-200 ease-out animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-1 sm:block md:w-[300px]"
                   style={{
                     left: `${leftPct}%`,
                     top: `${topPct}%`,
@@ -810,7 +866,7 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
         <div className="mt-3 sm:hidden">
           {hover ? (
             <div
-              className="rounded-2xl border border-border/50 bg-popover/95 px-3.5 py-3 text-popover-foreground"
+              className="rounded-2xl border border-border/60 bg-popover px-3.5 py-3 text-popover-foreground"
               style={{ boxShadow: `inset 0 0 0 1px ${heatAlpha(hover.color, 22)}` }}
             >
               <CityDetail city={hover} />
@@ -901,7 +957,9 @@ function CityDetail({ city }: { city: Placed }) {
       <div className="mb-2.5 flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <span
-            className="h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-background"
+            // Ringed against the popover it sits in, not the page behind it —
+            // `ring-background` drew a hairline of the wrong surface colour.
+            className="h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-popover"
             style={{
               background: city.color,
               boxShadow: `0 0 12px ${heatAlpha(city.color, 70)}`,
@@ -913,7 +971,14 @@ function CityDetail({ city }: { city: Placed }) {
         </div>
         <span
           className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider"
-          style={{ background: heatAlpha(city.color, 14), color: city.color }}
+          style={{
+            background: heatAlpha(city.color, 14),
+            // The raw heat colour on a 14% tint of itself is close to invisible
+            // for the amber tier in light mode. Pulling it toward the body text
+            // colour keeps the hue that ties it to the bubble and buys back the
+            // contrast, in whichever direction the theme needs.
+            color: `color-mix(in oklab, ${city.color} 65%, var(--color-foreground))`,
+          }}
         >
           #{city.rank}
         </span>

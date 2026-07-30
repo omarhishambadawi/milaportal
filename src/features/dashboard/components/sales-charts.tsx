@@ -16,6 +16,17 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fmtSAR } from "@/lib/branches";
 import { COLORS, STATUS_COLORS } from "../constants";
+import {
+  AXIS_TICK,
+  BAR_CURSOR,
+  ChartTooltip,
+  GRID_STROKE,
+  LEGEND_STYLE,
+  PIE_LABEL,
+  POINT_CURSOR,
+  TOOLTIP_WRAPPER,
+  legendText,
+} from "../chart-theme";
 import { CHART_PANEL_HEIGHT } from "./sales-charts-skeleton";
 
 /**
@@ -51,20 +62,6 @@ export interface SalesChartsData {
   cityData: (Named & { sales: number })[];
 }
 
-/**
- * Recharts renders its tooltip into a plain div with inline styles, so it does
- * not inherit `bg-popover` from anything. Left unset it defaults to white — a
- * white card with black text on top of a dark dashboard. Three of the six charts
- * had no `contentStyle` at all.
- */
-const TOOLTIP_STYLE = {
-  borderRadius: 8,
-  border: "1px solid var(--color-border)",
-  background: "var(--color-popover)",
-  color: "var(--color-popover-foreground)",
-  fontSize: 12,
-} as const;
-
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <Card>
@@ -92,17 +89,21 @@ export function SalesCharts({ data }: { data: SalesChartsData }) {
                 <stop offset="100%" stopColor="var(--positive)" stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
+            <CartesianGrid vertical={false} strokeDasharray="3 3" stroke={GRID_STROKE} />
             <XAxis
               dataKey="date"
-              tick={{ fontSize: 11 }}
+              tick={AXIS_TICK}
               tickMargin={6}
               axisLine={false}
               tickLine={false}
             />
-            <YAxis tick={{ fontSize: 11 }} axisLine={false} tickLine={false} width={48} />
-            <Tooltip formatter={(v: number | string) => fmtSAR(v)} contentStyle={TOOLTIP_STYLE} />
-            <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
+            <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={48} />
+            <Tooltip
+              content={<ChartTooltip format={fmtSAR} />}
+              cursor={POINT_CURSOR}
+              wrapperStyle={TOOLTIP_WRAPPER}
+            />
+            <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
             <Area
               type="monotone"
               dataKey="total"
@@ -132,13 +133,25 @@ export function SalesCharts({ data }: { data: SalesChartsData }) {
       <Panel title="Orders by status">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
-            <Pie data={data.statusData} dataKey="value" nameKey="name" outerRadius={80} label>
+            <Pie
+              data={data.statusData}
+              dataKey="value"
+              nameKey="name"
+              outerRadius={80}
+              label={PIE_LABEL}
+              // Separates a slice from its neighbour with the card colour rather
+              // than the default black hairline, which is a visible seam on dark.
+              stroke="var(--color-card)"
+              strokeWidth={2}
+            >
               {data.statusData.map((s, i) => (
                 <Cell key={i} fill={STATUS_COLORS[s.name] ?? COLORS[i % COLORS.length]} />
               ))}
             </Pie>
-            <Legend />
-            <Tooltip contentStyle={TOOLTIP_STYLE} />
+            <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
+            {/* No heading: a pie tooltip's label and its single row name the same
+                slice, so the heading was the word repeated twice. */}
+            <Tooltip content={<ChartTooltip hideLabel />} wrapperStyle={TOOLTIP_WRAPPER} />
           </PieChart>
         </ResponsiveContainer>
       </Panel>
@@ -146,10 +159,14 @@ export function SalesCharts({ data }: { data: SalesChartsData }) {
       <Panel title="Sales by team">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data.teamData}>
-            <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-            <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-            <YAxis tick={{ fontSize: 11 }} />
-            <Tooltip formatter={(v: number | string) => fmtSAR(v)} contentStyle={TOOLTIP_STYLE} />
+            <CartesianGrid vertical={false} strokeDasharray="3 3" stroke={GRID_STROKE} />
+            <XAxis dataKey="name" tick={AXIS_TICK} tickLine={false} axisLine={false} />
+            <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} />
+            <Tooltip
+              content={<ChartTooltip format={fmtSAR} />}
+              cursor={BAR_CURSOR}
+              wrapperStyle={TOOLTIP_WRAPPER}
+            />
             <Bar
               dataKey="sales"
               name="Completed sales"
@@ -163,11 +180,27 @@ export function SalesCharts({ data }: { data: SalesChartsData }) {
       <Panel title="Top agents by sales">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data.agentSalesData} layout="vertical">
-            <CartesianGrid horizontal={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-            <XAxis type="number" tick={{ fontSize: 11 }} />
-            <YAxis type="category" dataKey="name" width={130} tick={{ fontSize: 11 }} />
-            <Tooltip formatter={(v: number | string) => fmtSAR(v)} contentStyle={TOOLTIP_STYLE} />
-            <Bar dataKey="sales" fill="var(--color-chart-3)" radius={[0, 4, 4, 0]} />
+            <CartesianGrid horizontal={false} strokeDasharray="3 3" stroke={GRID_STROKE} />
+            <XAxis type="number" tick={AXIS_TICK} tickLine={false} axisLine={false} />
+            <YAxis
+              type="category"
+              dataKey="name"
+              width={130}
+              tick={AXIS_TICK}
+              tickLine={false}
+              axisLine={false}
+            />
+            <Tooltip
+              content={<ChartTooltip format={fmtSAR} />}
+              cursor={BAR_CURSOR}
+              wrapperStyle={TOOLTIP_WRAPPER}
+            />
+            <Bar
+              dataKey="sales"
+              name="Completed sales"
+              fill="var(--color-chart-3)"
+              radius={[0, 4, 4, 0]}
+            />
           </BarChart>
         </ResponsiveContainer>
       </Panel>
@@ -175,11 +208,27 @@ export function SalesCharts({ data }: { data: SalesChartsData }) {
       <Panel title="Sales by branch (top 10)">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data.branchData} layout="vertical">
-            <CartesianGrid horizontal={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-            <XAxis type="number" tick={{ fontSize: 11 }} />
-            <YAxis type="category" dataKey="name" width={80} tick={{ fontSize: 11 }} />
-            <Tooltip formatter={(v: number | string) => fmtSAR(v)} contentStyle={TOOLTIP_STYLE} />
-            <Bar dataKey="sales" fill="var(--color-chart-4)" radius={[0, 4, 4, 0]} />
+            <CartesianGrid horizontal={false} strokeDasharray="3 3" stroke={GRID_STROKE} />
+            <XAxis type="number" tick={AXIS_TICK} tickLine={false} axisLine={false} />
+            <YAxis
+              type="category"
+              dataKey="name"
+              width={80}
+              tick={AXIS_TICK}
+              tickLine={false}
+              axisLine={false}
+            />
+            <Tooltip
+              content={<ChartTooltip format={fmtSAR} />}
+              cursor={BAR_CURSOR}
+              wrapperStyle={TOOLTIP_WRAPPER}
+            />
+            <Bar
+              dataKey="sales"
+              name="Completed sales"
+              fill="var(--color-chart-4)"
+              radius={[0, 4, 4, 0]}
+            />
           </BarChart>
         </ResponsiveContainer>
       </Panel>
@@ -187,11 +236,27 @@ export function SalesCharts({ data }: { data: SalesChartsData }) {
       <Panel title="Sales by city">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data.cityData} layout="vertical">
-            <CartesianGrid horizontal={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-            <XAxis type="number" tick={{ fontSize: 11 }} />
-            <YAxis type="category" dataKey="name" width={90} tick={{ fontSize: 11 }} />
-            <Tooltip formatter={(v: number | string) => fmtSAR(v)} contentStyle={TOOLTIP_STYLE} />
-            <Bar dataKey="sales" fill="var(--color-chart-5)" radius={[0, 4, 4, 0]} />
+            <CartesianGrid horizontal={false} strokeDasharray="3 3" stroke={GRID_STROKE} />
+            <XAxis type="number" tick={AXIS_TICK} tickLine={false} axisLine={false} />
+            <YAxis
+              type="category"
+              dataKey="name"
+              width={90}
+              tick={AXIS_TICK}
+              tickLine={false}
+              axisLine={false}
+            />
+            <Tooltip
+              content={<ChartTooltip format={fmtSAR} />}
+              cursor={BAR_CURSOR}
+              wrapperStyle={TOOLTIP_WRAPPER}
+            />
+            <Bar
+              dataKey="sales"
+              name="Completed sales"
+              fill="var(--color-chart-5)"
+              radius={[0, 4, 4, 0]}
+            />
           </BarChart>
         </ResponsiveContainer>
       </Panel>
