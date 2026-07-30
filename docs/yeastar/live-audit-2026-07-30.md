@@ -92,8 +92,8 @@ Grouping: 13,997 rows → **7,769 calls** (avg 1.80 legs; inbound queue calls ru
 
 ## 3. Fields that do not exist on this firmware
 
-Zero occurrences across all 13,997 rows — yet every one of them is read by
-`src/lib/yeastar/stats.server.ts`:
+Zero occurrences across all 13,997 rows — yet every one of them was read by
+`src/lib/yeastar/stats.server.ts` at the time of the audit (all removed in §7):
 
 `wait_time` · `agent_ring_time` · `last_participant_number` · `last_participant` ·
 `final_participant` · `answer_by` · `answered_by` · `agent_number` · `dst` · `dst_num` ·
@@ -105,7 +105,7 @@ falling through to `call_to_number`. Since all nine are absent, **it always fall
 
 ### `uid` is a call id, not a row id
 
-`classifyRecords()` de-duplicates rows on `uid ?? new_id ?? id`. On this firmware:
+`classifyRecords()` de-duplicated rows on `uid ?? new_id ?? id`. On this firmware:
 
 | Field    | Distinct values across 13,997 rows | Meaning                   |
 | -------- | ---------------------------------- | ------------------------- |
@@ -239,5 +239,50 @@ queue waits recorded: 1285   (= the exact number of queue legs)
   endpoint, request, status, body, parsed output and parse errors, including a live check that the
   14 retired fields are still absent.
 
-**Not done, deliberately:** `stats.server.ts` is untouched. Correcting the KPIs is the next sprint;
-this one only establishes a trustworthy data source.
+**Not done in this pass, deliberately:** `stats.server.ts` was left untouched. Correcting the KPIs
+was the next sprint; this one only established a trustworthy data source.
+
+---
+
+## 7. Phase 2 — the analytics pipeline now runs on the normalization layer
+
+`src/lib/yeastar/stats.server.ts` was rewritten on top of `normalize.ts`. Every KPI is derived from
+normalized CALLS; no KPI reads a raw CDR row.
+
+**Removed** (obsolete once rows are grouped by `call_id`): the `uid` de-duplication, the
+`correlationId()` chain over `linkedid`/`linked_id`, the 120-second sliding-fingerprint fallback,
+`agentExtFor()`'s nine-field priority list, `ringOf()`/`waitOf()`'s reads of `wait_time` and
+`agent_ring_time`, `routedThroughQueue()`, and the `Classified` group type. `CdrRecord` is now an
+alias of the verified `RawCdrRow` rather than a hand-written interface declaring fourteen fields
+this firmware never sends.
+
+**KPI definitions now in force**
+
+| KPI                 | Derivation                                                                          |
+| ------------------- | ----------------------------------------------------------------------------------- |
+| Answered            | An agent leg answered. An `ANSWERED` IVR leg is not an answered call                |
+| Missed              | Reached the queue, no agent answered, queue-leg ring ≥ 5s                           |
+| Abandoned           | Reached the queue, no agent answered, queue-leg ring < 5s                           |
+| IVR-only            | Never reached a queue — reported separately, never as Missed                        |
+| Queue wait          | Queue-leg `ring_duration`, averaged over calls that reached a queue                 |
+| Agent ring          | Agent-leg `ring_duration` — a separate number                                       |
+| Talk time           | Agent-leg `talk_duration`, counted once per call                                    |
+| Agent KPIs          | One contribution per (call, agent); durations from that agent's own leg             |
+| Inbound answer rate | Answered inbound ÷ all inbound; queue answer rate ÷ (answered + missed + abandoned) |
+| Outbound            | Unchanged — single-leg, attributed to `call_from_number`                            |
+
+**New:** `src/lib/yeastar/validate.ts` re-derives every headline KPI independently and asserts 27
+invariants (no duplicate calls, no IVR pickup scored as answered, no multiplied talk, no queue
+number as an answering agent, buckets summing to totals, …). It runs in the test suite over
+fixtures and over the captured live payload, and on `/admin/yeastar-diagnostics` against live CDR.
+
+**Also corrected:** the realtime widget reads `waiting_list` / `active_list` / `ringing_list` and
+the PBX's own `waiting_calls` / `active_calls` / `ringing_calls` scalars, and treats `errcode
+60001` as "idle" rather than as a failure. It previously read `data` / `queue_call_status_list`,
+neither of which exists, and therefore always rendered zeros.
+
+**Roster gap found while replaying the captured payload:** `/extension/list` is paginated, and the
+captured page holds 8 of the PBX's 28 extensions — 4005, who answers the sample call, is not on it.
+`buildContext()` now folds queue MEMBERS (`queue_list[].static_agent_list[].text2`) into the
+extension set, and the server pages `/extension/list` to exhaustion. Without that, an agent on an
+unfetched page would be unrecognisable and their answered calls would be reported as Missed.

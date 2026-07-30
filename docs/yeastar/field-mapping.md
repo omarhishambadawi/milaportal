@@ -97,8 +97,10 @@ the roster (4,744 of 4,745 rows matched).
 | `/openapi/v1.0/queue/list`     | `queue_list[].number`                                       | `NormalizationContext.queueNumbers`                                                    |
 | `/openapi/v1.0/queue/list`     | `queue_list[].static_agent_list[]` / `dynamic_agent_list[]` | Members: `value` = extension id, `text` = display name, **`text2` = extension number** |
 
-`buildContext()` removes any queue number from the extension set, so a queue can never be returned
-as an answering extension.
+`buildContext()` folds queue members into the extension set — `/extension/list` is paginated, and an
+agent on an unfetched page would otherwise be unrecognisable, turning their answered calls into
+Missed. It then removes any queue number from that set, so a queue can never be returned as an
+answering extension.
 
 ---
 

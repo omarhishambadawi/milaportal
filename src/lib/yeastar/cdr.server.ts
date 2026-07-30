@@ -17,44 +17,26 @@
  *      Asia/Riyadh — no DST) so buckets line up with dashboard filters.
  */
 import { yeastarFetch } from "./client.server";
+import type { RawCdrRow } from "./normalize";
 import { BUSINESS_UTC_OFFSET_MINUTES } from "@/lib/timezone";
 
 // Business timezone offset for day-boundary math. Defaults to the centralized
 // business timezone (Asia/Riyadh = UTC+3, no DST); override per-deployment.
 const TZ_OFFSET_MIN = Number(process.env.YEASTAR_UTC_OFFSET_MINUTES ?? BUSINESS_UTC_OFFSET_MINUTES);
 
-export interface CdrRecord {
-  id?: number;
-  new_id?: string;
-  uid?: string;
-  call_id?: string;
-  linkedid?: string;
-  linked_id?: string;
-  time?: string; // PBX-local display time, e.g. "2026/07/01 10:40:07"
-  timestamp?: number; // epoch seconds (UTC) — authoritative for filtering
-  call_from?: string;
-  call_to?: string;
-  call_from_number?: string;
-  call_from_name?: string;
-  call_to_number?: string;
-  call_to_name?: string;
-  disposition?: "ANSWERED" | "NO ANSWER" | "BUSY" | "FAILED" | "VOICEMAIL" | string;
-  call_type?: "Inbound" | "Outbound" | "Internal" | string;
-  duration?: number; // total seconds
-  ring_duration?: number; // agent ring seconds (until answered / hangup)
-  talk_duration?: number; // seconds talking
-  wait_time?: number; // queue wait seconds before agent ring (H5)
-  agent_ring_time?: number; // synonym for ring on some firmwares
-  did_number?: string;
-  /** Connected/answering extension on the ANSWERED leg — used for C1 attribution. */
-  dst?: string;
-  dst_num?: string;
-  dst_number?: string;
-  answer_by?: string;
-  answered_by?: string;
-  agent_number?: string;
-  [k: string]: any;
-}
+/**
+ * A raw CDR row, exactly as the live PBX emits it.
+ *
+ * This is `RawCdrRow` from the normalization layer — one definition, verified
+ * field-by-field against the live PBX (see `docs/yeastar/field-mapping.md`). The
+ * previous hand-written interface declared fourteen fields this firmware never
+ * sends (`wait_time`, `agent_ring_time`, `dst*`, `answer_by`, `linkedid`, `id`,
+ * …); they are gone, along with the parsing that depended on them.
+ *
+ * Remember: a row is a LEG, not a call. Group by `call_id` before deriving any
+ * KPI — see `./normalize`.
+ */
+export type CdrRecord = RawCdrRow;
 
 interface CdrPageResponse {
   errcode: number;

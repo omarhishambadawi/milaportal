@@ -14,6 +14,7 @@ import { z } from "zod";
 // Type-only: erased at compile time, so the server-only diagnostics module is
 // never pulled into a client bundle.
 import type { DiagnosticsReport as YeastarDiagnosticsReport } from "@/lib/yeastar/diagnostics.server";
+import type { NormalizationContext } from "@/lib/yeastar/normalize";
 
 async function assertAdmin(ctx: { supabase: any; userId: string }) {
   const { data, error } = await ctx.supabase.rpc("is_administrator", { _user_id: ctx.userId });
@@ -120,26 +121,25 @@ export const yeastarCdrProbe = createServerFn({ method: "POST" })
         truncated: res.truncated,
         pagesFetched: res.pagesFetched,
         elapsedMs: res.elapsedMs,
+        // Verified fields only. The retired ones (`id`, `linkedid`,
+        // `linked_id`, `agent_ring_time`, `wait_time`) do not exist on this
+        // firmware — /admin/yeastar-diagnostics re-checks that on every run.
         sample: res.records.slice(0, 8).map((r) => ({
           time: r.time,
           timestamp: r.timestamp,
           call_type: r.call_type,
           disposition: r.disposition,
           call_from_number: r.call_from_number,
+          call_to: r.call_to,
           call_to_number: r.call_to_number,
           talk_duration: r.talk_duration,
           ring_duration: r.ring_duration,
           duration: r.duration,
-          // ID fields for grouping diagnosis
-          id: (r as any).id,
-          uid: (r as any).uid,
-          new_id: (r as any).new_id,
+          // Grouping ids: call_id groups legs into a call, new_id is row-unique,
+          // uid is ALSO call-level here (never de-duplicate on it).
           call_id: (r as any).call_id,
-          linkedid: (r as any).linkedid,
-          linked_id: (r as any).linked_id,
-          pin_code: (r as any).pin_code,
-          agent_ring_time: (r as any).agent_ring_time,
-          wait_time: (r as any).wait_time,
+          new_id: (r as any).new_id,
+          uid: (r as any).uid,
         })),
       };
     } catch (err) {
@@ -794,19 +794,21 @@ function evictCdrCache() {
   }
 }
 
-// ---- Phase-1 (classification) cache ----------------------------------------
+// ---- Phase-1 (normalization) cache ------------------------------------------
 //
-// The CDR *network* fetch is cached above, but classifying those rows — dedup,
-// correlation grouping and the sliding-fingerprint sort — is pure over the
-// record set and independent of team/agent/direction/status/orders. The Call
-// Center page issues one analytics request per filter permutation over the same
-// window, so without this every filter toggle re-ran the whole classification.
+// The CDR *network* fetch is cached above, but normalizing those rows — row
+// de-dup on `new_id` and grouping by `call_id` — is pure over the record set and
+// the PBX roster, and independent of team/agent/direction/status/orders. The
+// Call Center page issues one analytics request per filter permutation over the
+// same window, so without this every filter toggle re-ran the whole
+// normalization.
 //
-// Keyed by the same `from|to` window and identity-checked against the exact
-// records array returned by the CDR cache: when the CDR entry expires and
-// refetches, it yields a NEW array, the identity check misses, and we
-// reclassify. Same size bound as the CDR cache; entries only hold references to
-// the already-cached CdrRecord objects, not copies.
+// Keyed by the `from|to` window plus a roster fingerprint (a queue or extension
+// change alters how legs are classified, so it must invalidate), and
+// identity-checked against the exact records array returned by the CDR cache:
+// when the CDR entry expires and refetches, it yields a NEW array, the identity
+// check misses, and we re-normalize. Same size bound as the CDR cache; entries
+// only hold references to the already-cached rows, not copies.
 type ClassifiedRecordsT = import("@/lib/yeastar/stats.server").ClassifiedRecords;
 const classifiedCache = new Map<string, { records: unknown[]; value: ClassifiedRecordsT }>();
 
@@ -814,12 +816,13 @@ function getClassifiedCached(
   from: string,
   to: string,
   records: any[],
-  classifyRecords: (r: any[]) => ClassifiedRecordsT,
+  ctx: NormalizationContext,
+  classifyRecords: (r: any[], c: NormalizationContext) => ClassifiedRecordsT,
 ): ClassifiedRecordsT {
-  const key = `${from}|${to}`;
+  const key = `${from}|${to}|${rosterSignature(ctx)}`;
   const hit = classifiedCache.get(key);
   if (hit && hit.records === records) return hit.value;
-  const value = classifyRecords(records);
+  const value = classifyRecords(records, ctx);
   classifiedCache.set(key, { records, value });
   while (classifiedCache.size > CDR_CACHE_MAX) {
     const oldest = classifiedCache.keys().next().value;
@@ -874,55 +877,137 @@ const TELESALES_STATIC_EXTS: Array<{ ext: string; name: string }> = [
 ];
 
 const ROSTER_TTL_MS = 60_000;
-let rosterCache: {
-  at: number;
-  ccExts: Map<string, string>;
-  queueNumbers: Set<string>;
-} | null = null;
 
-async function fetchQueueData(): Promise<{
+interface PbxRoster {
+  /** Customer Care queue members: extension → display name. */
   ccExts: Map<string, string>;
+  /** Every configured queue number. A queue is never an agent. */
   queueNumbers: Set<string>;
-}> {
+  /** Every configured extension number, from /extension/list. */
+  extensionNumbers: Set<string>;
+  /** Members of every queue — extensions by definition, whatever page they are on. */
+  queueMemberExts: Set<string>;
+}
+
+let rosterCache: { at: number; roster: PbxRoster } | null = null;
+
+/**
+ * Pull the two authoritative rosters from the PBX.
+ *
+ * Both are required by the normalization layer: `queue/list` says which numbers
+ * are queues and `extension/list` says which are agents. Without them a CDR leg
+ * cannot be told apart from an IVR stage, which is exactly the ambiguity that
+ * produced the old KPI errors — so this is fetched, not guessed.
+ */
+async function fetchPbxRoster(): Promise<PbxRoster> {
   const now = Date.now();
-  if (rosterCache && now - rosterCache.at < ROSTER_TTL_MS) {
-    return { ccExts: rosterCache.ccExts, queueNumbers: rosterCache.queueNumbers };
-  }
+  if (rosterCache && now - rosterCache.at < ROSTER_TTL_MS) return rosterCache.roster;
+
   const ccExts = new Map<string, string>();
   const queueNumbers = new Set<string>();
+  const extensionNumbers = new Set<string>();
+  const queueMemberExts = new Set<string>();
+  let ok = false;
   try {
     const { isConfigured, yeastarFetch } = await import("@/lib/yeastar/client.server");
-    if (!isConfigured()) return { ccExts, queueNumbers };
-    const { httpStatus, json } = await yeastarFetch<any>("/openapi/v1.0/queue/list", {
+    if (!isConfigured()) return { ccExts, queueNumbers, extensionNumbers, queueMemberExts };
+
+    const queueRes = await yeastarFetch<any>("/openapi/v1.0/queue/list", {
       page: 1,
       page_size: 100,
     });
-    if (httpStatus !== 200 || json?.errcode !== 0) return { ccExts, queueNumbers };
-    const queues = Array.isArray(json.queue_list) ? json.queue_list : [];
-    for (const q of queues) {
-      const qnum = String(q?.number ?? "").trim();
-      if (qnum) queueNumbers.add(qnum);
-      if (qnum === CUSTOMER_CARE_QUEUE_NUMBER) {
+    if (queueRes.httpStatus === 200 && queueRes.json?.errcode === 0) {
+      ok = true;
+      const queues = Array.isArray(queueRes.json.queue_list) ? queueRes.json.queue_list : [];
+      for (const q of queues) {
+        const qnum = String(q?.number ?? "").trim();
+        if (qnum) queueNumbers.add(qnum);
         const members = [
           ...(Array.isArray(q.static_agent_list) ? q.static_agent_list : []),
           ...(Array.isArray(q.dynamic_agent_list) ? q.dynamic_agent_list : []),
         ];
         for (const m of members) {
+          // Verified member shape: value = extension id, text = display name,
+          // text2 = extension NUMBER.
           const ext = String(m?.text2 ?? "").trim();
           const name = String(m?.text ?? "").trim();
-          if (ext) ccExts.set(ext, name || ext);
+          if (!ext) continue;
+          queueMemberExts.add(ext);
+          if (qnum === CUSTOMER_CARE_QUEUE_NUMBER) ccExts.set(ext, name || ext);
         }
       }
     }
-    rosterCache = { at: now, ccExts, queueNumbers };
+
+    // /extension/list pages at 200; this PBX has ~28 extensions, but page
+    // through anyway rather than silently truncating a larger roster later.
+    const PAGE = 200;
+    for (let page = 1; page <= 10; page++) {
+      const { httpStatus, json } = await yeastarFetch<any>("/openapi/v1.0/extension/list", {
+        page,
+        page_size: PAGE,
+      });
+      if (httpStatus !== 200 || json?.errcode !== 0) break;
+      const list: any[] = Array.isArray(json.data) ? json.data : [];
+      for (const e of list) {
+        const n = String(e?.number ?? "").trim();
+        if (n) extensionNumbers.add(n);
+      }
+      if (list.length < PAGE) break;
+    }
   } catch {
-    // Swallow — caller falls back to DB customer_care mapping.
+    // Swallow — callers fall back to the DB roster.
   }
-  return { ccExts, queueNumbers };
+  // Cache only a roster we actually retrieved, so a transient PBX failure
+  // doesn't pin an empty roster for a minute.
+  if (ok || extensionNumbers.size > 0) {
+    rosterCache = { at: now, roster: { ccExts, queueNumbers, extensionNumbers, queueMemberExts } };
+  }
+  return { ccExts, queueNumbers, extensionNumbers, queueMemberExts };
 }
 
 async function fetchCustomerCareQueueRoster(): Promise<Map<string, string>> {
-  return (await fetchQueueData()).ccExts;
+  return (await fetchPbxRoster()).ccExts;
+}
+
+/**
+ * Build the normalization context for a CDR window.
+ *
+ * `fallbackExts` (the app's own agent extensions) is used ONLY when
+ * `/extension/list` is unavailable. Without any extension roster the normalizer
+ * cannot recognise an agent leg and every inbound call would look like it never
+ * reached a human — degrading to the app roster keeps analytics honest for the
+ * agents we know about instead of reporting a zero answer rate.
+ */
+async function buildNormalizationContext(
+  fallbackExts: Iterable<string> = [],
+): Promise<NormalizationContext> {
+  const { extensionNumbers, queueNumbers, queueMemberExts } = await fetchPbxRoster();
+  const { buildContext } = await import("@/lib/yeastar/normalize");
+  const exts = new Set(extensionNumbers);
+  // Queue members are extensions by definition, and /extension/list is paged —
+  // an agent on an unfetched page must still be recognisable.
+  for (const ext of queueMemberExts) exts.add(ext);
+  if (exts.size === 0) {
+    for (const ext of fallbackExts) {
+      const e = String(ext).trim();
+      if (e) exts.add(e);
+    }
+  }
+  return buildContext(
+    [...exts].map((number) => ({ number })),
+    [...queueNumbers].map((number) => ({ number })),
+  );
+}
+
+/** Cheap stable fingerprint of a roster, so a roster change busts the cache. */
+function rosterSignature(ctx: NormalizationContext): string {
+  const src = `${[...ctx.extensionNumbers].sort().join(",")}|${[...ctx.queueNumbers].sort().join(",")}`;
+  let h = 2166136261;
+  for (let i = 0; i < src.length; i++) {
+    h ^= src.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
 }
 
 async function loadAgents(_supabase: any) {
@@ -1037,7 +1122,10 @@ export const getCallCenterAnalytics = createServerFn({ method: "POST" })
     const progress = scopedJobId ? await import("@/lib/yeastar/progress.server") : null;
     if (progress && scopedJobId) await progress.initJob(scopedJobId);
 
-    let agents = await loadAgents(supabase);
+    // `allAgents` stays unfiltered: it only ever feeds the roster fallback for
+    // normalization, which must not depend on the active team/agent filter.
+    const allAgents = await loadAgents(supabase);
+    let agents = allAgents;
 
     if (data.team !== "all") agents = agents.filter((a) => a.team === data.team);
     if (!seesAll) agents = agents.filter((a) => a.id === userId);
@@ -1070,9 +1158,9 @@ export const getCallCenterAnalytics = createServerFn({ method: "POST" })
           records: cdr.records.length,
         });
 
-      // [C2] Do NOT pre-filter raw rows by direction/status here — that would
-      // strip ANSWERED legs and misclassify grouped queue calls. Filters are
-      // applied inside aggregateAnalytics AFTER grouping + classification.
+      // Do NOT pre-filter raw rows by direction/status here — a row is a LEG,
+      // and dropping legs corrupts the call it belongs to. Filters are applied
+      // to whole calls AFTER normalization.
       const records = cdr.records as any[];
 
       // Load orders in the same window, for telesales conversion
@@ -1092,18 +1180,17 @@ export const getCallCenterAnalytics = createServerFn({ method: "POST" })
       }
 
       const { aggregateClassified, classifyRecords } = await import("@/lib/yeastar/stats.server");
-      // Pass PBX queue numbers so agentExtFor never mistakes a queue for an
-      // agent (root cause of the Inbound=0 bug on queue-inbound calls).
-      const { queueNumbers } = await fetchQueueData();
-      // Phase 1 is cached per window (see getClassifiedCached); phase 2 applies
-      // the request's direction/status/scope filters. Identical result to the
-      // former single aggregateAnalytics call — only the redundant re-grouping
-      // across filter permutations is eliminated.
-      const classified = getClassifiedCached(data.from, data.to, records, classifyRecords);
+      // The PBX rosters drive leg classification: a queue is never an agent,
+      // and an agent leg is only recognisable by its extension being on the
+      // roster. Fall back to the app's own agent extensions if /extension/list
+      // is unreachable.
+      const ctx = await buildNormalizationContext(allAgents.map((a) => a.ext));
+      // Phase 1 (normalize) is cached per window + roster; phase 2 applies the
+      // request's direction/status/scope filters over whole calls.
+      const classified = getClassifiedCached(data.from, data.to, records, ctx, classifyRecords);
       const result = aggregateClassified(classified, agents, orders, {
         direction: data.direction,
         status: data.status,
-        queueNumbers,
         scope,
       });
 
@@ -1156,13 +1243,18 @@ export const yeastarRealtimeQueue = createServerFn({ method: "POST" })
       return { ok: false as const, configured: false as const };
     }
 
+    // errcode 60001 (DATA NOT FOUND) from the realtime queue endpoints means
+    // "queue idle / nobody signed in" — verified against the live PBX. The
+    // response still carries the full field skeleton, so it must be parsed as a
+    // legitimate empty snapshot rather than discarded as a failure.
     const safeFetch = async (
       path: string,
       query: Record<string, string | number | undefined> = {},
     ) => {
       try {
         const { httpStatus, json } = await yeastarFetch<any>(path, query, { timeoutMs: 8_000 });
-        if (httpStatus !== 200 || json?.errcode !== 0) return null;
+        if (httpStatus !== 200) return null;
+        if (json?.errcode !== 0 && json?.errcode !== 60001) return null;
         return json;
       } catch {
         return null;
@@ -1181,50 +1273,46 @@ export const yeastarRealtimeQueue = createServerFn({ method: "POST" })
       .map((q) => Number(q?.id ?? 0))
       .filter((id) => Number.isFinite(id) && id > 0);
 
+    const arr = (v: unknown): any[] => (Array.isArray(v) ? v : []);
+
     const perQueue = await Promise.all(
       queueIds.map(async (queue_id) => {
         const [cs, as] = await Promise.all([
           safeFetch("/openapi/v1.0/queue/call_status", { queue_id }),
           safeFetch("/openapi/v1.0/queue/agent_status", { queue_id }),
         ]);
-        const cList: any[] = Array.isArray(cs?.data)
-          ? cs.data
-          : Array.isArray(cs?.queue_call_status_list)
-            ? cs.queue_call_status_list
-            : [];
-        const aList: any[] = Array.isArray(as?.data)
-          ? as.data
-          : Array.isArray(as?.queue_agent_status_list)
-            ? as.queue_agent_status_list
-            : [];
-        return { cList, aList };
+        // Verified response shape: three separate lists plus ready-made
+        // scalars. `data` and `queue_call_status_list` do NOT exist here — the
+        // widget used to read them and therefore always rendered zeros.
+        return {
+          waiting: arr(cs?.waiting_list),
+          active: arr(cs?.active_list),
+          ringing: arr(cs?.ringing_list),
+          // Prefer the PBX's own counters; the lists are the cross-check.
+          waitingCount: Number(cs?.waiting_calls ?? arr(cs?.waiting_list).length),
+          activeCount: Number(cs?.active_calls ?? arr(cs?.active_list).length),
+          ringingCount: Number(cs?.ringing_calls ?? arr(cs?.ringing_list).length),
+          agents: arr(as?.data),
+        };
       }),
     );
 
-    const calls: any[] = perQueue.flatMap((r) => r.cList);
-    const agents: any[] = perQueue.flatMap((r) => r.aList);
+    const sum = (pick: (r: (typeof perQueue)[number]) => number) =>
+      perQueue.reduce((n, r) => n + (Number.isFinite(pick(r)) ? pick(r) : 0), 0);
 
-    // Widget counters — string-comparison is permissive because the field
-    // name varies across firmwares (`status`, `state`, `agent_status`, etc.).
+    const waiting = sum((r) => r.waitingCount);
+    const active = sum((r) => r.activeCount);
+    const ringing = sum((r) => r.ringingCount);
+    const callsTotal = waiting + active + ringing;
+
+    const agents: any[] = perQueue.flatMap((r) => r.agents);
+
+    // Agent status field name varies across firmwares (`status`, `state`,
+    // `agent_status`), so matching stays permissive.
     const isState = (a: any, ...words: string[]) => {
       const s = String(a?.status ?? a?.state ?? a?.agent_status ?? "").toLowerCase();
       return words.some((w) => s.includes(w));
     };
-
-    const waiting = calls.filter((c) => {
-      const s = String(c?.status ?? c?.state ?? "").toLowerCase();
-      return s.includes("wait") || s.includes("queue");
-    }).length;
-    const active = calls.filter((c) => {
-      const s = String(c?.status ?? c?.state ?? "").toLowerCase();
-      return (
-        s.includes("talk") || s.includes("connect") || s.includes("busy") || s.includes("bridged")
-      );
-    }).length;
-    const ringing = calls.filter((c) => {
-      const s = String(c?.status ?? c?.state ?? "").toLowerCase();
-      return s.includes("ring");
-    }).length;
 
     const ready = agents.filter((a) =>
       isState(a, "idle", "ready", "available", "logged_in"),
@@ -1236,9 +1324,9 @@ export const yeastarRealtimeQueue = createServerFn({ method: "POST" })
       ok: true as const,
       configured: true as const,
       at: new Date().toISOString(),
-      calls: { waiting, active, ringing, total: calls.length },
+      calls: { waiting, active, ringing, total: callsTotal },
       agents: { ready, busy, paused, total: agents.length },
-      raw: { callsCount: calls.length, agentsCount: agents.length, queueIds },
+      raw: { callsCount: callsTotal, agentsCount: agents.length, queueIds },
     };
   });
 
@@ -1266,17 +1354,23 @@ export const yeastarAnalyticsDebug = createServerFn({ method: "POST" })
     const cdr = await fetchCdrRange({ from: data.from, to: data.to });
 
     const target = data.callId.trim();
-    const rows = cdr.records.filter((r) => {
+    // Verified id fields only: `call_id` (call-level), `uid` (also call-level on
+    // this firmware) and `new_id` (row-level). `linkedid` / `linked_id` / `id`
+    // do not exist here and were removed.
+    const seed = cdr.records.filter((r) => {
       const anyR = r as any;
       return (
         String(anyR.call_id ?? "") === target ||
-        String(anyR.linkedid ?? "") === target ||
-        String(anyR.linked_id ?? "") === target ||
         String(anyR.uid ?? "") === target ||
-        String(anyR.new_id ?? "") === target ||
-        String(anyR.id ?? "") === target
+        String(anyR.new_id ?? "") === target
       );
     });
+    // A `new_id` match is a single LEG. Expand to the whole call so the trace
+    // shows the routing chain the KPIs are actually derived from.
+    const callIds = new Set(seed.map((r) => String((r as any).call_id ?? "")).filter(Boolean));
+    const rows = callIds.size
+      ? cdr.records.filter((r) => callIds.has(String((r as any).call_id ?? "")))
+      : seed;
 
     if (rows.length === 0) {
       return {
@@ -1287,83 +1381,52 @@ export const yeastarAnalyticsDebug = createServerFn({ method: "POST" })
       };
     }
 
-    // Load agents + queue numbers for resolution context.
-    const [agents, { queueNumbers }] = await Promise.all([
-      loadAgents((context as any).supabase),
-      fetchQueueData(),
-    ]);
+    // Load agents + PBX rosters, then normalize exactly as analytics does.
+    const agents = await loadAgents((context as any).supabase);
+    const ctx = await buildNormalizationContext(agents.map((a) => a.ext));
     const byExt = new Map(agents.map((a) => [String(a.ext).trim(), a]));
 
-    // Resolve agent per row using the same rules as the aggregator.
-    const isQueue = (v: any) => v != null && queueNumbers.has(String(v).trim());
-    const resolveExt = (r: any): { ext: string | null; reason: string } => {
-      if (r.call_type === "Outbound") {
-        const s = r.call_from_number ? String(r.call_from_number).trim() : "";
-        return isQueue(s)
-          ? { ext: null, reason: "call_from_number is a queue" }
-          : { ext: s || null, reason: "outbound: call_from_number" };
-      }
-      if (r.call_type === "Inbound") {
-        const priority: Array<[string, any]> = [
-          ["last_participant_number", r.last_participant_number],
-          ["last_participant", r.last_participant],
-          ["final_participant", r.final_participant],
-          ["answer_by", r.answer_by],
-          ["answered_by", r.answered_by],
-          ["agent_number", r.agent_number],
-          ["dst", r.dst],
-          ["dst_num", r.dst_num],
-          ["dst_number", r.dst_number],
-          ["call_to_number", r.call_to_number],
-        ];
-        for (const [k, v] of priority) {
-          if (v == null) continue;
-          const s = String(v).trim();
-          if (!s) continue;
-          if (isQueue(s)) continue;
-          return { ext: s, reason: `inbound: ${k}` };
-        }
-        return { ext: null, reason: "inbound: no non-queue candidate" };
-      }
-      return { ext: null, reason: "internal ignored" };
-    };
+    const { normalizeCdr } = await import("@/lib/yeastar/normalize");
+    const calls = normalizeCdr(rows as any[], ctx);
 
-    const trace = rows.map((r) => {
-      const { ext, reason } = resolveExt(r);
-      const agent = ext ? byExt.get(ext) : undefined;
-      return {
-        raw: {
-          time: r.time,
-          timestamp: r.timestamp,
-          call_type: r.call_type,
-          disposition: r.disposition,
-          call_from_number: r.call_from_number,
-          call_to_number: r.call_to_number,
-          dst: (r as any).dst,
-          last_participant_number: (r as any).last_participant_number,
-          talk_duration: r.talk_duration,
-          ring_duration: r.ring_duration,
-          wait_time: (r as any).wait_time,
-        },
-        resolvedExt: ext,
-        resolutionReason: reason,
-        matchedAgent: agent
-          ? { id: agent.id, name: agent.name, team: agent.team, ext: agent.ext }
-          : null,
-        contribution: agent
-          ? {
-              total: 1,
-              inbound: r.call_type === "Inbound" ? 1 : 0,
-              outbound: r.call_type === "Outbound" ? 1 : 0,
-              answered: r.disposition === "ANSWERED" ? 1 : 0,
-            }
-          : { note: "Unknown agent — counted only in platform totals (never zero-ed)." },
-      };
-    });
+    // Per-leg trace: what each row is, and what the normalizer made of it.
+    // There is no field-priority chain any more — the answering extension is
+    // the agent leg, identified by roster membership.
+    const trace = calls.map((c) => ({
+      callId: c.callId,
+      direction: c.direction,
+      outcome: c.outcome,
+      answeringExtension: c.answeringExtension ?? "Unknown",
+      matchedAgent: (() => {
+        const a = c.answeringExtension ? byExt.get(c.answeringExtension) : undefined;
+        return a ? { id: a.id, name: a.name, team: a.team, ext: a.ext } : null;
+      })(),
+      queueNumber: c.queueNumber,
+      queueWaitSeconds: c.queueWaitSeconds,
+      agentRingSeconds: c.agentRingSeconds,
+      talkSeconds: c.talkSeconds,
+      legs: c.legs.map((l) => ({
+        rowId: l.rowId,
+        role: l.role,
+        destination: l.destinationNumber,
+        label: l.destinationLabel,
+        disposition: l.disposition,
+        ringSeconds: l.ringSeconds,
+        talkSeconds: l.talkSeconds,
+        durationSeconds: l.durationSeconds,
+        timestamp: l.timestamp,
+        note:
+          l.role === "ivr" && l.answered
+            ? "ANSWERED here means the auto-attendant picked up — not a handled call."
+            : l.role === "queue"
+              ? "ring_duration on this leg is the caller's QUEUE WAIT."
+              : undefined,
+      })),
+    }));
 
-    // Group-level classification for the call.
+    // Call-level KPI contribution, through the real aggregator.
     const { aggregateAnalytics } = await import("@/lib/yeastar/stats.server");
-    const single = aggregateAnalytics(rows, agents, [], { queueNumbers });
+    const single = aggregateAnalytics(rows, ctx, agents, [], {});
 
     return {
       ok: true as const,
@@ -1371,8 +1434,10 @@ export const yeastarAnalyticsDebug = createServerFn({ method: "POST" })
       found: true as const,
       callId: target,
       legs: rows.length,
+      calls: calls.length,
       trace,
       groupTotals: single.totals,
-      queueNumbers: [...queueNumbers],
+      queueNumbers: [...ctx.queueNumbers],
+      extensionCount: ctx.extensionNumbers.size,
     };
   });

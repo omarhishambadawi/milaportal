@@ -119,6 +119,82 @@ function YeastarDiagnostics() {
         </Card>
       )}
 
+      {report?.kpiValidation && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex flex-wrap items-center gap-2">
+              {report.kpiValidation.passed ? (
+                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+              ) : (
+                <TriangleAlert className="h-4 w-4 text-destructive" />
+              )}
+              Live KPI validation
+              <Badge
+                variant={report.kpiValidation.passed ? "default" : "destructive"}
+                className="font-normal"
+              >
+                {report.kpiValidation.checks.filter((c) => c.passed).length}/
+                {report.kpiValidation.checks.length} checks passed
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              The production aggregation, run over the {report.kpiValidation.rows} live CDR rows
+              above ({report.kpiValidation.calls} calls), with every KPI independently re-derived
+              from the normalized calls. A failing check means a KPI does not match the PBX data it
+              claims to summarise.
+            </p>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+              {(
+                [
+                  ["Total calls", report.kpiValidation.totals.total],
+                  ["Inbound", report.kpiValidation.totals.inbound],
+                  ["Outbound", report.kpiValidation.totals.outbound],
+                  ["Answered", report.kpiValidation.totals.answered],
+                  ["Missed", report.kpiValidation.totals.missed],
+                  ["Abandoned", report.kpiValidation.totals.abandoned],
+                  ["IVR-only", report.kpiValidation.totals.ivrOnly],
+                  ["Queue calls", report.kpiValidation.totals.queueCalls],
+                  ["Answer rate %", report.kpiValidation.totals.answerRate.toFixed(1)],
+                  ["Inbound answer %", report.kpiValidation.totals.inboundAnswerRate.toFixed(1)],
+                  ["Avg wait (s)", report.kpiValidation.totals.avgWaitSec.toFixed(1)],
+                  ["Avg talk (s)", report.kpiValidation.totals.avgTalkSec.toFixed(1)],
+                ] as const
+              ).map(([label, value]) => (
+                <div key={label} className="rounded border border-border/60 p-2">
+                  <div className="text-muted-foreground">{label}</div>
+                  <div className="text-sm font-semibold tabular-nums">{value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-1">
+              {report.kpiValidation.checks.map((c) => (
+                <div
+                  key={c.name}
+                  className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-b border-border/50 py-1 text-xs"
+                >
+                  <Badge
+                    variant={c.passed ? "secondary" : "destructive"}
+                    className="font-mono font-normal"
+                  >
+                    {c.name}
+                  </Badge>
+                  <span className="text-muted-foreground">{c.description}</span>
+                  {!c.passed && (
+                    <span className="font-mono text-destructive">
+                      expected {c.expected}, got {c.actual}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {report?.retiredFieldCheck && (
         <Card>
           <CardHeader>

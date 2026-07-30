@@ -376,10 +376,32 @@ export function normalizeCdr(
   return calls;
 }
 
-/** Build a normalization context from live roster responses. */
+/** A queue member as `/queue/list` renders it: `text2` is the extension NUMBER. */
+interface QueueMemberEntry {
+  text2?: unknown;
+}
+
+/** A `/queue/list` entry, with its agent rosters. */
+interface QueueListEntry {
+  number?: unknown;
+  static_agent_list?: ReadonlyArray<QueueMemberEntry> | null;
+  dynamic_agent_list?: ReadonlyArray<QueueMemberEntry> | null;
+}
+
+/**
+ * Build a normalization context from live roster responses.
+ *
+ * Queue MEMBERS are folded into the extension set as well as `/extension/list`
+ * itself. `/extension/list` is paginated, and an agent who falls on a page the
+ * caller did not fetch would otherwise go unrecognised — their leg would be
+ * classified as `unknown`, the call would look like it never reached a human,
+ * and it would land in Missed. A queue member is an extension by definition, so
+ * this closes that gap without weakening the check: both lists come from the
+ * PBX, and any number configured as a queue is still removed at the end.
+ */
 export function buildContext(
   extensionListData: ReadonlyArray<{ number?: unknown }> | null | undefined,
-  queueListData: ReadonlyArray<{ number?: unknown }> | null | undefined,
+  queueListData: ReadonlyArray<QueueListEntry> | null | undefined,
   abandonThresholdSeconds = DEFAULT_ABANDON_THRESHOLD_SEC,
 ): NormalizationContext {
   const extensionNumbers = new Set<string>();
@@ -391,6 +413,10 @@ export function buildContext(
   for (const q of queueListData ?? []) {
     const n = str(q?.number);
     if (n) queueNumbers.add(n);
+    for (const m of [...(q?.static_agent_list ?? []), ...(q?.dynamic_agent_list ?? [])]) {
+      const ext = str(m?.text2);
+      if (ext) extensionNumbers.add(ext);
+    }
   }
   // A number configured as a queue is never an agent, whatever else it appears in.
   for (const q of queueNumbers) extensionNumbers.delete(q);

@@ -11,6 +11,8 @@
  */
 import { yeastarFetch } from "./client.server";
 import { buildContext, normalizeCdr, type NormalizedCall, type RawCdrRow } from "./normalize";
+import { aggregateClassified, classifyRecords, type CallTotals } from "./stats.server";
+import { validateAnalytics, type KpiCheck } from "./validate";
 
 /** Fields the previous parser referenced that do NOT exist on this firmware. */
 export const RETIRED_ASSUMED_FIELDS = [
@@ -56,6 +58,21 @@ export interface DiagnosticProbe {
   elapsedMs: number;
 }
 
+/**
+ * Live KPI validation — the analytics pipeline run end to end over the CDR this
+ * diagnostics pass fetched, with every invariant re-checked against the real
+ * PBX rather than against fixtures.
+ */
+export interface LiveKpiValidation {
+  /** Calls the window normalized to (Internal excluded). */
+  calls: number;
+  /** Raw rows those calls came from. */
+  rows: number;
+  totals: CallTotals;
+  checks: KpiCheck[];
+  passed: boolean;
+}
+
 export interface DiagnosticsReport {
   at: string;
   baseUrlConfigured: boolean;
@@ -65,6 +82,8 @@ export interface DiagnosticsReport {
   /** Assumed-but-absent field check, run against live rows. */
   retiredFieldCheck: { field: string; occurrences: number }[];
   cdrRowsInspected: number;
+  /** Null when no CDR rows were retrieved, so nothing could be validated. */
+  kpiValidation: LiveKpiValidation | null;
 }
 
 const BODY_LIMIT = 4000;
@@ -295,6 +314,25 @@ export async function runDiagnostics(windowDays = 7): Promise<DiagnosticsReport>
     occurrences: counts.get(field) ?? 0,
   }));
 
+  // --- live KPI validation -------------------------------------------------
+  // Runs the production aggregation over these live rows and re-derives every
+  // headline KPI independently. Agent-level attribution is deliberately left
+  // out: this is a PBX-side check, and pulling the app's agent roster in would
+  // make it depend on the database rather than on the PBX.
+  let kpiValidation: LiveKpiValidation | null = null;
+  if (cdrRows.length > 0) {
+    const classified = classifyRecords(cdrRows, ctx);
+    const result = aggregateClassified(classified, [], []);
+    const checks = validateAnalytics(classified.calls, result);
+    kpiValidation = {
+      calls: classified.calls.length,
+      rows: classified.rowsInspected,
+      totals: result.totals,
+      checks,
+      passed: checks.every((c) => c.passed),
+    };
+  }
+
   return {
     at: new Date().toISOString(),
     baseUrlConfigured: true,
@@ -302,5 +340,6 @@ export async function runDiagnostics(windowDays = 7): Promise<DiagnosticsReport>
     fieldPresence,
     retiredFieldCheck,
     cdrRowsInspected: cdrRows.length,
+    kpiValidation,
   };
 }
