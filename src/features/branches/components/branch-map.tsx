@@ -407,9 +407,23 @@ export function BranchMap({ branches, selected, onSelect, coverage, toneFor, cla
                 stroke={coverageRing.colour}
                 strokeOpacity={0.85}
                 strokeWidth={1.5}
-                strokeDasharray="6 4"
+                // The dash is dropped once the ring is small. At country zoom
+                // 10 km is a handful of pixels across, and a 6-4 dash on a
+                // circumference that short renders as three detached specks that
+                // read as artefacts rather than as a boundary. The ring itself is
+                // never faked bigger than it is — the radius stays honest at every
+                // zoom, it just draws solid when it is tiny.
+                strokeDasharray={coverageRing.r >= 24 ? "6 4" : undefined}
+                vectorEffect="non-scaling-stroke"
               />
-              <circle cx={coverageRing.x} cy={coverageRing.y} r={3} fill={coverageRing.colour} />
+              <circle
+                cx={coverageRing.x}
+                cy={coverageRing.y}
+                r={3}
+                fill={coverageRing.colour}
+                stroke="var(--card)"
+                strokeWidth={1}
+              />
             </g>
           )}
 

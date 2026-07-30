@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Building2,
+  Check,
   CheckCircle2,
   Crosshair,
   Info,
@@ -25,7 +26,7 @@ import {
 } from "@/components/ui/select";
 import { describeDistance, formatDistance } from "@/lib/geo";
 import { cn } from "@/lib/utils";
-import { COVERAGE_RADIUS_METRES } from "../delivery-eta";
+import { COVERAGE_RADIUS_METRES, coverageTier, type CoverageTier } from "../delivery-eta";
 import { REFERENCE_LABEL } from "../normalize";
 import type { LocationEntry, LocationKind } from "../location-index";
 import { branchDirectionsUrl, type LocatorResult, type ResolvedOrigin } from "../locator";
@@ -61,18 +62,30 @@ const KIND_LABEL: Record<LocationKind, string> = {
 };
 
 /**
+ * Approximate height of one result row, in pixels.
+ *
+ * Four lines in the left column (code, city, district, street) against three
+ * stacked metrics in the right one, plus 2.5 units of vertical padding. Named so
+ * the "about five rows" intent below survives the next spacing change instead of
+ * quietly drifting to four and a half.
+ */
+const RESULT_ROW_HEIGHT = 88;
+
+/** Visible rows before the list starts scrolling internally. */
+const VISIBLE_RESULTS = 5;
+
+/**
  * Height of the results list, in pixels.
  *
- * Fixed rather than grown-into, so that finding ten branches does not push the
+ * Capped rather than grown-into, so that finding ten branches does not push the
  * directory below it off the screen — the card an agent is about to be scrolled
- * to has to still be visible when they click. One row is four lines of text plus
- * its padding, ~76px; five of those is the list an agent can take in without
- * scrolling, and everything past the fifth is one flick away.
+ * to has to still be visible when they click. Five rows is the list an agent can
+ * take in without scrolling, and everything past the fifth is one flick away.
  *
  * A max-height rather than a height: three results should occupy the room three
  * results need, not leave two rows of empty box under them.
  */
-const RESULTS_MAX_HEIGHT = 5 * 76;
+const RESULTS_MAX_HEIGHT = VISIBLE_RESULTS * RESULT_ROW_HEIGHT;
 
 /** Sentinel for "no city scope", because a Radix Select item cannot hold "". */
 const ANY_CITY = "__any__";
@@ -467,7 +480,7 @@ function SelectedSummary({
               {formatDistance(result.distance.metres)}
             </span>
           )}
-          {result && !result.insideCoverage && <CoverageBadge inside={false} />}
+          {result && <CoverageBadge tier={coverageTier(result.distance.metres)} compact />}
         </p>
       </div>
 
@@ -498,36 +511,73 @@ function SelectedSummary({
 /**
  * The delivery-coverage verdict, as a badge.
  *
- * Two states and they are deliberately not symmetrical. Inside coverage is
- * reassurance and gets the quiet treatment; outside is an operational problem
- * the agent has to act on — the order needs an exception, a different branch or a
- * conversation with the customer — so it takes the attention colour, an icon and
- * the whole width it needs. The rule is one number, `COVERAGE_RADIUS_METRES`,
- * shared with the ranker and the map.
+ * Three tiers now, one shape. Green is reassurance, amber says "available, but
+ * near the edge — mention it", red is an operational problem the agent has to act
+ * on: the order needs an exception, a different branch, or a conversation with the
+ * customer. The escalation is carried by colour *and* by icon, because a badge
+ * that only differs by hue is a badge a colour-blind agent cannot triage.
+ *
+ * One component and one set of paddings for all three, so the row's vertical
+ * rhythm does not shift when a branch happens to be far away. `compact` shortens
+ * the wording for a result row, where the column is narrow — the colour, the
+ * icon, the shape and the spacing are identical, and the full sentence stays
+ * available on the tooltip and to a screen reader.
  */
-function CoverageBadge({ inside, className }: { inside: boolean; className?: string }) {
+const COVERAGE_BADGE: Record<
+  CoverageTier,
+  { label: string; short: string; icon: typeof CheckCircle2; classes: string; title: string }
+> = {
+  available: {
+    label: "Delivery available",
+    short: "Available",
+    icon: CheckCircle2,
+    classes: "bg-[var(--positive)]/12 text-[var(--positive)] ring-[var(--positive)]/25",
+    title: "Inside normal delivery coverage",
+  },
+  "near-limit": {
+    label: "Near coverage limit",
+    short: "Near limit",
+    icon: AlertTriangle,
+    classes: "bg-[var(--attention)]/15 text-[var(--attention)] ring-[var(--attention)]/30",
+    title: "Inside coverage but close to the edge — worth mentioning on the call",
+  },
+  outside: {
+    label: "Outside delivery coverage",
+    short: "Outside",
+    icon: AlertTriangle,
+    classes: "bg-[var(--negative)]/15 text-[var(--negative)] ring-[var(--negative)]/35",
+    title: "Beyond normal delivery coverage — this order needs an exception",
+  },
+};
+
+function CoverageBadge({
+  tier,
+  compact,
+  className,
+}: {
+  tier: CoverageTier;
+  compact?: boolean;
+  className?: string;
+}) {
   const km = Math.round(COVERAGE_RADIUS_METRES / 1000);
-  return inside ? (
+  const spec = COVERAGE_BADGE[tier];
+  const Icon = spec.icon;
+
+  return (
     <span
-      title={`Inside the ${km} km normal delivery coverage`}
+      title={`${spec.title} (${km} km)`}
       className={cn(
-        "inline-flex items-center gap-1 rounded-full bg-[var(--positive)]/12 px-1.5 py-px text-[9.5px] font-semibold text-[var(--positive)]",
+        "inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-px text-[9.5px] font-semibold ring-1 ring-inset",
+        spec.classes,
         className,
       )}
     >
-      <CheckCircle2 className="h-2.5 w-2.5 shrink-0" aria-hidden />
-      Delivery available
-    </span>
-  ) : (
-    <span
-      title={`Beyond the ${km} km normal delivery coverage — this order needs an exception`}
-      className={cn(
-        "inline-flex items-center gap-1 rounded-full bg-[var(--attention)]/15 px-1.5 py-px text-[9.5px] font-bold uppercase tracking-wide text-[var(--attention)] ring-1 ring-inset ring-[var(--attention)]/30",
-        className,
-      )}
-    >
-      <AlertTriangle className="h-2.5 w-2.5 shrink-0" aria-hidden />
-      Over {km} km
+      <Icon className="h-2.5 w-2.5 shrink-0" aria-hidden />
+      {/* The visible text may be abbreviated, so it is hidden from assistive tech
+          and the full wording supplied once alongside it — never both, which is
+          how a badge ends up read out twice. */}
+      <span aria-hidden>{compact ? spec.short : spec.label}</span>
+      <span className="sr-only">{spec.label}</span>
     </span>
   );
 }
@@ -551,8 +601,8 @@ function DirectionsButton({
         aria-hidden
         title="No coordinates on file for this branch"
         className={cn(
-          "inline-flex shrink-0 items-center gap-1 rounded-md px-2 text-muted-foreground/25",
-          compact ? "h-7" : "h-8",
+          "inline-flex shrink-0 items-center justify-center gap-1 rounded-md text-muted-foreground/25",
+          compact ? "h-9 w-9" : "h-8 px-2",
         )}
       >
         <Navigation className="h-3.5 w-3.5" />
@@ -566,7 +616,10 @@ function DirectionsButton({
       asChild
       size="sm"
       variant={compact ? "ghost" : "outline"}
-      className={cn("shrink-0 gap-1 px-2 text-xs", compact ? "h-7" : "h-8")}
+      // 36px square when compact — the smallest comfortable touch target, and the
+      // old 28px one was under every guideline for a control an agent taps on a
+      // tablet on the call floor.
+      className={cn("shrink-0 gap-1 px-2 text-xs", compact ? "h-9 w-9 px-0" : "h-8")}
       // The row underneath is a button too; without this, asking for directions
       // would also select the branch and scroll the page away.
       onClick={(event) => event.stopPropagation()}
@@ -590,32 +643,46 @@ function DirectionsButton({
  * strength beside a warning invites reading past the warning.
  */
 function DistanceBlock({ result, size }: { result: LocatorResult; size: "row" | "hero" }) {
+  const tier = coverageTier(result.distance.metres);
+  const hero = size === "hero";
+
   return (
-    <div className="text-right">
+    <div className="flex flex-col items-end gap-1">
       <div
         className={cn(
           "whitespace-nowrap font-bold leading-none tabular-nums text-foreground",
-          size === "hero" ? "text-2xl" : "text-[17px]",
+          hero ? "text-[26px]" : "text-lg",
         )}
       >
         {formatDistance(result.distance.metres)}
       </div>
-      <div
-        className={cn(
-          "mt-1 whitespace-nowrap text-[9px] font-medium uppercase tracking-wide",
-          result.insideCoverage ? "text-muted-foreground/80" : "text-muted-foreground/50",
-        )}
-      >
-        Estimated delivery
-      </div>
-      <div
-        title={result.eta.detail}
-        className={cn(
-          "whitespace-nowrap text-[11.5px] font-semibold leading-4 tabular-nums",
-          result.insideCoverage ? "text-foreground/80" : "text-muted-foreground/60",
-        )}
-      >
-        {result.eta.label}
+
+      {/* Directly under the distance, because the two are read as one statement:
+          how far, and whether that distance can actually be served. */}
+      <CoverageBadge tier={tier} compact={!hero} />
+
+      <div className="text-right">
+        <div
+          className={cn(
+            "whitespace-nowrap text-[9px] font-medium uppercase tracking-wide",
+            tier === "outside" ? "text-muted-foreground/50" : "text-muted-foreground/80",
+          )}
+        >
+          Estimated delivery
+        </div>
+        <div
+          title={result.eta.detail}
+          className={cn(
+            "whitespace-nowrap font-semibold leading-4 tabular-nums",
+            hero ? "text-[13px]" : "text-[11.5px]",
+            // Demoted when the branch cannot deliver normally: an ETA for a
+            // trip that needs an exception is not yet a real promise, and giving
+            // it full weight beside a red badge invites reading past the badge.
+            tier === "outside" ? "text-muted-foreground/60" : "text-foreground/80",
+          )}
+        >
+          {result.eta.label}
+        </div>
       </div>
     </div>
   );
@@ -669,7 +736,7 @@ function RecommendedBranch({
             branch.street,
             describeDistance(result.distance),
             `estimated delivery ${spokenDelivery(result)}`,
-            result.insideCoverage ? "inside delivery coverage" : "outside normal delivery coverage",
+            COVERAGE_BADGE[coverageTier(result.distance.metres)].label,
             "Show this branch below.",
           ]
             .filter(Boolean)
@@ -685,7 +752,6 @@ function RecommendedBranch({
               <span className="font-mono text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 {branch.branch_no}
               </span>
-              <CoverageBadge inside={result.insideCoverage} />
               {referenceLabel && (
                 <span className="rounded-full bg-[var(--attention)]/12 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-[var(--attention)]">
                   {referenceLabel}
@@ -727,7 +793,19 @@ function RecommendedBranch({
         </button>
       </div>
 
-      <div className="flex items-center justify-end border-t border-border/40 px-2.5 py-1.5">
+      {/* Both actions the recommendation invites, spelled out rather than implied.
+          The card body is already clickable, but an explicit primary button is
+          what makes "this is the one to use" an instruction instead of a hint —
+          and it gives the keyboard a labelled target that is not the whole card. */}
+      <div className="flex items-center gap-2 border-t border-border/40 px-2.5 py-2">
+        <Button
+          size="sm"
+          onClick={() => onSelect(branch.branch_no)}
+          className="h-8 flex-1 gap-1.5 text-xs"
+        >
+          <Check className="h-3.5 w-3.5" aria-hidden />
+          {active ? "Selected" : "Select branch"}
+        </Button>
         <DirectionsButton result={result} origin={origin} />
       </div>
     </div>
@@ -866,15 +944,19 @@ function LocatorRow({
             branch.street,
             describeDistance(result.distance),
             `estimated delivery ${spokenDelivery(result)}`,
-            result.insideCoverage ? "inside delivery coverage" : "outside normal delivery coverage",
+            COVERAGE_BADGE[coverageTier(result.distance.metres)].label,
             "Show this branch below.",
           ]
             .filter(Boolean)
             .join(". ")}
           className={cn(
-            "group flex min-w-0 flex-1 items-start gap-2.5 px-2.5 py-2 text-left",
-            "transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
-            !active && "hover:bg-accent/40",
+            "group flex min-w-0 flex-1 cursor-pointer items-start gap-2.5 px-3 py-2.5 text-left",
+            // 200ms and on both colour and shadow: a row is a click target, and a
+            // target that lifts very slightly under the pointer reads as pressable
+            // in a way a background tint alone does not.
+            "transition-[background-color,box-shadow] duration-200 ease-out",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
+            !active && "hover:bg-accent/40 hover:shadow-[inset_0_0_0_1px_var(--color-border)]",
           )}
         >
           <span
@@ -896,12 +978,9 @@ function LocatorRow({
               <span className="truncate font-mono text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 {branch.branch_no}
               </span>
-              {/* Only the warning half is shown per row. Ten green "delivery
-                  available" pills is ten pills nobody reads; one amber one in a
-                  list of otherwise unbadged rows is impossible to miss, which is
-                  the entire job. The reassuring case is stated on the
-                  recommendation card, where there is exactly one of it. */}
-              {!result.insideCoverage && <CoverageBadge inside={false} />}
+              {/* The coverage badge lives under the distance, not here: it is a
+                  statement about the distance and stating it twice in one row was
+                  the duplication the layout review turned up. */}
               {referenceLabel && (
                 // Kept where the phone and the scooter badge were dropped: this
                 // is not branch detail, it is a warning that the row is not a

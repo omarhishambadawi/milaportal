@@ -234,8 +234,14 @@ function BranchCardInner({
   return (
     <article
       onClick={() => onSelect(branch.branch_no)}
+      // Selecting by clicking the card is a pointer shortcut, not the only path:
+      // the card holds its own buttons and links, so making the whole thing a
+      // `button` would nest interactive elements — invalid, and worse for a screen
+      // reader than what is here. The keyboard route to selection is the locator's
+      // result rows and the map's markers, which are real buttons and already
+      // reachable. `cursor-pointer` is the missing affordance for the pointer half.
       className={cn(
-        "group relative flex flex-col overflow-hidden rounded-xl border text-left",
+        "group relative flex cursor-pointer flex-col overflow-hidden rounded-xl border text-left",
         "bg-card shadow-sm dark:shadow-none dark:ring-1 dark:ring-inset dark:ring-white/[0.04]",
         "transition-[box-shadow,border-color,transform] duration-200",
         "hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/5",

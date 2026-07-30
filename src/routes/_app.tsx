@@ -186,12 +186,25 @@ function AppLayout() {
           onSignOut={() => signOut().then(() => navigate({ to: "/auth", replace: true }))}
         />
 
-        {/* Route content — quick fade-in. `overflow-x-hidden` lives here (a
+        {/* Route content — quick fade-in. Horizontal containment lives here (a
             sibling of the header, not its ancestor) so wide content is still
-            contained without breaking the sticky header. */}
+            contained without breaking the sticky header.
+
+            `overflow-x-clip`, not `overflow-x-hidden`, and the difference is
+            load-bearing. CSS does not allow one axis to be `hidden` while the
+            other is `visible`: the spec computes the `visible` side to `auto`, so
+            `overflow-x: hidden` silently made this a *vertical scroll container*.
+            It never actually scrolled — its height is its content — but that is
+            enough to break `position: sticky` for everything inside it, because
+            sticky offsets are measured against the nearest scrolling ancestor and
+            an ancestor that cannot scroll never produces one. That is why the
+            Branch Directory's sticky map sat still instead of following the page.
+
+            `clip` contains the same overflow without establishing a scroll box,
+            so the document stays the scrollport and sticky descendants work. */}
         <div
           key={location.pathname}
-          className="p-3 sm:p-4 lg:p-6 xl:px-8 w-full overflow-x-hidden animate-in fade-in duration-150"
+          className="p-3 sm:p-4 lg:p-6 xl:px-8 w-full overflow-x-clip animate-in fade-in duration-150"
         >
           <Outlet />
         </div>

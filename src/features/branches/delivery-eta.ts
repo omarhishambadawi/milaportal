@@ -52,6 +52,33 @@ export function isWithinCoverage(metres: number): boolean {
   return metres <= COVERAGE_RADIUS_METRES;
 }
 
+/**
+ * Where the last kilometre of coverage begins.
+ *
+ * Purely a *display* threshold, and it is worth being explicit about why that is
+ * not a business-rule change. The rule is unchanged: coverage ends at 10 km, and
+ * `isWithinCoverage` — the boolean the ranker sorts on and the map colours by —
+ * still answers exactly as before. This only splits the "inside" half of that
+ * answer in two for the badge, because 9.6 km and 1.2 km are both "available" and
+ * an agent quoting the first one should know it is close to the edge.
+ */
+const NEAR_LIMIT_METRES = 8_000;
+
+/** How a branch's distance reads against the coverage rule. */
+export type CoverageTier = "available" | "near-limit" | "outside";
+
+/**
+ * The badge tier for a distance.
+ *
+ * Derived from the same numbers as `isWithinCoverage` rather than stored, so the
+ * two can never disagree: everything at or under 10 km is inside, and the top
+ * fifth of that range is flagged as approaching the edge.
+ */
+export function coverageTier(metres: number): CoverageTier {
+  if (!isWithinCoverage(metres)) return "outside";
+  return metres >= NEAR_LIMIT_METRES ? "near-limit" : "available";
+}
+
 /** Which rule decided the band, for the tooltip and for tests. */
 export type DeliveryBasis = "same-district" | "same-city" | "near" | "medium" | "far" | "very-far";
 

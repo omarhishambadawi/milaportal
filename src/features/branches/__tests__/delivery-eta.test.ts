@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   COVERAGE_RADIUS_METRES,
+  coverageTier,
   estimateDelivery,
   formatDeliveryBand,
   isWithinCoverage,
@@ -91,6 +92,24 @@ describe("isWithinCoverage", () => {
     expect(isWithinCoverage(COVERAGE_RADIUS_METRES)).toBe(true);
     expect(isWithinCoverage(COVERAGE_RADIUS_METRES + 1)).toBe(false);
     expect(isWithinCoverage(0)).toBe(true);
+  });
+});
+
+describe("coverageTier", () => {
+  it("splits the covered range without moving the coverage boundary", () => {
+    expect(coverageTier(1_000)).toBe("available");
+    expect(coverageTier(7_999)).toBe("available");
+    expect(coverageTier(8_000)).toBe("near-limit");
+    expect(coverageTier(COVERAGE_RADIUS_METRES)).toBe("near-limit");
+    expect(coverageTier(COVERAGE_RADIUS_METRES + 1)).toBe("outside");
+  });
+
+  it("agrees with isWithinCoverage everywhere", () => {
+    // The tier is a presentation split of the same rule, not a second rule. If
+    // these ever disagree a row shows a green badge next to an amber map pin.
+    for (const metres of [0, 500, 7_999, 8_000, 9_999, 10_000, 10_001, 25_000]) {
+      expect(coverageTier(metres) === "outside").toBe(!isWithinCoverage(metres));
+    }
   });
 });
 
