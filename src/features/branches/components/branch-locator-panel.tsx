@@ -604,18 +604,21 @@ function DirectionsButton({
   const href = branchDirectionsUrl(origin.point, result.item);
   const label = `Directions from ${origin.label} to ${result.item.branch_no}`;
 
+  // A fixed-width column, so the action lines up vertically across every row.
+  const shape = "h-8 w-[104px] shrink-0 gap-1.5 px-2 text-xs";
+
   if (!href) {
     return (
       <span
         aria-hidden
         title="No coordinates on file for this branch"
         className={cn(
-          "inline-flex shrink-0 items-center justify-center gap-1 rounded-md text-muted-foreground/25",
-          compact ? "h-9 w-9" : "h-8 px-2",
+          "inline-flex items-center justify-center rounded-md text-muted-foreground/25",
+          shape,
         )}
       >
         <Navigation className="h-3.5 w-3.5" />
-        {!compact && <span className="text-xs">Directions</span>}
+        <span>Directions</span>
       </span>
     );
   }
@@ -625,21 +628,19 @@ function DirectionsButton({
       asChild
       size="sm"
       variant={compact ? "ghost" : "outline"}
-      // 36px square when compact — the smallest comfortable touch target, and the
-      // old 28px one was under every guideline for a control an agent taps on a
-      // tablet on the call floor.
-      className={cn("shrink-0 gap-1 px-2 text-xs", compact ? "h-9 w-9 px-0" : "h-8")}
+      className={shape}
       // The row underneath is a button too; without this, asking for directions
       // would also select the branch and scroll the page away.
       onClick={(event) => event.stopPropagation()}
     >
       <a href={href} target="_blank" rel="noopener noreferrer" title={label} aria-label={label}>
         <Navigation className="h-3.5 w-3.5" aria-hidden />
-        {compact ? <span className="sr-only">Directions</span> : "Directions"}
+        <span aria-hidden>Directions</span>
       </a>
     </Button>
   );
 }
+
 
 /**
  * Distance, then the estimate under it.
