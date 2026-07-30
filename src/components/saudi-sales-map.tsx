@@ -808,7 +808,6 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
               getAnchor={() => cityRefs.current.get(hover.name) ?? null}
             />
           )}
-
         </div>
 
         {/*
@@ -991,5 +990,81 @@ function LegendDot({ color, label }: { color: string; label: string }) {
       />
       <span className="font-medium">{label}</span>
     </span>
+  );
+}
+
+/**
+ * The hover card, rendered outside the map's clipping context.
+ *
+ * Positioned in viewport coordinates against the bubble's own rect: flips below
+ * when there is no room above, clamps horizontally and vertically to stay fully
+ * visible, and re-measures on scroll and resize. `pointer-events-none` keeps the
+ * pointer on the marker, so moving toward the card can never flicker it away.
+ */
+function FloatingCityCard({
+  city,
+  getAnchor,
+  id,
+}: {
+  city: Placed;
+  getAnchor: () => SVGCircleElement | null;
+  id: string;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const update = () => {
+      const el = ref.current;
+      const anchor = getAnchor();
+      if (!el || !anchor) return;
+      const a = anchor.getBoundingClientRect();
+      const c = el.getBoundingClientRect();
+      const M = 12;
+      const GAP = 14;
+
+      let top = a.top - c.height - GAP;
+      if (top < M) top = a.bottom + GAP;
+      if (top + c.height > window.innerHeight - M) {
+        top = Math.max(M, window.innerHeight - M - c.height);
+      }
+
+      let left = a.left + a.width / 2 - c.width / 2;
+      left = Math.min(Math.max(M, left), Math.max(M, window.innerWidth - M - c.width));
+
+      setPos((prev) =>
+        prev && Math.abs(prev.left - left) < 0.5 && Math.abs(prev.top - top) < 0.5
+          ? prev
+          : { left, top },
+      );
+    };
+
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [city.name, getAnchor]);
+
+  return createPortal(
+    <div
+      id={id}
+      role="tooltip"
+      className="pointer-events-none fixed z-[9999] hidden w-[280px] rounded-2xl border border-border/60 bg-popover px-4 py-3.5 text-popover-foreground duration-200 ease-out animate-in fade-in-0 zoom-in-95 sm:block md:w-[300px]"
+      style={{
+        left: pos?.left ?? 0,
+        top: pos?.top ?? 0,
+        visibility: pos ? "visible" : "hidden",
+        boxShadow: `0 24px 48px -24px ${heatAlpha(city.color, 40)}, 0 0 0 1px ${heatAlpha(
+          city.color,
+          22,
+        )}, 0 2px 8px -2px rgba(0,0,0,0.12)`,
+      }}
+    >
+      <CityDetail city={city} />
+    </div>,
+    document.body,
   );
 }
