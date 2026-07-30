@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { estimateDelivery, formatDeliveryBand } from "../delivery-eta";
+import {
+  COVERAGE_RADIUS_METRES,
+  estimateDelivery,
+  formatDeliveryBand,
+  isWithinCoverage,
+} from "../delivery-eta";
 
 /** Straight-line kilometres, which is what a Haversine distance gives us. */
 function km(value: number) {
@@ -23,14 +28,27 @@ describe("estimateDelivery", () => {
   });
 
   it("bands by distance when nothing is known about the locality", () => {
-    // The brief's distance rules, read as straight-line kilometres — which the
-    // road factor turns into the drive each band is really describing.
-    expect(estimateDelivery(km(10)).maxMinutes).toBe(50);
-    expect(estimateDelivery(km(10)).minMinutes).toBe(35);
-    expect(estimateDelivery(km(18)).minMinutes).toBe(45);
-    expect(estimateDelivery(km(18)).maxMinutes).toBe(60);
-    expect(estimateDelivery(km(30)).minMinutes).toBe(60);
-    expect(estimateDelivery(km(30)).maxMinutes).toBeNull();
+    // The operational rules verbatim, in straight-line kilometres: 8–10 is
+    // 35–45, 10–15 is 45–60, past 15 is open-ended.
+    expect([estimateDelivery(km(9)).minMinutes, estimateDelivery(km(9)).maxMinutes]).toEqual([
+      35, 45,
+    ]);
+    expect([estimateDelivery(km(12)).minMinutes, estimateDelivery(km(12)).maxMinutes]).toEqual([
+      45, 60,
+    ]);
+    expect(estimateDelivery(km(18)).minMinutes).toBe(60);
+    expect(estimateDelivery(km(18)).maxMinutes).toBeNull();
+  });
+
+  it("changes band exactly where delivery coverage ends", () => {
+    // The 10 km boundary does double duty: it is where the estimate steps up to
+    // 45–60 *and* where the coverage warning appears. If these ever disagree a
+    // row will show "over 10 km" beside an in-coverage band, so the agreement is
+    // asserted rather than assumed.
+    expect(estimateDelivery(km(9.9)).maxMinutes).toBe(45);
+    expect(isWithinCoverage(9.9 * 1000)).toBe(true);
+    expect(estimateDelivery(km(10.1)).maxMinutes).toBe(60);
+    expect(isWithinCoverage(10.1 * 1000)).toBe(false);
   });
 
   it("never lets locality make a long trip look shorter", () => {
@@ -43,13 +61,12 @@ describe("estimateDelivery", () => {
   });
 
   it("takes the slower of the distance band and the same-city floor", () => {
-    // 10 km straight line is 13 km by road, whose band (35–50) is slower than the
-    // 30–45 floor. The floor must not pull it back up to optimism.
-    const near = estimateDelivery({ ...km(10), sameDistrict: false, sameCity: true });
-    expect([near.minMinutes, near.maxMinutes]).toEqual([35, 50]);
+    // 9 km lands in 35–45, which is slower than the 30–45 same-city floor. The
+    // floor must not pull it back up to optimism.
+    const near = estimateDelivery({ ...km(9), sameDistrict: false, sameCity: true });
+    expect([near.minMinutes, near.maxMinutes]).toEqual([35, 45]);
 
-    // And the road factor is applied before banding, so 12 km straight line is
-    // treated as the ~15.6 km drive it is rather than landing a band lower.
+    // And a genuinely long trip keeps its own band rather than the floor's.
     const far = estimateDelivery({ ...km(12), sameDistrict: false, sameCity: true });
     expect([far.minMinutes, far.maxMinutes]).toEqual([45, 60]);
   });
@@ -64,6 +81,16 @@ describe("estimateDelivery", () => {
 
   it("treats a nonsensical negative distance as zero rather than throwing", () => {
     expect(estimateDelivery({ metres: -500 }).minMinutes).toBe(20);
+  });
+});
+
+describe("isWithinCoverage", () => {
+  it("treats the boundary itself as covered", () => {
+    // A branch at exactly 10 km is inside. The rule is "exceeds 10 km", so the
+    // boundary belongs to the covered side.
+    expect(isWithinCoverage(COVERAGE_RADIUS_METRES)).toBe(true);
+    expect(isWithinCoverage(COVERAGE_RADIUS_METRES + 1)).toBe(false);
+    expect(isWithinCoverage(0)).toBe(true);
   });
 });
 

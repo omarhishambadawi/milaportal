@@ -22,6 +22,21 @@ export interface MapPoint<T = unknown> {
   data?: T;
 }
 
+/**
+ * A radius drawn around a point — today, the delivery coverage ring.
+ *
+ * Part of the shared map contract rather than the Branch Directory's own, because
+ * both providers have to honour it: the Google map draws a `google.maps.Circle`
+ * and the SVG fallback draws a `<circle>`, and a feature that supplied this to
+ * one and not the other would show coverage on some deployments and not others.
+ */
+export interface MapCoverage {
+  center: LatLng;
+  radiusMetres: number;
+  /** Which theme colour to draw it in. Defaults to `positive`. */
+  tone?: "primary" | "positive" | "attention";
+}
+
 export interface Cluster<T = unknown> {
   id: string;
   position: LatLng;

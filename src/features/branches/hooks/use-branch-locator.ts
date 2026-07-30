@@ -38,6 +38,15 @@ const SUGGESTION_LIMIT = 6;
 export function useBranchLocator(branches: BranchView[]) {
   const [active, setActive] = useState(false);
   const [query, setQuery] = useState("");
+  /**
+   * The optional city scope, as written in the directory. Empty means "anywhere".
+   *
+   * Held here rather than in the panel because every consumer of it is here:
+   * suggestions, resolution and the OpenStreetMap query text all narrow by it,
+   * and a scope that lived in the component would have to be passed back down
+   * into each of them.
+   */
+  const [city, setCity] = useState("");
   const [origin, setOrigin] = useState<ResolvedOrigin | null>(null);
   const [results, setResults] = useState<LocatorResult[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -47,8 +56,25 @@ export function useBranchLocator(branches: BranchView[]) {
 
   const index = useMemo(() => buildLocationIndex(branches), [branches]);
 
+  /**
+   * Cities that actually have a branch, for the dropdown.
+   *
+   * Read off the gazetteer rather than the branch array so the list is already
+   * deduplicated and carries the English alias; sorted by that alias where there
+   * is one, since that is the label the dropdown shows.
+   */
+  const cities = useMemo(
+    () =>
+      index.entries
+        .filter((entry) => entry.kind === "city")
+        .sort((a, b) => (a.english ?? a.name).localeCompare(b.english ?? b.name)),
+    [index],
+  );
+
   /** Incremented per search; a continuation that no longer holds it is stale. */
   const token = useRef(0);
+
+  const scope = useMemo(() => ({ city: city || null }), [city]);
 
   /**
    * Live autocomplete.
@@ -60,8 +86,8 @@ export function useBranchLocator(branches: BranchView[]) {
   const suggestions = useMemo(() => {
     const trimmed = query.trim();
     if (!trimmed || /\d[\s,;]+-?\d/.test(trimmed) || /https?:\/\//i.test(trimmed)) return [];
-    return searchLocations(index, trimmed, SUGGESTION_LIMIT).map((match) => match.entry);
-  }, [index, query]);
+    return searchLocations(index, trimmed, SUGGESTION_LIMIT, scope).map((match) => match.entry);
+  }, [index, query, scope]);
 
   /** Rank the directory around a point that is already decided. */
   const rankAround = useCallback(
@@ -102,7 +128,7 @@ export function useBranchLocator(branches: BranchView[]) {
       setSearching(true);
       // The geocoder is passed on every search but reached only when the local
       // index has nothing — `resolveOrigin` owns that ordering.
-      const resolution = await resolveOrigin(trimmed, index, geocodeWithOpenStreetMap);
+      const resolution = await resolveOrigin(trimmed, index, geocodeWithOpenStreetMap, scope);
       if (mine !== token.current) return;
 
       if (resolution.choices.length > 0) {
@@ -125,7 +151,7 @@ export function useBranchLocator(branches: BranchView[]) {
 
       await rankAround(resolution.origin, mine);
     },
-    [index, rankAround],
+    [index, rankAround, scope],
   );
 
   /**
@@ -157,6 +183,7 @@ export function useBranchLocator(branches: BranchView[]) {
     token.current += 1;
     setActive(false);
     setQuery("");
+    setCity("");
     setOrigin(null);
     setResults([]);
     setChoices([]);
@@ -164,10 +191,56 @@ export function useBranchLocator(branches: BranchView[]) {
     setSearching(false);
   }, []);
 
+  /**
+   * Change the city scope and, if a search has already run, redo it.
+   *
+   * Re-running is the behaviour the dropdown is for: an agent sets the city
+   * *because* the answer they got was for the wrong one, and making them press
+   * Find again to apply it would be a second step for a decision they have
+   * already made. Nothing is re-run before the first search, when there is no
+   * result on screen to correct.
+   */
+  const selectCity = useCallback(
+    (next: string) => {
+      setCity(next);
+      const pending = query.trim();
+      if (!pending) return;
+      const mine = ++token.current;
+      setSearching(true);
+      void (async () => {
+        const resolution = await resolveOrigin(pending, index, geocodeWithOpenStreetMap, {
+          city: next || null,
+        });
+        if (mine !== token.current) return;
+        if (resolution.choices.length > 0) {
+          setOrigin(null);
+          setResults([]);
+          setChoices(resolution.choices);
+          setError(null);
+          setSearching(false);
+          return;
+        }
+        if (!resolution.origin) {
+          setOrigin(null);
+          setResults([]);
+          setChoices([]);
+          setError(resolution.error);
+          setSearching(false);
+          return;
+        }
+        await rankAround(resolution.origin, mine);
+      })();
+    },
+    [index, query, rankAround],
+  );
+
   return {
     active,
     query,
     setQuery,
+    city,
+    setCity: selectCity,
+    cities,
     origin,
     results,
     choices,

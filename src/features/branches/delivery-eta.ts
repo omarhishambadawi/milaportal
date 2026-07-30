@@ -23,11 +23,34 @@
  *
  * Road distance always exceeds great-circle distance; the ratio is the "route
  * circuity factor", and 1.3 is the usual figure for a gridded urban network,
- * which is what Saudi cities largely are. It is applied before banding so a
- * 12 km straight line is treated as the ~15.6 km drive it really is rather than
- * landing an optimistic band lower.
+ * which is what Saudi cities largely are.
+ *
+ * It is *reported* rather than applied to the banding, and that is a deliberate
+ * change. The bands are keyed on the same straight-line kilometres the row
+ * prints and the coverage rule tests, because the alternative desynchronizes two
+ * numbers an agent reads side by side: multiply by 1.3 before banding and a
+ * branch at 9.8 km sits in the "10–15 km" band while the badge beside it still
+ * says it is inside the 10 km coverage. The road factor's real job is explaining
+ * why 4 km is worth 25 minutes, so it lives in the tooltip where that question
+ * gets asked.
  */
 const ROAD_FACTOR = 1.3;
+
+/**
+ * Normal delivery coverage, in metres.
+ *
+ * The operational rule, not a display threshold: past this the order is outside
+ * what the contracted partner and the branch scooters are expected to serve, so
+ * the row warns rather than quietly quoting a longer estimate. Exported because
+ * the ranker sorts on it, the panel badges it and the map draws it — one number,
+ * three consumers, and they must not drift apart.
+ */
+export const COVERAGE_RADIUS_METRES = 10_000;
+
+/** Whether a branch is inside normal delivery coverage of the customer. */
+export function isWithinCoverage(metres: number): boolean {
+  return metres <= COVERAGE_RADIUS_METRES;
+}
 
 /** Which rule decided the band, for the tooltip and for tests. */
 export type DeliveryBasis = "same-district" | "same-city" | "near" | "medium" | "far" | "very-far";
@@ -50,18 +73,24 @@ interface Band {
 }
 
 /**
- * Bands by approximate road distance.
+ * Bands by straight-line distance, in kilometres.
  *
- * The two fastest are finer-grained than the brief's list because the brief's
- * locality rules imply them: "same neighbourhood: 20–30" is only reachable if a
- * sub-3km trip has a band that fast, and a flat "under 8 km" band would have
- * overridden it.
+ * The three upper bands are the operational rules verbatim: 8–10 km is 35–45,
+ * 10–15 is 45–60, beyond 15 is open-ended. Note that the 10 km boundary is also
+ * the coverage boundary, so a branch that crosses into "45–60 min" is exactly the
+ * one that has crossed out of normal coverage — the two signals agree by
+ * construction rather than by coincidence.
+ *
+ * Below 8 km the rules speak in terms of locality instead of kilometres, so the
+ * two fastest bands exist to give `estimateDelivery` something to refine: "same
+ * neighbourhood: 20–30" is only reachable if a short trip has a band that fast,
+ * and a single flat "under 8 km" band would have swallowed it.
  */
-function distanceBand(roadKm: number): Band {
-  if (roadKm < 3) return { min: 20, max: 30, basis: "near" };
-  if (roadKm < 8) return { min: 25, max: 40, basis: "near" };
-  if (roadKm < 15) return { min: 35, max: 50, basis: "medium" };
-  if (roadKm < 25) return { min: 45, max: 60, basis: "far" };
+function distanceBand(km: number): Band {
+  if (km < 3) return { min: 20, max: 30, basis: "near" };
+  if (km < 8) return { min: 25, max: 40, basis: "near" };
+  if (km < 10) return { min: 35, max: 45, basis: "medium" };
+  if (km < 15) return { min: 45, max: 60, basis: "far" };
   return { min: 60, max: null, basis: "very-far" };
 }
 
@@ -97,8 +126,8 @@ export interface DeliveryInput {
  *   - **Different city, or unknown** leaves distance to speak for itself.
  */
 export function estimateDelivery(input: DeliveryInput): DeliveryEstimate {
-  const roadKm = (Math.max(0, input.metres) / 1000) * ROAD_FACTOR;
-  const byDistance = distanceBand(roadKm);
+  const km = Math.max(0, input.metres) / 1000;
+  const byDistance = distanceBand(km);
 
   let band = byDistance;
   let detail: string;
@@ -112,12 +141,17 @@ export function estimateDelivery(input: DeliveryInput): DeliveryEstimate {
     detail = "Estimated from distance alone";
   }
 
+  const roadKm = km * ROAD_FACTOR;
+  const coverage = isWithinCoverage(input.metres)
+    ? "within the 10 km delivery coverage"
+    : "beyond the 10 km delivery coverage";
+
   return {
     minMinutes: band.min,
     maxMinutes: band.max,
     label: formatDeliveryBand(band.min, band.max),
     basis: input.sameDistrict ? "same-district" : band.basis,
-    detail: `${detail} · ~${roadKm.toFixed(1)} km by road, estimated under normal conditions`,
+    detail: `${detail} · ~${roadKm.toFixed(1)} km by road, ${coverage} · estimated under normal conditions, never exact`,
   };
 }
 

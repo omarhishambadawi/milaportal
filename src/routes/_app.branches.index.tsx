@@ -173,6 +173,15 @@ function BranchDirectory() {
 
   const filtered = hasActiveFilters(filters);
 
+  /**
+   * Where the delivery coverage ring is centred, or null for the plain directory.
+   *
+   * Only in locator mode and only once an origin has resolved: a ring drawn
+   * around nothing, or left behind after the locator closed, would be a claim
+   * about a customer who is no longer on the phone.
+   */
+  const coverageCenter = locator.active ? (locator.origin?.point ?? null) : null;
+
   if (!canView) {
     return (
       <div className="py-16 text-center">
@@ -274,6 +283,8 @@ function BranchDirectory() {
         {locator.active ? (
           <BranchLocatorPanel
             query={locator.query}
+            city={locator.city}
+            cities={locator.cities}
             origin={locator.origin}
             results={locator.results}
             choices={locator.choices}
@@ -282,6 +293,7 @@ function BranchDirectory() {
             searching={locator.searching}
             selected={selected}
             onQueryChange={locator.setQuery}
+            onCityChange={locator.setCity}
             onSearch={locator.search}
             onChooseLocation={locator.chooseLocation}
             onSelect={handleLocatorSelect}
@@ -365,6 +377,7 @@ function BranchDirectory() {
                   branches={results}
                   selected={selected}
                   onSelect={handleSelect}
+                  coverageCenter={coverageCenter}
                   className="h-full"
                 />
               </ResizablePanel>
@@ -389,6 +402,7 @@ function BranchDirectory() {
             branches={results}
             selected={selected}
             onSelect={handleSelect}
+            coverageCenter={coverageCenter}
             className={cn("h-[calc(85dvh-4rem)] rounded-none border-0")}
           />
         </SheetContent>

@@ -5,6 +5,7 @@ import {
   clusterPoints,
   createClusterElement,
   createPinElement,
+  type MapCoverage,
   type MapPoint,
 } from "@/lib/maps/markers";
 import { cn } from "@/lib/utils";
@@ -28,6 +29,8 @@ export interface GoogleMapProps<T> {
   onSelect?: (point: MapPoint<T> | null) => void;
   /** Rendered in an overlay anchored to the selected point. */
   renderInfo?: (point: MapPoint<T>) => React.ReactNode;
+  /** A radius to shade around a point — the delivery coverage ring. */
+  coverage?: MapCoverage | null;
   className?: string;
   /** Zoom applied when a point is selected from outside the map. */
   focusZoom?: number;
@@ -36,11 +39,19 @@ export interface GoogleMapProps<T> {
 
 const DEFAULT_ZOOM = 5;
 
+/** Theme token per coverage tone, resolved at draw time so it follows the theme. */
+const COVERAGE_TONE: Record<NonNullable<MapCoverage["tone"]>, string> = {
+  primary: "--primary",
+  positive: "--positive",
+  attention: "--attention",
+};
+
 export function GoogleMap<T>({
   points,
   selectedId,
   onSelect,
   renderInfo,
+  coverage,
   className,
   focusZoom = 14,
   emptyMessage,
@@ -48,6 +59,7 @@ export function GoogleMap<T>({
   const hostRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
   const markersRef = useRef<google.maps.marker.AdvancedMarkerElement[]>([]);
+  const circleRef = useRef<google.maps.Circle | null>(null);
   const [ready, setReady] = useState(false);
   // Bumped on every camera idle so clustering recomputes against the new
   // projection. Storing the projection itself in state would re-render on a
@@ -182,6 +194,64 @@ export function GoogleMap<T>({
       markersRef.current = [];
     };
   }, [clusters, selectedId, onSelect, ready]);
+
+  /* ---------------------------------------------------------------------- */
+  /* Coverage ring                                                           */
+  /* ---------------------------------------------------------------------- */
+
+  /**
+   * One `Circle` reused across updates rather than recreated.
+   *
+   * `setCenter`/`setRadius` on an existing overlay is what makes the ring follow
+   * a new search without the flash that destroying and re-adding it produces.
+   *
+   * The colour is read out of the stylesheet at draw time because the SDK takes
+   * a colour *string*, not a CSS variable — `strokeColor: "var(--positive)"` is
+   * silently ignored. Reading the computed value means the ring still matches
+   * whichever theme is active when it is drawn; it does not live-update on a
+   * theme swap, which is a cosmetic edge nobody hits mid-search.
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+
+    if (!coverage) {
+      circleRef.current?.setMap(null);
+      circleRef.current = null;
+      return;
+    }
+
+    const token = COVERAGE_TONE[coverage.tone ?? "positive"];
+    const colour =
+      getComputedStyle(document.documentElement).getPropertyValue(token).trim() || "#16a34a";
+
+    if (!circleRef.current) {
+      circleRef.current = new google.maps.Circle({
+        map,
+        // Non-interactive: the ring is an annotation, and a clickable overlay the
+        // size of a city would swallow every marker click inside it.
+        clickable: false,
+        strokeColor: colour,
+        strokeOpacity: 0.85,
+        strokeWeight: 2,
+        fillColor: colour,
+        fillOpacity: 0.07,
+      });
+    }
+    circleRef.current.setOptions({ strokeColor: colour, fillColor: colour });
+    circleRef.current.setCenter(coverage.center);
+    circleRef.current.setRadius(coverage.radiusMetres);
+  }, [coverage, ready]);
+
+  // Unmount cleanup is separate from the update effect above: tying them together
+  // would remove the overlay on every coverage change and add it back.
+  useEffect(
+    () => () => {
+      circleRef.current?.setMap(null);
+      circleRef.current = null;
+    },
+    [],
+  );
 
   /* ---------------------------------------------------------------------- */
   /* Following an external selection                                         */

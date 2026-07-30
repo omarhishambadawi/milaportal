@@ -292,14 +292,71 @@ describe("rankNearestBranches with a resolved locality", () => {
     precision: "district",
   };
 
-  it("prefers the same neighbourhood over a marginally nearer one across the boundary", async () => {
+  it("bands the estimate by locality even though distance decides the order", async () => {
+    // Distance is the ordering rule, so the 900m branch leads. Locality still
+    // shapes each *estimate*: the same-neighbourhood branch gets 20–30 and the
+    // one across the district boundary is floored at 30–45, which is why the
+    // farther branch can show the faster arrival.
     const ranked = await rankNearestBranches(ORIGIN, LOCAL, { locality: IN_HAZM });
-    expect(ranked.map((entry) => entry.item.branch_no)).toEqual(["P0100", "P0200"]);
-    expect(ranked[0].sameDistrict).toBe(true);
-    expect(ranked[0].eta.minMinutes).toBe(20);
-    // And the one across the boundary is banded to say why it lost.
-    expect(ranked[1].sameDistrict).toBe(false);
-    expect(ranked[1].eta.minMinutes).toBe(30);
+    expect(ranked.map((entry) => entry.item.branch_no)).toEqual(["P0200", "P0100"]);
+
+    const hazm = ranked.find((entry) => entry.item.branch_no === "P0100");
+    expect(hazm?.sameDistrict).toBe(true);
+    expect(hazm?.eta.minMinutes).toBe(20);
+
+    const olaya = ranked.find((entry) => entry.item.branch_no === "P0200");
+    expect(olaya?.sameDistrict).toBe(false);
+    expect(olaya?.eta.minMinutes).toBe(30);
+  });
+
+  it("puts every in-coverage branch ahead of every branch beyond 10 km", async () => {
+    // The one place the order deliberately contradicts the kilometres it prints:
+    // a branch that cannot deliver is not a better answer for being nearer to the
+    // top of the list. P0400 sits ~11 km out, past the coverage boundary.
+    const withFar = decorate([
+      branch({
+        branch_no: "P0400",
+        city: "الرياض",
+        address: "الرياض/ حي الحزم",
+        latitude: 24.65,
+        longitude: 46.8087, // ~11 km east, outside coverage
+      }),
+      IN_DISTRICT,
+      NEARER,
+    ]);
+    const ranked = await rankNearestBranches(ORIGIN, withFar, { locality: IN_HAZM });
+    expect(ranked.map((entry) => entry.item.branch_no)).toEqual(["P0200", "P0100", "P0400"]);
+    expect(ranked[0].insideCoverage).toBe(true);
+    expect(ranked[1].insideCoverage).toBe(true);
+    expect(ranked[2].insideCoverage).toBe(false);
+  });
+
+  it("breaks a sub-500m tie on scooter availability", async () => {
+    // Two branches ~120m apart: indistinguishable at the precision a straight
+    // line supports, so the one with its own rider is the better recommendation
+    // even though it is the marginally farther of the two.
+    const tied = decorate([
+      branch({
+        branch_no: "P0500",
+        city: "الرياض",
+        address: "الرياض/ حي الحزم",
+        latitude: 24.6505,
+        longitude: 46.7,
+        scooter: false,
+      }),
+      branch({
+        branch_no: "P0501",
+        city: "الرياض",
+        address: "الرياض/ حي الحزم",
+        latitude: 24.6515,
+        longitude: 46.7,
+        scooter: true,
+      }),
+    ]);
+    const ranked = await rankNearestBranches(ORIGIN, tied);
+    expect(ranked.map((entry) => entry.item.branch_no)).toEqual(["P0501", "P0500"]);
+    // Confirms the premise: the scooter branch really is the farther one.
+    expect(ranked[0].distance.metres).toBeGreaterThan(ranked[1].distance.metres);
   });
 
   it("orders on distance alone when the origin is only a point", async () => {
@@ -324,6 +381,8 @@ describe("rankNearestBranches with a resolved locality", () => {
   it("counts a shared street as the same neighbourhood", async () => {
     // The sheet does not always write a حي segment, and two addresses on one
     // street in one city are in the same neighbourhood whether it did or not.
+    // Asserted on the flags and the band rather than on position, because the
+    // order is decided by distance.
     const ranked = await rankNearestBranches(ORIGIN, LOCAL, {
       locality: {
         city: "الرياض",
@@ -332,9 +391,10 @@ describe("rankNearestBranches with a resolved locality", () => {
         precision: "street",
       },
     });
-    expect(ranked[0].item.branch_no).toBe("P0100");
-    expect(ranked[0].sameStreet).toBe(true);
-    expect(ranked[0].sameDistrict).toBe(true);
+    const hazm = ranked.find((entry) => entry.item.branch_no === "P0100");
+    expect(hazm?.sameStreet).toBe(true);
+    expect(hazm?.sameDistrict).toBe(true);
+    expect(hazm?.eta.minMinutes).toBe(20);
   });
 
   it("does not match a street name against a different city", async () => {
@@ -353,8 +413,9 @@ describe("rankNearestBranches with a resolved locality", () => {
   });
 
   it("does not let the same neighbourhood outrank a genuinely nearer branch", async () => {
-    // The preference is bounded by the distance that feeds the same band. A
-    // same-district branch 12 km out must not beat a 900 m one across the road.
+    // A same-district branch 12 km out is both farther and outside coverage, so
+    // it loses on both of the first two rules rather than being rescued by its
+    // neighbourhood.
     const spread = decorate([
       branch({
         branch_no: "P0300",
@@ -367,7 +428,25 @@ describe("rankNearestBranches with a resolved locality", () => {
       NEARER,
     ]);
     const ranked = await rankNearestBranches(ORIGIN, spread, { locality: IN_HAZM });
-    expect(ranked[0].item.branch_no).toBe("P0100");
+    expect(ranked[0].item.branch_no).toBe("P0200");
     expect(ranked[ranked.length - 1].item.branch_no).toBe("P0300");
+  });
+
+  it("keeps the ordering stable regardless of the input order", async () => {
+    // Guards the comparator's transitivity. Three branches inside one 500m band
+    // plus one outside it is exactly the shape that an `|a - b| < 500` test gets
+    // wrong, and a broken comparator shows up as an order that depends on how the
+    // rows happened to arrive.
+    const rows = [
+      branch({ branch_no: "A", city: "الرياض", latitude: 24.65, longitude: 46.7 }),
+      branch({ branch_no: "B", city: "الرياض", latitude: 24.6536, longitude: 46.7 }),
+      branch({ branch_no: "C", city: "الرياض", latitude: 24.6572, longitude: 46.7 }),
+      branch({ branch_no: "D", city: "الرياض", latitude: 24.6608, longitude: 46.7 }),
+    ];
+    const forward = await rankNearestBranches(ORIGIN, decorate(rows));
+    const reversed = await rankNearestBranches(ORIGIN, decorate([...rows].reverse()));
+    expect(reversed.map((entry) => entry.item.branch_no)).toEqual(
+      forward.map((entry) => entry.item.branch_no),
+    );
   });
 });

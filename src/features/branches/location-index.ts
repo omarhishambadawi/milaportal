@@ -25,7 +25,16 @@ import type { BranchView } from "./types";
  * its result array.
  */
 
-export type LocationKind = "city" | "district" | "area" | "branch";
+/**
+ * What kind of place an entry is, in the order a tie between them is broken.
+ *
+ * `street` and `landmark` were one `area` kind until the resolution priority was
+ * specified as city → district → street → landmark: a single bucket cannot
+ * express the last two steps. The split is cheap because the address segment
+ * already says which it is — "ش علي النقيب" and "طريق الملك فهد" announce
+ * themselves with a classifier, and "حراج الصواريخ" (a market) does not.
+ */
+export type LocationKind = "city" | "district" | "street" | "landmark" | "branch";
 
 export interface LocationEntry {
   /** Stable across rebuilds of the same dataset; used as a React key. */
@@ -125,6 +134,26 @@ const NOISE_WORDS: ReadonlySet<string> = new Set(
  * place-specific half: dropping the classifier words above, and collapsing the
  * punctuation that separates a compound name.
  */
+/**
+ * Words that mark an address segment as a street rather than a landmark.
+ *
+ * Tested against the **raw** segment, not the normalized one: `normalizePlace`
+ * strips exactly these as noise, which is correct for matching ("شارع فلسطين"
+ * and "فلسطين" are the same street) and useless for classifying. So the
+ * classifier reads the text before that happens.
+ */
+const STREET_WORDS: ReadonlySet<string> = new Set(
+  ["شارع", "ش", "طريق", "street", "st", "str", "road", "rd", "avenue", "ave", "highway", "hwy"].map(
+    foldText,
+  ),
+);
+
+/** Street or landmark, from the classifier the sheet already wrote. */
+function segmentKind(segment: string): "street" | "landmark" {
+  const words = foldText(segment.replace(/[-_.،,/\\|()]+/g, " ")).split(" ");
+  return words.some((word) => STREET_WORDS.has(word)) ? "street" : "landmark";
+}
+
 export function normalizePlace(text: string): string {
   return foldText(text.replace(/[-_.،,/\\|()]+/g, " "))
     .split(" ")
@@ -264,7 +293,7 @@ export function buildLocationIndex(branches: readonly BranchView[]): LocationInd
       if (isCitySegment(segment, branch.city)) continue;
       if (branch.district && normalizePlace(segment) === normalizePlace(branch.district)) continue;
       if (segment.length > 40) continue;
-      add("area", segment, branch.city, point);
+      add(segmentKind(segment), segment, branch.city, point);
     }
 
     // The branch itself. Keyed by code so two branches never share a bucket,
@@ -374,11 +403,38 @@ const SCORE = {
  * district and a branch inside it almost always means the district. An exact
  * code match scores 0 and outranks any of this regardless.
  */
-const KIND_RANK: Record<LocationKind, number> = { city: 0, district: 1, area: 2, branch: 3 };
+const KIND_RANK: Record<LocationKind, number> = {
+  city: 0,
+  district: 1,
+  street: 2,
+  landmark: 3,
+  branch: 4,
+};
 
 export interface LocationMatch {
   entry: LocationEntry;
   score: number;
+  /** True when a city scope was supplied and this entry sits in it. */
+  inScope: boolean;
+}
+
+/** Optional narrowing applied to a search. */
+export interface SearchScope {
+  /**
+   * Restrict attention to one city, as written in the directory.
+   *
+   * A *preference*, not a filter, and the difference matters on a call. An agent
+   * who has set the city to Riyadh and types a district that only exists in
+   * Jeddah should still be shown the Jeddah district — labelled with its city, at
+   * the bottom of the list — rather than told nothing matches. Silence would
+   * leave them re-typing a name that was correct all along.
+   */
+  city?: string | null;
+}
+
+/** Which city an entry belongs to, folded. A city entry is its own city. */
+function cityKeyOf(entry: LocationEntry): string {
+  return normalizePlace(entry.city ?? entry.name);
 }
 
 function scoreEntry(entry: LocationEntry, query: string, budget: number): number | null {
@@ -458,10 +514,16 @@ function candidateIndices(index: LocationIndex, query: string, budget: number): 
  * Runs on every keystroke — it backs the autocomplete as well as submission —
  * so it scores only the entries the postings lists put in front of it.
  */
-export function searchLocations(index: LocationIndex, query: string, limit = 8): LocationMatch[] {
+export function searchLocations(
+  index: LocationIndex,
+  query: string,
+  limit = 8,
+  scope?: SearchScope,
+): LocationMatch[] {
   const normalized = normalizePlace(query);
   if (!normalized) return [];
 
+  const scopeKey = scope?.city ? normalizePlace(scope.city) : null;
   const budget = tolerance(normalized.length);
   const matches: LocationMatch[] = [];
 
@@ -469,11 +531,18 @@ export function searchLocations(index: LocationIndex, query: string, limit = 8):
     const entry = index.entries[position];
     if (!entry) continue;
     const score = scoreEntry(entry, normalized, budget);
-    if (score != null) matches.push({ entry, score });
+    if (score == null) continue;
+    matches.push({ entry, score, inScope: scopeKey == null || cityKeyOf(entry) === scopeKey });
   }
 
   matches.sort((a, b) => {
+    // The selected city outranks match quality itself. "الروضة" typed with Riyadh
+    // chosen means the Riyadh one even if the Jeddah one is spelled slightly
+    // closer to what was typed — the agent has already answered the question the
+    // score is guessing at.
+    if (a.inScope !== b.inScope) return a.inScope ? -1 : 1;
     if (a.score !== b.score) return a.score - b.score;
+    // city → district → street → landmark → branch.
     const kind = KIND_RANK[a.entry.kind] - KIND_RANK[b.entry.kind];
     if (kind !== 0) return kind;
     // More branches behind a place makes it both a likelier target and a more
@@ -502,14 +571,23 @@ export type PlaceResolution =
  * city — two fuzzy near-misses are not a question worth asking, they are just
  * a weak result.
  */
-export function resolvePlace(index: LocationIndex, query: string): PlaceResolution {
-  const matches = searchLocations(index, query, 12);
+export function resolvePlace(
+  index: LocationIndex,
+  query: string,
+  scope?: SearchScope,
+): PlaceResolution {
+  const matches = searchLocations(index, query, 12, scope);
   if (matches.length === 0) return { status: "none" };
 
-  const best = matches[0].score;
-  const tied = matches.filter((match) => match.score === best).map((match) => match.entry);
+  const leader = matches[0];
+  const tied = matches
+    .filter((match) => match.score === leader.score && match.inScope === leader.inScope)
+    .map((match) => match.entry);
 
-  if (tied.length > 1 && best <= SCORE.alias) {
+  // A chosen city *is* the answer to "which one". Asking anyway would be asking
+  // the agent to repeat themselves, which is the entire point of the dropdown —
+  // so ambiguity is only raised among equally-scoped candidates.
+  if (tied.length > 1 && leader.score <= SCORE.alias) {
     const cities = new Set(tied.map((entry) => entry.city ?? entry.name));
     if (cities.size > 1) return { status: "ambiguous", choices: tied };
   }
@@ -532,7 +610,15 @@ export function describeLocationSource(entry: LocationEntry): string {
   // A branch entry is not a centroid at all — it is one recorded coordinate, so
   // "centre of 1 branch" would understate what is actually known.
   if (entry.kind === "branch") return "Exact position of this branch, from the directory";
-  const scope = entry.kind === "city" ? "city" : entry.kind === "district" ? "district" : "area";
+  // "on this street" but "in this city" — the preposition has to follow the kind.
+  const scope =
+    entry.kind === "street"
+      ? "on this street"
+      : entry.kind === "city"
+        ? "in this city"
+        : entry.kind === "district"
+          ? "in this district"
+          : "at this location";
   const backing = entry.branchCount === 1 ? "1 branch" : `${entry.branchCount} branches`;
-  return `Centre of the ${backing} in this ${scope} — approximate, from the directory`;
+  return `Centre of the ${backing} ${scope} — approximate, from the directory`;
 }

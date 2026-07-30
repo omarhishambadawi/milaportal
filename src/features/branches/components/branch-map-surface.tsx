@@ -2,8 +2,10 @@ import { useCallback, useMemo } from "react";
 import { Bike, Copy, ExternalLink, Navigation, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MapSurface } from "@/components/maps/map-surface";
-import type { MapPoint } from "@/lib/maps/markers";
+import { haversineMetres, type LatLng } from "@/lib/geo";
+import type { MapCoverage, MapPoint } from "@/lib/maps/markers";
 import { copyText } from "../clipboard";
+import { COVERAGE_RADIUS_METRES, isWithinCoverage } from "../delivery-eta";
 import type { BranchView } from "../types";
 import { BranchMap } from "./branch-map";
 
@@ -22,6 +24,15 @@ interface Props {
   branches: BranchView[];
   selected: string | null;
   onSelect: (branchNo: string | null) => void;
+  /**
+   * The customer's location, when the locator has resolved one.
+   *
+   * Its presence switches the map into "delivery" mode: a coverage ring is drawn
+   * around it and the pins re-encode to say which branches fall inside. Absent —
+   * the ordinary directory view — nothing changes and the pins keep meaning
+   * scooter availability.
+   */
+  coverageCenter?: LatLng | null;
   className?: string;
 }
 
@@ -92,7 +103,35 @@ function BranchInfoCard({ branch, onClose }: { branch: BranchView; onClose: () =
   );
 }
 
-export function BranchMapSurface({ branches, selected, onSelect, className }: Props) {
+export function BranchMapSurface({
+  branches,
+  selected,
+  onSelect,
+  coverageCenter,
+  className,
+}: Props) {
+  /**
+   * Inside coverage, per branch.
+   *
+   * Measured with the same Haversine the locator's distances come from, so a pin
+   * can never be green while the row for the same branch warns that it is over
+   * 10 km. Null when there is no origin, which is how both renderers know to fall
+   * back to the scooter encoding.
+   */
+  const insideCoverage = useMemo(() => {
+    if (!coverageCenter) return null;
+    const map = new Map<string, boolean>();
+    for (const branch of branches) {
+      if (!branch.hasCoords) continue;
+      const metres = haversineMetres(coverageCenter, {
+        lat: branch.latitude as number,
+        lng: branch.longitude as number,
+      });
+      map.set(branch.branch_no, isWithinCoverage(metres));
+    }
+    return map;
+  }, [branches, coverageCenter]);
+
   const points: MapPoint<BranchView>[] = useMemo(
     () =>
       branches
@@ -100,12 +139,31 @@ export function BranchMapSurface({ branches, selected, onSelect, className }: Pr
         .map((branch) => ({
           id: branch.branch_no,
           position: { lat: branch.latitude as number, lng: branch.longitude as number },
-          // Scooter availability is the one attribute agents scan the map for,
-          // so it is what the pin colour encodes.
-          tone: branch.scooter ? ("positive" as const) : ("primary" as const),
+          // In delivery mode the pin answers "can this branch serve the order":
+          // green inside the ring, amber outside. Out-of-coverage branches are
+          // recoloured, never removed — an agent needs to see that the nearest
+          // option is 14 km away, not be shown an empty map.
+          //
+          // Otherwise scooter availability, which is the one attribute agents
+          // scan the ordinary directory map for.
+          tone: insideCoverage
+            ? insideCoverage.get(branch.branch_no)
+              ? ("positive" as const)
+              : ("attention" as const)
+            : branch.scooter
+              ? ("positive" as const)
+              : ("primary" as const),
           data: branch,
         })),
-    [branches],
+    [branches, insideCoverage],
+  );
+
+  const coverage: MapCoverage | null = useMemo(
+    () =>
+      coverageCenter
+        ? { center: coverageCenter, radiusMetres: COVERAGE_RADIUS_METRES, tone: "positive" }
+        : null,
+    [coverageCenter],
   );
 
   const handleSelect = useCallback(
@@ -119,16 +177,26 @@ export function BranchMapSurface({ branches, selected, onSelect, className }: Pr
     [onSelect],
   );
 
+  const toneFor = useCallback(
+    (branch: BranchView) => {
+      if (!insideCoverage) return null;
+      return insideCoverage.get(branch.branch_no) ? ("positive" as const) : ("attention" as const);
+    },
+    [insideCoverage],
+  );
+
   const renderFallback = useCallback(
     () => (
       <BranchMap
         branches={branches}
         selected={selected}
         onSelect={onSelect}
+        coverage={coverage}
+        toneFor={toneFor}
         className="h-full w-full"
       />
     ),
-    [branches, selected, onSelect],
+    [branches, selected, onSelect, coverage, toneFor],
   );
 
   return (
@@ -138,6 +206,7 @@ export function BranchMapSurface({ branches, selected, onSelect, className }: Pr
       onSelect={handleSelect}
       renderInfo={renderInfo}
       renderFallback={renderFallback}
+      coverage={coverage}
       className={className}
       emptyMessage="No branches with coordinates match the current filters"
     />

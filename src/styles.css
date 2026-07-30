@@ -624,6 +624,28 @@ html.theme-vt * {
   }
 }
 
+/*
+ * The accompanying pulse: two beats of the inner ring's intensity while the glow
+ * is up. Animated on `box-shadow` spread rather than on `transform`, so nothing
+ * moves — the card is absolutely positioned by the virtualizer inside a
+ * scrolling container that is smooth-scrolling at the same moment, and a scaling
+ * card would fight both. The result reads as the card breathing once, which is
+ * enough to catch an eye that was looking at the locator row when it was clicked.
+ */
+@keyframes branch-card-pulse {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 0 2px color-mix(in oklab, var(--color-primary) 65%, transparent),
+      inset 0 0 24px 2px color-mix(in oklab, var(--color-primary) 22%, transparent);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 3px color-mix(in oklab, var(--color-primary) 85%, transparent),
+      inset 0 0 34px 6px color-mix(in oklab, var(--color-primary) 34%, transparent);
+  }
+}
+
 /* Reduced motion still needs the answer to "which card", so the highlight stays
  * and only the movement goes. */
 @keyframes branch-card-flash-still {
@@ -641,12 +663,20 @@ html.theme-vt * {
   box-shadow:
     inset 0 0 0 2px color-mix(in oklab, var(--color-primary) 65%, transparent),
     inset 0 0 24px 2px color-mix(in oklab, var(--color-primary) 22%, transparent);
-  animation: branch-card-flash 1500ms cubic-bezier(0.2, 0, 0, 1) forwards;
+  /* Two animations on one element: the envelope (fade in, hold, fade out) and
+   * the pulse inside it. Keeping them separate means the pulse's period is
+   * independent of the glow's total length — retiming one does not silently
+   * retime the other. */
+  animation:
+    branch-card-flash 1500ms cubic-bezier(0.2, 0, 0, 1) forwards,
+    branch-card-pulse 700ms ease-in-out 2;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .branch-card-flash {
-    animation-name: branch-card-flash-still;
+    /* Highlight without motion: the card still says "here I am", it just does
+     * not throb about it. */
+    animation: branch-card-flash-still 1200ms linear forwards;
   }
 }
 

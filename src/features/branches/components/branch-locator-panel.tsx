@@ -1,22 +1,34 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  AlertTriangle,
   Building2,
+  CheckCircle2,
   Crosshair,
   Info,
+  Landmark,
   Loader2,
   MapPin,
   Navigation,
   Search,
   Signpost,
+  Star,
   Store,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { describeDistance, formatDistance } from "@/lib/geo";
 import { cn } from "@/lib/utils";
+import { COVERAGE_RADIUS_METRES } from "../delivery-eta";
 import { REFERENCE_LABEL } from "../normalize";
 import type { LocationEntry, LocationKind } from "../location-index";
-import type { LocatorResult, ResolvedOrigin } from "../locator";
+import { branchDirectionsUrl, type LocatorResult, type ResolvedOrigin } from "../locator";
 
 /**
  * Locator mode, in the space the search bar occupies.
@@ -35,14 +47,16 @@ import type { LocatorResult, ResolvedOrigin } from "../locator";
 const KIND_ICON: Record<LocationKind, typeof MapPin> = {
   city: Building2,
   district: MapPin,
-  area: Signpost,
+  street: Signpost,
+  landmark: Landmark,
   branch: Store,
 };
 
 const KIND_LABEL: Record<LocationKind, string> = {
   city: "City",
   district: "District",
-  area: "Area",
+  street: "Street",
+  landmark: "Landmark",
   branch: "Branch",
 };
 
@@ -60,8 +74,15 @@ const KIND_LABEL: Record<LocationKind, string> = {
  */
 const RESULTS_MAX_HEIGHT = 5 * 76;
 
+/** Sentinel for "no city scope", because a Radix Select item cannot hold "". */
+const ANY_CITY = "__any__";
+
 interface Props {
   query: string;
+  /** The city scope, as written in the directory. Empty means anywhere. */
+  city: string;
+  /** Cities that have at least one branch, for the dropdown. */
+  cities: LocationEntry[];
   origin: ResolvedOrigin | null;
   results: LocatorResult[];
   /** Places sharing the typed name across several cities. */
@@ -73,6 +94,7 @@ interface Props {
   /** The branch currently highlighted in the directory, if it is one of ours. */
   selected: string | null;
   onQueryChange: (value: string) => void;
+  onCityChange: (value: string) => void;
   onSearch: (value: string) => void;
   onChooseLocation: (entry: LocationEntry) => void;
   onSelect: (branchNo: string) => void;
@@ -81,6 +103,8 @@ interface Props {
 
 export function BranchLocatorPanel({
   query,
+  city,
+  cities,
   origin,
   results,
   choices,
@@ -89,6 +113,7 @@ export function BranchLocatorPanel({
   searching,
   selected,
   onQueryChange,
+  onCityChange,
   onSearch,
   onChooseLocation,
   onSelect,
@@ -139,7 +164,9 @@ export function BranchLocatorPanel({
           setSuggestOpen(false);
           onSearch(query);
         }}
-        className="flex items-center gap-2"
+        // Wraps on a phone so the city select and the submit button each get a
+        // usable width instead of three controls squeezed onto one 360px line.
+        className="flex flex-wrap items-center gap-2"
       >
         {/* The suggestion list is a sibling of the input inside this wrapper, so
             focus moving from the box into a suggestion never leaves the wrapper
@@ -204,14 +231,56 @@ export function BranchLocatorPanel({
             </ul>
           )}
         </div>
-        <Button type="submit" className="h-11 shrink-0 gap-1.5 px-4" disabled={searching}>
-          {searching ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Search className="h-4 w-4" />
-          )}
-          <span className="hidden sm:inline">Find nearest</span>
-        </Button>
+        {/*
+          The optional city scope.
+
+          Optional in the strong sense: "Any city" is the default and every
+          feature works without touching it. It exists for one specific failure —
+          "الروضة" is a district in Riyadh, Jeddah and Dammam, and "اليرموك" in
+          Riyadh, Tabuk and Hail — where the panel would otherwise have to stop
+          and ask. Setting it re-runs the search immediately rather than waiting
+          for another press of Find, because an agent reaches for it *because* the
+          answer on screen is for the wrong city.
+        */}
+        <div className="flex min-w-0 flex-1 items-center gap-2 sm:flex-none">
+          <Select
+            value={city || ANY_CITY}
+            onValueChange={(value) => onCityChange(value === ANY_CITY ? "" : value)}
+          >
+            <SelectTrigger
+              aria-label="Limit the search to one city"
+              className={cn(
+                "h-11 min-w-0 flex-1 gap-1.5 border-border/70 bg-card text-sm shadow-sm sm:w-40 sm:flex-none",
+                city && "border-primary/50 font-medium text-foreground",
+              )}
+            >
+              <Building2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+              <SelectValue placeholder="Any city" />
+            </SelectTrigger>
+            <SelectContent className="max-h-72">
+              <SelectItem value={ANY_CITY}>Any city</SelectItem>
+              {cities.map((entry) => (
+                <SelectItem key={entry.id} value={entry.name}>
+                  <span dir="auto">{entry.english ?? entry.name}</span>
+                  {entry.english && entry.english !== entry.name && (
+                    <span className="ml-1.5 text-xs text-muted-foreground" dir="auto">
+                      {entry.name}
+                    </span>
+                  )}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Button type="submit" className="h-11 shrink-0 gap-1.5 px-4" disabled={searching}>
+            {searching ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Search className="h-4 w-4" />
+            )}
+            <span className="hidden sm:inline">Find nearest</span>
+          </Button>
+        </div>
       </form>
 
       {/* What the distances were measured from. An agent quoting a number to a
@@ -266,36 +335,297 @@ export function BranchLocatorPanel({
         </p>
       )}
 
-      {results.length > 0 && (
+      {results.length > 0 && origin && (
         <>
-          <div className="mt-2 flex items-center gap-1.5 px-0.5 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-            <Info className="h-3 w-3 shrink-0" aria-hidden />
-            {/* Stated once, above the list, rather than repeated on every row.
-                The "≈" on each estimate carries it after the first read. */}
-            Nearest {results.length} · soonest first · estimated under normal conditions, never
-            exact
-          </div>
+          {/* The recommendation. Same ranking as the list — it *is* the list's
+              first row — surfaced separately because an agent mid-call wants one
+              answer, and scanning ten rows to work out that the top one already
+              was the answer is the work this saves. */}
+          <RecommendedBranch
+            result={results[0]}
+            origin={origin}
+            active={selected === results[0].item.branch_no}
+            onSelect={onSelect}
+          />
 
-          {/* Fixed height with its own scrollbar. The list is a finder, and a
-              finder that grows until it pushes the branch cards off the screen
-              defeats the click it exists to invite. */}
-          <ol
-            className="divide-y divide-border/40 overflow-y-auto overscroll-contain rounded-lg border border-border/50 bg-card [scrollbar-width:thin]"
-            style={{ maxHeight: RESULTS_MAX_HEIGHT }}
-          >
-            {results.map((result, index) => (
-              <LocatorRow
-                key={result.item.branch_no}
-                result={result}
-                rank={index + 1}
-                active={selected === result.item.branch_no}
-                onSelect={onSelect}
-              />
-            ))}
-          </ol>
+          {results.length > 1 && (
+            <>
+              <div className="mt-2.5 flex items-center gap-1.5 px-0.5 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                <Info className="h-3 w-3 shrink-0" aria-hidden />
+                {/* Stated once, above the list, rather than repeated on every
+                    row. The "≈" on each estimate carries it after the first
+                    read. */}
+                {results.length - 1} more nearby · in-coverage first, then nearest · estimates are
+                approximate
+              </div>
+
+              {/* Fixed height with its own scrollbar. The list is a finder, and a
+                  finder that grows until it pushes the branch cards off the
+                  screen defeats the click it exists to invite.
+
+                  No `overscroll-contain`: it stopped a wheel that reached the end
+                  of this list from continuing to the directory beneath, which is
+                  the "page scrolling feels blocked" complaint. Chaining is the
+                  natural behaviour and the default. */}
+              <ol
+                className="divide-y divide-border/40 overflow-y-auto rounded-lg border border-border/50 bg-card [scrollbar-width:thin]"
+                style={{ maxHeight: RESULTS_MAX_HEIGHT }}
+              >
+                {results.slice(1).map((result, index) => (
+                  <LocatorRow
+                    key={result.item.branch_no}
+                    result={result}
+                    origin={origin}
+                    rank={index + 2}
+                    active={selected === result.item.branch_no}
+                    onSelect={onSelect}
+                  />
+                ))}
+              </ol>
+            </>
+          )}
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * The delivery-coverage verdict, as a badge.
+ *
+ * Two states and they are deliberately not symmetrical. Inside coverage is
+ * reassurance and gets the quiet treatment; outside is an operational problem
+ * the agent has to act on — the order needs an exception, a different branch or a
+ * conversation with the customer — so it takes the attention colour, an icon and
+ * the whole width it needs. The rule is one number, `COVERAGE_RADIUS_METRES`,
+ * shared with the ranker and the map.
+ */
+function CoverageBadge({ inside, className }: { inside: boolean; className?: string }) {
+  const km = Math.round(COVERAGE_RADIUS_METRES / 1000);
+  return inside ? (
+    <span
+      title={`Inside the ${km} km normal delivery coverage`}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full bg-[var(--positive)]/12 px-1.5 py-px text-[9.5px] font-semibold text-[var(--positive)]",
+        className,
+      )}
+    >
+      <CheckCircle2 className="h-2.5 w-2.5 shrink-0" aria-hidden />
+      Delivery available
+    </span>
+  ) : (
+    <span
+      title={`Beyond the ${km} km normal delivery coverage — this order needs an exception`}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full bg-[var(--attention)]/15 px-1.5 py-px text-[9.5px] font-bold uppercase tracking-wide text-[var(--attention)] ring-1 ring-inset ring-[var(--attention)]/30",
+        className,
+      )}
+    >
+      <AlertTriangle className="h-2.5 w-2.5 shrink-0" aria-hidden />
+      Over {km} km
+    </span>
+  );
+}
+
+/** The Directions control, shared by the recommendation card and the rows. */
+function DirectionsButton({
+  result,
+  origin,
+  compact,
+}: {
+  result: LocatorResult;
+  origin: ResolvedOrigin;
+  compact?: boolean;
+}) {
+  const href = branchDirectionsUrl(origin.point, result.item);
+  const label = `Directions from ${origin.label} to ${result.item.branch_no}`;
+
+  if (!href) {
+    return (
+      <span
+        aria-hidden
+        title="No coordinates on file for this branch"
+        className={cn(
+          "inline-flex shrink-0 items-center gap-1 rounded-md px-2 text-muted-foreground/25",
+          compact ? "h-7" : "h-8",
+        )}
+      >
+        <Navigation className="h-3.5 w-3.5" />
+        {!compact && <span className="text-xs">Directions</span>}
+      </span>
+    );
+  }
+
+  return (
+    <Button
+      asChild
+      size="sm"
+      variant={compact ? "ghost" : "outline"}
+      className={cn("shrink-0 gap-1 px-2 text-xs", compact ? "h-7" : "h-8")}
+      // The row underneath is a button too; without this, asking for directions
+      // would also select the branch and scroll the page away.
+      onClick={(event) => event.stopPropagation()}
+    >
+      <a href={href} target="_blank" rel="noopener noreferrer" title={label} aria-label={label}>
+        <Navigation className="h-3.5 w-3.5" aria-hidden />
+        {compact ? <span className="sr-only">Directions</span> : "Directions"}
+      </a>
+    </Button>
+  );
+}
+
+/**
+ * Distance, then the estimate under it.
+ *
+ * The size relationship is the point: distance is the number an agent quotes,
+ * checks against coverage and compares between branches, so it is the largest
+ * thing in the block and the estimate is explicitly subordinate to it. When the
+ * branch is outside coverage the estimate is demoted further still — a delivery
+ * that needs an exception has no meaningful ETA yet, and printing one at full
+ * strength beside a warning invites reading past the warning.
+ */
+function DistanceBlock({ result, size }: { result: LocatorResult; size: "row" | "hero" }) {
+  return (
+    <div className="text-right">
+      <div
+        className={cn(
+          "whitespace-nowrap font-bold leading-none tabular-nums text-foreground",
+          size === "hero" ? "text-2xl" : "text-[17px]",
+        )}
+      >
+        {formatDistance(result.distance.metres)}
+      </div>
+      <div
+        className={cn(
+          "mt-1 whitespace-nowrap text-[9px] font-medium uppercase tracking-wide",
+          result.insideCoverage ? "text-muted-foreground/80" : "text-muted-foreground/50",
+        )}
+      >
+        Estimated delivery
+      </div>
+      <div
+        title={result.eta.detail}
+        className={cn(
+          "whitespace-nowrap text-[11.5px] font-semibold leading-4 tabular-nums",
+          result.insideCoverage ? "text-foreground/80" : "text-muted-foreground/60",
+        )}
+      >
+        {result.eta.label}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The recommended branch.
+ *
+ * Not a second ranking — deriving a "best" branch by different rules from the
+ * ones that ordered the list is how a panel ends up recommending its own third
+ * row. This is `results[0]`, presented larger.
+ */
+function RecommendedBranch({
+  result,
+  origin,
+  active,
+  onSelect,
+}: {
+  result: LocatorResult;
+  origin: ResolvedOrigin;
+  active: boolean;
+  onSelect: (branchNo: string) => void;
+}) {
+  const branch = result.item;
+  const cityPrimary = branch.cityEnglish ?? branch.city;
+  const citySecondary = branch.cityEnglish ? branch.city : null;
+  const referenceLabel = branch.reference ? REFERENCE_LABEL[branch.reference] : null;
+
+  return (
+    <div
+      className={cn(
+        "mt-2 overflow-hidden rounded-xl border bg-card transition-[border-color,box-shadow] duration-200",
+        active
+          ? "border-primary/60 ring-1 ring-primary/30"
+          : "border-primary/30 hover:border-primary/50",
+      )}
+    >
+      <div className="flex items-center gap-1.5 border-b border-primary/20 bg-primary/[0.07] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-primary dark:bg-primary/[0.12]">
+        <Star className="h-3 w-3 shrink-0 fill-current" aria-hidden />
+        Recommended branch
+      </div>
+
+      <div className="flex items-stretch">
+        <button
+          type="button"
+          onClick={() => onSelect(branch.branch_no)}
+          aria-current={active ? "true" : undefined}
+          aria-label={[
+            `Recommended: ${branch.branch_no} in ${cityPrimary}`,
+            branch.district,
+            branch.street,
+            describeDistance(result.distance),
+            `estimated delivery ${spokenDelivery(result)}`,
+            result.insideCoverage ? "inside delivery coverage" : "outside normal delivery coverage",
+            "Show this branch below.",
+          ]
+            .filter(Boolean)
+            .join(". ")}
+          className={cn(
+            "flex min-w-0 flex-1 items-start gap-3 px-3 py-2.5 text-left",
+            "transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
+            !active && "hover:bg-accent/40",
+          )}
+        >
+          <span className="min-w-0 flex-1">
+            <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <span className="font-mono text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {branch.branch_no}
+              </span>
+              <CoverageBadge inside={result.insideCoverage} />
+              {referenceLabel && (
+                <span className="rounded-full bg-[var(--attention)]/12 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-[var(--attention)]">
+                  {referenceLabel}
+                </span>
+              )}
+            </span>
+
+            <span
+              className="mt-0.5 block truncate text-base font-semibold leading-6 tracking-tight text-foreground"
+              dir="auto"
+            >
+              {cityPrimary}
+              {citySecondary && (
+                <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">
+                  {citySecondary}
+                </span>
+              )}
+            </span>
+
+            {branch.district && (
+              <span className="flex min-w-0 items-center gap-1 text-[11.5px] leading-4 text-foreground/75">
+                <MapPin className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
+                <span className="truncate" dir="auto">
+                  {branch.district}
+                </span>
+              </span>
+            )}
+            {branch.street && (
+              <span className="flex min-w-0 items-center gap-1 text-[11.5px] leading-4 text-muted-foreground">
+                <Signpost className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
+                <span className="truncate" dir="auto">
+                  {branch.street}
+                </span>
+              </span>
+            )}
+          </span>
+
+          <DistanceBlock result={result} size="hero" />
+        </button>
+      </div>
+
+      <div className="flex items-center justify-end border-t border-border/40 px-2.5 py-1.5">
+        <DirectionsButton result={result} origin={origin} />
+      </div>
+    </div>
   );
 }
 
@@ -354,29 +684,34 @@ function spokenDelivery(result: LocatorResult): string {
 /**
  * One result.
  *
- * Six things and no more: the code, the city, the neighbourhood, the street, how
- * far, and when it would arrive. The phone number and the scooter badge that used
- * to sit here are on the card this row scrolls to, and both were answering a
- * question the agent has not asked yet — *which* branch comes first, and this row
- * has to answer that in one glance.
+ * Eight things and no more: the code, the city, the neighbourhood, the street, how
+ * far, when it would arrive, whether it can deliver at all, and a way to hand the
+ * route to a driver. The phone number and the scooter badge that used to sit here
+ * are on the card this row scrolls to, and both were answering a question the
+ * agent has not asked yet — *which* branch comes first, and this row has to
+ * answer that in one glance. (The scooter is not gone, it moved: it breaks ties in
+ * the ranking, so it decides the order rather than competing for the eye.)
  *
  * Laid out the way a maps result is: the identifier small above, the place name
- * large, the address narrowing beneath it, and the arrival time in its own column
- * on the right. The city is the prominent line because it is the thing that
- * disqualifies a result fastest — a Riyadh branch in a list for a Jeddah customer
- * is wrong no matter how near it claims to be.
+ * large, the address narrowing beneath it, and the metrics in their own column on
+ * the right. Distance is the biggest thing in the row because it is the number an
+ * agent quotes and the one the coverage rule is about; the city is the prominent
+ * *line* because it is what disqualifies a result fastest — a Riyadh branch in a
+ * list for a Jeddah customer is wrong no matter how near it claims to be.
  *
- * The row is a button and Navigate is a sibling link, never a link nested inside
+ * The row is a button and Directions is a sibling link, never a link nested inside
  * the button — nesting them produces a control that is one thing to a mouse and
  * two to a keyboard, and screen readers disagree about which wins.
  */
 function LocatorRow({
   result,
+  origin,
   rank,
   active,
   onSelect,
 }: {
   result: LocatorResult;
+  origin: ResolvedOrigin;
   rank: number;
   active: boolean;
   onSelect: (branchNo: string) => void;
@@ -426,6 +761,7 @@ function LocatorRow({
             branch.street,
             describeDistance(result.distance),
             `estimated delivery ${spokenDelivery(result)}`,
+            result.insideCoverage ? "inside delivery coverage" : "outside normal delivery coverage",
             "Show this branch below.",
           ]
             .filter(Boolean)
@@ -451,10 +787,16 @@ function LocatorRow({
           <span className="min-w-0 flex-1">
             {/* The code, as a maps result labels its category: present, findable,
                 and not competing with the place name underneath it. */}
-            <span className="flex min-w-0 items-center gap-1.5">
+            <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
               <span className="truncate font-mono text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 {branch.branch_no}
               </span>
+              {/* Only the warning half is shown per row. Ten green "delivery
+                  available" pills is ten pills nobody reads; one amber one in a
+                  list of otherwise unbadged rows is impossible to miss, which is
+                  the entire job. The reassuring case is stated on the
+                  recommendation card, where there is exactly one of it. */}
+              {!result.insideCoverage && <CoverageBadge inside={false} />}
               {referenceLabel && (
                 // Kept where the phone and the scooter badge were dropped: this
                 // is not branch detail, it is a warning that the row is not a
@@ -505,48 +847,14 @@ function LocatorRow({
             )}
           </span>
 
-          {/* Arrival, then distance. In that order and at those sizes because the
-              question is "how soon", and the kilometres are the working rather
-              than the answer. */}
-          <span className="shrink-0 pl-1 text-right" title={result.eta.detail}>
-            <span className="block text-[9px] font-medium uppercase tracking-wide text-muted-foreground/80">
-              Est. delivery
-            </span>
-            <span
-              className={cn(
-                "block whitespace-nowrap text-[13px] font-semibold leading-4 tabular-nums transition-colors duration-150",
-                active ? "text-primary" : "text-foreground",
-              )}
-            >
-              {result.eta.label}
-            </span>
-            <span className="mt-px block whitespace-nowrap text-[10px] leading-4 tabular-nums text-muted-foreground">
-              {formatDistance(result.distance.metres)} away
-            </span>
+          {/* Distance first and largest, the estimate subordinate to it. */}
+          <span className="shrink-0 pl-1">
+            <DistanceBlock result={result} size="row" />
           </span>
         </button>
 
         <span className="flex shrink-0 items-center pr-1.5">
-          {branch.navLink ? (
-            <a
-              href={branch.navLink}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="Open directions in Google Maps"
-              aria-label={`Directions to ${branch.branch_no} in Google Maps`}
-              className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-            >
-              <Navigation className="h-3.5 w-3.5" aria-hidden />
-            </a>
-          ) : (
-            <span
-              aria-hidden
-              title="No coordinates on file"
-              className="grid h-7 w-7 place-items-center text-muted-foreground/25"
-            >
-              <Navigation className="h-3.5 w-3.5" />
-            </span>
-          )}
+          <DirectionsButton result={result} origin={origin} compact />
         </span>
       </div>
     </li>

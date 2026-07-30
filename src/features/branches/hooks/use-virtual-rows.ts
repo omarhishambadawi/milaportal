@@ -134,12 +134,29 @@ export function useVirtualRows({
     return out;
   }, [rowCount, scrollTop, viewport, pitch, overscan, expandedRow, extra, rowStart]);
 
+  /**
+   * Scroll a row into view, centred when there is room for it.
+   *
+   * Top-aligning is what this used to do, and it is the reason a jump could
+   * "stop halfway": the row lands flush against the top edge of the scroller,
+   * so a card taller than the remaining viewport — which is what happens once
+   * the locator panel is open above it and has taken 300px of the column — is
+   * clipped at the bottom with no indication that there is more of it.
+   *
+   * Centring reserves the slack on both sides, so the whole card is visible
+   * whenever the viewport can hold it at all, and the destination reads as
+   * deliberate rather than as a scroll that ran out. When the viewport genuinely
+   * cannot fit one card, top alignment is the best available and is what the
+   * `max(0, …)` clamp falls back to.
+   */
   const scrollToIndex = useCallback(
     (index: number) => {
       if (!scroller || itemsPerRow <= 0) return;
-      scroller.scrollTo({ top: rowStart(Math.floor(index / itemsPerRow)), behavior: "smooth" });
+      const start = rowStart(Math.floor(index / itemsPerRow));
+      const slack = Math.max(0, scroller.clientHeight - rowHeight);
+      scroller.scrollTo({ top: Math.max(0, start - slack / 2), behavior: "smooth" });
     },
-    [scroller, itemsPerRow, rowStart],
+    [scroller, itemsPerRow, rowStart, rowHeight],
   );
 
   return { scrollRef: setScroller, totalHeight, rows, scrollToIndex };

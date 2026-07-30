@@ -123,9 +123,43 @@ describe("editDistance", () => {
 });
 
 describe("buildLocationIndex", () => {
-  it("indexes cities, districts, areas and the branches themselves", () => {
+  it("indexes cities, districts, streets and the branches themselves", () => {
+    // No landmark in this fixture: its only market address ("جدة/حراج الصواريخ")
+    // has two segments, so `extractDistrict`'s positional rule claims it as the
+    // district. Landmark classification is covered on its own below.
     const kinds = new Set(INDEX.entries.map((entry) => entry.kind));
-    expect(kinds).toEqual(new Set(["city", "district", "area", "branch"]));
+    expect(kinds).toEqual(new Set(["city", "district", "street", "branch"]));
+  });
+
+  it("tells a street from a landmark by the classifier the sheet wrote", () => {
+    // Both are third segments, so both used to be one undifferentiated "area"
+    // kind — which cannot express the city > district > street > landmark
+    // priority. The distinction is the classifier: "ش"/"طريق"/"street" name a
+    // street, and a market does not.
+    const mixed = buildLocationIndex(
+      decorate([
+        branch({
+          branch_no: "S1",
+          city: "الرياض",
+          address: "الرياض/ حي الحزم /طريق الملك فهد",
+          latitude: 24.7,
+          longitude: 46.68,
+        }),
+        branch({
+          branch_no: "S2",
+          city: "الرياض",
+          address: "الرياض/ حي الحزم /حراج الصواريخ",
+          latitude: 24.71,
+          longitude: 46.69,
+        }),
+      ]),
+    );
+    const kindOf = (name: string) =>
+      searchLocations(mixed, name, 8).find((match) => match.entry.name.includes(name.slice(0, 4)))
+        ?.entry.kind;
+
+    expect(kindOf("الملك فهد")).toBe("street");
+    expect(kindOf("حراج الصواريخ")).toBe("landmark");
   });
 
   it("resolves a branch by its code, at that branch's exact position", () => {
@@ -190,12 +224,13 @@ describe("buildLocationIndex", () => {
     expect(find("jiddah")[0]?.name).toBe("جدة");
   });
 
-  it("indexes a third address segment as an area", () => {
-    // "الرياض/ حي الحزم /ش علي النقيب" — the street is neither the city nor the
-    // district, so it lands as an area. The classifier "ش" is stripped, which is
-    // why the query below has to work without it.
+  it("indexes a third address segment as a street when it names itself one", () => {
+    // "الرياض/ حي الحزم /ش علي النقيب" — neither the city nor the district, and
+    // the "ش" classifier makes it a street rather than a landmark. That
+    // classifier is stripped for *matching*, which is why the query below has to
+    // work without it — the kind is decided on the raw segment before folding.
     const [street] = find("علي النقيب");
-    expect(street.kind).toBe("area");
+    expect(street.kind).toBe("street");
     expect(street.city).toBe("الرياض");
   });
 
@@ -284,6 +319,42 @@ describe("resolvePlace", () => {
     // every typo into a dialog.
     const resolution = resolvePlace(INDEX, "زقاق مجهول تماما");
     expect(resolution.status).toBe("none");
+  });
+
+  it("stops asking once a city has been chosen", () => {
+    // The whole purpose of the city dropdown: the agent has already answered
+    // "which الروضة", so prompting again would be asking them to repeat
+    // themselves.
+    const resolution = resolvePlace(INDEX, "الروضة", { city: "جدة" });
+    expect(resolution.status).toBe("found");
+    if (resolution.status !== "found") return;
+    expect(resolution.entry.city).toBe("جدة");
+  });
+
+  it("still answers when the chosen city has no match for the name", () => {
+    // A scope is a preference, not a filter. An agent who has Jeddah selected and
+    // types a Riyadh-only district gets the Riyadh one — labelled with its city —
+    // rather than being told nothing matches a name that was correct all along.
+    const resolution = resolvePlace(INDEX, "الحزم", { city: "جدة" });
+    expect(resolution.status).toBe("found");
+    if (resolution.status !== "found") return;
+    expect(resolution.entry.city).toBe("الرياض");
+  });
+});
+
+describe("searchLocations with a city scope", () => {
+  it("floats the chosen city's entries to the top", () => {
+    const scoped = searchLocations(INDEX, "الروضة", 8, { city: "جدة" });
+    expect(scoped[0].entry.city).toBe("جدة");
+    expect(scoped[0].inScope).toBe(true);
+    // The other city is demoted, not dropped.
+    expect(scoped.some((match) => match.entry.city === "الرياض" && !match.inScope)).toBe(true);
+  });
+
+  it("reports everything in scope when no city is set", () => {
+    const open = searchLocations(INDEX, "الروضة", 8);
+    expect(open.length).toBeGreaterThan(1);
+    expect(open.every((match) => match.inScope)).toBe(true);
   });
 });
 

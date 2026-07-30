@@ -1,7 +1,7 @@
 import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useGoogleMaps } from "@/lib/maps/use-google-maps";
-import type { MapPoint } from "@/lib/maps/markers";
+import type { MapCoverage, MapPoint } from "@/lib/maps/markers";
 import { cn } from "@/lib/utils";
 import { GoogleMap } from "./google-map";
 
@@ -32,6 +32,8 @@ interface Props<T> {
   renderInfo?: (point: MapPoint<T>) => React.ReactNode;
   /** Rendered whenever Google Maps is unavailable. */
   renderFallback: () => React.ReactNode;
+  /** An area to shade — the delivery coverage ring, when there is an origin. */
+  coverage?: MapCoverage | null;
   className?: string;
   focusZoom?: number;
   emptyMessage?: string;
@@ -43,6 +45,7 @@ export function MapSurface<T>({
   onSelect,
   renderInfo,
   renderFallback,
+  coverage,
   className,
   focusZoom,
   emptyMessage,
@@ -56,6 +59,7 @@ export function MapSurface<T>({
         selectedId={selectedId}
         onSelect={onSelect}
         renderInfo={renderInfo}
+        coverage={coverage}
         className={className}
         focusZoom={focusZoom}
         emptyMessage={emptyMessage}

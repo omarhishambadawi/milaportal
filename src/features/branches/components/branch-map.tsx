@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bike, Copy, Crosshair, ExternalLink, Minus, Navigation, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { KSA_OUTLINE_PATH, MAP_HEIGHT, MAP_WIDTH, projectPoint } from "@/lib/ksa-geo";
+import type { MapCoverage } from "@/lib/maps/markers";
 import { cn } from "@/lib/utils";
 import { copyText } from "../clipboard";
 import type { BranchView } from "../types";
@@ -44,8 +45,22 @@ interface Props {
   branches: BranchView[];
   selected: string | null;
   onSelect: (branchNo: string | null) => void;
+  /** The delivery coverage ring, when the locator has resolved an origin. */
+  coverage?: MapCoverage | null;
+  /**
+   * Marker colour, when the caller wants to encode something other than scooter
+   * availability. Returning null falls back to the default.
+   */
+  toneFor?: (branch: BranchView) => "primary" | "positive" | "attention" | null;
   className?: string;
 }
+
+/** Marker/ring colours, as theme tokens. */
+const TONE_COLOUR: Record<"primary" | "positive" | "attention", string> = {
+  primary: "var(--primary)",
+  positive: "var(--positive)",
+  attention: "var(--attention)",
+};
 
 interface Placed {
   branch: BranchView;
@@ -54,7 +69,7 @@ interface Placed {
   py: number;
 }
 
-export function BranchMap({ branches, selected, onSelect, className }: Props) {
+export function BranchMap({ branches, selected, onSelect, coverage, toneFor, className }: Props) {
   const frameRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ width: MAP_WIDTH, height: MAP_HEIGHT });
   const [view, setView] = useState<Viewport>({ x: 0, y: 0, k: 1 });
@@ -113,6 +128,32 @@ export function BranchMap({ branches, selected, onSelect, className }: Props) {
         }),
     [branches],
   );
+
+  /**
+   * The coverage ring in screen coordinates.
+   *
+   * Recomputed with the camera, because `toScreen` already folds in the pan and
+   * zoom — so the ring stays glued to the ground as the map moves instead of
+   * being a fixed-size decal on the viewport.
+   */
+  const coverageRing = useMemo(() => {
+    if (!coverage) return null;
+    const [cx, cy] = projectPoint(coverage.center.lng, coverage.center.lat);
+    // One radius due north of the centre. Latitude degrees are a constant
+    // 111.32 km everywhere, which is what makes this the safe axis to measure on.
+    const northLat = coverage.center.lat + coverage.radiusMetres / 111_320;
+    const [, northY] = projectPoint(coverage.center.lng, northLat);
+    const centre = toScreen(cx, cy);
+    const edge = toScreen(cx, northY);
+    const r = Math.abs(centre.y - edge.y);
+    if (!Number.isFinite(r) || r <= 0) return null;
+    return {
+      x: centre.x,
+      y: centre.y,
+      r,
+      colour: TONE_COLOUR[coverage.tone ?? "positive"],
+    };
+  }, [coverage, toScreen]);
 
   /* ---------------------------------------------------------------------- */
   /* Camera                                                                  */
@@ -341,6 +382,37 @@ export function BranchMap({ branches, selected, onSelect, className }: Props) {
             />
           </g>
 
+          {/*
+            The delivery coverage ring, in screen space.
+
+            Drawn between the land and the markers so it reads as ground shading
+            rather than as something floating over the pins, and `pointerEvents:
+            none` so a 10 km disc does not swallow the clicks of every marker
+            inside it.
+
+            The radius is measured rather than converted: projecting the centre
+            and a second point one radius due north gives the pixel length of that
+            distance under this projection and the current camera, which is
+            exactly what the circle needs. A metres-per-pixel constant would drift
+            with latitude, since the projection is equirectangular.
+          */}
+          {coverageRing && (
+            <g style={{ pointerEvents: "none" }}>
+              <circle
+                cx={coverageRing.x}
+                cy={coverageRing.y}
+                r={coverageRing.r}
+                fill={coverageRing.colour}
+                fillOpacity={0.07}
+                stroke={coverageRing.colour}
+                strokeOpacity={0.85}
+                strokeWidth={1.5}
+                strokeDasharray="6 4"
+              />
+              <circle cx={coverageRing.x} cy={coverageRing.y} r={3} fill={coverageRing.colour} />
+            </g>
+          )}
+
           {/* Markers, in screen space so they stay a constant size. */}
           {clusters.map((cluster) => {
             const count = cluster.members.length;
@@ -350,7 +422,15 @@ export function BranchMap({ branches, selected, onSelect, className }: Props) {
               const isSelected = branch.branch_no === selected;
               const isHovered = branch.branch_no === hovered;
               const radius = isSelected ? 9 : isHovered ? 7.5 : 6;
-              const colour = branch.scooter ? "var(--positive)" : "var(--primary)";
+              // The caller's encoding wins when it supplies one — in locator mode
+              // that is coverage, which matters more than scooter availability
+              // because it decides whether the branch can serve the order at all.
+              const tone = toneFor?.(branch);
+              const colour = tone
+                ? TONE_COLOUR[tone]
+                : branch.scooter
+                  ? "var(--positive)"
+                  : "var(--primary)";
               return (
                 <g
                   key={branch.branch_no}

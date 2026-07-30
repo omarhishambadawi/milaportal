@@ -1,5 +1,6 @@
 import {
   KSA_BOUNDS,
+  directionsUrl,
   formatLatLng,
   isWithin,
   parseCoordinatePair,
@@ -8,7 +9,7 @@ import {
   type LatLng,
   type Ranked,
 } from "@/lib/geo";
-import { estimateDelivery, type DeliveryEstimate } from "./delivery-eta";
+import { estimateDelivery, isWithinCoverage, type DeliveryEstimate } from "./delivery-eta";
 import {
   describeLocation,
   describeLocationSource,
@@ -16,6 +17,7 @@ import {
   resolvePlace,
   type LocationEntry,
   type LocationIndex,
+  type SearchScope,
 } from "./location-index";
 import type { BranchView } from "./types";
 
@@ -69,6 +71,14 @@ export interface OriginLocality {
 export type LocatorResult = Ranked<BranchView> & {
   /** Delivery band, computed once at ranking time rather than per render. */
   eta: DeliveryEstimate;
+  /**
+   * Inside the 10 km normal delivery coverage.
+   *
+   * The primary sort key and the row's warning badge. Computed here rather than
+   * in the panel so the order and the badge cannot disagree about the same
+   * branch.
+   */
+  insideCoverage: boolean;
   /** The customer's neighbourhood is this branch's neighbourhood. */
   sameDistrict: boolean;
   sameCity: boolean;
@@ -247,8 +257,13 @@ function localityOfEntry(entry: LocationEntry): OriginLocality {
       return { city: entry.name, district: null, street: null, precision: "city" };
     case "district":
       return { city: entry.city, district: entry.name, street: null, precision: "district" };
-    case "area":
+    case "street":
       return { city: entry.city, district: null, street: entry.name, precision: "street" };
+    // A landmark is a market, a mosque or a shopping centre. It pins a point
+    // precisely enough to measure from, but its *name* is not a street name and
+    // must not be matched against one — "حراج الصواريخ" is not an address.
+    case "landmark":
+      return { city: entry.city, district: null, street: null, precision: "street" };
     case "branch":
       return { city: entry.city, district: null, street: null, precision: "street" };
   }
@@ -273,11 +288,17 @@ function localityOfEntry(entry: LocationEntry): OriginLocality {
  * An *ambiguous* local result also stops the cascade. The place was found; the
  * only open question is which city, and asking a geocoder would replace a
  * question the agent can answer with a guess they cannot check.
+ *
+ * `scope.city`, when the agent has set the dropdown, is threaded into step 1 and
+ * appended to the step-3 query. It is what turns "الروضة" from a question into an
+ * answer, and it is optional throughout — the cascade behaves exactly as before
+ * when nothing is selected.
  */
 export async function resolveOrigin(
   text: string,
   index: LocationIndex,
   geocode?: Geocoder,
+  scope?: SearchScope,
 ): Promise<OriginResolution> {
   const trimmed = text.trim();
   if (!trimmed) return { origin: null, choices: [], error: null };
@@ -303,7 +324,7 @@ export async function resolveOrigin(
   }
 
   // Steps 1 and 2.
-  const place = resolvePlace(index, trimmed);
+  const place = resolvePlace(index, trimmed, scope);
   if (place.status === "found") {
     return { origin: originFromPlace(place.entry), choices: [], error: null };
   }
@@ -313,7 +334,12 @@ export async function resolveOrigin(
 
   // Step 3. Only now, and only if a provider was supplied.
   if (geocode) {
-    const hit = asHit(await geocode(trimmed));
+    // The city goes into the query text rather than a parameter, because that is
+    // the only place a geocoder can take it: "الروضة" alone is a name in a dozen
+    // Saudi cities, and "الروضة الرياض" is one place. Appended rather than
+    // prepended so the thing being searched for still leads the string.
+    const query = scope?.city ? `${trimmed} ${scope.city}` : trimmed;
+    const hit = asHit(await geocode(query));
     if (hit && isWithin(hit.point, KSA_BOUNDS)) {
       const named = [hit.district, hit.city].filter(Boolean).join(", ");
       return {
@@ -414,24 +440,14 @@ function sameName(a: string, b: string): boolean {
  * those are real. Swapping Haversine for Routes is a `provider` argument here
  * and nothing else anywhere.
  *
- * Two things happen on top of the distance sort:
+ * Each result carries the two things the panel cannot work out for itself — a
+ * delivery band and whether the branch is inside coverage — computed once here
+ * rather than per render, and the list is then ordered by business relevance
+ * rather than by kilometres alone. See `compareResults` for the rules.
  *
- *   - **A delivery band is attached**, computed once here rather than per render,
- *     from the distance *and* the locality the origin resolved to.
- *   - **The band decides the order**, with distance breaking equal bands.
- *
- * Ordering by the estimate rather than by raw kilometres is what "prefer a
- * branch in the same neighbourhood" actually requires, and it is the only
- * ordering the row can defend: the band is the number printed largest on it, so
- * a list sorted by anything else would visibly contradict itself. The effect is
- * bounded and always in the same direction — a same-neighbourhood branch can
- * overtake a marginally nearer one across the district boundary, because
- * crossing that boundary is precisely what the slower band is modelling. A
- * genuinely nearer branch keeps its place, since distance drives the band too.
- *
- * The generic ranker is asked for more than `limit` so locality has candidates
- * to reorder, then the list is cut. The over-fetch is bounded because a future
- * Routes provider is billed per element.
+ * The generic ranker is asked for more than `limit` so the reordering has
+ * candidates to work with, then the list is cut. The over-fetch is bounded
+ * because a future Routes provider is billed per element.
  */
 export function rankNearestBranches(
   origin: LatLng,
@@ -462,6 +478,7 @@ export function rankNearestBranches(
             sameDistrict: match.district,
             sameCity: match.city,
           }),
+          insideCoverage: isWithinCoverage(entry.distance.metres),
           sameDistrict: match.district,
           sameCity: match.city,
           sameStreet: match.street,
@@ -474,19 +491,79 @@ export function rankNearestBranches(
 }
 
 /**
- * Soonest arrival first.
+ * Width of the band inside which two branches count as the same distance.
  *
- * The open-ended top band ("60+") sorts last among equal minima, because "an
- * hour or more" is a weaker promise than "an hour at the outside". Locality
- * breaks a genuine tie ahead of distance so that two branches sharing a band
- * are offered nearest-neighbourhood-first, which is the one an agent should read
- * out even when the kilometres are a wash.
+ * 500m is inside the error of a district centroid and a straight-line
+ * approximation, so within it the closer branch is not *meaningfully* closer —
+ * which is what makes it safe to let an operational attribute decide instead.
+ */
+const TIE_BAND_METRES = 500;
+
+/**
+ * The branch most likely to actually serve this customer, first.
+ *
+ * Business relevance rather than raw geometry, in the order the rules state it:
+ *
+ *   1. **Inside the 10 km coverage.** A branch that can deliver beats one that
+ *      cannot, at any distance. This is the one place where the list deliberately
+ *      contradicts the kilometres printed on it, and it is the whole point: a
+ *      9 km branch that delivers is a better answer than an 11 km branch that
+ *      needs an exception, and sorting the 11 km one first would recommend it.
+ *   2. **Nearest.** Within the same coverage class, distance decides.
+ *   3. **Scooter, on a tie.** Two branches whose distances differ by under 500m
+ *      are the same distance as far as anyone can tell, so the one with its own
+ *      rider wins — it does not depend on partner capacity. The badge for this
+ *      was removed from the row on purpose: it is an input to the ordering, not
+ *      something an agent needs to read on every line.
+ *   4. **Locality, then exact metres**, so the order is total and stable.
  */
 function compareResults(a: LocatorResult, b: LocatorResult): number {
-  if (a.eta.minMinutes !== b.eta.minMinutes) return a.eta.minMinutes - b.eta.minMinutes;
-  const maxA = a.eta.maxMinutes ?? Number.POSITIVE_INFINITY;
-  const maxB = b.eta.maxMinutes ?? Number.POSITIVE_INFINITY;
-  if (maxA !== maxB) return maxA - maxB;
+  if (a.insideCoverage !== b.insideCoverage) return a.insideCoverage ? -1 : 1;
+
+  // Fixed 500m buckets rather than `|a - b| < 500`.
+  //
+  // The pairwise test is the obvious reading of the rule and it is not a valid
+  // comparator: with branches at 0m, 400m and 800m it calls the first two equal
+  // and the last two equal but the outer pair ordered, which is intransitive, and
+  // `Array.prototype.sort` given an intransitive comparator produces an
+  // implementation-defined order — the list would reshuffle for no visible
+  // reason. Bucketing is transitive by construction. The cost is that 499m and
+  // 501m land in different buckets despite being 2m apart, which is the standard
+  // trade and invisible at the precision the distances are quoted to.
+  const bandA = Math.floor(a.distance.metres / TIE_BAND_METRES);
+  const bandB = Math.floor(b.distance.metres / TIE_BAND_METRES);
+  if (bandA !== bandB) return bandA - bandB;
+
+  if (a.item.scooter !== b.item.scooter) return a.item.scooter ? -1 : 1;
   if (a.localityRank !== b.localityRank) return a.localityRank - b.localityRank;
   return a.distance.metres - b.distance.metres;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Directions                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A Google Maps directions link from the customer to a branch.
+ *
+ * The URL itself is built by `@/lib/geo`'s `directionsUrl`, which the portal
+ * already uses everywhere else; this is only the branch-shaped wrapper around it.
+ * It exists to hold the one thing that is specific to the locator and easy to get
+ * wrong: the origin is **the resolved search location**, not the device's
+ * position. An agent sitting in Riyadh needs the route from the customer in
+ * Jeddah to the Jeddah branch, and the existing per-branch `navLink` — which
+ * takes no origin at all — would quietly have routed from the call floor.
+ *
+ * Coordinates on both ends, never place names: a name is a fresh geocode at the
+ * far end and can resolve somewhere else entirely.
+ *
+ * Returns null when the branch has no coordinates, so the caller renders a
+ * disabled control rather than a link to a broken route.
+ */
+export function branchDirectionsUrl(origin: LatLng, branch: BranchView): string | null {
+  if (!branch.hasCoords) return null;
+  return directionsUrl(
+    { lat: branch.latitude as number, lng: branch.longitude as number },
+    { origin, mode: "driving" },
+  );
 }
