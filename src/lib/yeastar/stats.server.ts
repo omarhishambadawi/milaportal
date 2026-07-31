@@ -206,6 +206,12 @@ export interface AggregateOptions {
   /** Filter normalized calls by outcome (applied AFTER normalization). */
   status?: "all" | "ANSWERED" | "NO ANSWER" | "BUSY" | "FAILED" | "VOICEMAIL";
   /**
+   * Keep only calls that passed through this queue number. Used by the
+   * Customer Care dashboard, which is queue-driven. Telesales never sets it —
+   * telesales agents belong to no queue.
+   */
+  queueNumber?: string | null;
+  /**
    * Active team/agent scope. When set, platform totals, day/hour buckets and
    * per-agent stats include only calls an in-scope extension took part in
    * (answered it, or had their phone ring for it) plus, for a team selection,
@@ -385,9 +391,13 @@ export function aggregateClassified(
   const byExt = new Map<string, AgentRef>();
   for (const a of agents) if (a.ext) byExt.set(String(a.ext).trim(), a);
 
-  // Direction / status filters apply at CALL level, post-normalization.
+  // Direction / status / queue filters apply at CALL level, post-normalization.
+  const queueNumber = opts.queueNumber ? String(opts.queueNumber).trim() : "";
   const filtered = input.calls.filter(
-    (c) => (direction === "all" || c.direction === direction) && matchesStatus(c, status),
+    (c) =>
+      (direction === "all" || c.direction === direction) &&
+      matchesStatus(c, status) &&
+      (queueNumber === "" || c.queueNumber === queueNumber),
   );
 
   // Scope filter: with a team/agent selection active, keep only calls an

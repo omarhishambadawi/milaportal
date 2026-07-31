@@ -13,6 +13,8 @@ interface UseCallCenterAnalyticsArgs {
   team: Team;
   agentId: string;
   direction: Direction;
+  /** Customer Care only. "all" (or omitted) means every queue. */
+  queue?: string;
   canAll: boolean;
   canView: boolean;
   authLoading: boolean;
@@ -36,6 +38,7 @@ export function useCallCenterAnalytics({
   team,
   agentId,
   direction,
+  queue = "all",
   canAll,
   canView,
   authLoading,
@@ -47,7 +50,7 @@ export function useCallCenterAnalytics({
   // Gate on auth readiness + permissions to prevent duplicate/premature fetches.
   const analyticsFn = useServerFn(getCallCenterAnalytics);
   const q = useQuery({
-    queryKey: queryKeys.callCenter.analytics({ from, to, team, agentId, direction }),
+    queryKey: queryKeys.callCenter.analytics({ from, to, team, agentId, direction, queue }),
     queryFn: () =>
       analyticsFn({
         data: {
@@ -57,6 +60,9 @@ export function useCallCenterAnalytics({
           agentId: canAll && agentId !== "all" ? agentId : null,
           direction,
           status: "all",
+          // Omitted entirely when no queue is selected, so the request is
+          // byte-identical to what it was before the queue filter existed.
+          ...(queue && queue !== "all" ? { queue } : {}),
           includeOrders: true,
           jobId: jobIdRef.current,
         },

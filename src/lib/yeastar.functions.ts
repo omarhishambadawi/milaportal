@@ -838,6 +838,13 @@ const analyticsInput = statsInput.extend({
   direction: z.enum(["all", "Inbound", "Outbound"]).default("all"),
   status: z.enum(["all", "ANSWERED", "NO ANSWER", "BUSY", "FAILED", "VOICEMAIL"]).default("all"),
   includeOrders: z.boolean().default(true),
+  /**
+   * Restrict to one queue number. ADDITIVE and optional — every existing caller
+   * omits it and behaves exactly as before. Used only by the queue-driven
+   * Customer Care dashboard; Telesales never sends it, because telesales agents
+   * belong to no queue.
+   */
+  queue: z.string().max(20).optional(),
 });
 
 // Aligned with the Call Center query's own `staleTime` (5 min). The client will
@@ -956,6 +963,8 @@ interface PbxRoster {
   extensionNumbers: Set<string>;
   /** Members of every queue — extensions by definition, whatever page they are on. */
   queueMemberExts: Set<string>;
+  /** Configured queues, for the Customer Care queue filter. */
+  queues: Array<{ number: string; name: string }>;
 }
 
 let rosterCache: { at: number; roster: PbxRoster } | null = null;
@@ -976,10 +985,11 @@ async function fetchPbxRoster(): Promise<PbxRoster> {
   const queueNumbers = new Set<string>();
   const extensionNumbers = new Set<string>();
   const queueMemberExts = new Set<string>();
+  const queues: Array<{ number: string; name: string }> = [];
   let ok = false;
   try {
     const { isConfigured, yeastarFetch } = await import("@/lib/yeastar/client.server");
-    if (!isConfigured()) return { ccExts, queueNumbers, extensionNumbers, queueMemberExts };
+    if (!isConfigured()) return { ccExts, queueNumbers, extensionNumbers, queueMemberExts, queues };
 
     const queueRes = await yeastarFetch<any>("/openapi/v1.0/queue/list", {
       page: 1,
@@ -987,10 +997,13 @@ async function fetchPbxRoster(): Promise<PbxRoster> {
     });
     if (queueRes.httpStatus === 200 && queueRes.json?.errcode === 0) {
       ok = true;
-      const queues = Array.isArray(queueRes.json.queue_list) ? queueRes.json.queue_list : [];
-      for (const q of queues) {
+      const queueList = Array.isArray(queueRes.json.queue_list) ? queueRes.json.queue_list : [];
+      for (const q of queueList) {
         const qnum = String(q?.number ?? "").trim();
-        if (qnum) queueNumbers.add(qnum);
+        if (qnum) {
+          queueNumbers.add(qnum);
+          queues.push({ number: qnum, name: String(q?.name ?? "").trim() || qnum });
+        }
         const members = [
           ...(Array.isArray(q.static_agent_list) ? q.static_agent_list : []),
           ...(Array.isArray(q.dynamic_agent_list) ? q.dynamic_agent_list : []),
@@ -1029,9 +1042,12 @@ async function fetchPbxRoster(): Promise<PbxRoster> {
   // Cache only a roster we actually retrieved, so a transient PBX failure
   // doesn't pin an empty roster for a minute.
   if (ok || extensionNumbers.size > 0) {
-    rosterCache = { at: now, roster: { ccExts, queueNumbers, extensionNumbers, queueMemberExts } };
+    rosterCache = {
+      at: now,
+      roster: { ccExts, queueNumbers, extensionNumbers, queueMemberExts, queues },
+    };
   }
-  return { ccExts, queueNumbers, extensionNumbers, queueMemberExts };
+  return { ccExts, queueNumbers, extensionNumbers, queueMemberExts, queues };
 }
 
 async function fetchCustomerCareQueueRoster(): Promise<Map<string, string>> {
@@ -1308,6 +1324,7 @@ export const getCallCenterAnalytics = createServerFn({ method: "POST" })
       const result = aggregateClassified(classified, agents, orders, {
         direction: data.direction,
         status: data.status,
+        queueNumber: data.queue ?? null,
         scope,
       });
 
@@ -1324,6 +1341,7 @@ export const getCallCenterAnalytics = createServerFn({ method: "POST" })
           agentId: data.agentId ?? null,
           direction: data.direction,
           status: data.status,
+          queue: data.queue ?? null,
         },
         cdr: {
           path: cdr.path,
@@ -1341,6 +1359,34 @@ export const getCallCenterAnalytics = createServerFn({ method: "POST" })
       throw err;
     }
   });
+
+// ---- Queue options (Customer Care queue filter) ----------------------------
+//
+// Additive, read-only. Gated on the shared Call Center view permission rather
+// than administrator, because it feeds a filter dropdown on the Customer Care
+// dashboard. Returns queue numbers and names only.
+
+export const yeastarQueueOptions = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(
+    async ({
+      context,
+    }): Promise<{
+      ok: boolean;
+      configured: boolean;
+      queues: Array<{ number: string; name: string }>;
+    }> => {
+      const { supabase, userId } = context as { supabase: any; userId: string };
+      const { canView } = await callCenterAccess(supabase, userId);
+      if (!canView) throw new Error("Forbidden: call analytics access required");
+
+      const { isConfigured } = await import("@/lib/yeastar/client.server");
+      if (!isConfigured()) return { ok: false, configured: false, queues: [] };
+
+      const { queues } = await fetchPbxRoster();
+      return { ok: true, configured: true, queues };
+    },
+  );
 
 // ---- Realtime queue widgets ------------------------------------------------
 //

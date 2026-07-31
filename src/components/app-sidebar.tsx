@@ -70,9 +70,9 @@ const SECTIONS: { id: string; label: string; match: (to: string) => boolean }[] 
   {
     id: "workspace",
     label: "Workspace",
-    match: (t) =>
-      t === "/orders" || t === "/orders/new" || t === "/complaints" || t === "/call-center",
+    match: (t) => t === "/orders" || t === "/orders/new" || t === "/complaints",
   },
+  { id: "calls", label: "Calls", match: (t) => t.startsWith("/calls") },
   { id: "admin", label: "Administration", match: (t) => t.startsWith("/admin") },
 ];
 

@@ -64,6 +64,8 @@ export interface CallCenterFilters {
   team: string;
   agentId: string;
   direction: string;
+  /** Customer Care only — telesales agents belong to no queue. */
+  queue?: string;
 }
 
 export const queryKeys = {
@@ -157,6 +159,7 @@ export const queryKeys = {
     all: () => ["call-center"] as const,
     analytics: (f: CallCenterFilters) => ["call-center", "analytics", f] as const,
     realtime: () => ["call-center", "realtime"] as const,
+    queues: () => ["call-center", "queues"] as const,
   },
 
   yeastar: {

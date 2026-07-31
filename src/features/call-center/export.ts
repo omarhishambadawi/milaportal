@@ -9,6 +9,8 @@ interface ExportCallCenterArgs {
   hourly12: any[];
   from: string;
   to: string;
+  /** Filename prefix, e.g. "customer-care". */
+  fileLabel?: string;
 }
 
 /**
@@ -25,6 +27,7 @@ export async function exportCallCenter({
   hourly12,
   from,
   to,
+  fileLabel = "call-center",
 }: ExportCallCenterArgs) {
   if (!ok || !totals) return;
   const XLSX = await import("xlsx");
@@ -40,7 +43,10 @@ export async function exportCallCenter({
     { Metric: "Avg talking", Value: hhmmss(totals.avgTalkSec) },
     { Metric: "Avg waiting", Value: hhmmss(totals.avgWaitSec) },
     { Metric: "Total talk", Value: hhmmss(totals.talkSeconds) },
-    { Metric: "Conversion rate %", Value: (conv?.overall.conversionRate ?? 0).toFixed(2) },
+    // Conversion belongs to Telesales only; Customer Care passes conv = null.
+    ...(conv
+      ? [{ Metric: "Conversion rate %", Value: conv.overall.conversionRate.toFixed(2) }]
+      : []),
   ];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(kpiSheet), "KPIs");
@@ -55,5 +61,5 @@ export async function exportCallCenter({
     );
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(conv.perDay), "Conversion by day");
   }
-  XLSX.writeFile(wb, `call-center-${from}_${to}.xlsx`);
+  XLSX.writeFile(wb, `${fileLabel}-${from}_${to}.xlsx`);
 }

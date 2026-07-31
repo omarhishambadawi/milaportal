@@ -27,6 +27,8 @@ import { Route as AppOrdersNewRouteImport } from './routes/_app.orders.new'
 import { Route as AppOrdersIdRouteImport } from './routes/_app.orders.$id'
 import { Route as AppComplaintsNewRouteImport } from './routes/_app.complaints.new'
 import { Route as AppComplaintsIdRouteImport } from './routes/_app.complaints.$id'
+import { Route as AppCallsTelesalesRouteImport } from './routes/_app.calls.telesales'
+import { Route as AppCallsCustomerCareRouteImport } from './routes/_app.calls.customer-care'
 import { Route as AppBranchesImportRouteImport } from './routes/_app.branches.import'
 import { Route as AppAdminYeastarDiagnosticsRouteImport } from './routes/_app.admin.yeastar-diagnostics'
 import { Route as AppAdminYeastarRouteImport } from './routes/_app.admin.yeastar'
@@ -127,6 +129,16 @@ const AppComplaintsIdRoute = AppComplaintsIdRouteImport.update({
   path: '/complaints/$id',
   getParentRoute: () => AppRoute,
 } as any)
+const AppCallsTelesalesRoute = AppCallsTelesalesRouteImport.update({
+  id: '/calls/telesales',
+  path: '/calls/telesales',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppCallsCustomerCareRoute = AppCallsCustomerCareRouteImport.update({
+  id: '/calls/customer-care',
+  path: '/calls/customer-care',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppBranchesImportRoute = AppBranchesImportRouteImport.update({
   id: '/branches/import',
   path: '/branches/import',
@@ -189,6 +201,8 @@ export interface FileRoutesByFullPath {
   '/admin/yeastar': typeof AppAdminYeastarRoute
   '/admin/yeastar-diagnostics': typeof AppAdminYeastarDiagnosticsRoute
   '/branches/import': typeof AppBranchesImportRoute
+  '/calls/customer-care': typeof AppCallsCustomerCareRoute
+  '/calls/telesales': typeof AppCallsTelesalesRoute
   '/complaints/$id': typeof AppComplaintsIdRoute
   '/complaints/new': typeof AppComplaintsNewRoute
   '/orders/$id': typeof AppOrdersIdRoute
@@ -216,6 +230,8 @@ export interface FileRoutesByTo {
   '/admin/yeastar': typeof AppAdminYeastarRoute
   '/admin/yeastar-diagnostics': typeof AppAdminYeastarDiagnosticsRoute
   '/branches/import': typeof AppBranchesImportRoute
+  '/calls/customer-care': typeof AppCallsCustomerCareRoute
+  '/calls/telesales': typeof AppCallsTelesalesRoute
   '/complaints/$id': typeof AppComplaintsIdRoute
   '/complaints/new': typeof AppComplaintsNewRoute
   '/orders/$id': typeof AppOrdersIdRoute
@@ -245,6 +261,8 @@ export interface FileRoutesById {
   '/_app/admin/yeastar': typeof AppAdminYeastarRoute
   '/_app/admin/yeastar-diagnostics': typeof AppAdminYeastarDiagnosticsRoute
   '/_app/branches/import': typeof AppBranchesImportRoute
+  '/_app/calls/customer-care': typeof AppCallsCustomerCareRoute
+  '/_app/calls/telesales': typeof AppCallsTelesalesRoute
   '/_app/complaints/$id': typeof AppComplaintsIdRoute
   '/_app/complaints/new': typeof AppComplaintsNewRoute
   '/_app/orders/$id': typeof AppOrdersIdRoute
@@ -274,6 +292,8 @@ export interface FileRouteTypes {
     | '/admin/yeastar'
     | '/admin/yeastar-diagnostics'
     | '/branches/import'
+    | '/calls/customer-care'
+    | '/calls/telesales'
     | '/complaints/$id'
     | '/complaints/new'
     | '/orders/$id'
@@ -301,6 +321,8 @@ export interface FileRouteTypes {
     | '/admin/yeastar'
     | '/admin/yeastar-diagnostics'
     | '/branches/import'
+    | '/calls/customer-care'
+    | '/calls/telesales'
     | '/complaints/$id'
     | '/complaints/new'
     | '/orders/$id'
@@ -329,6 +351,8 @@ export interface FileRouteTypes {
     | '/_app/admin/yeastar'
     | '/_app/admin/yeastar-diagnostics'
     | '/_app/branches/import'
+    | '/_app/calls/customer-care'
+    | '/_app/calls/telesales'
     | '/_app/complaints/$id'
     | '/_app/complaints/new'
     | '/_app/orders/$id'
@@ -481,6 +505,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppComplaintsIdRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/calls/telesales': {
+      id: '/_app/calls/telesales'
+      path: '/calls/telesales'
+      fullPath: '/calls/telesales'
+      preLoaderRoute: typeof AppCallsTelesalesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/calls/customer-care': {
+      id: '/_app/calls/customer-care'
+      path: '/calls/customer-care'
+      fullPath: '/calls/customer-care'
+      preLoaderRoute: typeof AppCallsCustomerCareRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/branches/import': {
       id: '/_app/branches/import'
       path: '/branches/import'
@@ -549,6 +587,8 @@ interface AppRouteChildren {
   AppAdminYeastarRoute: typeof AppAdminYeastarRoute
   AppAdminYeastarDiagnosticsRoute: typeof AppAdminYeastarDiagnosticsRoute
   AppBranchesImportRoute: typeof AppBranchesImportRoute
+  AppCallsCustomerCareRoute: typeof AppCallsCustomerCareRoute
+  AppCallsTelesalesRoute: typeof AppCallsTelesalesRoute
   AppComplaintsIdRoute: typeof AppComplaintsIdRoute
   AppComplaintsNewRoute: typeof AppComplaintsNewRoute
   AppOrdersIdRoute: typeof AppOrdersIdRoute
@@ -567,6 +607,8 @@ const AppRouteChildren: AppRouteChildren = {
   AppAdminYeastarRoute: AppAdminYeastarRoute,
   AppAdminYeastarDiagnosticsRoute: AppAdminYeastarDiagnosticsRoute,
   AppBranchesImportRoute: AppBranchesImportRoute,
+  AppCallsCustomerCareRoute: AppCallsCustomerCareRoute,
+  AppCallsTelesalesRoute: AppCallsTelesalesRoute,
   AppComplaintsIdRoute: AppComplaintsIdRoute,
   AppComplaintsNewRoute: AppComplaintsNewRoute,
   AppOrdersIdRoute: AppOrdersIdRoute,

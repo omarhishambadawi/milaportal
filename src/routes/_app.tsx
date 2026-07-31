@@ -12,6 +12,7 @@ import {
   MessageSquareWarning,
   PhoneCall,
   Headphones,
+  BadgeDollarSign,
 } from "lucide-react";
 import { hasPerm, canViewCallCenter } from "@/lib/permissions";
 import { AppHeader } from "@/components/app-header";
@@ -83,7 +84,15 @@ function AppLayout() {
       ...(canComplaints
         ? [{ to: "/complaints", label: "Complaints", icon: MessageSquareWarning }]
         : []),
-      ...(canCallCenter ? [{ to: "/call-center", label: "Calls", icon: Headphones }] : []),
+      // Calls is split by workflow: Customer Care is queue-driven, Telesales is
+      // extension-driven, and their KPIs are computed differently. The sidebar
+      // groups both under a "Calls" heading (see SECTIONS in app-sidebar).
+      ...(canCallCenter
+        ? [
+            { to: "/calls/customer-care", label: "Customer Care", icon: Headphones },
+            { to: "/calls/telesales", label: "Telesales", icon: BadgeDollarSign },
+          ]
+        : []),
       ...(canUsers ? [{ to: "/admin/users", label: "Users", icon: Users }] : []),
       ...(canBranches ? [{ to: "/branches", label: "Branches", icon: MapPin }] : []),
       ...(isAdministrator(role)
