@@ -81,7 +81,7 @@ function AppLayout() {
     () => [
       ...(canDashboard ? [{ to: "/dashboard", label: "Dashboard", icon: LayoutDashboard }] : []),
       ...(canOrders ? [{ to: "/orders", label: "Orders", icon: ListOrdered }] : []),
-      ...(canCreate ? [{ to: "/orders/new", label: "New", icon: Plus }] : []),
+      ...(canCreate ? [{ to: "/orders/new", label: "New Order", icon: PlusCircle }] : []),
       ...(canComplaints
         ? [{ to: "/complaints", label: "Complaints", icon: MessageSquareWarning }]
         : []),
@@ -91,9 +91,10 @@ function AppLayout() {
       ...(canCallCenter
         ? [
             { to: "/calls/customer-care", label: "Customer Care", icon: Headphones },
-            { to: "/calls/telesales", label: "Telesales", icon: BadgeDollarSign },
+            { to: "/calls/telesales", label: "Telesales", icon: PhoneOutgoing },
           ]
         : []),
+
       ...(canUsers ? [{ to: "/admin/users", label: "Users", icon: Users }] : []),
       ...(canBranches ? [{ to: "/branches", label: "Branches", icon: MapPin }] : []),
       ...(isAdministrator(role)
