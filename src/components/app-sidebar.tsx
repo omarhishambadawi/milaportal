@@ -8,7 +8,10 @@ export type NavItemData = {
   to: string;
   label: string;
   icon: ComponentType<{ className?: string }>;
+  /** Reserved for future notification badges — layout is already allocated. */
+  badge?: number | string | null;
 };
+
 
 type SidebarProps = {
   nav: NavItemData[];
