@@ -116,9 +116,14 @@ const NavItem = memo(function NavItem({ item, active }: { item: NavItemData; act
       title={item.label}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "group relative flex items-center overflow-hidden rounded-xl px-2 py-1.5 outline-none transition-colors duration-200 ease-out",
+        // Denser vertical rhythm (36px icon + 8px padding = 44px target, still
+        // comfortably above the 44px touch minimum).
+        "group relative flex items-center overflow-hidden rounded-xl px-2 py-1 outline-none",
+        "transition-[background-color,box-shadow] duration-150 ease-out",
         "focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
-        active ? "bg-primary/10" : "hover:bg-accent/70",
+        active
+          ? "bg-primary/[0.12] shadow-sm shadow-primary/10"
+          : "hover:bg-accent/60 hover:shadow-sm hover:shadow-foreground/[0.04]",
       )}
     >
       {/* Active rail — animates in from the left edge; fades away in rail mode
@@ -127,33 +132,30 @@ const NavItem = memo(function NavItem({ item, active }: { item: NavItemData; act
         <span
           aria-hidden
           className={cn(
-            "absolute left-0 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-primary animate-in fade-in slide-in-from-left-1 duration-300",
+            "absolute left-0 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-primary animate-in fade-in slide-in-from-left-1 duration-200",
             "transition-opacity group-data-[state=collapsed]/rail:opacity-0",
           )}
         />
       )}
-      {/* Icon container — the core of the visual language */}
+      {/* Icon container — the core of the visual language. Its box never
+          changes size between states; only colour and background move. */}
       <span
         className={cn(
-          // Narrowed from `transition-all`: this element only ever changes
-          // colours, its shadow, and `scale` on press. Listing them keeps the
-          // press feedback on the compositor without animating the layout
-          // properties that shift when the sidebar collapses.
-          "grid h-9 w-9 shrink-0 place-items-center rounded-lg transition-[color,background-color,box-shadow,transform] duration-200 ease-out",
+          "grid h-9 w-9 shrink-0 place-items-center rounded-lg transition-[color,background-color,box-shadow,transform] duration-150 ease-out",
           active
             ? "bg-primary text-primary-foreground shadow-sm shadow-primary/30"
-            : "text-foreground/70 group-hover:bg-background group-hover:text-foreground group-active:scale-90",
+            : "text-foreground/65 group-hover:bg-background group-hover:text-foreground group-active:scale-95",
         )}
       >
-        <Icon className="h-[18px] w-[18px]" />
+        <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={active ? 2.25 : 2} />
       </span>
       {/* pl-3 replaces the parent's old gap-3, so the whole spacing collapses
           with the box: border-box max-w-0 closes padding and content together,
           leaving the 36px icon exactly centred in the 52px collapsed slot. */}
       <span
         className={cn(
-          "min-w-0 truncate pl-3 text-sm tracking-tight",
-          "max-w-40 transition-[max-width,opacity,color]",
+          "min-w-0 flex-1 truncate pl-3 text-[13.5px] leading-5 tracking-[-0.005em]",
+          "max-w-40 transition-[max-width,opacity,color] ",
           RAIL_CLOCK,
           "group-data-[state=collapsed]/rail:max-w-0 group-data-[state=collapsed]/rail:opacity-0",
           active
@@ -163,9 +165,24 @@ const NavItem = memo(function NavItem({ item, active }: { item: NavItemData; act
       >
         {item.label}
       </span>
+      {/* Badge slot — reserved. Renders nothing until `badge` is supplied, and
+          collapses away with the labels in rail mode. */}
+      {item.badge != null && item.badge !== "" && (
+        <span
+          className={cn(
+            "ml-2 shrink-0 overflow-hidden rounded-full bg-primary/15 px-1.5 text-[10px] font-semibold leading-[18px] text-primary",
+            "transition-[max-width,opacity,margin]",
+            RAIL_CLOCK,
+            "max-w-10 group-data-[state=collapsed]/rail:ml-0 group-data-[state=collapsed]/rail:max-w-0 group-data-[state=collapsed]/rail:px-0 group-data-[state=collapsed]/rail:opacity-0",
+          )}
+        >
+          {item.badge}
+        </span>
+      )}
     </Link>
   );
 });
+
 
 /** Shared inner shell used by both the desktop rail and the mobile drawer. */
 const SidebarInner = memo(function SidebarInner({
