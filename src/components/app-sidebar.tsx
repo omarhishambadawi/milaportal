@@ -207,26 +207,28 @@ const SidebarInner = memo(function SidebarInner({
 
   return (
     <div className="flex h-full flex-col">
-      {/* Brand */}
-      <div className="flex h-16 shrink-0 items-center border-b border-border/60 px-4">
+      {/* Brand — px-3 matches the nav's own padding, so the 40px mark lands
+          dead centre of the 76px rail exactly like the 36px nav icons do. */}
+      <div className="flex h-16 shrink-0 items-center border-b border-border/60 px-3">
         <div className="flex min-w-0 items-center">
           <BrandLogo />
           <div
             className={cn(
-              "min-w-0 overflow-hidden pl-2.5",
+              "min-w-0 overflow-hidden pl-2",
               "max-w-36 transition-[max-width,opacity]",
               RAIL_CLOCK,
               "group-data-[state=collapsed]/rail:max-w-0 group-data-[state=collapsed]/rail:opacity-0",
             )}
           >
-            <div className="truncate text-sm font-bold leading-tight tracking-tight text-foreground">
+            <div className="truncate text-[15px] font-bold leading-[18px] tracking-[-0.015em] text-foreground">
               MilaServ
             </div>
-            <div className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80">
+            <div className="whitespace-nowrap text-[9px] font-semibold uppercase leading-[12px] tracking-[0.22em] text-muted-foreground/70">
               Portal
             </div>
           </div>
         </div>
+
         {onMobileClose && (
           <button
             type="button"
