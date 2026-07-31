@@ -78,13 +78,23 @@ const SECTIONS: { id: string; label: string; match: (to: string) => boolean }[] 
   {
     id: "workspace",
     label: "Workspace",
-    match: (t) => t === "/orders" || t === "/orders/new" || t === "/complaints",
+    match: (t) => t === "/orders" || t === "/orders/new" || t === "/complaints" || t === "/calls",
   },
-  { id: "calls", label: "Calls", match: (t) => t === "/calls" },
   { id: "admin", label: "Administration", match: (t) => t.startsWith("/admin") },
 ];
 
-function groupNav(nav: NavItemData[]) {
+/**
+ * Is this item, or anything under it, the current page?
+ *
+ * Exact matching alone left a parent looking inactive while the user was on one
+ * of its children, which is the one moment it most needs to look active.
+ */
+export function isBranchActive(item: NavItemData, activePath: string): boolean {
+  if (activePath === item.to) return true;
+  return (item.children ?? []).some((c) => activePath === c.to);
+}
+
+export function groupNav(nav: NavItemData[]) {
   const groups = SECTIONS.map((s) => ({
     id: s.id,
     label: s.label,
@@ -341,7 +351,7 @@ const SidebarInner = memo(function SidebarInner({
                 <NavItem
                   key={it.to}
                   item={it}
-                  active={activePath === it.to}
+                  active={isBranchActive(it, activePath)}
                   activePath={activePath}
                 />
               ))}

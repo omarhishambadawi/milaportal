@@ -33,11 +33,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Progress } from "@/components/ui/progress";
 import { DateRangePicker } from "@/components/date-range-picker";
 import type { Direction } from "@/features/call-center/types";
 import { pct, hhmmss } from "@/features/call-center/utils";
 import { exportCallCenter } from "@/features/call-center/export";
+import { FetchProgress } from "@/features/call-center/components/fetch-progress";
 import { SectionHeader } from "@/features/call-center/components/section-header";
 import { HeroKpi } from "@/features/call-center/components/hero-kpi";
 import { Kpi } from "@/features/call-center/components/kpi";
@@ -179,21 +179,7 @@ function CustomerCarePage() {
         </div>
       </div>
 
-      {q.isFetching && (
-        <Card className="border-primary/30 bg-primary/5">
-          <CardContent className="p-4 space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span className="font-medium text-foreground">
-                {progress?.message ?? (q.data ? "Refreshing analytics…" : "Loading call records…")}
-              </span>
-              <span className="tabular-nums text-muted-foreground">
-                {progress?.percent ?? (q.data ? 60 : 0)}%
-              </span>
-            </div>
-            <Progress value={progress?.percent ?? (q.data ? 60 : 5)} />
-          </CardContent>
-        </Card>
-      )}
+      <FetchProgress fetching={q.isFetching} hasData={!!q.data} progress={progress} />
 
       {errMsg && (
         <Card>
