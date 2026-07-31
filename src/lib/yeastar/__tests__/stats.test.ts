@@ -1109,3 +1109,42 @@ describe("telesales: lead contact rate (Phase 4A)", () => {
     expect(r.conversion.perDay[0].revenue).toBe(400);
   });
 });
+
+describe("customer care: service level (Phase 5)", () => {
+  it("counts a queue call answered inside the target as within SLA", () => {
+    // QUEUE_ANSWERED waited 11s in the queue, well inside the 60s target.
+    const r = run(QUEUE_ANSWERED);
+    expect(r.totals.slaSeconds).toBe(60);
+    expect(r.totals.slaAnsweredWithin).toBe(1);
+    expect(r.totals.slaAttainment).toBe(100);
+  });
+
+  it("measures SLA against calls offered to agents, not against every call", () => {
+    // Answered (11s wait) + missed (20s) + abandoned (2s) = 3 offered, 1 in SLA.
+    const r = run([...QUEUE_ANSWERED, ...MISSED, ...ABANDONED, ...IVR_ONLY]);
+    expect(r.totals.slaAnsweredWithin).toBe(1);
+    expect(r.totals.slaAttainment).toBeCloseTo((1 / 3) * 100, 6);
+  });
+
+  it("excludes a call answered outside the target from SLA but not from Answered", () => {
+    const slow = QUEUE_ANSWERED.map((row) =>
+      row.call_to_number === "6400" ? { ...row, ring_duration: 95 } : row,
+    );
+    const r = run(slow);
+    expect(r.totals.answered).toBe(1);
+    expect(r.totals.slaAnsweredWithin).toBe(0);
+    expect(r.totals.slaAttainment).toBe(0);
+  });
+
+  it("honours a configured SLA target", () => {
+    const r = run(QUEUE_ANSWERED, [], { slaSeconds: 5 });
+    expect(r.totals.slaSeconds).toBe(5);
+    expect(r.totals.slaAnsweredWithin).toBe(0); // waited 11s
+  });
+
+  it("is zero rather than NaN when nothing reached a queue", () => {
+    const r = run(OUTBOUND_ANSWERED);
+    expect(r.totals.slaAttainment).toBe(0);
+    expect(r.totals.slaAnsweredWithin).toBe(0);
+  });
+});

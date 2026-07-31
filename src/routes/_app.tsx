@@ -1,6 +1,6 @@
 import { createFileRoute, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
-import { useAuth, isAdministrator } from "@/lib/auth";
+import { useAuth, isAdministrator, isOwnerRole } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import {
   LayoutDashboard,
@@ -10,10 +10,12 @@ import {
   MapPin,
   ShieldAlert,
   MessageSquareWarning,
-  PhoneCall,
   Headphones,
   BadgeDollarSign,
   Stethoscope,
+  Phone,
+  ChartNoAxesCombined,
+  Settings2,
 } from "lucide-react";
 import { hasPerm, canViewCallCenter } from "@/lib/permissions";
 import { AppHeader } from "@/components/app-header";
@@ -85,25 +87,42 @@ function AppLayout() {
       ...(canComplaints
         ? [{ to: "/complaints", label: "Complaints", icon: MessageSquareWarning }]
         : []),
-      // Calls is split by workflow: Customer Care is queue-driven, Telesales is
-      // extension-driven, and their KPIs are computed differently. The sidebar
-      // groups both under a "Calls" heading (see SECTIONS in app-sidebar).
+      // "Calls" is the product feature; the PBX behind it is an implementation
+      // detail and is deliberately not named in the navigation, so swapping
+      // provider would not change a single menu entry.
+      //
+      // Access narrows down the list: the two operational dashboards follow the
+      // call-centre permission, the analytics and diagnostics surfaces are
+      // administrator-only, and configuration is owner-only.
       ...(canCallCenter
         ? [
-            { to: "/calls/customer-care", label: "Customer Care", icon: Headphones },
-            { to: "/calls/telesales", label: "Telesales", icon: BadgeDollarSign },
+            {
+              to: "/calls",
+              label: "Calls",
+              icon: Phone,
+              children: [
+                { to: "/calls/customer-care", label: "Customer Care", icon: Headphones },
+                { to: "/calls/telesales", label: "Telesales", icon: BadgeDollarSign },
+                ...(isAdministrator(role)
+                  ? [
+                      {
+                        to: "/calls/analytics",
+                        label: "Analytics Center",
+                        icon: ChartNoAxesCombined,
+                        separatorBefore: true,
+                      },
+                      { to: "/calls/diagnostics", label: "Diagnostics", icon: Stethoscope },
+                    ]
+                  : []),
+                ...(isOwnerRole(role)
+                  ? [{ to: "/calls/configuration", label: "Configuration", icon: Settings2 }]
+                  : []),
+              ],
+            },
           ]
         : []),
       ...(canUsers ? [{ to: "/admin/users", label: "Users", icon: Users }] : []),
       ...(canBranches ? [{ to: "/branches", label: "Branches", icon: MapPin }] : []),
-      // Administrators only. The diagnostics page is the single place to work
-      // out why a KPI disagrees with the PBX report, so it needs to be findable.
-      ...(isAdministrator(role)
-        ? [
-            { to: "/admin/yeastar", label: "Yeastar", icon: PhoneCall },
-            { to: "/admin/yeastar-diagnostics", label: "Diagnostics", icon: Stethoscope },
-          ]
-        : []),
     ],
     [canDashboard, canOrders, canCreate, canComplaints, canCallCenter, canUsers, canBranches, role],
   );

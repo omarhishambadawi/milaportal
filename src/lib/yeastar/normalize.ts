@@ -246,6 +246,12 @@ export const DEFAULT_ABANDON_THRESHOLD_SEC = 5;
  */
 export const DEFAULT_OUTBOUND_RING_TIMEOUT_SEC = 60;
 
+/**
+ * Service-level target: a queue call answered within this many seconds counts
+ * as within SLA. Matches the queue's own `sla_time` on this PBX (60s).
+ */
+export const DEFAULT_SLA_SECONDS = 60;
+
 const str = (v: unknown): string => (v == null ? "" : String(v).trim());
 const numOrNull = (v: unknown): number | null =>
   typeof v === "number" && Number.isFinite(v) ? v : null;

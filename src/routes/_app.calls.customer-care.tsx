@@ -278,6 +278,30 @@ function CustomerCarePage() {
         />
       </div>
 
+      {/* SLA */}
+      <SectionHeader>Service level</SectionHeader>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <Kpi
+          label={`SLA (answered <= ${totals?.slaSeconds ?? 60}s)`}
+          value={pct(totals?.slaAttainment)}
+          tone="success"
+          loading={isLoading}
+          hint="Answered within target, over calls offered to agents"
+        />
+        <Kpi
+          label="Within SLA"
+          value={totals?.slaAnsweredWithin ?? 0}
+          loading={isLoading}
+          hint="Queue calls answered inside the target"
+        />
+        <Kpi
+          label="Average queue wait"
+          value={hhmmss(totals?.avgWaitSec)}
+          loading={isLoading}
+          icon={Clock}
+        />
+      </div>
+
       {/* QUEUE STATISTICS */}
       <SectionHeader>Queue statistics</SectionHeader>
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
@@ -371,6 +395,49 @@ function CustomerCarePage() {
             loading={isLoading}
             hasData={byHour.some((h) => h.total > 0)}
           />
+
+          <SectionHeader>Queue members</SectionHeader>
+          <Card>
+            <CardContent className="p-4">
+              {f.queues.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  Queue membership is unavailable — the PBX roster could not be read.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {f.queues
+                    .filter((qq) => f.queue === "all" || qq.number === f.queue)
+                    .map((qq) => (
+                      <div key={qq.number}>
+                        <div className="text-sm font-medium">
+                          {qq.name}{" "}
+                          <span className="font-mono text-xs text-muted-foreground">
+                            #{qq.number}
+                          </span>
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            {qq.members.length} member{qq.members.length === 1 ? "" : "s"}
+                          </span>
+                        </div>
+                        <div className="mt-1.5 flex flex-wrap gap-1.5">
+                          {qq.members.map((m) => (
+                            <span
+                              key={m.ext}
+                              className="rounded border border-border/60 px-2 py-0.5 text-xs"
+                            >
+                              <span className="font-mono text-muted-foreground">{m.ext}</span>{" "}
+                              {m.name}
+                            </span>
+                          ))}
+                          {qq.members.length === 0 && (
+                            <span className="text-xs text-muted-foreground">No members.</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
           <SectionHeader>Agent performance</SectionHeader>
           <AgentPerformanceTable

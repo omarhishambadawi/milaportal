@@ -42,6 +42,220 @@ async function callCenterAccess(
   return { canView, isAdmin: !!isAdmin };
 }
 
+/**
+ * Owner-only gate. `is_administrator` deliberately covers owner AND admin, so
+ * it cannot express "owner only" — the role is read directly instead.
+ */
+async function assertOwner(ctx: { userId: string }) {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data } = await supabaseAdmin
+    .from("user_roles")
+    .select("role")
+    .eq("user_id", ctx.userId)
+    .maybeSingle();
+  if ((data as { role?: string } | null)?.role !== "owner") {
+    throw new Error("Forbidden: owner access required");
+  }
+}
+
+// ---- Calls configuration (owner only) --------------------------------------
+//
+// A READ-ONLY view of the settings the call pipeline actually runs on, and
+// where each one comes from. Deliberately not editable: every value below is a
+// deployment environment variable or PBX-side configuration, so an in-app
+// editor would either be a lie or would need a settings store this phase is not
+// allowed to add. Secret VALUES are never returned — only whether they loaded.
+
+export interface CallsConfigSetting {
+  key: string;
+  label: string;
+  value: string;
+  source: "environment" | "pbx" | "application";
+  /** Present when the value needs an operator decision. */
+  note?: string;
+}
+
+export const callsConfiguration = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(
+    async ({
+      context,
+    }): Promise<{
+      ok: boolean;
+      configured: boolean;
+      groups: { group: string; settings: CallsConfigSetting[] }[];
+    }> => {
+      await assertOwner(context as any);
+      const { isConfigured } = await import("@/lib/yeastar/client.server");
+      const configured = isConfigured();
+
+      const tz = Number(process.env.YEASTAR_UTC_OFFSET_MINUTES ?? BUSINESS_UTC_OFFSET_MINUTES);
+      const {
+        parseBusinessHours,
+        DEFAULT_ABANDON_THRESHOLD_SEC,
+        DEFAULT_OUTBOUND_RING_TIMEOUT_SEC,
+      } = await import("@/lib/yeastar/normalize");
+      const hours = parseBusinessHours(process.env.YEASTAR_BUSINESS_HOURS, tz);
+      const ringTimeout = Number(process.env.YEASTAR_OUTBOUND_RING_TIMEOUT_SEC);
+      const hhmm = (m: number) =>
+        `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+
+      let queues: PbxRoster["queues"] = [];
+      let extensionCount = 0;
+      if (configured) {
+        try {
+          const roster = await fetchPbxRoster();
+          queues = roster.queues;
+          extensionCount = roster.extensionNumbers.size;
+        } catch {
+          /* leave empty — the Connection group already reports the failure */
+        }
+      }
+
+      const agents = await loadAgents((context as any).supabase);
+      const cc = agents.filter((a) => a.team === "customer_care");
+      const ts = agents.filter((a) => a.team === "telesales");
+      const present = (v: string | undefined) => (v ? "configured" : "not set");
+
+      return {
+        ok: true,
+        configured,
+        groups: [
+          {
+            group: "Connection",
+            settings: [
+              {
+                key: "YEASTAR_BASE_URL",
+                label: "PBX URL",
+                value: present(process.env.YEASTAR_BASE_URL),
+                source: "environment",
+              },
+              {
+                key: "YEASTAR_CLIENT_ID",
+                label: "Client ID",
+                value: present(process.env.YEASTAR_CLIENT_ID),
+                source: "environment",
+              },
+              {
+                key: "YEASTAR_CLIENT_SECRET",
+                label: "Client secret",
+                value: present(process.env.YEASTAR_CLIENT_SECRET),
+                source: "environment",
+                note: "Never displayed. Only its presence is reported.",
+              },
+            ],
+          },
+          {
+            group: "Time",
+            settings: [
+              {
+                key: "YEASTAR_UTC_OFFSET_MINUTES",
+                label: "Business timezone offset",
+                value: `${tz} minutes`,
+                source: "environment",
+              },
+              {
+                key: "YEASTAR_BUSINESS_HOURS",
+                label: "Business hours",
+                value: hours
+                  ? `days ${hours.days.join(",")} · ${hhmm(hours.startMinute)}–${hhmm(hours.endMinute)}`
+                  : "not set — after-hours rule disabled",
+                source: "environment",
+                note: hours
+                  ? undefined
+                  : "The PBX cannot supply this: the queue has no time condition. While unset, no call is excluded for arriving after hours.",
+              },
+            ],
+          },
+          {
+            group: "Validation settings",
+            settings: [
+              {
+                key: "YEASTAR_OUTBOUND_RING_TIMEOUT_SEC",
+                label: "Outbound ring timeout",
+                value:
+                  Number.isFinite(ringTimeout) && ringTimeout > 0
+                    ? `${ringTimeout}s`
+                    : `${DEFAULT_OUTBOUND_RING_TIMEOUT_SEC}s (default)`,
+                source: "environment",
+                note: "Separates a genuine No Answer from an agent hanging up early. Confirm it against the ring histogram in the Analytics Center.",
+              },
+              {
+                key: "abandonThreshold",
+                label: "Queue abandon threshold",
+                value: `${DEFAULT_ABANDON_THRESHOLD_SEC}s`,
+                source: "application",
+                note: "Below this queue wait, an unanswered call is Abandoned rather than Missed.",
+              },
+            ],
+          },
+          {
+            group: "Caching",
+            settings: [
+              {
+                key: "cdrCacheTtl",
+                label: "CDR cache",
+                value: `${CDR_CACHE_TTL_MS / 60_000} minutes`,
+                source: "application",
+                note: "Matches the dashboards' own staleTime.",
+              },
+              {
+                key: "rosterCacheTtl",
+                label: "Roster cache",
+                value: `${ROSTER_TTL_MS / 60_000} minutes`,
+                source: "application",
+              },
+            ],
+          },
+          {
+            group: "Teams & extensions",
+            settings: [
+              {
+                key: "customerCareQueue",
+                label: "Customer Care queue",
+                value: CUSTOMER_CARE_QUEUE_NUMBER,
+                source: "application",
+                note: "Customer Care membership is taken from this PBX queue.",
+              },
+              {
+                key: "queues",
+                label: "Queues on the PBX",
+                value: queues.length
+                  ? queues.map((q) => `${q.name} (${q.number})`).join(", ")
+                  : "—",
+                source: "pbx",
+              },
+              {
+                key: "extensions",
+                label: "Extensions on the PBX",
+                value: extensionCount ? String(extensionCount) : "—",
+                source: "pbx",
+              },
+              {
+                key: "customerCareAgents",
+                label: "Customer Care agents",
+                value: String(cc.length),
+                source: "application",
+              },
+              {
+                key: "telesalesAgents",
+                label: "Telesales agents",
+                value: String(ts.length),
+                source: "application",
+              },
+              {
+                key: "agentsMissingExtension",
+                label: "Agents without an extension",
+                value: String(agents.filter((a) => !a.ext).length),
+                source: "application",
+              },
+            ],
+          },
+        ],
+      };
+    },
+  );
+
 // ---- Configuration / auth diagnostics --------------------------------------
 
 export const yeastarConfigDiagnostic = createServerFn({ method: "GET" })
@@ -993,8 +1207,8 @@ interface PbxRoster {
   extensionNumbers: Set<string>;
   /** Members of every queue — extensions by definition, whatever page they are on. */
   queueMemberExts: Set<string>;
-  /** Configured queues, for the Customer Care queue filter. */
-  queues: Array<{ number: string; name: string }>;
+  /** Configured queues, for the Customer Care queue filter and member list. */
+  queues: Array<{ number: string; name: string; members: Array<{ ext: string; name: string }> }>;
 }
 
 let rosterCache: { at: number; roster: PbxRoster } | null = null;
@@ -1015,7 +1229,7 @@ async function fetchPbxRoster(): Promise<PbxRoster> {
   const queueNumbers = new Set<string>();
   const extensionNumbers = new Set<string>();
   const queueMemberExts = new Set<string>();
-  const queues: Array<{ number: string; name: string }> = [];
+  const queues: PbxRoster["queues"] = [];
   let ok = false;
   try {
     const { isConfigured, yeastarFetch } = await import("@/lib/yeastar/client.server");
@@ -1030,9 +1244,14 @@ async function fetchPbxRoster(): Promise<PbxRoster> {
       const queueList = Array.isArray(queueRes.json.queue_list) ? queueRes.json.queue_list : [];
       for (const q of queueList) {
         const qnum = String(q?.number ?? "").trim();
+        const qMembers: Array<{ ext: string; name: string }> = [];
         if (qnum) {
           queueNumbers.add(qnum);
-          queues.push({ number: qnum, name: String(q?.name ?? "").trim() || qnum });
+          queues.push({
+            number: qnum,
+            name: String(q?.name ?? "").trim() || qnum,
+            members: qMembers,
+          });
         }
         const members = [
           ...(Array.isArray(q.static_agent_list) ? q.static_agent_list : []),
@@ -1045,6 +1264,7 @@ async function fetchPbxRoster(): Promise<PbxRoster> {
           const name = String(m?.text ?? "").trim();
           if (!ext) continue;
           queueMemberExts.add(ext);
+          qMembers.push({ ext, name: name || ext });
           if (qnum === CUSTOMER_CARE_QUEUE_NUMBER) ccExts.set(ext, name || ext);
         }
       }
@@ -1414,7 +1634,7 @@ export const yeastarQueueOptions = createServerFn({ method: "POST" })
     }): Promise<{
       ok: boolean;
       configured: boolean;
-      queues: Array<{ number: string; name: string }>;
+      queues: PbxRoster["queues"];
     }> => {
       const { supabase, userId } = context as { supabase: any; userId: string };
       const { canView } = await callCenterAccess(supabase, userId);

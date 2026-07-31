@@ -36,7 +36,7 @@
  */
 import type { CdrRecord } from "./cdr.server";
 import type { NormalizationContext, NormalizedCall, NormalizedLeg } from "./normalize";
-import { normalizeCdr } from "./normalize";
+import { DEFAULT_SLA_SECONDS, normalizeCdr } from "./normalize";
 import { STATUSES, ORDER_TYPES } from "@/lib/branches";
 import { BUSINESS_UTC_OFFSET_MINUTES } from "@/lib/timezone";
 
@@ -115,6 +115,15 @@ export interface CallTotals {
   queueCalls: number;
   /** Answered ÷ (answered + missed + abandoned) — of the calls agents were offered. */
   queueAnswerRate: number;
+  /** Queue calls answered within the SLA target. */
+  slaAnsweredWithin: number;
+  /** The SLA target itself, in seconds, so the UI can label the KPI honestly. */
+  slaSeconds: number;
+  /**
+   * Answered-within-SLA ÷ calls offered to agents. Calls that never reached a
+   * queue are not in either side of this ratio.
+   */
+  slaAttainment: number;
   // --- outbound / telesales detail ----------------------------------------
   outboundAnswered: number;
   /**
@@ -239,6 +248,8 @@ export interface AggregateOptions {
    * telesales agents belong to no queue.
    */
   queueNumber?: string | null;
+  /** Queue answer target in seconds. Defaults to DEFAULT_SLA_SECONDS. */
+  slaSeconds?: number;
   /**
    * Active team/agent scope. When set, platform totals, day/hour buckets and
    * per-agent stats include only calls an in-scope extension took part in
@@ -483,6 +494,9 @@ export function aggregateClassified(
     inboundAnswerRate: 0,
     queueCalls: 0,
     queueAnswerRate: 0,
+    slaAnsweredWithin: 0,
+    slaSeconds: 0,
+    slaAttainment: 0,
     outboundAnswered: 0,
     leadContactRate: 0,
     agentCancelRate: 0,
@@ -503,6 +517,7 @@ export function aggregateClassified(
   // ring duration, so a missing field cannot drag the mean toward zero.
   let cancelRingSeconds = 0;
   let cancelRingCount = 0;
+  const slaSeconds = opts.slaSeconds ?? DEFAULT_SLA_SECONDS;
 
   for (const c of calls) {
     totals.total++;
@@ -534,6 +549,9 @@ export function aggregateClassified(
     else if (c.outcome === "voicemail") totals.voicemail++;
 
     if (c.reachedQueue) totals.queueCalls++;
+    if (answered && c.queueWaitSeconds != null && c.queueWaitSeconds <= slaSeconds) {
+      totals.slaAnsweredWithin++;
+    }
     if (c.queueWaitSeconds != null) {
       totals.waitSeconds += c.queueWaitSeconds;
       queueWaitCount++;
@@ -589,6 +607,8 @@ export function aggregateClassified(
   totals.inboundAnswerRate = totals.inbound ? (totals.inboundAnswered / totals.inbound) * 100 : 0;
   const offered = totals.inboundAnswered + totals.missed + totals.abandoned;
   totals.queueAnswerRate = offered ? (totals.inboundAnswered / offered) * 100 : 0;
+  totals.slaSeconds = slaSeconds;
+  totals.slaAttainment = offered ? (totals.slaAnsweredWithin / offered) * 100 : 0;
   totals.leadContactRate = totals.outbound ? (totals.outboundAnswered / totals.outbound) * 100 : 0;
   totals.agentCancelRate = totals.outbound ? (totals.cancelledByAgent / totals.outbound) * 100 : 0;
   totals.avgRingBeforeCancelSec = cancelRingCount ? cancelRingSeconds / cancelRingCount : 0;

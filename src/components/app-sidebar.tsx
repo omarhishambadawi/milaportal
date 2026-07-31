@@ -1,6 +1,6 @@
 import { memo, useMemo, type ComponentType } from "react";
 import { Link } from "@tanstack/react-router";
-import { ChevronLeft, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { BrandLogo } from "@/components/brand-logo";
 import { cn } from "@/lib/utils";
 
@@ -8,6 +8,14 @@ export type NavItemData = {
   to: string;
   label: string;
   icon: ComponentType<{ className?: string }>;
+  /**
+   * Sub-items shown in a right-hand flyout. The parent stays a real link, so
+   * the menu is never the only way to reach it and keyboard users can tab
+   * straight through.
+   */
+  children?: NavItemData[];
+  /** Renders a divider above this child inside the flyout. */
+  separatorBefore?: boolean;
 };
 
 type SidebarProps = {
@@ -72,7 +80,7 @@ const SECTIONS: { id: string; label: string; match: (to: string) => boolean }[] 
     label: "Workspace",
     match: (t) => t === "/orders" || t === "/orders/new" || t === "/complaints",
   },
-  { id: "calls", label: "Calls", match: (t) => t.startsWith("/calls") },
+  { id: "calls", label: "Calls", match: (t) => t === "/calls" },
   { id: "admin", label: "Administration", match: (t) => t.startsWith("/admin") },
 ];
 
@@ -99,9 +107,19 @@ function groupNav(nav: NavItemData[]) {
  * on a deliberate hover pause, so carrying it in the expanded state too is
  * harmless — that trade is what lets `collapsed` disappear from the props.
  */
-const NavItem = memo(function NavItem({ item, active }: { item: NavItemData; active: boolean }) {
+const NavItem = memo(function NavItem({
+  item,
+  active,
+  activePath,
+}: {
+  item: NavItemData;
+  active: boolean;
+  activePath?: string;
+}) {
   const Icon = item.icon;
-  return (
+  const children = item.children ?? [];
+
+  const link = (
     <Link
       to={item.to}
       title={item.label}
@@ -154,7 +172,77 @@ const NavItem = memo(function NavItem({ item, active }: { item: NavItemData; act
       >
         {item.label}
       </span>
+      {children.length > 0 && (
+        <ChevronRight
+          aria-hidden
+          className={cn(
+            "ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground/70 transition-opacity",
+            RAIL_CLOCK,
+            "group-data-[state=collapsed]/rail:opacity-0",
+          )}
+        />
+      )}
     </Link>
+  );
+
+  if (children.length === 0) return link;
+
+  // Flyout. Opened by hover and by keyboard focus anywhere inside, so it is
+  // reachable without a pointer; `invisible` (not `hidden`) keeps the links in
+  // the tab order's natural place while they are off-screen.
+  return (
+    <div className="group/fly relative">
+      {link}
+      <div
+        className={cn(
+          "absolute left-full top-0 z-50 hidden min-w-52 pl-2 lg:block",
+          "pointer-events-none opacity-0 transition-opacity duration-150",
+          "group-hover/fly:pointer-events-auto group-hover/fly:opacity-100",
+          "group-focus-within/fly:pointer-events-auto group-focus-within/fly:opacity-100",
+        )}
+      >
+        <div className="rounded-xl border border-border/60 bg-popover p-1.5 shadow-lg">
+          {children.map((c) => (
+            <div key={c.to}>
+              {c.separatorBefore && <div className="my-1.5 border-t border-border/60" />}
+              <Link
+                to={c.to}
+                className={cn(
+                  "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm outline-none transition-colors",
+                  "focus-visible:ring-2 focus-visible:ring-ring/60",
+                  activePath === c.to
+                    ? "bg-primary/10 font-semibold text-foreground"
+                    : "text-foreground/75 hover:bg-accent/70 hover:text-foreground",
+                )}
+              >
+                <c.icon className="h-4 w-4 shrink-0" />
+                <span className="truncate">{c.label}</span>
+              </Link>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Collapsed rail and mobile drawer have no room for a flyout, so the
+          children render inline instead of becoming unreachable. */}
+      <div className="mt-0.5 space-y-0.5 pl-3 lg:hidden">
+        {children.map((c) => (
+          <Link
+            key={c.to}
+            to={c.to}
+            className={cn(
+              "flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition-colors",
+              activePath === c.to
+                ? "bg-primary/10 font-semibold text-foreground"
+                : "text-foreground/70 hover:bg-accent/70",
+            )}
+          >
+            <c.icon className="h-4 w-4 shrink-0" />
+            <span className="truncate">{c.label}</span>
+          </Link>
+        ))}
+      </div>
+    </div>
   );
 });
 
@@ -250,7 +338,12 @@ const SidebarInner = memo(function SidebarInner({
             </div>
             <div className="space-y-0.5">
               {g.items.map((it) => (
-                <NavItem key={it.to} item={it} active={activePath === it.to} />
+                <NavItem
+                  key={it.to}
+                  item={it}
+                  active={activePath === it.to}
+                  activePath={activePath}
+                />
               ))}
             </div>
           </div>
