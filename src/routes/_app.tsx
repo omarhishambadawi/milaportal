@@ -98,8 +98,9 @@ function AppLayout() {
       ...(canUsers ? [{ to: "/admin/users", label: "Users", icon: Users }] : []),
       ...(canBranches ? [{ to: "/branches", label: "Branches", icon: MapPin }] : []),
       ...(isAdministrator(role)
-        ? [{ to: "/admin/yeastar", label: "Yeastar", icon: PhoneCall }]
+        ? [{ to: "/admin/yeastar", label: "Yeastar PBX", icon: PhoneCall }]
         : []),
+
     ],
     [canDashboard, canOrders, canCreate, canComplaints, canCallCenter, canUsers, canBranches, role],
   );
