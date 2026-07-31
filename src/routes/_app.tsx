@@ -5,16 +5,15 @@ import { Button } from "@/components/ui/button";
 import {
   LayoutDashboard,
   ListOrdered,
-  PlusCircle,
+  Plus,
   Users,
   MapPin,
   ShieldAlert,
   MessageSquareWarning,
   PhoneCall,
   Headphones,
-  PhoneOutgoing,
+  BadgeDollarSign,
 } from "lucide-react";
-
 import { hasPerm, canViewCallCenter } from "@/lib/permissions";
 import { AppHeader } from "@/components/app-header";
 import { AppSidebar } from "@/components/app-sidebar";
@@ -67,22 +66,6 @@ function AppLayout() {
   const toggleSidebar = useCallback(() => setExpanded((v) => !v), []);
   const closeMobileSidebar = useCallback(() => setMobileOpen(false), []);
 
-  // The route subtree is held as a memoized element keyed by pathname, so a
-  // sidebar collapse (a state change on THIS component) re-renders the chrome
-  // only — React bails out of the identical child element and every page's
-  // component state survives the toggle untouched.
-  const routeContent = useMemo(
-    () => (
-      <div
-        key={location.pathname}
-        className="p-3 sm:p-4 lg:p-6 xl:px-8 w-full overflow-x-clip animate-in fade-in duration-150"
-      >
-        <Outlet />
-      </div>
-    ),
-    [location.pathname],
-  );
-
   const canDashboard = hasPerm(role, profile?.permissions as any, "view_dashboard");
   const canOrders = hasPerm(role, profile?.permissions as any, "view_orders");
   const canCreate = hasPerm(role, profile?.permissions as any, "create_orders");
@@ -97,7 +80,7 @@ function AppLayout() {
     () => [
       ...(canDashboard ? [{ to: "/dashboard", label: "Dashboard", icon: LayoutDashboard }] : []),
       ...(canOrders ? [{ to: "/orders", label: "Orders", icon: ListOrdered }] : []),
-      ...(canCreate ? [{ to: "/orders/new", label: "New Order", icon: PlusCircle }] : []),
+      ...(canCreate ? [{ to: "/orders/new", label: "New", icon: Plus }] : []),
       ...(canComplaints
         ? [{ to: "/complaints", label: "Complaints", icon: MessageSquareWarning }]
         : []),
@@ -107,14 +90,13 @@ function AppLayout() {
       ...(canCallCenter
         ? [
             { to: "/calls/customer-care", label: "Customer Care", icon: Headphones },
-            { to: "/calls/telesales", label: "Telesales", icon: PhoneOutgoing },
+            { to: "/calls/telesales", label: "Telesales", icon: BadgeDollarSign },
           ]
         : []),
-
       ...(canUsers ? [{ to: "/admin/users", label: "Users", icon: Users }] : []),
       ...(canBranches ? [{ to: "/branches", label: "Branches", icon: MapPin }] : []),
       ...(isAdministrator(role)
-        ? [{ to: "/admin/yeastar", label: "Yeastar PBX", icon: PhoneCall }]
+        ? [{ to: "/admin/yeastar", label: "Yeastar", icon: PhoneCall }]
         : []),
     ],
     [canDashboard, canOrders, canCreate, canComplaints, canCallCenter, canUsers, canBranches, role],
@@ -234,7 +216,12 @@ function AppLayout() {
 
             `clip` contains the same overflow without establishing a scroll box,
             so the document stays the scrollport and sticky descendants work. */}
-        {routeContent}
+        <div
+          key={location.pathname}
+          className="p-3 sm:p-4 lg:p-6 xl:px-8 w-full overflow-x-clip animate-in fade-in duration-150"
+        >
+          <Outlet />
+        </div>
       </main>
     </div>
   );

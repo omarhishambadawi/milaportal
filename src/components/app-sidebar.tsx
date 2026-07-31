@@ -8,8 +8,6 @@ export type NavItemData = {
   to: string;
   label: string;
   icon: ComponentType<{ className?: string }>;
-  /** Reserved for future notification badges — layout is already allocated. */
-  badge?: number | string | null;
 };
 
 type SidebarProps = {
@@ -59,16 +57,8 @@ type SidebarProps = {
  * opacity/max-width on a handful of small boxes.
  */
 
-/** Subtle build tag shown in the collapse row. */
-const APP_VERSION = "v1.0";
-/**
- * Every collapse affordance shares the aside's width clock. Expanding is given
-
- * slightly more time than collapsing (180ms vs 130ms) — revealing content reads
- * better when it eases in, while hiding it should feel immediate.
- */
-const RAIL_CLOCK =
-  "duration-[130ms] group-data-[state=expanded]/rail:duration-[180ms] ease-[cubic-bezier(0.4,0,0.2,1)]";
+/** Every collapse affordance shares the aside's width clock. */
+const RAIL_CLOCK = "duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]";
 
 /**
  * Presentational grouping of the (already permission-filtered) nav items into
@@ -117,14 +107,9 @@ const NavItem = memo(function NavItem({ item, active }: { item: NavItemData; act
       title={item.label}
       aria-current={active ? "page" : undefined}
       className={cn(
-        // Denser vertical rhythm (36px icon + 8px padding = 44px target, still
-        // comfortably above the 44px touch minimum).
-        "group relative flex items-center overflow-hidden rounded-xl px-2 py-1 outline-none",
-        "transition-[background-color,box-shadow] duration-150 ease-out",
+        "group relative flex items-center overflow-hidden rounded-xl px-2 py-1.5 outline-none transition-colors duration-200 ease-out",
         "focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
-        active
-          ? "bg-primary/[0.12] shadow-sm shadow-primary/10"
-          : "hover:bg-accent/60 hover:shadow-sm hover:shadow-foreground/[0.04]",
+        active ? "bg-primary/10" : "hover:bg-accent/70",
       )}
     >
       {/* Active rail — animates in from the left edge; fades away in rail mode
@@ -133,30 +118,33 @@ const NavItem = memo(function NavItem({ item, active }: { item: NavItemData; act
         <span
           aria-hidden
           className={cn(
-            "absolute left-0 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-primary animate-in fade-in slide-in-from-left-1 duration-200",
+            "absolute left-0 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-primary animate-in fade-in slide-in-from-left-1 duration-300",
             "transition-opacity group-data-[state=collapsed]/rail:opacity-0",
           )}
         />
       )}
-      {/* Icon container — the core of the visual language. Its box never
-          changes size between states; only colour and background move. */}
+      {/* Icon container — the core of the visual language */}
       <span
         className={cn(
-          "grid h-9 w-9 shrink-0 place-items-center rounded-lg transition-[color,background-color,box-shadow,transform] duration-150 ease-out",
+          // Narrowed from `transition-all`: this element only ever changes
+          // colours, its shadow, and `scale` on press. Listing them keeps the
+          // press feedback on the compositor without animating the layout
+          // properties that shift when the sidebar collapses.
+          "grid h-9 w-9 shrink-0 place-items-center rounded-lg transition-[color,background-color,box-shadow,transform] duration-200 ease-out",
           active
             ? "bg-primary text-primary-foreground shadow-sm shadow-primary/30"
-            : "text-foreground/65 group-hover:bg-background group-hover:text-foreground group-active:scale-95",
+            : "text-foreground/70 group-hover:bg-background group-hover:text-foreground group-active:scale-90",
         )}
       >
-        <Icon className="h-[18px] w-[18px] shrink-0" />
+        <Icon className="h-[18px] w-[18px]" />
       </span>
       {/* pl-3 replaces the parent's old gap-3, so the whole spacing collapses
           with the box: border-box max-w-0 closes padding and content together,
           leaving the 36px icon exactly centred in the 52px collapsed slot. */}
       <span
         className={cn(
-          "min-w-0 flex-1 truncate pl-3 text-[13.5px] leading-5 tracking-[-0.005em]",
-          "max-w-40 transition-[max-width,opacity,color] ",
+          "min-w-0 truncate pl-3 text-sm tracking-tight",
+          "max-w-40 transition-[max-width,opacity,color]",
           RAIL_CLOCK,
           "group-data-[state=collapsed]/rail:max-w-0 group-data-[state=collapsed]/rail:opacity-0",
           active
@@ -166,20 +154,6 @@ const NavItem = memo(function NavItem({ item, active }: { item: NavItemData; act
       >
         {item.label}
       </span>
-      {/* Badge slot — reserved. Renders nothing until `badge` is supplied, and
-          collapses away with the labels in rail mode. */}
-      {item.badge != null && item.badge !== "" && (
-        <span
-          className={cn(
-            "ml-2 shrink-0 overflow-hidden rounded-full bg-primary/15 px-1.5 text-[10px] font-semibold leading-[18px] text-primary",
-            "transition-[max-width,opacity,margin]",
-            RAIL_CLOCK,
-            "max-w-10 group-data-[state=collapsed]/rail:ml-0 group-data-[state=collapsed]/rail:max-w-0 group-data-[state=collapsed]/rail:px-0 group-data-[state=collapsed]/rail:opacity-0",
-          )}
-        >
-          {item.badge}
-        </span>
-      )}
     </Link>
   );
 });
@@ -207,34 +181,32 @@ const SidebarInner = memo(function SidebarInner({
 
   return (
     <div className="flex h-full flex-col">
-      {/* Brand — px-3 matches the nav's own padding, so the 40px mark lands
-          dead centre of the 76px rail exactly like the 36px nav icons do. */}
-      <div className="flex h-16 shrink-0 items-center border-b border-border/60 px-3">
+      {/* Brand */}
+      <div className="flex h-16 shrink-0 items-center border-b border-border/60 px-4">
         <div className="flex min-w-0 items-center">
           <BrandLogo />
           <div
             className={cn(
-              "min-w-0 overflow-hidden pl-2",
+              "min-w-0 overflow-hidden pl-2.5",
               "max-w-36 transition-[max-width,opacity]",
               RAIL_CLOCK,
               "group-data-[state=collapsed]/rail:max-w-0 group-data-[state=collapsed]/rail:opacity-0",
             )}
           >
-            <div className="truncate text-[15px] font-bold leading-[18px] tracking-[-0.015em] text-foreground">
+            <div className="truncate text-sm font-bold leading-tight tracking-tight text-foreground">
               MilaServ
             </div>
-            <div className="whitespace-nowrap text-[9px] font-semibold uppercase leading-[12px] tracking-[0.22em] text-muted-foreground/70">
+            <div className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80">
               Portal
             </div>
           </div>
         </div>
-
         {onMobileClose && (
           <button
             type="button"
             onClick={onMobileClose}
             aria-label="Close menu"
-            className="ml-auto grid h-9 w-9 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground active:scale-95"
+            className="ml-auto grid h-9 w-9 place-items-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-card active:scale-95"
           >
             <X className="h-[18px] w-[18px]" />
           </button>
@@ -258,7 +230,7 @@ const SidebarInner = memo(function SidebarInner({
                 // The hairline that stands in for the heading in rail mode
                 // fades in from transparent instead of appearing on a class
                 // swap.
-                "mt-4 border-t border-transparent transition-[margin,padding,border-color]",
+                "mt-5 border-t border-transparent transition-[margin,padding,border-color]",
                 RAIL_CLOCK,
                 "group-data-[state=collapsed]/rail:mt-2 group-data-[state=collapsed]/rail:pt-2 group-data-[state=collapsed]/rail:border-border/50",
               ],
@@ -268,8 +240,7 @@ const SidebarInner = memo(function SidebarInner({
               className={cn(
                 // Fixed height (not `auto`) so the collapse to h-0 is
                 // animatable; 10px type sits comfortably inside 16px.
-                "mb-1 h-4 overflow-hidden whitespace-nowrap px-2.5 text-[10px] font-semibold uppercase leading-4 tracking-[0.16em] text-muted-foreground/60",
-
+                "mb-1.5 h-4 overflow-hidden whitespace-nowrap px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70",
                 "transition-[height,margin,opacity]",
                 RAIL_CLOCK,
                 "group-data-[state=collapsed]/rail:mb-0 group-data-[state=collapsed]/rail:h-0 group-data-[state=collapsed]/rail:opacity-0",
@@ -288,48 +259,30 @@ const SidebarInner = memo(function SidebarInner({
 
       {/* Footer — sidebar toggle only. Profile & sign out live in the header. */}
       {onToggle && (
-        <div className="mt-auto border-t border-border/60 px-2 py-1.5">
+        <div className="mt-auto border-t border-border/60 p-2">
           <button
             type="button"
             onClick={onToggle}
             aria-expanded={!collapsed}
-            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className={cn(
-              "flex h-9 w-full items-center rounded-lg px-2.5 text-[12px] font-medium tracking-tight text-muted-foreground outline-none",
-              "transition-colors duration-150 ease-out hover:bg-accent/60 hover:text-foreground",
-              "focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
-            )}
+            className="flex h-9 w-full items-center rounded-lg px-2.5 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-card"
           >
-            <span className="grid h-4 w-9 shrink-0 place-items-center">
-              <ChevronLeft
-                className={cn(
-                  "h-4 w-4 transition-transform",
-                  RAIL_CLOCK,
-                  "group-data-[state=collapsed]/rail:rotate-180",
-                )}
-              />
-            </span>
+            <ChevronLeft
+              className={cn(
+                "h-4 w-4 shrink-0 transition-transform",
+                RAIL_CLOCK,
+                "group-data-[state=collapsed]/rail:rotate-180",
+              )}
+            />
             <span
               className={cn(
-                "overflow-hidden whitespace-nowrap pl-3 text-left",
+                "overflow-hidden whitespace-nowrap pl-2",
                 "max-w-24 transition-[max-width,opacity]",
                 RAIL_CLOCK,
                 "group-data-[state=collapsed]/rail:max-w-0 group-data-[state=collapsed]/rail:opacity-0",
               )}
             >
               Collapse
-            </span>
-            {/* Subtle build tag — collapses away with the rail. */}
-            <span
-              className={cn(
-                "ml-auto overflow-hidden whitespace-nowrap text-[10px] font-medium tabular-nums text-muted-foreground/50",
-                "max-w-16 transition-[max-width,opacity]",
-                RAIL_CLOCK,
-                "group-data-[state=collapsed]/rail:max-w-0 group-data-[state=collapsed]/rail:opacity-0",
-              )}
-            >
-              {APP_VERSION}
             </span>
           </button>
         </div>
@@ -361,9 +314,7 @@ export function AppSidebar({
           // layout for this element and the main content beside it on every
           // frame, so the hint bought nothing while permanently holding an extra
           // layer (and its memory) for an animation that runs for 300ms.
-          "transition-[width] ease-[cubic-bezier(0.4,0,0.2,1)]",
-          expanded ? "duration-[180ms]" : "duration-[130ms]",
-
+          "transition-[width] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]",
           expanded ? "w-64" : "w-[76px]",
         )}
       >
