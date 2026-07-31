@@ -265,7 +265,7 @@ const SidebarInner = memo(function SidebarInner({
             onClick={onToggle}
             aria-expanded={!collapsed}
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className="flex h-9 w-full items-center rounded-lg px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/70 hover:text-foreground"
+            className="flex h-9 w-full items-center rounded-lg px-2.5 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-card"
           >
             <ChevronLeft
               className={cn(
