@@ -465,7 +465,13 @@ idle, not unsupported)
 ❌ **Not usable:** all `call_report/*` (exist, reject every parameter shape
 tried) · everything non-CDR on v2.0 · the three `callstatistics` paths
 
-## Recommendation: CDR APIs
+## Recommendation — SUPERSEDED
+
+> ⚠️ **The recommendation in this section was wrong and is retracted.** It read as
+> a permanent verdict on Call Report when the evidence only supported "the request
+> format is unknown". The request format has since been **resolved** — see
+> [Call Report request format RESOLVED](#call-report-request-format-resolved) at
+> the foot of this document, which supersedes everything below.
 
 Not a hybrid — **not yet**, and the distinction is the point.
 
@@ -488,3 +494,95 @@ before any replacement, even then: the Contact Center licence state on this P570
 and whether Queue Performance counts queue legs where the CDR pipeline counts
 `call_id` groups — because if the definitions differ, matching numbers is the
 wrong target.
+
+---
+
+# Call Report request format RESOLVED
+
+**Classification: _Supported endpoint with resolved request format; data
+retrieval unconfirmed._**
+
+This supersedes the earlier "CDR APIs" recommendation, which was retracted. The
+earlier framing treated "we cannot form a valid request" as "the API is
+unusable". Those are different claims and only the first was ever evidenced.
+
+## The two mistakes in the failing request
+
+The official page carries a verbatim example that settles it:
+
+```
+GET /openapi/v1.0/call_report/list?type=extcallstatistics
+    &start_time=2022/04/01 12:00:00 AM
+    &end_time=2022/04/15 11:59:59 PM
+    &ext_id_list=34
+    &communication_type=Inbound
+    &access_token=...
+```
+
+1. **The date format is `YYYY/MM/DD hh:mm:ss AM`** — year first, slashes,
+   12-hour with a meridiem. Six formats were tried before this and all failed,
+   including the PBX's own reported `DD/MM/YYYY hh:mm:ss AM`. The PBX's display
+   preference is **not** the API's wire format; that assumption cost the earlier
+   attempts.
+2. **Each report type requires its own entity ID list**, and it is genuinely
+   required rather than a filter:
+
+   | Report type | Required ID parameter |
+   | --- | --- |
+   | `extcallstatistics` | `ext_id_list` |
+   | `queueperformance` | `queue_id_list` |
+   | `queueagentperformance` | `queue_id` |
+
+   Every earlier probe omitted these, so `40002 PARAMETER ERROR` was correct and
+   informative all along.
+
+## Verified working — live, 2026-08-01
+
+IDs sourced from the verified `queue/list` (queue id `1`) and `extension/list`
+(`100,101,102,103,105`):
+
+| Request | Result |
+| --- | --- |
+| `call_report/list?type=extcallstatistics&ext_id_list=…` | ✅ `errcode 0 SUCCESS` |
+| `call_report/list?type=queueperformance&queue_id_list=1` | ✅ `errcode 0 SUCCESS` |
+| `call_report/list?type=queueagentperformance&queue_id=1` | ✅ `errcode 0 SUCCESS` |
+| `call_report/list?type=queueavgwaittalktime&queue_id_list=1` | ❌ still `40002` — needs a further parameter, likely `ring_duration_range` |
+
+**The Call Report API is reachable and accepts valid requests on firmware
+37.23.0.123.** The standing "no server-side queue/agent statistics API" claim is
+fully disproven.
+
+## The remaining open question — do not skip this
+
+Every successful call returned **`total_number: 0`**, including over a 45-day
+window (2026/06/17 → 2026/08/01), even though the 37.23.0.83 audit counted
+**13,997 CDR rows in 30 days**. So:
+
+> **Request format: resolved. Data retrieval: unconfirmed.**
+
+`errcode 0` with zero rows means the PBX accepted the request and reported no
+matching report data. Candidate causes, none yet tested:
+
+1. **The firmware upgrade cleared the report module.** `system/information`
+   reports `up_time` 3130s — the PBX had been up under an hour when probed. The
+   documented CDR/report rework at 37.21.0.117 explicitly partitions old and new
+   data; the report store may simply be empty post-upgrade.
+2. **Contact Center licensing.** Queue and agent reporting is a licensed feature.
+   An unlicensed box could accept the call and hold no data.
+3. **Wrong entity scope.** Only queue id `1` exists in `queue/list`; if Customer
+   Care runs on a queue not in that list, the report is legitimately empty.
+4. **A required filter defaulting to nothing**, e.g. `communication_type`, which
+   the official example passes explicitly.
+
+## Next investigation — format only, no analytics work
+
+1. Re-run after real queue traffic and confirm whether `total_number` rises.
+2. Compare against the same window in the PBX web UI's own Queue Performance
+   report. If the UI shows rows and the API returns none, that is a licensing or
+   module fault to take to Yeastar, with the `errcode 0` evidence attached.
+3. Resolve `queueavgwaittalktime`'s remaining `40002` (try `ring_duration_range`).
+4. Only once non-zero data is returned does the KPI-mapping question arise — and
+   the definition mismatch flagged earlier still needs settling first: Queue
+   Performance counts queue legs, the CDR pipeline counts `call_id` groups.
+
+**No dashboard, analytics or KPI code has been changed.**
