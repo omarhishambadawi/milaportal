@@ -67,6 +67,23 @@ function AppLayout() {
   const toggleSidebar = useCallback(() => setExpanded((v) => !v), []);
   const closeMobileSidebar = useCallback(() => setMobileOpen(false), []);
 
+  // The route subtree is held as a memoized element keyed by pathname, so a
+  // sidebar collapse (a state change on THIS component) re-renders the chrome
+  // only — React bails out of the identical child element and every page's
+  // component state survives the toggle untouched.
+  const routeContent = useMemo(
+    () => (
+      <div
+        key={location.pathname}
+        className="p-3 sm:p-4 lg:p-6 xl:px-8 w-full overflow-x-clip animate-in fade-in duration-150"
+      >
+        <Outlet />
+      </div>
+    ),
+    [location.pathname],
+  );
+
+
   const canDashboard = hasPerm(role, profile?.permissions as any, "view_dashboard");
   const canOrders = hasPerm(role, profile?.permissions as any, "view_orders");
   const canCreate = hasPerm(role, profile?.permissions as any, "create_orders");
