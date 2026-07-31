@@ -60,8 +60,14 @@ type SidebarProps = {
  * opacity/max-width on a handful of small boxes.
  */
 
-/** Every collapse affordance shares the aside's width clock. */
-const RAIL_CLOCK = "duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]";
+/**
+ * Every collapse affordance shares the aside's width clock. Expanding is given
+ * slightly more time than collapsing (180ms vs 130ms) — revealing content reads
+ * better when it eases in, while hiding it should feel immediate.
+ */
+const RAIL_CLOCK =
+  "duration-[130ms] group-data-[state=expanded]/rail:duration-[180ms] ease-[cubic-bezier(0.4,0,0.2,1)]";
+
 
 /**
  * Presentational grouping of the (already permission-filtered) nav items into
