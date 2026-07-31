@@ -60,7 +60,10 @@ type SidebarProps = {
  * opacity/max-width on a handful of small boxes.
  */
 
-/**
+/** Subtle build tag shown in the collapse row. */
+const APP_VERSION = "v1.0";
+
+
  * Every collapse affordance shares the aside's width clock. Expanding is given
  * slightly more time than collapsing (180ms vs 130ms) — revealing content reads
  * better when it eases in, while hiding it should feel immediate.
