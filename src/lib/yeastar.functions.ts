@@ -709,6 +709,12 @@ const kpiValidationInput = z.object({
     .optional(),
   /** Used only when `from`/`to` are omitted. */
   windowDays: z.number().int().min(1).max(30).default(7),
+  /**
+   * Which workflow to validate. Telesales is compared against Yeastar Reports ›
+   * Extension Call Statistics; Customer Care must NOT use that report, and is
+   * validated on queue analytics instead.
+   */
+  team: z.enum(["all", "customer_care", "telesales"]).default("all"),
 });
 
 export type KpiValidationResult =
@@ -739,8 +745,32 @@ export const yeastarKpiValidation = createServerFn({ method: "POST" })
       const agents = await loadAgents((context as any).supabase);
       const ctx = await buildNormalizationContext(agents.map((a) => a.ext));
 
+      const teamExtensions =
+        data.team === "all"
+          ? null
+          : new Set(agents.filter((a) => a.team === data.team).map((a) => String(a.ext).trim()));
+
+      // Observe the production CDR cache WITHOUT touching it. Validation always
+      // fetches its own copy, so running diagnostics can neither warm nor evict
+      // the cache the dashboards depend on.
+      const cached = cdrCache.get(`${from}|${to}`);
+      const cdrCacheState: { status: "warm" | "cold"; ageMs: number | null } =
+        cached && Date.now() - cached.at < CDR_CACHE_TTL_MS
+          ? { status: "warm", ageMs: Date.now() - cached.at }
+          : { status: "cold", ageMs: null };
+
       const { runKpiValidation } = await import("@/lib/yeastar/kpi-validation.server");
-      const report = await runKpiValidation(from, to, ctx);
+      const scopedAgents =
+        data.team === "all" ? agents : agents.filter((a) => a.team === data.team);
+      const agentsByExtension = new Map(
+        scopedAgents.filter((a) => a.ext).map((a) => [String(a.ext).trim(), a.name]),
+      );
+
+      const report = await runKpiValidation(from, to, ctx, {
+        teamExtensions,
+        agentsByExtension,
+        cdrCache: cdrCacheState,
+      });
       return { ok: true, configured: true, report };
     } catch (err) {
       return {

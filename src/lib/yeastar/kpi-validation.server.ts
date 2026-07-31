@@ -7,20 +7,27 @@
  * over the same live CDR but returns ONLY aggregates: call counts, KPI totals,
  * the pass/fail invariants, and field NAMES with their occurrence counts.
  *
- * Nothing here can identify a caller, an agent or a recording:
- *   - no raw response bodies
- *   - no per-call or per-leg rows
- *   - no phone numbers, DIDs or record file paths
- *   - no agent roster join (KPIs are validated at platform level)
+ * It DOES return per-call diagnostic rows — a mismatch cannot be traced to
+ * exact calls without them — but only fields that carry no external identity:
  *
- * That is what makes it safe to expose to an administrator on a deployed
- * environment, which is the only place the Yeastar credentials exist.
+ *   - `call_id`: an opaque PBX identifier, meaningless outside this PBX
+ *   - extension + agent name: internal roster data the viewer already administers
+ *   - outcome, durations, leg counts, exclusion reason
+ *
+ * Never returned, at any point: raw response bodies, credentials, tokens,
+ * caller/callee phone numbers, DIDs, or recording file paths. That is what
+ * makes this safe to expose to an administrator on a deployed environment,
+ * which is the only place the Yeastar credentials exist.
  */
 import { fetchCdrRange } from "./cdr.server";
 import { aggregateClassified, classifyRecords, type CallTotals } from "./stats.server";
 import { validateAnalytics, type KpiCheck } from "./validate";
 import { RETIRED_ASSUMED_FIELDS } from "./diagnostics.server";
-import { DEFAULT_OUTBOUND_RING_TIMEOUT_SEC, type NormalizationContext } from "./normalize";
+import {
+  DEFAULT_OUTBOUND_RING_TIMEOUT_SEC,
+  type NormalizationContext,
+  type NormalizedCall,
+} from "./normalize";
 import { BUSINESS_UTC_OFFSET_MINUTES } from "@/lib/timezone";
 
 /** Minutes from midnight → "HH:MM". */
@@ -28,6 +35,82 @@ function minuteLabel(minute: number): string {
   const h = Math.floor(minute / 60) % 24;
   const m = minute % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/**
+ * One call, reduced to what a mismatch investigation needs.
+ *
+ * Contains NO phone numbers, DIDs or recording paths — a `call_id` is an opaque
+ * PBX identifier and the extension is an internal number, both of which are
+ * required to line a row up against the Yeastar report.
+ */
+export interface CallDiagnosticRow {
+  callId: string;
+  startedAt: number | null;
+  direction: string;
+  /** Raw `call_type` before correction, so a reclassification is visible. */
+  declaredDirection: string;
+  directionCorrected: boolean;
+  extension: string;
+  /** Roster name for `extension`, or "Unknown" when no agent claims it. */
+  agentName: string;
+  classification: string;
+  included: boolean;
+  exclusionReason: string | null;
+  talkSeconds: number;
+  ringSeconds: number | null;
+  queueWaitSeconds: number | null;
+  queueNumber: string | null;
+  legs: number;
+  /** Why this call is where it is — see `deriveRootCause`. */
+  rootCause: string;
+}
+
+/** How long each stage took, and whether production's cache was warm. */
+export interface ProcessingStats {
+  fetchMs: number;
+  normalizeMs: number;
+  aggregateMs: number;
+  totalMs: number;
+  /**
+   * State of the PRODUCTION CDR cache, observed without touching it. Validation
+   * always fetches its own copy, so running diagnostics can neither warm nor
+   * evict the cache the dashboards rely on.
+   */
+  cdrCache: { status: "warm" | "cold"; ageMs: number | null };
+}
+
+export interface PipelineStats {
+  rawRows: number;
+  normalizedCalls: number;
+  duplicateLegsRemoved: number;
+  directionCorrections: number;
+  callsExcluded: number;
+  queueCalls: number;
+  extensionCalls: number;
+}
+
+/**
+ * Why a call ended up classified or excluded the way it did.
+ *
+ * Derived from the call's own facts — never guessed. "missing_cdr_row" is
+ * deliberately absent: a call we never received cannot appear in this list, so
+ * that root cause is inferred by the mismatch inspector from a count shortfall,
+ * not from a row.
+ */
+export function deriveRootCause(c: NormalizedCall, duplicateLegs: boolean): string {
+  if (c.directionCorrected) return "wrong_direction";
+  if (c.exclusion === "after_hours") return "after_hours";
+  if (c.exclusion === "queue_closed") return "queue_closed";
+  if (c.exclusion === "system_event") return "system_event";
+  if (c.exclusion === "ivr_only") return "ivr_only";
+  if (c.exclusion === "internal") return "internal";
+  if (duplicateLegs) return "duplicate_leg";
+  if (c.outcome === "cancelled_by_agent") return "agent_cancelled";
+  if (c.direction === "Inbound" && c.reachedQueue && !c.legs.some((l) => l.role === "agent"))
+    return "queue_leg_ignored";
+  if (c.outcome === "unknown") return "unknown";
+  return "none";
 }
 
 export interface KpiValidationReport {
@@ -87,6 +170,13 @@ export interface KpiValidationReport {
     }[];
     callsTruncated: boolean;
   };
+  /** Agents in scope, for the agent filter. Names + extensions only. */
+  agents: { ext: string; name: string }[];
+  /** Every call in the window, for the comparison table and mismatch inspector. */
+  callRows: CallDiagnosticRow[];
+  callRowsTruncated: boolean;
+  processing: ProcessingStats;
+  stats: PipelineStats;
   totals: CallTotals;
   /** Aggregate counts by call outcome. */
   outcomes: { outcome: string; count: number }[];
@@ -114,10 +204,23 @@ export async function runKpiValidation(
   from: string,
   to: string,
   ctx: NormalizationContext,
+  opts: {
+    /** Restrict to one team's extensions. Telesales and Customer Care are validated apart. */
+    teamExtensions?: ReadonlySet<string> | null;
+    /** extension -> agent name, so a row can name who a call belongs to. */
+    agentsByExtension?: ReadonlyMap<string, string> | null;
+    /** Observed state of the production CDR cache. Read-only — never mutated here. */
+    cdrCache?: { status: "warm" | "cold"; ageMs: number | null };
+    maxCallRows?: number;
+  } = {},
 ): Promise<KpiValidationReport> {
+  const t0 = Date.now();
   const cdr = await fetchCdrRange({ from, to });
+  const tFetched = Date.now();
   const classified = classifyRecords(cdr.records, ctx);
+  const tNormalized = Date.now();
   const result = aggregateClassified(classified, [], []);
+  const tAggregated = Date.now();
   const checks = validateAnalytics(classified, result);
 
   const outcomes = new Map<string, number>();
@@ -184,6 +287,44 @@ export async function runKpiValidation(
     }
   }
 
+  // --- per-call diagnostic rows --------------------------------------------
+  const MAX_CALL_ROWS = opts.maxCallRows ?? 2000;
+  const teamExts = opts.teamExtensions ?? null;
+  const inTeam = (c: NormalizedCall) =>
+    teamExts == null ||
+    (c.answeringExtension != null && teamExts.has(c.answeringExtension)) ||
+    c.legs.some((l) => l.role === "agent" && teamExts.has(l.destinationNumber));
+
+  const everyCall = [...classified.calls, ...classified.excluded]
+    .filter(inTeam)
+    .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
+
+  const callRows: CallDiagnosticRow[] = everyCall.slice(0, MAX_CALL_ROWS).map((c) => {
+    // A repeated `new_id` is dropped before the call exists, so the surviving
+    // signal is a call carrying two legs that resolve to the same destination.
+    const destinations = c.legs.map((l) => l.destinationNumber).filter(Boolean);
+    const duplicateLegs = new Set(destinations).size < destinations.length;
+    return {
+      callId: c.callId,
+      startedAt: c.startedAt,
+      direction: c.direction,
+      declaredDirection: c.declaredDirection,
+      directionCorrected: c.directionCorrected,
+      extension: c.answeringExtension ?? "unknown",
+      agentName:
+        (c.answeringExtension && opts.agentsByExtension?.get(c.answeringExtension)) || "Unknown",
+      classification: c.outcome,
+      included: c.operational,
+      exclusionReason: c.exclusion,
+      talkSeconds: c.talkSeconds,
+      ringSeconds: c.agentRingSeconds,
+      queueWaitSeconds: c.queueWaitSeconds,
+      queueNumber: c.queueNumber,
+      legs: c.legs.length,
+      rootCause: deriveRootCause(c, duplicateLegs),
+    };
+  });
+
   const counts = new Map<string, number>();
   for (const row of cdr.records)
     for (const key of Object.keys(row)) counts.set(key, (counts.get(key) ?? 0) + 1);
@@ -237,6 +378,29 @@ export async function runKpiValidation(
         talkSeconds: c.talkSeconds,
       })),
       callsTruncated: outboundCalls.length > OUTBOUND_CALL_LIMIT,
+    },
+    agents: [...(opts.agentsByExtension ?? new Map())]
+      .map(([ext, name]) => ({ ext, name }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    callRows,
+    callRowsTruncated: everyCall.length > MAX_CALL_ROWS,
+    processing: {
+      fetchMs: tFetched - t0,
+      normalizeMs: tNormalized - tFetched,
+      aggregateMs: tAggregated - tNormalized,
+      totalMs: Date.now() - t0,
+      cdrCache: opts.cdrCache ?? { status: "cold", ageMs: null },
+    },
+    stats: {
+      rawRows: classified.rowsInspected,
+      normalizedCalls: classified.calls.length + classified.excluded.length,
+      duplicateLegsRemoved: classified.duplicateRowsDropped,
+      directionCorrections: classified.directionCorrections.reduce((n, d) => n + d.count, 0),
+      callsExcluded: classified.excluded.length,
+      queueCalls: classified.calls.filter((c) => c.reachedQueue).length,
+      extensionCalls: classified.calls.filter(
+        (c) => !c.reachedQueue && c.answeringExtension != null,
+      ).length,
     },
     totals: result.totals,
     outcomes: [...outcomes.entries()]

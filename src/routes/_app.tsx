@@ -13,6 +13,7 @@ import {
   PhoneCall,
   Headphones,
   BadgeDollarSign,
+  Stethoscope,
 } from "lucide-react";
 import { hasPerm, canViewCallCenter } from "@/lib/permissions";
 import { AppHeader } from "@/components/app-header";
@@ -95,8 +96,13 @@ function AppLayout() {
         : []),
       ...(canUsers ? [{ to: "/admin/users", label: "Users", icon: Users }] : []),
       ...(canBranches ? [{ to: "/branches", label: "Branches", icon: MapPin }] : []),
+      // Administrators only. The diagnostics page is the single place to work
+      // out why a KPI disagrees with the PBX report, so it needs to be findable.
       ...(isAdministrator(role)
-        ? [{ to: "/admin/yeastar", label: "Yeastar", icon: PhoneCall }]
+        ? [
+            { to: "/admin/yeastar", label: "Yeastar", icon: PhoneCall },
+            { to: "/admin/yeastar-diagnostics", label: "Diagnostics", icon: Stethoscope },
+          ]
         : []),
     ],
     [canDashboard, canOrders, canCreate, canComplaints, canCallCenter, canUsers, canBranches, role],
