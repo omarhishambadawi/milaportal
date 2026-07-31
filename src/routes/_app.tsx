@@ -219,12 +219,8 @@ function AppLayout() {
 
             `clip` contains the same overflow without establishing a scroll box,
             so the document stays the scrollport and sticky descendants work. */}
-        <div
-          key={location.pathname}
-          className="p-3 sm:p-4 lg:p-6 xl:px-8 w-full overflow-x-clip animate-in fade-in duration-150"
-        >
-          <Outlet />
-        </div>
+        {routeContent}
+
       </main>
     </div>
   );
