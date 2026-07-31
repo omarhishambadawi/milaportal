@@ -365,7 +365,9 @@ export function AppSidebar({
           // layout for this element and the main content beside it on every
           // frame, so the hint bought nothing while permanently holding an extra
           // layer (and its memory) for an animation that runs for 300ms.
-          "transition-[width] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]",
+          "transition-[width] ease-[cubic-bezier(0.4,0,0.2,1)]",
+          expanded ? "duration-[180ms]" : "duration-[130ms]",
+
           expanded ? "w-64" : "w-[76px]",
         )}
       >
