@@ -119,10 +119,41 @@ export interface KpiValidationReport {
   cdr: {
     path: string;
     totalReported: number | null;
+    /** Rows the PBX returned before our epoch window filter. */
+    rowsFetched: number;
     rowsInWindow: number;
+    /** Rows our filter discarded. Non-zero means our window disagrees with the PBX's. */
+    rowsDroppedOutOfWindow: number;
     pagesFetched: number;
     truncated: boolean;
     elapsedMs: number;
+  };
+  /**
+   * Calls just outside the requested window, found by re-querying a widened one.
+   *
+   * This exists to answer a question no other panel can: when the PBX report
+   * counts a call we never received, was it dropped at the window edge? A call
+   * that STARTED before the window but was still connected when it opened is
+   * the classic case — we filter on start time, and a report that counts it on
+   * the later day will always be one call ahead of us.
+   *
+   * `overlapsWindow` marks exactly those. A near-miss that does not overlap is
+   * simply a neighbouring call and explains nothing.
+   */
+  boundary: {
+    probeMinutes: number;
+    probed: boolean;
+    nearMiss: {
+      callId: string;
+      startedAt: number | null;
+      endsAt: number | null;
+      position: "before" | "after";
+      overlapsWindow: boolean;
+      direction: string;
+      outcome: string;
+      extension: string;
+      talkSeconds: number;
+    }[];
   };
   /** Roster sizes only — never the numbers themselves, apart from queues. */
   roster: { extensionCount: number; queueNumbers: string[] };
@@ -212,6 +243,8 @@ export async function runKpiValidation(
     /** Observed state of the production CDR cache. Read-only — never mutated here. */
     cdrCache?: { status: "warm" | "cold"; ageMs: number | null };
     maxCallRows?: number;
+    /** Minutes either side of the window to probe for edge losses. 0 disables. */
+    boundaryProbeMinutes?: number;
   } = {},
 ): Promise<KpiValidationReport> {
   const t0 = Date.now();
@@ -325,6 +358,60 @@ export async function runKpiValidation(
     };
   });
 
+  // --- boundary probe -------------------------------------------------------
+  const probeMinutes = opts.boundaryProbeMinutes ?? 60;
+  const nearMiss: KpiValidationReport["boundary"]["nearMiss"] = [];
+  let probed = false;
+  if (probeMinutes > 0) {
+    try {
+      // A day either side is the smallest widening `fetchCdrRange` supports,
+      // since it takes calendar dates; the results are then narrowed to the
+      // probe window in seconds.
+      const widen = (d: string, days: number) => {
+        const t = new Date(`${d}T00:00:00Z`).getTime() + days * 86_400_000;
+        return new Date(t).toISOString().slice(0, 10);
+      };
+      const wide = await fetchCdrRange({ from: widen(from, -1), to: widen(to, 1) });
+      const wideCalls = classifyRecords(wide.records, ctx);
+      const probeSec = probeMinutes * 60;
+
+      for (const c of [...wideCalls.calls, ...wideCalls.excluded]) {
+        if (c.startedAt == null) continue;
+        const inStrict = c.startedAt >= cdr.startEpoch && c.startedAt <= cdr.endEpoch;
+        if (inStrict) continue;
+
+        const before = c.startedAt < cdr.startEpoch;
+        const distance = before ? cdr.startEpoch - c.startedAt : c.startedAt - cdr.endEpoch;
+        if (distance > probeSec) continue;
+
+        const duration = Math.max(
+          0,
+          ...c.legs.map((l) => l.durationSeconds ?? 0),
+          c.talkSeconds + (c.agentRingSeconds ?? 0),
+        );
+        const endsAt = c.startedAt + duration;
+        nearMiss.push({
+          callId: c.callId,
+          startedAt: c.startedAt,
+          endsAt,
+          position: before ? "before" : "after",
+          // Started outside, still connected inside — the call a start-time
+          // filter loses and an end-time report keeps.
+          overlapsWindow: before && endsAt >= cdr.startEpoch,
+          direction: c.direction,
+          outcome: c.outcome,
+          extension: c.answeringExtension ?? "unknown",
+          talkSeconds: c.talkSeconds,
+        });
+      }
+      nearMiss.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
+      probed = true;
+    } catch {
+      // A probe failure must never fail the validation it is only assisting.
+      probed = false;
+    }
+  }
+
   const counts = new Map<string, number>();
   for (const row of cdr.records)
     for (const key of Object.keys(row)) counts.set(key, (counts.get(key) ?? 0) + 1);
@@ -335,11 +422,14 @@ export async function runKpiValidation(
     cdr: {
       path: cdr.path,
       totalReported: cdr.totalReported,
+      rowsFetched: cdr.fetchedRows,
       rowsInWindow: cdr.records.length,
+      rowsDroppedOutOfWindow: cdr.droppedOutOfWindow,
       pagesFetched: cdr.pagesFetched,
       truncated: cdr.truncated,
       elapsedMs: cdr.elapsedMs,
     },
+    boundary: { probeMinutes, probed, nearMiss },
     roster: { extensionCount: ctx.extensionNumbers.size, queueNumbers: [...ctx.queueNumbers] },
     businessHours: ctx.businessHours
       ? {

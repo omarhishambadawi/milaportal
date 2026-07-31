@@ -57,6 +57,17 @@ export interface FetchCdrOptions {
 export interface FetchCdrResult {
   records: CdrRecord[];
   totalReported: number | null;
+  /**
+   * Rows the PBX actually returned, BEFORE our own epoch window filter.
+   *
+   * Reported because the gap between this and `records.length` is otherwise
+   * invisible: a call present in the PBX's own report but absent from our
+   * analytics has to be lost either here (pagination) or in that filter
+   * (window semantics), and neither was previously observable.
+   */
+  fetchedRows: number;
+  /** Rows discarded because their timestamp fell outside the requested window. */
+  droppedOutOfWindow: number;
   pagesFetched: number;
   path: "search" | "list-fallback" | "search-empty-list-fallback";
   startEpoch: number;
@@ -216,11 +227,14 @@ export async function fetchCdrRange(opts: FetchCdrOptions): Promise<FetchCdrResu
 
   // Authoritative timezone-correct filter by epoch timestamp.
   const filtered = records.filter(inWindow);
+  const droppedOutOfWindow = records.length - filtered.length;
   console.log(`[yeastar cdr] path=${path} fetched=${records.length} inWindow=${filtered.length}`);
 
   return {
     records: filtered,
     totalReported,
+    fetchedRows: records.length,
+    droppedOutOfWindow,
     pagesFetched: pages,
     path,
     startEpoch,

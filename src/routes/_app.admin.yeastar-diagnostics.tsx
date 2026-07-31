@@ -410,6 +410,10 @@ function YeastarDiagnostics() {
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <Stat label="PBX total_number" value={report.cdr.totalReported ?? "—"} />
+                <Stat label="Rows fetched" value={report.cdr.rowsFetched} />
+                <Stat label="Rows in window" value={report.cdr.rowsInWindow} />
+                <Stat label="Dropped by window filter" value={report.cdr.rowsDroppedOutOfWindow} />
                 <Stat label="Raw CDR rows" value={report.stats.rawRows} />
                 <Stat label="Normalized calls" value={report.stats.normalizedCalls} />
                 <Stat label="Duplicate legs removed" value={report.stats.duplicateLegsRemoved} />
@@ -437,6 +441,20 @@ function YeastarDiagnostics() {
                 Validation fetches its own copy of the window, so running it neither warms nor
                 evicts the cache the dashboards use.
               </p>
+              {report.cdr.totalReported != null &&
+                report.cdr.totalReported !== report.cdr.rowsFetched && (
+                  <p className="text-xs text-destructive">
+                    The PBX reported {report.cdr.totalReported} rows for this window but{" "}
+                    {report.cdr.rowsFetched} were retrieved. Rows were lost during paging — that
+                    alone can account for a missing call.
+                  </p>
+                )}
+              {report.cdr.rowsDroppedOutOfWindow > 0 && (
+                <p className="text-xs text-amber-600">
+                  {report.cdr.rowsDroppedOutOfWindow} row(s) came back from the PBX but fell outside
+                  our window filter, so the PBX's idea of this window is wider than ours.
+                </p>
+              )}
               <div className="grid gap-3 sm:grid-cols-3 text-xs">
                 <div>
                   <Label className="text-xs text-muted-foreground">Outcomes</Label>
@@ -466,6 +484,93 @@ function YeastarDiagnostics() {
                 </Label>
                 <Json data={report.outbound.ringHistogram} max="max-h-40" />
               </div>
+            </CardContent>
+          </Card>
+
+          {/* ---- 4b. Window boundary ---------------------------------------- */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                Window boundary
+                {report.boundary.nearMiss.some((n) => n.overlapsWindow) ? (
+                  <Badge variant="destructive" className="font-normal">
+                    {report.boundary.nearMiss.filter((n) => n.overlapsWindow).length} call(s)
+                    straddle the window start
+                  </Badge>
+                ) : (
+                  <Badge variant="secondary" className="font-normal">
+                    no straddling calls
+                  </Badge>
+                )}
+              </CardTitle>
+              <div className="text-xs text-muted-foreground">
+                Calls within {report.boundary.probeMinutes} minutes outside the window. We filter on
+                call START time; a report that counts a call on the day it ENDED would be one call
+                ahead of us for every call that straddles midnight. Rows marked{" "}
+                <span className="font-medium">straddles</span> started before the window and were
+                still connected when it opened — those are the ones that explain a shortfall.
+              </div>
+            </CardHeader>
+            <CardContent className="p-0 overflow-x-auto">
+              {!report.boundary.probed ? (
+                <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+                  Boundary probe did not run.
+                </div>
+              ) : report.boundary.nearMiss.length === 0 ? (
+                <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+                  No calls near either edge. A missing call is not a boundary problem.
+                </div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b text-left text-muted-foreground">
+                      <th className="px-2 py-2">Call ID</th>
+                      <th className="px-2 py-2">Started</th>
+                      <th className="px-2 py-2">Ended</th>
+                      <th className="px-2 py-2">Side</th>
+                      <th className="px-2 py-2">Ext</th>
+                      <th className="px-2 py-2">Direction</th>
+                      <th className="px-2 py-2">Outcome</th>
+                      <th className="px-2 py-2 text-right">Talk</th>
+                      <th className="px-2 py-2">Verdict</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.boundary.nearMiss.map((n) => (
+                      <tr
+                        key={n.callId}
+                        className={`border-b last:border-0 ${
+                          n.overlapsWindow ? "bg-destructive/5" : ""
+                        }`}
+                      >
+                        <td className="px-2 py-1.5 font-mono">{n.callId}</td>
+                        <td className="px-2 py-1.5 whitespace-nowrap">
+                          {n.startedAt ? new Date(n.startedAt * 1000).toLocaleString() : "—"}
+                        </td>
+                        <td className="px-2 py-1.5 whitespace-nowrap">
+                          {n.endsAt ? new Date(n.endsAt * 1000).toLocaleString() : "—"}
+                        </td>
+                        <td className="px-2 py-1.5">{n.position}</td>
+                        <td className="px-2 py-1.5 font-mono">{n.extension}</td>
+                        <td className="px-2 py-1.5">{n.direction}</td>
+                        <td className="px-2 py-1.5 font-mono">{n.outcome}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums">
+                          {hhmmss(n.talkSeconds)}
+                        </td>
+                        <td className="px-2 py-1.5">
+                          {n.overlapsWindow ? (
+                            <Badge variant="destructive" className="font-normal">
+                              straddles
+                            </Badge>
+                          ) : (
+                            <span className="text-muted-foreground">neighbour</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </CardContent>
           </Card>
 

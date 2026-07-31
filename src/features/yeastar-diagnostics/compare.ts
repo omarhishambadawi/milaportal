@@ -247,7 +247,7 @@ export function inspectMismatch(
     case "talkSeconds":
       return {
         candidates: rows.filter((r) => !r.included),
-        note: "Excluded calls are the only rows that can lower these totals. If none of them explains the gap, the missing calls are absent from the CDR we received.",
+        note: "Excluded calls are the only rows that can lower these totals. If none of them explains the gap, the calls are absent from the CDR we received — check the Window boundary panel next: a call that started before the window and was still connected when it opened is counted by a report that buckets on end time, and dropped by our start-time filter.",
       };
     case "inbound":
       return {
