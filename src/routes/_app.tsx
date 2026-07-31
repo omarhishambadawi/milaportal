@@ -5,15 +5,16 @@ import { Button } from "@/components/ui/button";
 import {
   LayoutDashboard,
   ListOrdered,
-  Plus,
+  PlusCircle,
   Users,
   MapPin,
   ShieldAlert,
   MessageSquareWarning,
   PhoneCall,
   Headphones,
-  BadgeDollarSign,
+  PhoneOutgoing,
 } from "lucide-react";
+
 import { hasPerm, canViewCallCenter } from "@/lib/permissions";
 import { AppHeader } from "@/components/app-header";
 import { AppSidebar } from "@/components/app-sidebar";
