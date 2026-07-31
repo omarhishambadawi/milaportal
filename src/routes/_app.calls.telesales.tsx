@@ -12,17 +12,7 @@
  * selection are separate.
  */
 import { createFileRoute } from "@tanstack/react-router";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  ResponsiveContainer,
-  Tooltip,
-  CartesianGrid,
-  LineChart,
-  Line,
-} from "recharts";
+import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from "recharts";
 import {
   Download,
   ShieldAlert,
@@ -56,9 +46,9 @@ import { HeroKpi } from "@/features/call-center/components/hero-kpi";
 import { Kpi } from "@/features/call-center/components/kpi";
 import { ChartCard } from "@/features/call-center/components/chart-card";
 import {
-  CallTrendCharts,
-  HourlyDistributionChart,
-} from "@/features/call-center/components/call-trend-charts";
+  TelesalesTrendCharts,
+  OutboundHourlyChart,
+} from "@/features/call-center/components/telesales-trend-charts";
 import { AgentPerformanceTable } from "@/features/call-center/components/agent-performance-table";
 import { useCallCenterFilters } from "@/features/call-center/hooks/use-call-center-filters";
 import { useCallCenterAnalytics } from "@/features/call-center/hooks/use-call-center-analytics";
@@ -233,9 +223,11 @@ function TelesalesPage() {
         />
       </div>
 
-      {/* DIRECTION */}
-      <SectionHeader>Call direction</SectionHeader>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      {/* OUTBOUND ACTIVITY — the operation. Inbound is informational only:
+          the only legitimate inbound telesales call is a transfer from
+          Customer Care, so it is never a primary KPI here. */}
+      <SectionHeader>Outbound activity</SectionHeader>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Kpi
           label="Outbound calls"
           value={totals?.outbound ?? 0}
@@ -244,25 +236,65 @@ function TelesalesPage() {
           icon={PhoneOutgoing}
         />
         <Kpi
-          label="Inbound calls"
-          value={totals?.inbound ?? 0}
+          label="Contacted"
+          value={totals?.outboundAnswered ?? 0}
           tone="success"
           loading={isLoading}
+          hint="Customer picked up"
+        />
+        <Kpi
+          label="Lead contact rate"
+          value={pct(totals?.leadContactRate)}
+          tone="success"
+          loading={isLoading}
+          hint="Answered ÷ total outbound"
+        />
+        <Kpi
+          label="Transferred in"
+          value={totals?.inbound ?? 0}
+          loading={isLoading}
           icon={PhoneIncoming}
+          hint="Informational — transfers from Customer Care"
         />
       </div>
 
       {/* OUTCOMES — what happened when the far end was dialled */}
       <SectionHeader>Call outcomes</SectionHeader>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Kpi
           label="No answer"
           value={totals?.noAnswerOutbound ?? 0}
           loading={isLoading}
-          hint="Customer did not pick up"
+          hint="Rang the full timeout without an answer"
+        />
+        <Kpi
+          label="Agent cancelled"
+          value={totals?.cancelledByAgent ?? 0}
+          tone="destructive"
+          loading={isLoading}
+          hint="Agent hung up before the ring timeout expired"
         />
         <Kpi label="Busy" value={totals?.busy ?? 0} tone="warning" loading={isLoading} />
         <Kpi label="Failed" value={totals?.failed ?? 0} tone="destructive" loading={isLoading} />
+      </div>
+
+      {/* AGENT DISCIPLINE — lead-abuse signal */}
+      <SectionHeader>Agent discipline</SectionHeader>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Kpi
+          label="Agent cancel rate"
+          value={pct(totals?.agentCancelRate)}
+          tone="destructive"
+          loading={isLoading}
+          hint="Cancelled ÷ total outbound"
+        />
+        <Kpi
+          label="Avg ring before cancel"
+          value={hhmmss(totals?.avgRingBeforeCancelSec)}
+          loading={isLoading}
+          icon={Clock}
+          hint="How long the agent waited before hanging up"
+        />
       </div>
 
       {/* TIME METRICS — no queue wait: telesales joins no queue */}
@@ -291,11 +323,11 @@ function TelesalesPage() {
         </Card>
       ) : (
         <>
-          <SectionHeader>Call trends</SectionHeader>
-          <CallTrendCharts byDay={byDay} loading={isLoading} />
+          <SectionHeader>Sales trends</SectionHeader>
+          <TelesalesTrendCharts byDay={byDay} perDay={conv?.perDay ?? []} loading={isLoading} />
 
           <SectionHeader>Hourly distribution</SectionHeader>
-          <HourlyDistributionChart
+          <OutboundHourlyChart
             hourly12={hourly12}
             loading={isLoading}
             hasData={byHour.some((h) => h.total > 0)}
@@ -344,49 +376,6 @@ function TelesalesPage() {
               loading={isLoading}
             />
           </div>
-
-          <ChartCard
-            title="Conversion rate per day"
-            loading={isLoading}
-            hasData={(conv?.perDay ?? []).length > 0}
-          >
-            <ResponsiveContainer>
-              <LineChart
-                data={conv?.perDay ?? []}
-                margin={{ top: 8, right: 12, left: 0, bottom: 0 }}
-              >
-                <CartesianGrid
-                  vertical={false}
-                  strokeDasharray="3 3"
-                  stroke="var(--color-border)"
-                />
-                <XAxis
-                  dataKey="date"
-                  tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
-                  tickLine={false}
-                  axisLine={false}
-                />
-                <YAxis
-                  tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
-                  tickFormatter={(v) => `${v}%`}
-                  tickLine={false}
-                  axisLine={false}
-                />
-                <Tooltip
-                  contentStyle={tooltipStyle}
-                  formatter={(v: any) => [`${Number(v).toFixed(1)}%`, "Conversion"]}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="rate"
-                  stroke="var(--color-chart-1)"
-                  strokeWidth={2.5}
-                  dot={{ r: 3, fill: "var(--color-chart-1)" }}
-                  activeDot={{ r: 5 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </ChartCard>
 
           {/* REVENUE PER AGENT */}
           <ChartCard

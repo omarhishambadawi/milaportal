@@ -20,7 +20,7 @@ import { fetchCdrRange } from "./cdr.server";
 import { aggregateClassified, classifyRecords, type CallTotals } from "./stats.server";
 import { validateAnalytics, type KpiCheck } from "./validate";
 import { RETIRED_ASSUMED_FIELDS } from "./diagnostics.server";
-import type { NormalizationContext } from "./normalize";
+import { DEFAULT_OUTBOUND_RING_TIMEOUT_SEC, type NormalizationContext } from "./normalize";
 import { BUSINESS_UTC_OFFSET_MINUTES } from "@/lib/timezone";
 
 /** Minutes from midnight → "HH:MM". */
@@ -60,6 +60,33 @@ export interface KpiValidationReport {
   directionCorrections: { declared: string; corrected: string; count: number }[];
   /** Operational calls per business-timezone hour — read real hours off this. */
   callsByHour: { hour: number; calls: number }[];
+  /**
+   * Outbound reconciliation against Yeastar Reports › Extension Call Statistics.
+   *
+   * `ringHistogram` buckets the ring duration of every UNANSWERED outbound call.
+   * A genuine No Answer rings the full timeout, so the distribution has a spike
+   * at the configured timeout; everything below it is an agent hanging up early.
+   * That spike is the correct `YEASTAR_OUTBOUND_RING_TIMEOUT_SEC`.
+   *
+   * `calls` lists every outbound call with its id, bucket and durations so a
+   * mismatch can be traced to exact call ids. Call ids are opaque PBX
+   * identifiers — no phone numbers are included.
+   */
+  outbound: {
+    ringTimeoutSeconds: number;
+    buckets: { bucket: string; calls: number; talkSeconds: number }[];
+    ringHistogram: { ringSeconds: string; calls: number }[];
+    talkSecondsTotal: number;
+    calls: {
+      callId: string;
+      startedAt: number | null;
+      outcome: string;
+      extension: string;
+      ringSeconds: number | null;
+      talkSeconds: number;
+    }[];
+    callsTruncated: boolean;
+  };
   totals: CallTotals;
   /** Aggregate counts by call outcome. */
   outcomes: { outcome: string; count: number }[];
@@ -137,6 +164,26 @@ export async function runKpiValidation(
   for (const [reason, count] of exclusionMap) if (!known.has(reason)) other += count;
   exclusionMap.set("other", other);
 
+  // --- outbound reconciliation ---------------------------------------------
+  const OUTBOUND_CALL_LIMIT = 500;
+  const outboundCalls = classified.calls.filter((c) => c.direction === "Outbound");
+  const ringTimeoutSeconds = ctx.outboundRingTimeoutSeconds ?? DEFAULT_OUTBOUND_RING_TIMEOUT_SEC;
+
+  const buckets = new Map<string, { calls: number; talkSeconds: number }>();
+  const ringHistogram = new Map<number, number>();
+  let outboundTalk = 0;
+  for (const c of outboundCalls) {
+    const b = buckets.get(c.outcome) ?? { calls: 0, talkSeconds: 0 };
+    b.calls++;
+    b.talkSeconds += c.talkSeconds;
+    buckets.set(c.outcome, b);
+    outboundTalk += c.talkSeconds;
+    // Only unanswered calls carry the cancelled-vs-no-answer question.
+    if (c.outcome !== "answered" && c.agentRingSeconds != null) {
+      ringHistogram.set(c.agentRingSeconds, (ringHistogram.get(c.agentRingSeconds) ?? 0) + 1);
+    }
+  }
+
   const counts = new Map<string, number>();
   for (const row of cdr.records)
     for (const key of Object.keys(row)) counts.set(key, (counts.get(key) ?? 0) + 1);
@@ -172,6 +219,25 @@ export async function runKpiValidation(
       hour,
       calls: byHour.get(hour) ?? 0,
     })),
+    outbound: {
+      ringTimeoutSeconds,
+      buckets: [...buckets.entries()]
+        .map(([bucket, v]) => ({ bucket, calls: v.calls, talkSeconds: v.talkSeconds }))
+        .sort((a, b) => b.calls - a.calls),
+      ringHistogram: [...ringHistogram.entries()]
+        .map(([ringSeconds, calls]) => ({ ringSeconds: String(ringSeconds), calls }))
+        .sort((a, b) => Number(a.ringSeconds) - Number(b.ringSeconds)),
+      talkSecondsTotal: outboundTalk,
+      calls: outboundCalls.slice(0, OUTBOUND_CALL_LIMIT).map((c) => ({
+        callId: c.callId,
+        startedAt: c.startedAt,
+        outcome: c.outcome,
+        extension: c.answeringExtension ?? "unknown",
+        ringSeconds: c.agentRingSeconds,
+        talkSeconds: c.talkSeconds,
+      })),
+      callsTruncated: outboundCalls.length > OUTBOUND_CALL_LIMIT,
+    },
     totals: result.totals,
     outcomes: [...outcomes.entries()]
       .map(([outcome, count]) => ({ outcome, count }))

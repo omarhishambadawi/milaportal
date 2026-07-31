@@ -99,8 +99,15 @@ export type CallOutcome =
   | "abandoned"
   /** Never reached the queue — caller hung up inside the IVR. Not a missed call. */
   | "ivr_only"
-  /** Outbound call the far end did not pick up. */
+  /** Outbound call the far end rang out without picking up. */
   | "no_answer_outbound"
+  /**
+   * Outbound call the AGENT hung up before the ring timeout expired — the
+   * customer was never given the full chance to answer. Counted in Total but
+   * NEVER in No Answer: Yeastar's Extension Call Statistics separates the two,
+   * and folding them together is what inflated our No Answer figure.
+   */
+  | "cancelled_by_agent"
   | "busy"
   | "failed"
   | "voicemail"
@@ -210,6 +217,20 @@ export interface NormalizationContext {
   /** Below this many seconds of queue wait, an unanswered call is "abandoned". */
   abandonThresholdSeconds?: number;
   /**
+   * The PBX's outbound ring timeout, in seconds.
+   *
+   * This is what separates a genuine No Answer from an agent cancelling: a
+   * customer who simply does not pick up rings for the FULL timeout, while an
+   * agent who gives up hangs up early. Both carry `disposition: "NO ANSWER"`,
+   * so the ring duration is the only available discriminator.
+   *
+   * Nothing in the CDR states this value, so it is configuration. Set it to the
+   * PBX's actual ring timeout — the diagnostics page prints a ring-duration
+   * histogram of unanswered outbound calls, and the correct value is the spike
+   * at the top of that distribution.
+   */
+  outboundRingTimeoutSeconds?: number;
+  /**
    * Operating window. When absent (the default), NO call is excluded for
    * arriving after hours — an unverified schedule would silently move every
    * KPI, which is worse than not applying the rule at all.
@@ -218,6 +239,12 @@ export interface NormalizationContext {
 }
 
 export const DEFAULT_ABANDON_THRESHOLD_SEC = 5;
+
+/**
+ * Yeastar's stock outbound ring timeout. Override per-deployment via
+ * `YEASTAR_OUTBOUND_RING_TIMEOUT_SEC` once the live ring histogram confirms it.
+ */
+export const DEFAULT_OUTBOUND_RING_TIMEOUT_SEC = 60;
 
 const str = (v: unknown): string => (v == null ? "" : String(v).trim());
 const numOrNull = (v: unknown): number | null =>
@@ -528,8 +555,21 @@ export function normalizeCall(
     else if (dispositions.has("BUSY")) outcome = "busy";
     else if (dispositions.has("FAILED")) outcome = "failed";
     else if (dispositions.has("VOICEMAIL")) outcome = "voicemail";
-    else if (dispositions.has("NO ANSWER")) outcome = "no_answer_outbound";
-    else outcome = "unknown";
+    else if (dispositions.has("NO ANSWER")) {
+      // A customer who does not pick up rings for the FULL timeout; an agent
+      // who gives up hangs up before it. Same disposition, different event —
+      // and Yeastar's Extension Call Statistics counts them in different
+      // buckets, so we must too.
+      //
+      // When the PBX omitted `ring_duration` there is no evidence of an early
+      // hang-up, and the call stays a plain No Answer. Inventing cancellations
+      // from missing data would defame the agent it is attributed to.
+      const ringTimeout = ctx.outboundRingTimeoutSeconds ?? DEFAULT_OUTBOUND_RING_TIMEOUT_SEC;
+      outcome =
+        agentRingSeconds != null && agentRingSeconds < ringTimeout
+          ? "cancelled_by_agent"
+          : "no_answer_outbound";
+    } else outcome = "unknown";
   } else {
     outcome = inboundOutcome(legs, agentAnswered, queueLeg, abandonThreshold);
   }
@@ -619,6 +659,7 @@ export function buildContext(
   queueListData: ReadonlyArray<QueueListEntry> | null | undefined,
   abandonThresholdSeconds = DEFAULT_ABANDON_THRESHOLD_SEC,
   businessHours: BusinessHours | null = null,
+  outboundRingTimeoutSeconds = DEFAULT_OUTBOUND_RING_TIMEOUT_SEC,
 ): NormalizationContext {
   const extensionNumbers = new Set<string>();
   for (const e of extensionListData ?? []) {
@@ -636,5 +677,11 @@ export function buildContext(
   }
   // A number configured as a queue is never an agent, whatever else it appears in.
   for (const q of queueNumbers) extensionNumbers.delete(q);
-  return { extensionNumbers, queueNumbers, abandonThresholdSeconds, businessHours };
+  return {
+    extensionNumbers,
+    queueNumbers,
+    abandonThresholdSeconds,
+    businessHours,
+    outboundRingTimeoutSeconds,
+  };
 }

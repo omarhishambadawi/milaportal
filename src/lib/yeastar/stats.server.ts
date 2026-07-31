@@ -58,6 +58,8 @@ export interface AgentCallStats {
   answered: number;
   missed: number; // this agent's own ring went unanswered — INBOUND ONLY (M1)
   noAnswerOutbound: number; // per-agent outbound calls customer did not pick up
+  /** Outbound calls this agent hung up before the ring timeout expired. */
+  cancelledByAgent: number;
   busy: number;
   failed: number;
   voicemail: number;
@@ -85,7 +87,12 @@ export interface CallTotals {
    * reached an extension.
    */
   ivrOnly: number;
-  noAnswerOutbound: number; // outbound calls customer didn't pick up
+  noAnswerOutbound: number; // outbound calls that rang out unanswered
+  /**
+   * Outbound calls the AGENT hung up before the ring timeout expired. Counted
+   * in `total`, never in `noAnswerOutbound`. Telesales lead-abuse signal.
+   */
+  cancelledByAgent: number;
   busy: number;
   failed: number;
   voicemail: number;
@@ -108,6 +115,17 @@ export interface CallTotals {
   queueCalls: number;
   /** Answered ÷ (answered + missed + abandoned) — of the calls agents were offered. */
   queueAnswerRate: number;
+  // --- outbound / telesales detail ----------------------------------------
+  outboundAnswered: number;
+  /**
+   * Answered ÷ total outbound. How often agents actually reach a customer.
+   * Distinct from conversion rate, which is orders ÷ answered.
+   */
+  leadContactRate: number;
+  /** Cancelled ÷ total outbound. */
+  agentCancelRate: number;
+  /** Mean ring seconds before the agent hung up, over cancelled calls only. */
+  avgRingBeforeCancelSec: number;
 }
 
 export interface HourBucket {
@@ -126,6 +144,10 @@ export interface DayBucket {
   abandoned: number;
   inbound: number;
   outbound: number;
+  /** Outbound calls answered by the customer — drives the lead-contact trend. */
+  outboundAnswered: number;
+  /** Outbound calls the agent cancelled early — drives the cancel trend. */
+  cancelledByAgent: number;
   talkSeconds: number;
   ringSeconds: number;
   waitSeconds: number;
@@ -185,7 +207,13 @@ export interface AnalyticsResult {
       revenuePerOrder: number;
     };
     perAgent: ConversionRow[];
-    perDay: { date: string; answered: number; orders: number; rate: number }[];
+    perDay: {
+      date: string;
+      answered: number;
+      orders: number;
+      rate: number;
+      revenue: number;
+    }[];
   };
   unmatched: { records: number; extensions: { ext: string; count: number }[] };
 }
@@ -276,8 +304,14 @@ function matchesStatus(c: NormalizedCall, status: AggregateOptions["status"]): b
     case "ANSWERED":
       return c.outcome === "answered";
     case "NO ANSWER":
+      // `cancelled_by_agent` is included: the PBX disposition on those rows IS
+      // "NO ANSWER". The split exists for KPI reporting, not to hide them from
+      // a disposition filter.
       return (
-        c.outcome === "missed" || c.outcome === "abandoned" || c.outcome === "no_answer_outbound"
+        c.outcome === "missed" ||
+        c.outcome === "abandoned" ||
+        c.outcome === "no_answer_outbound" ||
+        c.outcome === "cancelled_by_agent"
       );
     case "BUSY":
       return c.outcome === "busy";
@@ -430,6 +464,7 @@ export function aggregateClassified(
     abandoned: 0,
     ivrOnly: 0,
     noAnswerOutbound: 0,
+    cancelledByAgent: 0,
     busy: 0,
     failed: 0,
     voicemail: 0,
@@ -448,6 +483,10 @@ export function aggregateClassified(
     inboundAnswerRate: 0,
     queueCalls: 0,
     queueAnswerRate: 0,
+    outboundAnswered: 0,
+    leadContactRate: 0,
+    agentCancelRate: 0,
+    avgRingBeforeCancelSec: 0,
   };
 
   // Reporting-only: excluded by business rule, so it is read off the exclusion
@@ -460,6 +499,10 @@ export function aggregateClassified(
   // only calls for which a wait exists. Verified: `ring_duration` is present on
   // 100% of queue legs.
   let queueWaitCount = 0;
+  // Ring-before-cancel is averaged only over cancelled calls that reported a
+  // ring duration, so a missing field cannot drag the mean toward zero.
+  let cancelRingSeconds = 0;
+  let cancelRingCount = 0;
 
   for (const c of calls) {
     totals.total++;
@@ -472,6 +515,7 @@ export function aggregateClassified(
     if (answered) {
       totals.answered++;
       if (c.direction === "Inbound") totals.inboundAnswered++;
+      else totals.outboundAnswered++;
       totals.talkSeconds += c.talkSeconds;
       totals.ringSeconds += c.agentRingSeconds ?? 0;
       totals.handlingSeconds += handling;
@@ -479,7 +523,13 @@ export function aggregateClassified(
     } else if (c.outcome === "missed") totals.missed++;
     else if (c.outcome === "abandoned") totals.abandoned++;
     else if (c.outcome === "no_answer_outbound") totals.noAnswerOutbound++;
-    else if (c.outcome === "busy") totals.busy++;
+    else if (c.outcome === "cancelled_by_agent") {
+      totals.cancelledByAgent++;
+      if (c.agentRingSeconds != null) {
+        cancelRingSeconds += c.agentRingSeconds;
+        cancelRingCount++;
+      }
+    } else if (c.outcome === "busy") totals.busy++;
     else if (c.outcome === "failed") totals.failed++;
     else if (c.outcome === "voicemail") totals.voicemail++;
 
@@ -500,6 +550,8 @@ export function aggregateClassified(
       abandoned: 0,
       inbound: 0,
       outbound: 0,
+      outboundAnswered: 0,
+      cancelledByAgent: 0,
       talkSeconds: 0,
       ringSeconds: 0,
       waitSeconds: 0,
@@ -508,8 +560,10 @@ export function aggregateClassified(
     day.total++;
     if (c.direction === "Inbound") day.inbound++;
     else day.outbound++;
+    if (c.outcome === "cancelled_by_agent") day.cancelledByAgent++;
     if (answered) {
       day.answered++;
+      if (c.direction === "Outbound") day.outboundAnswered++;
       day.talkSeconds += c.talkSeconds;
       day.ringSeconds += c.agentRingSeconds ?? 0;
       day.handlingSeconds += handling;
@@ -535,6 +589,9 @@ export function aggregateClassified(
   totals.inboundAnswerRate = totals.inbound ? (totals.inboundAnswered / totals.inbound) * 100 : 0;
   const offered = totals.inboundAnswered + totals.missed + totals.abandoned;
   totals.queueAnswerRate = offered ? (totals.inboundAnswered / offered) * 100 : 0;
+  totals.leadContactRate = totals.outbound ? (totals.outboundAnswered / totals.outbound) * 100 : 0;
+  totals.agentCancelRate = totals.outbound ? (totals.cancelledByAgent / totals.outbound) * 100 : 0;
+  totals.avgRingBeforeCancelSec = cancelRingCount ? cancelRingSeconds / cancelRingCount : 0;
 
   // ---- Per-agent ----------------------------------------------------------
   // Also derived from normalized calls: one contribution per (call, agent),
@@ -552,6 +609,7 @@ export function aggregateClassified(
     answered: 0,
     missed: 0,
     noAnswerOutbound: 0,
+    cancelledByAgent: 0,
     busy: 0,
     failed: 0,
     voicemail: 0,
@@ -610,6 +668,7 @@ export function aggregateClassified(
       } else if (c.outcome === "busy") s.busy++;
       else if (c.outcome === "failed") s.failed++;
       else if (c.outcome === "voicemail") s.voicemail++;
+      else if (c.outcome === "cancelled_by_agent") s.cancelledByAgent++;
       // Outbound NO ANSWER is exposed exclusively via `noAnswerOutbound`.
       else s.noAnswerOutbound++;
     }
@@ -734,13 +793,23 @@ export function aggregateClassified(
 
   // Per-day conversion = total orders / answered calls (both scoped).
   const ordersByDay = new Map<string, number>();
-  for (const o of orders) ordersByDay.set(o.order_date, (ordersByDay.get(o.order_date) ?? 0) + 1);
+  const revenueByDay = new Map<string, number>();
+  for (const o of orders) {
+    ordersByDay.set(o.order_date, (ordersByDay.get(o.order_date) ?? 0) + 1);
+    revenueByDay.set(o.order_date, (revenueByDay.get(o.order_date) ?? 0) + num(o.invoice_value));
+  }
   const perDay = [...dayMap.values()]
     .sort((a, b) => a.date.localeCompare(b.date))
     .map((d) => {
       const answered = d.answered;
       const ord = ordersByDay.get(d.date) ?? 0;
-      return { date: d.date, answered, orders: ord, rate: answered ? (ord / answered) * 100 : 0 };
+      return {
+        date: d.date,
+        answered,
+        orders: ord,
+        rate: answered ? (ord / answered) * 100 : 0,
+        revenue: revenueByDay.get(d.date) ?? 0,
+      };
     });
 
   // Ensure hour 0..23

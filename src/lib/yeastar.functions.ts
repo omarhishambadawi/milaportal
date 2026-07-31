@@ -1089,11 +1089,18 @@ async function buildNormalizationContext(
     Number(process.env.YEASTAR_UTC_OFFSET_MINUTES ?? BUSINESS_UTC_OFFSET_MINUTES),
   );
 
+  // The PBX's outbound ring timeout. It is what separates a genuine No Answer
+  // (rang the full timeout) from an agent cancelling early — both carry
+  // disposition "NO ANSWER", so nothing in the CDR distinguishes them. Confirm
+  // the real value from the ring histogram on /admin/yeastar-diagnostics.
+  const ringTimeout = Number(process.env.YEASTAR_OUTBOUND_RING_TIMEOUT_SEC);
+
   return buildContext(
     [...exts].map((number) => ({ number })),
     [...queueNumbers].map((number) => ({ number })),
     undefined,
     businessHours,
+    Number.isFinite(ringTimeout) && ringTimeout > 0 ? ringTimeout : undefined,
   );
 }
 
@@ -1104,7 +1111,10 @@ function rosterSignature(ctx: NormalizationContext): string {
     `${[...ctx.extensionNumbers].sort().join(",")}|${[...ctx.queueNumbers].sort().join(",")}` +
     // Business hours change which calls are operational, so they must bust the
     // normalization cache exactly like a roster change does.
-    `|${bh ? `${bh.days.join("")}:${bh.startMinute}-${bh.endMinute}@${bh.utcOffsetMinutes}` : "none"}`;
+    `|${bh ? `${bh.days.join("")}:${bh.startMinute}-${bh.endMinute}@${bh.utcOffsetMinutes}` : "none"}` +
+    // The ring timeout decides cancelled-vs-no-answer, so it must bust the
+    // normalization cache too.
+    `|rt${ctx.outboundRingTimeoutSeconds ?? "d"}`;
   let h = 2166136261;
   for (let i = 0; i < src.length; i++) {
     h ^= src.charCodeAt(i);

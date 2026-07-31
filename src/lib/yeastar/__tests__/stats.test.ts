@@ -261,8 +261,9 @@ const OUTBOUND_NO_ANSWER: RawCdrRow[] = [
     call_from_number: "1000",
     call_to: "0509876588",
     call_to_number: "0509876588",
-    duration: 25,
-    ring_duration: 25,
+    // Rang the full 60s timeout — a genuine no-answer, not an agent hang-up.
+    duration: 60,
+    ring_duration: 60,
   },
 ];
 
@@ -573,7 +574,13 @@ describe("conversion", () => {
     expect(r.conversion.overall.conversionRate).toBe(100);
     expect(r.conversion.overall.completionRate).toBe(50);
     expect(r.conversion.overall.revenue).toBe(400);
-    expect(r.conversion.perDay[0]).toEqual({ date: DAY, answered: 2, orders: 2, rate: 100 });
+    expect(r.conversion.perDay[0]).toEqual({
+      date: DAY,
+      answered: 2,
+      orders: 2,
+      rate: 100,
+      revenue: 400,
+    });
   });
 
   it("joins per-agent conversion on the answered count that agent earned", () => {
@@ -921,5 +928,184 @@ describe("business hours (Phase 3)", () => {
     // 21:37 local is outside; 23:00 is inside.
     expect(isWithinBusinessHours(T, overnight)).toBe(false);
     expect(isWithinBusinessHours(T + 90 * 60, overnight)).toBe(true);
+  });
+});
+
+describe("telesales: agent cancelled calls (Phase 4A)", () => {
+  /**
+   * Reference day 30/07/2026, Yeastar Reports > Extension Call Statistics:
+   *
+   *   Total 158 = Answered 100 + No Answer 29 + Busy 15 + Failed 0 + 14
+   *
+   * The dashboard reported No Answer 43 — exactly 29 + 14. Those 14 are calls
+   * the AGENT hung up before the ring timeout expired. Yeastar counts them in
+   * Total but not in No Answer; we folded them together.
+   *
+   * Both carry `disposition: "NO ANSWER"`, so ring duration is the only
+   * discriminator: a customer who does not pick up rings the FULL timeout.
+   */
+  const outboundUnanswered = (id: string, ring: number): RawCdrRow => ({
+    uid: `u-${id}`,
+    new_id: `n-${id}`,
+    call_id: id,
+    timestamp: T + 900,
+    call_type: "Outbound",
+    disposition: "NO ANSWER",
+    call_from: "Ahmed Mousad<1000>",
+    call_from_number: "1000",
+    call_to: "0501234523",
+    call_to_number: "0501234523",
+    duration: ring,
+    ring_duration: ring,
+  });
+
+  it("splits an early hang-up from a genuine ring-out", () => {
+    const r = run([outboundUnanswered("c-cancel", 7), outboundUnanswered("c-noanswer", 60)]);
+    expect(r.totals.cancelledByAgent).toBe(1);
+    expect(r.totals.noAnswerOutbound).toBe(1);
+    // Both still count as calls — Yeastar's Total includes cancellations.
+    expect(r.totals.total).toBe(2);
+    expect(r.totals.outbound).toBe(2);
+  });
+
+  it("reproduces the 30/07/2026 No Answer split", () => {
+    // 29 rang the full 60s timeout, 14 were cut short by the agent.
+    const rows = [
+      ...Array.from({ length: 29 }, (_, i) => outboundUnanswered(`ring-${i}`, 60)),
+      ...Array.from({ length: 14 }, (_, i) => outboundUnanswered(`cut-${i}`, 5 + i)),
+    ];
+    const r = run(rows);
+    expect(r.totals.total).toBe(43); // what the dashboard used to call "No Answer"
+    expect(r.totals.noAnswerOutbound).toBe(29); // official figure
+    expect(r.totals.cancelledByAgent).toBe(14); // the missing bucket
+  });
+
+  it("never invents a cancellation when the PBX omitted ring_duration", () => {
+    const noRing: RawCdrRow = { ...outboundUnanswered("c-noring", 0), ring_duration: undefined };
+    const r = run([noRing]);
+    expect(r.totals.cancelledByAgent).toBe(0);
+    expect(r.totals.noAnswerOutbound).toBe(1);
+  });
+
+  it("honours a configured ring timeout", () => {
+    const ctx30 = buildContext(
+      [{ number: "1000" }],
+      [{ number: "6400" }],
+      undefined,
+      null,
+      30, // PBX configured with a 30s outbound ring timeout
+    );
+    const rows = [outboundUnanswered("a", 20), outboundUnanswered("b", 45)];
+    const r = aggregateAnalytics(rows, ctx30, AGENTS, [], { tzOffsetMin: TZ });
+    expect(r.totals.cancelledByAgent).toBe(1); // 20 < 30
+    expect(r.totals.noAnswerOutbound).toBe(1); // 45 >= 30
+  });
+
+  it("does not reuse queue-abandoned logic", () => {
+    // Abandoned is a QUEUE concept and must stay at zero for outbound traffic,
+    // however short the ring was.
+    const r = run([outboundUnanswered("c-short", 1)]);
+    expect(r.totals.abandoned).toBe(0);
+    expect(r.totals.missed).toBe(0);
+    expect(r.totals.cancelledByAgent).toBe(1);
+  });
+
+  it("reports cancel rate and average ring before cancel", () => {
+    const rows = [
+      outboundUnanswered("a", 4),
+      outboundUnanswered("b", 8),
+      outboundUnanswered("c", 60),
+      { ...OUTBOUND_ANSWERED[0] },
+    ];
+    const r = run(rows);
+    expect(r.totals.outbound).toBe(4);
+    expect(r.totals.cancelledByAgent).toBe(2);
+    expect(r.totals.agentCancelRate).toBe(50);
+    expect(r.totals.avgRingBeforeCancelSec).toBe(6); // (4 + 8) / 2
+  });
+
+  it("attributes cancellations to the agent who made them", () => {
+    const r = run([outboundUnanswered("a", 3), outboundUnanswered("b", 9)]);
+    const ahmed = r.agents.find((x) => x.ext === "1000")!;
+    expect(ahmed.cancelledByAgent).toBe(2);
+    expect(ahmed.noAnswerOutbound).toBe(0);
+  });
+});
+
+describe("telesales: lead contact rate (Phase 4A)", () => {
+  it("is answered ÷ total outbound, distinct from conversion rate", () => {
+    const orders: OrderRef[] = [
+      {
+        id: "o1",
+        agent_id: "a-ts-1",
+        order_date: DAY,
+        status: "Completed",
+        order_type: "Cash",
+        invoice_value: 500,
+      },
+    ];
+    const rows = [
+      ...OUTBOUND_ANSWERED, // answered
+      ...OUTBOUND_NO_ANSWER, // rang the full timeout, unanswered
+    ];
+    const r = run(rows, orders);
+    expect(r.totals.outbound).toBe(2);
+    expect(r.totals.outboundAnswered).toBe(1);
+    // Reached 1 of 2 customers.
+    expect(r.totals.leadContactRate).toBe(50);
+    // Converted 1 of the 1 reached — a different question entirely.
+    expect(r.conversion.overall.conversionRate).toBe(100);
+    expect(r.totals.leadContactRate).not.toBe(r.conversion.overall.conversionRate);
+  });
+
+  it("is zero when nothing was dialled, never NaN", () => {
+    const r = run(QUEUE_ANSWERED);
+    expect(r.totals.outbound).toBe(0);
+    expect(r.totals.leadContactRate).toBe(0);
+    expect(r.totals.agentCancelRate).toBe(0);
+    expect(r.totals.avgRingBeforeCancelSec).toBe(0);
+  });
+
+  it("exposes per-day series for the sales trends", () => {
+    const cancelled: RawCdrRow = {
+      uid: "u-day-cancel",
+      new_id: "n-day-cancel",
+      call_id: "c-day-cancel",
+      timestamp: T + 950,
+      call_type: "Outbound",
+      disposition: "NO ANSWER",
+      call_from_number: "1000",
+      call_to: "0501112233",
+      call_to_number: "0501112233",
+      duration: 6,
+      ring_duration: 6,
+    };
+    const r = run([...OUTBOUND_ANSWERED, ...OUTBOUND_NO_ANSWER, cancelled]);
+    expect(r.byDay[0].outbound).toBe(3);
+    expect(r.byDay[0].outboundAnswered).toBe(1);
+    expect(r.byDay[0].cancelledByAgent).toBe(1);
+  });
+
+  it("carries revenue per day for the revenue trend", () => {
+    const orders: OrderRef[] = [
+      {
+        id: "o1",
+        agent_id: "a-ts-1",
+        order_date: DAY,
+        status: "Completed",
+        order_type: "Cash",
+        invoice_value: 250,
+      },
+      {
+        id: "o2",
+        agent_id: "a-ts-1",
+        order_date: DAY,
+        status: "Pending",
+        order_type: "Cash",
+        invoice_value: 150,
+      },
+    ];
+    const r = run(OUTBOUND_ANSWERED, orders);
+    expect(r.conversion.perDay[0].revenue).toBe(400);
   });
 });

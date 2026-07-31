@@ -80,6 +80,7 @@ export function validateAnalytics(
   // Must stay zero: an IVR-only call is excluded before it can reach a KPI.
   const ivrOnly = calls.filter((c) => c.outcome === "ivr_only").length;
   let noAnswerOutbound = 0;
+  let cancelledByAgent = 0;
   let nonOperationalLeak = 0;
   let talk = 0;
   let ring = 0;
@@ -134,6 +135,7 @@ export function validateAnalytics(
     } else if (c.outcome === "missed") missed++;
     else if (c.outcome === "abandoned") abandoned++;
     else if (c.outcome === "no_answer_outbound") noAnswerOutbound++;
+    else if (c.outcome === "cancelled_by_agent") cancelledByAgent++;
 
     if (c.reachedQueue) queueCalls++;
     if (c.queueWaitSeconds != null) {
@@ -175,9 +177,28 @@ export function validateAnalytics(
     eq("ivr-only-not-in-total", "No IVR-only call survives into the operational set.", 0, ivrOnly),
     eq(
       "no-answer-outbound",
-      "Outbound the far end did not pick up.",
+      "Outbound that rang out unanswered — agent cancellations excluded.",
       noAnswerOutbound,
       t.noAnswerOutbound,
+    ),
+    eq(
+      "cancelled-by-agent",
+      "Outbound the agent hung up before the ring timeout expired.",
+      cancelledByAgent,
+      t.cancelledByAgent,
+    ),
+    eq(
+      "outbound-buckets-account-for-every-outbound-call",
+      "Answered + no answer + cancelled + busy + failed + voicemail = outbound.",
+      outbound,
+      t.outboundAnswered +
+        t.noAnswerOutbound +
+        t.cancelledByAgent +
+        calls.filter(
+          (c) =>
+            c.direction === "Outbound" &&
+            (c.outcome === "busy" || c.outcome === "failed" || c.outcome === "voicemail"),
+        ).length,
     ),
     eq("talk-seconds", "Talk seconds taken from the agent leg, counted once.", talk, t.talkSeconds),
     eq("agent-ring-seconds", "Ring seconds are the AGENT leg's ring.", ring, t.ringSeconds),

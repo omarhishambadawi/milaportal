@@ -324,8 +324,22 @@ describe("normalizeCall — outbound stays as it is today", () => {
   });
 
   it("marks an unanswered outbound call distinctly from an inbound miss", () => {
-    const call = normalizeCall([{ ...outbound, disposition: "NO ANSWER", talk_duration: 0 }], ctx)!;
+    // Rang the full 60s timeout: the customer genuinely did not pick up.
+    const call = normalizeCall(
+      [{ ...outbound, disposition: "NO ANSWER", talk_duration: 0, ring_duration: 60 }],
+      ctx,
+    )!;
     expect(call.outcome).toBe("no_answer_outbound");
+    expect(call.answeredByAgent).toBe(false);
+  });
+
+  it("separates an agent hang-up from a genuine ring-out", () => {
+    // Same disposition, but the agent gave up after 20s of a 60s timeout.
+    const call = normalizeCall(
+      [{ ...outbound, disposition: "NO ANSWER", talk_duration: 0, ring_duration: 20 }],
+      ctx,
+    )!;
+    expect(call.outcome).toBe("cancelled_by_agent");
     expect(call.answeredByAgent).toBe(false);
   });
 
