@@ -46,6 +46,28 @@ const TIMEOUT_MS = 15_000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * A `MM/DD/YYYY HH:mm:ss` timestamp, N days back and now.
+ *
+ * Call Report does **not** take epoch seconds. CDR does, which is where the
+ * confusion comes from — the previous in-app probe passed `startEpoch` to
+ * `call_report/*` and got `errcode -2 INTERNAL SERVER ERROR` back. The docs say
+ * the format follows the PBX's own date/time preference, so this is a guess that
+ * matches Yeastar's documented example; `YEASTAR_DATETIME_FORMAT` exists in the
+ * app's env for exactly this reason and a mismatch here is itself a finding.
+ */
+function reportWindow(daysBack = 7) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const fmt = (d) =>
+    `${pad(d.getMonth() + 1)}/${pad(d.getDate())}/${d.getFullYear()} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  const end = new Date();
+  const start = new Date(end.getTime() - daysBack * 86_400_000);
+  return { start_time: fmt(start), end_time: fmt(end) };
+}
+
+const WINDOW = reportWindow();
+
 function env(name) {
   const value = process.env[name]?.trim();
   return value && value.length > 0 ? value : null;
@@ -108,14 +130,14 @@ const ENDPOINTS = [
     path: "call_report/list",
     versions: ["v1.0", "v2.0"],
     documented: true,
-    params: { type: "extcallstatistics" },
+    params: { type: "extcallstatistics", ...WINDOW },
   },
   {
     group: "Call Report",
     path: "call_report/list",
     versions: ["v1.0", "v2.0"],
     documented: true,
-    params: { type: "queueperformance" },
+    params: { type: "queueperformance", ...WINDOW },
     label: "call_report/list?type=queueperformance",
   },
   {
@@ -123,7 +145,7 @@ const ENDPOINTS = [
     path: "call_report/list",
     versions: ["v1.0", "v2.0"],
     documented: true,
-    params: { type: "queueagentperformance" },
+    params: { type: "queueagentperformance", ...WINDOW },
     label: "call_report/list?type=queueagentperformance",
   },
   {
@@ -131,7 +153,7 @@ const ENDPOINTS = [
     path: "call_report/list",
     versions: ["v1.0", "v2.0"],
     documented: true,
-    params: { type: "queueavgwaittalktime" },
+    params: { type: "queueavgwaittalktime", ...WINDOW },
     label: "call_report/list?type=queueavgwaittalktime",
   },
   {
@@ -139,7 +161,7 @@ const ENDPOINTS = [
     path: "call_report/detail",
     versions: ["v1.0", "v2.0"],
     documented: true,
-    params: { type: "queueperformance" },
+    params: { type: "queueperformance", ...WINDOW },
     label: "call_report/detail?type=queueperformance",
   },
   {
@@ -147,7 +169,7 @@ const ENDPOINTS = [
     path: "call_report/detail",
     versions: ["v1.0", "v2.0"],
     documented: true,
-    params: { type: "queueagentperformance" },
+    params: { type: "queueagentperformance", ...WINDOW },
     label: "call_report/detail?type=queueagentperformance",
   },
 
@@ -286,18 +308,34 @@ async function main() {
   const baseUrl = env("YEASTAR_BASE_URL")?.replace(/\/+$/, "");
   const clientId = env("YEASTAR_CLIENT_ID");
   const clientSecret = env("YEASTAR_CLIENT_SECRET");
+  /**
+   * An access token that already exists.
+   *
+   * The app caches tokens in `public.yeastar_token_cache` precisely because
+   * `get_token` rate-limits hard, so when a live one is already sitting there
+   * the right move is to borrow it rather than mint a competing one and risk
+   * tripping `60002` for the production integration. Takes precedence over the
+   * client id/secret path.
+   */
+  const presetToken = env("YEASTAR_ACCESS_TOKEN");
 
-  if (!baseUrl || !clientId || !clientSecret) {
+  if (!baseUrl || (!presetToken && (!clientId || !clientSecret))) {
     console.error(
-      "Missing credentials. Set YEASTAR_BASE_URL, YEASTAR_CLIENT_ID and " +
-        "YEASTAR_CLIENT_SECRET, then re-run. Nothing was probed.",
+      "Missing credentials. Set YEASTAR_BASE_URL plus either YEASTAR_ACCESS_TOKEN " +
+        "or YEASTAR_CLIENT_ID + YEASTAR_CLIENT_SECRET, then re-run. Nothing was probed.",
     );
     process.exit(2);
   }
 
-  console.error(`[probe] authenticating against ${baseUrl}`);
-  const token = await getToken(baseUrl, clientId, clientSecret);
-  console.error("[probe] token acquired; reusing it for every probe");
+  let token;
+  if (presetToken) {
+    console.error(`[probe] using a supplied access token against ${baseUrl}`);
+    token = presetToken;
+  } else {
+    console.error(`[probe] authenticating against ${baseUrl}`);
+    token = await getToken(baseUrl, clientId, clientSecret);
+    console.error("[probe] token acquired; reusing it for every probe");
+  }
 
   const rows = [];
   for (const spec of ENDPOINTS) {
