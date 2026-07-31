@@ -258,7 +258,7 @@ const SidebarInner = memo(function SidebarInner({
                 // The hairline that stands in for the heading in rail mode
                 // fades in from transparent instead of appearing on a class
                 // swap.
-                "mt-5 border-t border-transparent transition-[margin,padding,border-color]",
+                "mt-4 border-t border-transparent transition-[margin,padding,border-color]",
                 RAIL_CLOCK,
                 "group-data-[state=collapsed]/rail:mt-2 group-data-[state=collapsed]/rail:pt-2 group-data-[state=collapsed]/rail:border-border/50",
               ],
@@ -268,7 +268,8 @@ const SidebarInner = memo(function SidebarInner({
               className={cn(
                 // Fixed height (not `auto`) so the collapse to h-0 is
                 // animatable; 10px type sits comfortably inside 16px.
-                "mb-1.5 h-4 overflow-hidden whitespace-nowrap px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70",
+                "mb-1 h-4 overflow-hidden whitespace-nowrap px-2.5 text-[10px] font-semibold uppercase leading-4 tracking-[0.16em] text-muted-foreground/60",
+
                 "transition-[height,margin,opacity]",
                 RAIL_CLOCK,
                 "group-data-[state=collapsed]/rail:mb-0 group-data-[state=collapsed]/rail:h-0 group-data-[state=collapsed]/rail:opacity-0",
