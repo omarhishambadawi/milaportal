@@ -3,10 +3,22 @@
 **Sprint 1 · Discovery only.** No analytics logic, dashboard calculations or
 existing code were changed by this work.
 
-> ## Status: documentation complete, live probe blocked one step short
+> ## Status: ✅ COMPLETE — live probe executed 2026-07-31T23:36Z
 >
-> Nothing in this document is a guessed API response. Cells needing the PBX are
-> marked `NOT PROBED`.
+> **Jump to [SPRINT 1 COMPLETE](#sprint-1-complete--live-probe-executed-2026-07-31t2336z)
+> at the foot of this document for the verified results and the recommendation.**
+>
+> Sections 1–6 below were written *before* the probe ran and are kept as the
+> documentation-only baseline. Where they say `NOT PROBED`, the live section
+> supersedes them. Two of their provisional conclusions were overturned by the
+> live run, which is exactly why they are preserved rather than quietly edited:
+>
+> - "v2.0 is the correct version for all current data" — **wrong for non-CDR.**
+>   Only `cdr/*` exists on v2.0; twelve other endpoints return `10001`.
+> - `call_report/*` was expected to work once called correctly — **it does exist,
+>   but still returns `40002` to every parameter shape tried.**
+>
+> Nothing in this document is a guessed API response.
 >
 > ### Runtime audit — every runtime checked, not assumed
 >
@@ -368,3 +380,111 @@ fills in every `NOT PROBED` cell above.
 3. Does `call_report/list` answer on v2.0 for each queue/agent `type`?
 4. Does `cdr/list` v1.0 with `from=new` reach the new partition?
 5. Is the Contact Center feature set licensed on this box?
+
+---
+
+# SPRINT 1 COMPLETE — live probe executed 2026-07-31T23:36Z
+
+Run against the production PBX with a single cached token. Full matrix in
+`api-probe-results.md` / `.json`.
+
+## Firmware, verified live (not from the brief)
+
+`GET /openapi/v1.0/system/information` → `errcode 0`:
+
+| Field | Value |
+| --- | --- |
+| Model | **Yeastar P570** (Appliance Edition — 37.x line confirmed) |
+| Firmware | **37.23.0.123** ✅ matches the brief |
+| Device | `Shams_VOIP` |
+| `system_date_format` | `DD/MM/YYYY` |
+| `system_time_format` | `hh:mm:ss AM` (12-hour) |
+
+## API version support — decisive
+
+**`openapi/v2.0` exists for CDR only.** Twelve non-CDR endpoints return
+`10001 INTERFACE NOT EXISTED` on v2.0.
+
+| v2.0 endpoint | Result |
+| --- | --- |
+| `cdr/list`, `cdr/search` | ✅ `errcode 0` |
+| `cdr/detail` | ✅ exists (`40002` param error) |
+| `system/information`, `myreport/list`, `queue/*`, `extension/*` | ❌ `10001` |
+
+**This is a change from the 37.23.0.83 audit**, which recorded
+`/openapi/v2.0/cdr/list` → `-2 INTERNAL SERVER ERROR`. The patch to `.123`
+**fixed the v2.0 CDR namespace**. Everything else remains v1.0-only.
+
+## Call Report — the previous conclusion was wrong, but it is still unusable
+
+The standing claim was "every `call_report/*` route answers `10001 INTERFACE NOT
+EXISTED`". **That is disproven.** On this firmware:
+
+| Request | Result |
+| --- | --- |
+| `call_report/list` (v1.0 and v2.0) | `40002 PARAMETER ERROR` — **the interface exists** |
+| `call_report/detail` (v1.0 and v2.0) | `40002 PARAMETER ERROR` — **exists** |
+| `myreport/list` v1.0 | ✅ `errcode 0`, returns `{id: 1, name: "Daily Report", dataset: "extcallstatistics"}` |
+
+So Sprint 1's hypothesis was right: `10001` was never the answer for
+`call_report/list`; the old snake_case paths were invented, and the old `-2` came
+from a malformed request.
+
+**But no working call has yet been found.** Exhaustively tried, one token:
+
+- Every documented `type`: `queueperformance`, `queueagentperformance`,
+  `extcallstatistics`, `queueavgwaittalktime` → all `40002`.
+- Six `start_time`/`end_time` formats, including the PBX's own
+  `DD/MM/YYYY hh:mm:ss AM` read from `system_information`, plus `YYYY-MM-DD
+  HH:mm:ss`, `MM/DD/YYYY HH:mm:ss`, `DD/MM/YYYY HH:mm:ss`, `YYYY-MM-DD`, and
+  epoch seconds → all `40002`.
+- With and without `page`/`page_size`, with `queue_id_list` → all `40002`.
+- `my_report_id=1` — a **real** report id returned by `myreport/list` — →
+  `-2 INTERNAL SERVER ERROR`, a *different* failure. It clears parameter
+  validation and then faults server-side.
+
+The `dataset` on that saved report is literally `extcallstatistics`, matching the
+documented enum, so the vocabulary is right and something else is rejected.
+Unresolved, and it is a question for Yeastar support, not more guessing.
+
+## Undocumented paths — confirmed absent
+
+`queue/callstatistics`, `queue/panel/callstatistics`, `extension/callstatistics`
+→ `10001 INTERFACE NOT EXISTED` on **both** v1.0 and v2.0. Genuinely not
+interfaces. They should be deleted from the diagnostics sweep.
+
+## Verified endpoint set for firmware 37.23.0.123
+
+✅ **Usable now:** `system/information` (v1.0) · `cdr/list`, `cdr/search`
+(**v1.0 and v2.0**) · `cdr/detail` (v2.0) · `queue/list` (v1.0) ·
+`queue_pause_reason/list` (v1.0) · `extension/list` (v1.0) · `myreport/list`
+(v1.0) · `queue/query`, `extension/query` (v1.0, need ids) ·
+`queue/call_status`, `queue/agent_status` (v1.0 — `60001 DATA NOT FOUND` means
+idle, not unsupported)
+
+❌ **Not usable:** all `call_report/*` (exist, reject every parameter shape
+tried) · everything non-CDR on v2.0 · the three `callstatistics` paths
+
+## Recommendation: CDR APIs
+
+Not a hybrid — **not yet**, and the distinction is the point.
+
+- **Call Report APIs: cannot be used.** They exist, which is new information and
+  worth pursuing with Yeastar, but they currently return zero values. Nothing can
+  be built on them today.
+- **Queue APIs: real-time only.** `queue/call_status` and `queue/agent_status`
+  report the present moment. They cannot answer "how did the queue perform
+  yesterday" and are a wallboard source, not an analytics source.
+- **CDR APIs: the only viable source**, and materially better than before —
+  `cdr/list` and `cdr/search` now work on **v2.0** as well as v1.0, which the
+  previous firmware did not offer.
+
+**Therefore the existing CDR-derived analytics are correct in approach and should
+stay.** The Sprint 2 framing — "replace every KPI with the official Yeastar
+metric" — has no data source behind it while `call_report/*` returns nothing.
+
+Move to a hybrid only once Yeastar explains the `40002`. Two things to settle
+before any replacement, even then: the Contact Center licence state on this P570,
+and whether Queue Performance counts queue legs where the CDR pipeline counts
+`call_id` groups — because if the definitions differ, matching numbers is the
+wrong target.
