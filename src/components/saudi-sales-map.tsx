@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fmtSAR } from "@/lib/branches";
 import { cn } from "@/lib/utils";
+import { placeFloatingCard } from "@/lib/floating-card";
 import { KSA_OUTLINE_PATH, MAP_HEIGHT, MAP_WIDTH, projectPoint } from "@/lib/ksa-geo";
 import { MapPin, TrendingUp } from "lucide-react";
 
@@ -707,6 +708,12 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
               .sort((a, b) => b.hitR - a.hitR)
               .map((p) => {
                 const isActive = activeName === p.name;
+                // Deliberately no `<title>` child. SVG `title` renders as the
+                // *browser's own* tooltip — the small bordered box that appears
+                // beside the cursor after a delay — so hovering a city produced
+                // two overlapping readouts: the styled card and a bare native
+                // label repeating the city name across it. `aria-label` below is
+                // what the title was really contributing, and it stays.
                 return (
                   <circle
                     key={`hit-${p.name}`}
@@ -777,9 +784,7 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                       }
                     }}
                     className="focus-visible:[stroke:var(--ring)] focus-visible:[stroke-width:2.5]"
-                  >
-                    <title>{p.name}</title>
-                  </circle>
+                  />
                 );
               })}
           </svg>
@@ -1013,40 +1018,59 @@ function FloatingCityCard({
   const ref = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
+  /**
+   * The anchor lookup, held in a ref rather than a dependency.
+   *
+   * The caller passes a fresh arrow function on every render of the map, so
+   * depending on it directly tore down and rebuilt the scroll and resize
+   * listeners on each of those renders — during a hover, which is exactly when
+   * the map re-renders most.
+   */
+  const getAnchorRef = useRef(getAnchor);
+  getAnchorRef.current = getAnchor;
+
   useLayoutEffect(() => {
     const update = () => {
       const el = ref.current;
-      const anchor = getAnchor();
+      const anchor = getAnchorRef.current();
       if (!el || !anchor) return;
+
       const a = anchor.getBoundingClientRect();
-      const c = el.getBoundingClientRect();
-      const M = 12;
-      const GAP = 14;
-
-      let top = a.top - c.height - GAP;
-      if (top < M) top = a.bottom + GAP;
-      if (top + c.height > window.innerHeight - M) {
-        top = Math.max(M, window.innerHeight - M - c.height);
-      }
-
-      let left = a.left + a.width / 2 - c.width / 2;
-      left = Math.min(Math.max(M, left), Math.max(M, window.innerWidth - M - c.width));
+      const next = placeFloatingCard({
+        anchor: { top: a.top, left: a.left, width: a.width, height: a.height },
+        // Layout size, not the client rect: the card animates in under a
+        // `scale(0.95)` transform and a client rect would report it 5% short
+        // while that runs, which is enough to place a card near an edge just
+        // outside it. See the note on `PlaceOptions.card`.
+        card: { width: el.offsetWidth, height: el.offsetHeight },
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+      });
 
       setPos((prev) =>
-        prev && Math.abs(prev.left - left) < 0.5 && Math.abs(prev.top - top) < 0.5
+        prev && Math.abs(prev.left - next.left) < 0.5 && Math.abs(prev.top - next.top) < 0.5
           ? prev
-          : { left, top },
+          : { left: next.left, top: next.top },
       );
     };
 
     update();
+    // Capture phase, so scrolling *any* ancestor repositions the card and not
+    // just the document.
     window.addEventListener("scroll", update, true);
     window.addEventListener("resize", update);
+
+    // Cities carry different numbers of rows — a completion rate appears only
+    // when there are orders — so the card's height is not constant. Re-place it
+    // when its own box changes rather than assuming the first measurement holds.
+    const observer = new ResizeObserver(update);
+    if (ref.current) observer.observe(ref.current);
+
     return () => {
       window.removeEventListener("scroll", update, true);
       window.removeEventListener("resize", update);
+      observer.disconnect();
     };
-  }, [city.name, getAnchor]);
+  }, [city.name]);
 
   return createPortal(
     <div
