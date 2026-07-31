@@ -12,7 +12,6 @@ export type NavItemData = {
   badge?: number | string | null;
 };
 
-
 type SidebarProps = {
   nav: NavItemData[];
   activePath: string;
@@ -70,7 +69,6 @@ const APP_VERSION = "v1.0";
  */
 const RAIL_CLOCK =
   "duration-[130ms] group-data-[state=expanded]/rail:duration-[180ms] ease-[cubic-bezier(0.4,0,0.2,1)]";
-
 
 /**
  * Presentational grouping of the (already permission-filtered) nav items into
@@ -185,7 +183,6 @@ const NavItem = memo(function NavItem({ item, active }: { item: NavItemData; act
     </Link>
   );
 });
-
 
 /** Shared inner shell used by both the desktop rail and the mobile drawer. */
 const SidebarInner = memo(function SidebarInner({
@@ -337,7 +334,6 @@ const SidebarInner = memo(function SidebarInner({
           </button>
         </div>
       )}
-
     </div>
   );
 });

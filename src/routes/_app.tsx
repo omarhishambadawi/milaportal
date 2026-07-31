@@ -83,7 +83,6 @@ function AppLayout() {
     [location.pathname],
   );
 
-
   const canDashboard = hasPerm(role, profile?.permissions as any, "view_dashboard");
   const canOrders = hasPerm(role, profile?.permissions as any, "view_orders");
   const canCreate = hasPerm(role, profile?.permissions as any, "create_orders");
@@ -117,7 +116,6 @@ function AppLayout() {
       ...(isAdministrator(role)
         ? [{ to: "/admin/yeastar", label: "Yeastar PBX", icon: PhoneCall }]
         : []),
-
     ],
     [canDashboard, canOrders, canCreate, canComplaints, canCallCenter, canUsers, canBranches, role],
   );
@@ -237,7 +235,6 @@ function AppLayout() {
             `clip` contains the same overflow without establishing a scroll box,
             so the document stays the scrollport and sticky descendants work. */}
         {routeContent}
-
       </main>
     </div>
   );
