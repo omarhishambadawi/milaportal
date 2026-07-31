@@ -288,24 +288,31 @@ const SidebarInner = memo(function SidebarInner({
 
       {/* Footer — sidebar toggle only. Profile & sign out live in the header. */}
       {onToggle && (
-        <div className="mt-auto border-t border-border/60 p-2">
+        <div className="mt-auto border-t border-border/60 px-2 py-1.5">
           <button
             type="button"
             onClick={onToggle}
             aria-expanded={!collapsed}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className="flex h-9 w-full items-center rounded-lg px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/70 hover:text-foreground"
+            className={cn(
+              "flex h-9 w-full items-center rounded-lg px-2.5 text-[12px] font-medium tracking-tight text-muted-foreground outline-none",
+              "transition-colors duration-150 ease-out hover:bg-accent/60 hover:text-foreground",
+              "focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
+            )}
           >
-            <ChevronLeft
-              className={cn(
-                "h-4 w-4 shrink-0 transition-transform",
-                RAIL_CLOCK,
-                "group-data-[state=collapsed]/rail:rotate-180",
-              )}
-            />
+            <span className="grid h-4 w-9 shrink-0 place-items-center">
+              <ChevronLeft
+                className={cn(
+                  "h-4 w-4 transition-transform",
+                  RAIL_CLOCK,
+                  "group-data-[state=collapsed]/rail:rotate-180",
+                )}
+              />
+            </span>
             <span
               className={cn(
-                "overflow-hidden whitespace-nowrap pl-2",
+                "overflow-hidden whitespace-nowrap pl-3 text-left",
                 "max-w-24 transition-[max-width,opacity]",
                 RAIL_CLOCK,
                 "group-data-[state=collapsed]/rail:max-w-0 group-data-[state=collapsed]/rail:opacity-0",
@@ -313,9 +320,21 @@ const SidebarInner = memo(function SidebarInner({
             >
               Collapse
             </span>
+            {/* Subtle build tag — collapses away with the rail. */}
+            <span
+              className={cn(
+                "ml-auto overflow-hidden whitespace-nowrap text-[10px] font-medium tabular-nums text-muted-foreground/50",
+                "max-w-16 transition-[max-width,opacity]",
+                RAIL_CLOCK,
+                "group-data-[state=collapsed]/rail:max-w-0 group-data-[state=collapsed]/rail:opacity-0",
+              )}
+            >
+              {APP_VERSION}
+            </span>
           </button>
         </div>
       )}
+
     </div>
   );
 });
