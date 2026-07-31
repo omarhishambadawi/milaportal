@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   BarChart,
   Bar,
@@ -30,6 +31,17 @@ interface DayRow {
  * the analytics engine.
  */
 export function CallTrendCharts({ byDay, loading }: { byDay: DayRow[]; loading: boolean }) {
+  // See the note in telesales-trend-charts: a fresh array identity per render
+  // makes Recharts replay its animation, which reads as the chart flickering.
+  const answerRate = useMemo(
+    () =>
+      byDay.map((d) => ({
+        date: d.date,
+        rate: d.total ? (d.answered / d.total) * 100 : 0,
+      })),
+    [byDay],
+  );
+
   return (
     <div className="grid lg:grid-cols-2 gap-3">
       <ChartCard title="Inbound vs outbound" loading={loading} hasData={byDay.length > 0}>
@@ -73,13 +85,7 @@ export function CallTrendCharts({ byDay, loading }: { byDay: DayRow[]; loading: 
 
       <ChartCard title="Answer rate over time" loading={loading} hasData={byDay.length > 0}>
         <ResponsiveContainer>
-          <LineChart
-            data={byDay.map((d) => ({
-              date: d.date,
-              rate: d.total ? (d.answered / d.total) * 100 : 0,
-            }))}
-            margin={{ top: 8, right: 12, left: 0, bottom: 0 }}
-          >
+          <LineChart data={answerRate} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
             <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
             <XAxis
               dataKey="date"

@@ -1,55 +1,59 @@
-import { Card, CardContent } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-
-interface FetchProgressProps {
-  /** True while a fetch is in flight. */
-  fetching: boolean;
-  /** True once the page has numbers on screen, from any window. */
-  hasData: boolean;
-  progress: { percent: number; message: string } | null;
-}
+import { Loader2, TriangleAlert } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 /**
- * Fetch feedback, sized to what the user can already see.
+ * Background-refresh feedback, sized so the user barely notices it.
  *
- * The first load has nothing on screen, so it gets the full card: the sweep can
- * page through a lot of CDR and silence would read as a broken page.
+ * This replaced a full progress card with a percentage. The percentage was
+ * fiction — a CDR sweep reports no measurable progress — and the card sat in
+ * the layout, pushing the content being read down the page every time a filter
+ * changed. A refresh keeps the previous numbers on screen, so the only honest
+ * signal is "working", next to the title.
  *
- * A refetch is different. `keepPreviousData` means the previous window's
- * numbers are still displayed and still meaningful, so replacing a chunk of the
- * layout with a progress panel pushes the content the user is reading down the
- * page on every filter change. That gets a slim bar instead — same information,
- * no reflow.
+ * First load shows nothing here at all: the page is already full of skeletons,
+ * and a second spinner on top of them is noise.
  */
-export function FetchProgress({ fetching, hasData, progress }: FetchProgressProps) {
-  if (!fetching) return null;
-
-  if (hasData) {
+export function RefreshIndicator({
+  refreshing,
+  failed,
+  className,
+}: {
+  refreshing: boolean;
+  /** A refresh failed, but the last good analytics are still displayed. */
+  failed?: boolean;
+  className?: string;
+}) {
+  if (failed) {
     return (
-      <div
-        className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-3 py-1.5 print:hidden"
+      <span
         role="status"
-        aria-live="polite"
+        className={cn(
+          "inline-flex items-center gap-1.5 rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-xs text-warning",
+          className,
+        )}
       >
-        <Progress value={progress?.percent ?? 60} className="h-1 flex-1" />
-        <span className="shrink-0 text-xs text-muted-foreground">
-          {progress?.message ?? "Refreshing…"}
-        </span>
-      </div>
+        <TriangleAlert className="h-3 w-3" />
+        Couldn&apos;t refresh — showing last known figures
+      </span>
     );
   }
 
+  if (!refreshing) return null;
+
   return (
-    <Card className="border-primary/30 bg-primary/5 print:hidden">
-      <CardContent className="p-4 space-y-2">
-        <div className="flex items-center justify-between text-sm">
-          <span className="font-medium text-foreground" role="status" aria-live="polite">
-            {progress?.message ?? "Loading call records…"}
-          </span>
-          <span className="tabular-nums text-muted-foreground">{progress?.percent ?? 0}%</span>
-        </div>
-        <Progress value={progress?.percent ?? 5} />
-      </CardContent>
-    </Card>
+    <span
+      role="status"
+      aria-live="polite"
+      className={cn(
+        "inline-flex items-center gap-1.5 text-xs text-muted-foreground",
+        // Fades in only if the refresh is slow enough to be worth mentioning,
+        // so a fast one never flashes.
+        "animate-in fade-in duration-500 delay-300 fill-mode-both",
+        className,
+      )}
+    >
+      <Loader2 className="h-3 w-3 animate-spin" />
+      Updating analytics…
+    </span>
   );
 }

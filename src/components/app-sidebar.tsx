@@ -2,6 +2,7 @@ import { memo, useMemo, type ComponentType } from "react";
 import { Link } from "@tanstack/react-router";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { BrandLogo } from "@/components/brand-logo";
+import { NavFlyout } from "@/components/nav-flyout";
 import { cn } from "@/lib/utils";
 
 export type NavItemData = {
@@ -121,10 +122,12 @@ const NavItem = memo(function NavItem({
   item,
   active,
   activePath,
+  onNavigate,
 }: {
   item: NavItemData;
   active: boolean;
   activePath?: string;
+  onNavigate?: () => void;
 }) {
   const Icon = item.icon;
   const children = item.children ?? [];
@@ -183,76 +186,29 @@ const NavItem = memo(function NavItem({
         {item.label}
       </span>
       {children.length > 0 && (
-        <ChevronRight
-          aria-hidden
+        <span
+          data-flyout-toggle
+          role="button"
+          tabIndex={-1}
+          aria-label={`Toggle ${item.label} menu`}
           className={cn(
-            "ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground/70 transition-opacity",
+            "ml-auto grid h-5 w-5 shrink-0 place-items-center rounded transition-opacity",
             RAIL_CLOCK,
             "group-data-[state=collapsed]/rail:opacity-0",
           )}
-        />
+        >
+          <ChevronRight aria-hidden className="h-3.5 w-3.5 text-muted-foreground/70" />
+        </span>
       )}
     </Link>
   );
 
   if (children.length === 0) return link;
 
-  // Flyout. Opened by hover and by keyboard focus anywhere inside, so it is
-  // reachable without a pointer; `invisible` (not `hidden`) keeps the links in
-  // the tab order's natural place while they are off-screen.
+  // The panel has to escape the sidebar's `overflow-x-hidden`, so it lives in a
+  // portal — see NavFlyout.
   return (
-    <div className="group/fly relative">
-      {link}
-      <div
-        className={cn(
-          "absolute left-full top-0 z-50 hidden min-w-52 pl-2 lg:block",
-          "pointer-events-none opacity-0 transition-opacity duration-150",
-          "group-hover/fly:pointer-events-auto group-hover/fly:opacity-100",
-          "group-focus-within/fly:pointer-events-auto group-focus-within/fly:opacity-100",
-        )}
-      >
-        <div className="rounded-xl border border-border/60 bg-popover p-1.5 shadow-lg">
-          {children.map((c) => (
-            <div key={c.to}>
-              {c.separatorBefore && <div className="my-1.5 border-t border-border/60" />}
-              <Link
-                to={c.to}
-                className={cn(
-                  "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm outline-none transition-colors",
-                  "focus-visible:ring-2 focus-visible:ring-ring/60",
-                  activePath === c.to
-                    ? "bg-primary/10 font-semibold text-foreground"
-                    : "text-foreground/75 hover:bg-accent/70 hover:text-foreground",
-                )}
-              >
-                <c.icon className="h-4 w-4 shrink-0" />
-                <span className="truncate">{c.label}</span>
-              </Link>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Collapsed rail and mobile drawer have no room for a flyout, so the
-          children render inline instead of becoming unreachable. */}
-      <div className="mt-0.5 space-y-0.5 pl-3 lg:hidden">
-        {children.map((c) => (
-          <Link
-            key={c.to}
-            to={c.to}
-            className={cn(
-              "flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition-colors",
-              activePath === c.to
-                ? "bg-primary/10 font-semibold text-foreground"
-                : "text-foreground/70 hover:bg-accent/70",
-            )}
-          >
-            <c.icon className="h-4 w-4 shrink-0" />
-            <span className="truncate">{c.label}</span>
-          </Link>
-        ))}
-      </div>
-    </div>
+    <NavFlyout item={item} activePath={activePath ?? ""} trigger={link} onNavigate={onNavigate} />
   );
 });
 
@@ -353,6 +309,7 @@ const SidebarInner = memo(function SidebarInner({
                   item={it}
                   active={isBranchActive(it, activePath)}
                   activePath={activePath}
+                  onNavigate={onMobileClose}
                 />
               ))}
             </div>

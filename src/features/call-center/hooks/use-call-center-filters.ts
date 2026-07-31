@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import type { DateRange } from "react-day-picker";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
@@ -60,15 +60,6 @@ export function useCallCenterFilters(options: UseCallCenterFiltersOptions = {}) 
     return team === "all" ? operational : operational.filter((a: any) => a.role === team);
   }, [agents, team]);
 
-  // Progress job id (rotates per query)
-  const jobIdRef = useRef<string>("");
-  const [jobId, setJobId] = useState<string>("");
-  useEffect(() => {
-    const id = crypto.randomUUID();
-    jobIdRef.current = id;
-    setJobId(id);
-  }, [from, to, team, agentId, direction, queue]);
-
   // Queue options — fetched only where the queue filter is actually shown.
   const { data: queueData } = useQuery({
     queryKey: queryKeys.callCenter.queues(),
@@ -102,8 +93,5 @@ export function useCallCenterFilters(options: UseCallCenterFiltersOptions = {}) 
     to,
     filteredAgents,
     queues,
-    // progress job id
-    jobId,
-    jobIdRef,
   };
 }

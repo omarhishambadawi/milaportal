@@ -102,6 +102,8 @@ export const callsConfiguration = createServerFn({ method: "POST" })
 
       let queues: PbxRoster["queues"] = [];
       let extensionCount = 0;
+      let model = "unknown";
+      let firmware = "unknown";
       if (configured) {
         try {
           const roster = await fetchPbxRoster();
@@ -110,7 +112,34 @@ export const callsConfiguration = createServerFn({ method: "POST" })
         } catch {
           /* leave empty — the Connection group already reports the failure */
         }
+        try {
+          // Model and firmware come from the PBX itself, so they stay correct
+          // when the hardware is replaced or upgraded.
+          const { yeastarFetch } = await import("@/lib/yeastar/client.server");
+          const { httpStatus, json } = await yeastarFetch<any>(
+            "/openapi/v1.0/system/information",
+            {},
+            { timeoutMs: 8_000 },
+          );
+          if (httpStatus === 200 && json?.errcode === 0) {
+            const d = json.data ?? json;
+            model = String(d?.model ?? d?.product_name ?? "unknown");
+            firmware = String(d?.version ?? d?.firmware_version ?? "unknown");
+          }
+        } catch {
+          /* version stays unknown */
+        }
       }
+
+      // Newest cached CDR window, as an indicator of the last successful sync.
+      let lastSyncAgeMs: number | null = null;
+      for (const entry of cdrCache.values()) {
+        const age = Date.now() - entry.at;
+        if (lastSyncAgeMs == null || age < lastSyncAgeMs) lastSyncAgeMs = age;
+      }
+      const warmWindows = [...cdrCache.values()].filter(
+        (e) => Date.now() - e.at < CDR_CACHE_TTL_MS,
+      ).length;
 
       const agents = await loadAgents((context as any).supabase);
       const cc = agents.filter((a) => a.team === "customer_care");
@@ -121,6 +150,30 @@ export const callsConfiguration = createServerFn({ method: "POST" })
         ok: true,
         configured,
         groups: [
+          {
+            group: "Phone system",
+            settings: [
+              {
+                key: "model",
+                label: "PBX model",
+                value: model,
+                source: "pbx",
+              },
+              {
+                key: "firmware",
+                label: "Firmware version",
+                value: firmware,
+                source: "pbx",
+              },
+              {
+                key: "apiVersion",
+                label: "API version",
+                value: "OpenAPI v1.0",
+                source: "pbx",
+                note: "v2.0 is not functional on this firmware — every v2.0 route returns an internal server error.",
+              },
+            ],
+          },
           {
             group: "Connection",
             settings: [
@@ -190,8 +243,24 @@ export const callsConfiguration = createServerFn({ method: "POST" })
             ],
           },
           {
-            group: "Caching",
+            group: "Caching & sync",
             settings: [
+              {
+                key: "lastSync",
+                label: "Last successful sync",
+                value:
+                  lastSyncAgeMs == null
+                    ? "no window cached yet"
+                    : `${Math.round(lastSyncAgeMs / 1000)}s ago`,
+                source: "application",
+                note: "Age of the most recently fetched CDR window.",
+              },
+              {
+                key: "cacheStatus",
+                label: "Cache status",
+                value: warmWindows > 0 ? `${warmWindows} window(s) warm` : "cold",
+                source: "application",
+              },
               {
                 key: "cdrCacheTtl",
                 label: "CDR cache",

@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { supabase } from "@/integrations/supabase/client";
 import { getCallCenterAnalytics } from "@/lib/yeastar.functions";
 import { queryKeys } from "@/lib/query-keys";
 import type { Team, Direction } from "../types";
@@ -18,19 +17,34 @@ interface UseCallCenterAnalyticsArgs {
   canAll: boolean;
   canView: boolean;
   authLoading: boolean;
-  jobId: string;
-  jobIdRef: { current: string };
   search: string;
+  /**
+   * Background refresh cadence in ms. Customer Care watches a live queue and
+   * wants ~20s; Telesales reviews a day's outbound work and 60s is plenty.
+   */
+  refreshMs: number;
 }
 
 /**
- * The single analytics query that feeds every Call Center section, plus the live
- * progress polling and every derived slice (totals, agent rows, day/hour
- * buckets, team comparison, conversion, hourly-12 labelling, agent search).
+ * The single analytics query behind both dashboards, plus every derived slice.
  *
- * A faithful move of the route's analytics query + effects + memos: same query
- * key, same server fn args, same staleTime/refetch overrides, same loading /
- * error derivation, same progress polling against /api/public/cdr-progress.
+ * Stale-while-revalidate, deliberately:
+ *
+ *   - `placeholderData: keepPreviousData` keeps the previous window's numbers
+ *     on screen while a new one loads, so a filter change never blanks the page.
+ *   - React Query only swaps `data` on a SUCCESSFUL response, so a failed
+ *     refresh leaves the last good analytics visible and merely raises `isError`
+ *     — surfaced as a small non-blocking warning rather than an empty page.
+ *   - `isLoading` is true only when there is genuinely nothing to show. Every
+ *     other fetch is a background refresh and reports through `isRefreshing`.
+ *
+ * There is deliberately NO progress polling. The previous version polled a
+ * progress endpoint every 800ms during any fetch — a `getSession()` call, an
+ * HTTP request and a full re-render three times over per two seconds, which
+ * rebuilt every chart's data array and made Recharts replay its enter
+ * animation. That is what made the dashboards appear to load, clear and reload
+ * on a loop. A CDR sweep has no measurable progress to report anyway, so the
+ * bar was inventing precision it never had.
  */
 export function useCallCenterAnalytics({
   from,
@@ -42,12 +56,9 @@ export function useCallCenterAnalytics({
   canAll,
   canView,
   authLoading,
-  jobId,
-  jobIdRef,
   search,
+  refreshMs,
 }: UseCallCenterAnalyticsArgs) {
-  // Analytics query — one call feeds every section.
-  // Gate on auth readiness + permissions to prevent duplicate/premature fetches.
   const analyticsFn = useServerFn(getCallCenterAnalytics);
   const q = useQuery({
     queryKey: queryKeys.callCenter.analytics({ from, to, team, agentId, direction, queue }),
@@ -64,67 +75,36 @@ export function useCallCenterAnalytics({
           // byte-identical to what it was before the queue filter existed.
           ...(queue && queue !== "all" ? { queue } : {}),
           includeOrders: true,
-          jobId: jobIdRef.current,
         },
       }),
     enabled: !authLoading && canView,
-    // Overrides that are NOT covered by the global defaults: a full CDR sweep
-    // can page through millions of records, so this query opts out of remount
-    // and reconnect refetches entirely and holds data for 5 min rather than 1.
-    // (`refetchOnWindowFocus: false` was dropped — it is now the global default.)
-    staleTime: 5 * 60_000,
+    // The window's data is considered fresh until the next scheduled refresh,
+    // so a remount inside that window reuses the cache instead of refetching.
+    staleTime: refreshMs,
     placeholderData: keepPreviousData,
+    refetchInterval: refreshMs,
+    // Hidden tabs are not watching, so polling them is pure cost. Coming back
+    // to the tab triggers one refresh, which is the moment it actually matters.
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
     refetchOnMount: false,
-    refetchOnReconnect: false,
+    refetchOnReconnect: true,
   });
-
-  // Progress polling — track live server progress during any fetch.
-  const [progress, setProgress] = useState<{ percent: number; message: string } | null>(null);
-  useEffect(() => {
-    if (!q.isFetching || !jobId) {
-      setProgress(null);
-      return;
-    }
-    let stop = false;
-    const tick = async () => {
-      try {
-        // The progress endpoint reads via service_role, so it requires a
-        // bearer token — send the current session's access token.
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!session?.access_token) return;
-        const res = await fetch(`/api/public/cdr-progress/${jobId}`, {
-          cache: "no-store",
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-        if (!res.ok) return;
-        const j = await res.json();
-        if (!stop) setProgress({ percent: j.percent ?? 0, message: j.message ?? "Loading…" });
-      } catch {
-        /* ignore */
-      }
-    };
-    tick();
-    const iv = setInterval(tick, 800);
-    return () => {
-      stop = true;
-      clearInterval(iv);
-    };
-  }, [q.isFetching, jobId]);
 
   const data = q.data;
   const ok = data && data.ok === true;
   const configured = !data || (data as any).configured !== false;
-  // Skeletons are for when there is nothing to show. `keepPreviousData` keeps
-  // the previous window's numbers on screen during a refetch, so gating on
-  // `isFetching` replaced live values with skeletons on every filter toggle —
-  // the page appeared to reload constantly. Refetch progress is still visible
-  // via the progress bar, which reads `q.isFetching` directly.
-  const isLoading = authLoading || (!data && (q.isPending || q.isFetching));
-  const errored = (data && data.ok === false) || !!q.error;
+
+  // Skeletons are for having nothing to show. Any fetch with data already on
+  // screen is a background refresh and must not clear the page.
+  const isLoading = authLoading || (!data && q.isPending);
+  const isRefreshing = !!data && q.isFetching;
+  /** A refresh failed but the last good analytics are still displayed. */
+  const refreshFailed = !!data && !!q.error;
+
+  const errored = (data && data.ok === false) || (!data && !!q.error);
   const errMsg =
-    q.error instanceof Error
+    !data && q.error instanceof Error
       ? q.error.message
       : errored
         ? configured
@@ -133,20 +113,16 @@ export function useCallCenterAnalytics({
         : null;
 
   const totals = ok ? data.totals : null;
-  const rows = ok ? data.agents : [];
-  const byDay = ok ? data.byDay : [];
-  const byHour = ok ? data.byHour : [];
-  const teamCompare = ok ? data.teamCompare : [];
+  const rows = useMemo(() => (ok ? data.agents : []), [ok, data]);
+  const byDay = useMemo(() => (ok ? data.byDay : []), [ok, data]);
+  const byHour = useMemo(() => (ok ? data.byHour : []), [ok, data]);
+  const teamCompare = useMemo(() => (ok ? data.teamCompare : []), [ok, data]);
   const conv = ok ? data.conversion : null;
 
-  const hourly12 = useMemo(
-    () =>
-      byHour.map((h) => ({
-        ...h,
-        label: hourLabel(h.hour),
-      })),
-    [byHour],
-  );
+  // Memoised so the array identity only changes when the data does. Recharts
+  // re-runs its enter animation whenever its `data` prop is a new reference, so
+  // rebuilding these per render is what made charts visibly redraw.
+  const hourly12 = useMemo(() => byHour.map((h) => ({ ...h, label: hourLabel(h.hour) })), [byHour]);
 
   const searchedAgents = useMemo(() => {
     if (!search.trim()) return rows;
@@ -156,9 +132,10 @@ export function useCallCenterAnalytics({
 
   return {
     q,
-    progress,
     ok,
     isLoading,
+    isRefreshing,
+    refreshFailed,
     errMsg,
     totals,
     rows,
@@ -168,5 +145,6 @@ export function useCallCenterAnalytics({
     conv,
     hourly12,
     searchedAgents,
+    refresh: q.refetch,
   };
 }

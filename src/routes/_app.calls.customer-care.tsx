@@ -15,6 +15,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import {
   Download,
   ShieldAlert,
+  RefreshCw,
   PhoneOff,
   AlertTriangle,
   Printer,
@@ -37,7 +38,7 @@ import { DateRangePicker } from "@/components/date-range-picker";
 import type { Direction } from "@/features/call-center/types";
 import { pct, hhmmss } from "@/features/call-center/utils";
 import { exportCallCenter } from "@/features/call-center/export";
-import { FetchProgress } from "@/features/call-center/components/fetch-progress";
+import { RefreshIndicator } from "@/features/call-center/components/fetch-progress";
 import { SectionHeader } from "@/features/call-center/components/section-header";
 import { HeroKpi } from "@/features/call-center/components/hero-kpi";
 import { Kpi } from "@/features/call-center/components/kpi";
@@ -49,6 +50,10 @@ import { AgentPerformanceTable } from "@/features/call-center/components/agent-p
 import { useCallCenterFilters } from "@/features/call-center/hooks/use-call-center-filters";
 import { useCallCenterAnalytics } from "@/features/call-center/hooks/use-call-center-analytics";
 import { useRealtimeQueue } from "@/features/call-center/hooks/use-realtime-queue";
+
+// Customer Care watches a live queue, so it refreshes every 20 seconds —
+// inside the 15-30s operational band, and slow enough not to feel busy.
+const CUSTOMER_CARE_REFRESH_MS = 20_000;
 
 export const Route = createFileRoute("/_app/calls/customer-care")({
   head: () => ({ meta: [{ title: "Customer Care Calls — MilaServ Portal" }] }),
@@ -67,18 +72,18 @@ function CustomerCarePage() {
     canAll: f.canAll,
     canView: f.canView,
     authLoading: f.authLoading,
-    jobId: f.jobId,
-    jobIdRef: f.jobIdRef,
     search: f.search,
+    refreshMs: CUSTOMER_CARE_REFRESH_MS,
   });
   const rt = useRealtimeQueue({ authLoading: f.authLoading, canView: f.canView });
 
   const {
-    q,
-    progress,
     ok,
     isLoading,
+    isRefreshing,
+    refreshFailed,
     errMsg,
+    refresh,
     totals,
     rows,
     byDay,
@@ -121,9 +126,21 @@ function CustomerCarePage() {
           <p className="text-xs sm:text-sm text-muted-foreground truncate">
             Queue analytics · {f.from} → {f.to}
           </p>
+          <div className="mt-1 flex items-center gap-2">
+            <RefreshIndicator refreshing={isRefreshing} failed={refreshFailed} />
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 print:hidden">
           <DateRangePicker range={f.range} onChange={f.setRange} align="end" size="sm" />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => refresh()}
+            disabled={isRefreshing}
+            aria-label="Refresh analytics"
+          >
+            <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+          </Button>
           {f.queues.length > 0 && (
             <Select value={f.queue} onValueChange={f.setQueue}>
               <SelectTrigger className="h-9 w-[170px]">
@@ -178,8 +195,6 @@ function CustomerCarePage() {
           )}
         </div>
       </div>
-
-      <FetchProgress fetching={q.isFetching} hasData={!!q.data} progress={progress} />
 
       {errMsg && (
         <Card>

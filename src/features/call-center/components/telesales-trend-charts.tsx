@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   XAxis,
   YAxis,
@@ -43,15 +44,26 @@ export function TelesalesTrendCharts({
   perDay: ConversionDayRow[];
   loading: boolean;
 }) {
-  const contact = byDay.map((d) => ({
-    date: d.date,
-    rate: d.outbound ? (d.outboundAnswered / d.outbound) * 100 : 0,
-  }));
-  const cancel = byDay.map((d) => ({
-    date: d.date,
-    cancelled: d.cancelledByAgent,
-    rate: d.outbound ? (d.cancelledByAgent / d.outbound) * 100 : 0,
-  }));
+  // Identity-stable: Recharts replays its enter animation whenever `data` is a
+  // new reference, so rebuilding these each render made the charts visibly
+  // redraw on every unrelated re-render.
+  const contact = useMemo(
+    () =>
+      byDay.map((d) => ({
+        date: d.date,
+        rate: d.outbound ? (d.outboundAnswered / d.outbound) * 100 : 0,
+      })),
+    [byDay],
+  );
+  const cancel = useMemo(
+    () =>
+      byDay.map((d) => ({
+        date: d.date,
+        cancelled: d.cancelledByAgent,
+        rate: d.outbound ? (d.cancelledByAgent / d.outbound) * 100 : 0,
+      })),
+    [byDay],
+  );
 
   const axis = { fontSize: 11, fill: "var(--color-muted-foreground)" } as const;
 

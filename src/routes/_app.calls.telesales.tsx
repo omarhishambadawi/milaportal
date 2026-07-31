@@ -16,6 +16,7 @@ import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGri
 import {
   Download,
   ShieldAlert,
+  RefreshCw,
   PhoneOff,
   AlertTriangle,
   Printer,
@@ -40,7 +41,7 @@ import type { Direction } from "@/features/call-center/types";
 import { tooltipStyle } from "@/features/call-center/constants";
 import { pct, hhmmss } from "@/features/call-center/utils";
 import { exportCallCenter } from "@/features/call-center/export";
-import { FetchProgress } from "@/features/call-center/components/fetch-progress";
+import { RefreshIndicator } from "@/features/call-center/components/fetch-progress";
 import { SectionHeader } from "@/features/call-center/components/section-header";
 import { HeroKpi } from "@/features/call-center/components/hero-kpi";
 import { Kpi } from "@/features/call-center/components/kpi";
@@ -52,6 +53,10 @@ import {
 import { AgentPerformanceTable } from "@/features/call-center/components/agent-performance-table";
 import { useCallCenterFilters } from "@/features/call-center/hooks/use-call-center-filters";
 import { useCallCenterAnalytics } from "@/features/call-center/hooks/use-call-center-analytics";
+
+// Telesales reviews a day's outbound work rather than a live queue, so a
+// 60-second cadence keeps it current without extra load.
+const TELESALES_REFRESH_MS = 60_000;
 
 export const Route = createFileRoute("/_app/calls/telesales")({
   head: () => ({ meta: [{ title: "Telesales Calls — MilaServ Portal" }] }),
@@ -69,17 +74,17 @@ function TelesalesPage() {
     canAll: f.canAll,
     canView: f.canView,
     authLoading: f.authLoading,
-    jobId: f.jobId,
-    jobIdRef: f.jobIdRef,
     search: f.search,
+    refreshMs: TELESALES_REFRESH_MS,
   });
 
   const {
-    q,
-    progress,
     ok,
     isLoading,
+    isRefreshing,
+    refreshFailed,
     errMsg,
+    refresh,
     totals,
     rows,
     byDay,
@@ -121,9 +126,21 @@ function TelesalesPage() {
           <p className="text-xs sm:text-sm text-muted-foreground truncate">
             Extension analytics · {f.from} → {f.to}
           </p>
+          <div className="mt-1 flex items-center gap-2">
+            <RefreshIndicator refreshing={isRefreshing} failed={refreshFailed} />
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 print:hidden">
           <DateRangePicker range={f.range} onChange={f.setRange} align="end" size="sm" />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => refresh()}
+            disabled={isRefreshing}
+            aria-label="Refresh analytics"
+          >
+            <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+          </Button>
           {f.canAll && (
             <Select value={f.agentId} onValueChange={f.setAgentId}>
               <SelectTrigger className="h-9 w-[190px]">
@@ -163,8 +180,6 @@ function TelesalesPage() {
           )}
         </div>
       </div>
-
-      <FetchProgress fetching={q.isFetching} hasData={!!q.data} progress={progress} />
 
       {errMsg && (
         <Card>
