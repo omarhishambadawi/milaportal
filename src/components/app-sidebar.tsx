@@ -206,7 +206,7 @@ const SidebarInner = memo(function SidebarInner({
             type="button"
             onClick={onMobileClose}
             aria-label="Close menu"
-            className="ml-auto grid h-9 w-9 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground active:scale-95"
+            className="ml-auto grid h-9 w-9 place-items-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-card active:scale-95"
           >
             <X className="h-[18px] w-[18px]" />
           </button>
