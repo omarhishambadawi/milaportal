@@ -147,7 +147,7 @@ const NavItem = memo(function NavItem({ item, active }: { item: NavItemData; act
             : "text-foreground/65 group-hover:bg-background group-hover:text-foreground group-active:scale-95",
         )}
       >
-        <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={active ? 2.25 : 2} />
+        <Icon className="h-[18px] w-[18px] shrink-0" />
       </span>
       {/* pl-3 replaces the parent's old gap-3, so the whole spacing collapses
           with the box: border-box max-w-0 closes padding and content together,
