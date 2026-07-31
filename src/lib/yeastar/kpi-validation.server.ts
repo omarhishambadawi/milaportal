@@ -250,8 +250,43 @@ export async function runKpiValidation(
   const t0 = Date.now();
   const cdr = await fetchCdrRange({ from, to });
   const tFetched = Date.now();
-  const classified = classifyRecords(cdr.records, ctx);
+  const classifiedAll = classifyRecords(cdr.records, ctx);
   const tNormalized = Date.now();
+
+  // Scope to the team BEFORE aggregating, not after.
+  //
+  // The official report being compared against is filtered to one team's
+  // extensions, so the dashboard side has to be filtered the same way. Scoping
+  // only the per-call table (as this first did) would compare a team's official
+  // figures against whole-PBX totals and report mismatches that are pure
+  // apples-to-oranges.
+  const teamExts = opts.teamExtensions ?? null;
+  const inTeam = (c: NormalizedCall) =>
+    teamExts == null ||
+    (c.answeringExtension != null && teamExts.has(c.answeringExtension)) ||
+    c.legs.some((l) => l.role === "agent" && teamExts.has(l.destinationNumber));
+
+  const classified = teamExts
+    ? (() => {
+        const calls = classifiedAll.calls.filter(inTeam);
+        const excluded = classifiedAll.excluded.filter(inTeam);
+        const reasons = new Map<string, number>();
+        for (const c of excluded) {
+          const r = c.exclusion ?? "other";
+          reasons.set(r, (reasons.get(r) ?? 0) + 1);
+        }
+        return {
+          ...classifiedAll,
+          calls,
+          excluded,
+          exclusionCounts: [...reasons.entries()]
+            .map(([reason, count]) => ({ reason, count }))
+            .sort((a, b) => b.count - a.count),
+          directionCorrections: classifiedAll.directionCorrections,
+        };
+      })()
+    : classifiedAll;
+
   const result = aggregateClassified(classified, [], []);
   const tAggregated = Date.now();
   const checks = validateAnalytics(classified, result);
@@ -322,15 +357,9 @@ export async function runKpiValidation(
 
   // --- per-call diagnostic rows --------------------------------------------
   const MAX_CALL_ROWS = opts.maxCallRows ?? 2000;
-  const teamExts = opts.teamExtensions ?? null;
-  const inTeam = (c: NormalizedCall) =>
-    teamExts == null ||
-    (c.answeringExtension != null && teamExts.has(c.answeringExtension)) ||
-    c.legs.some((l) => l.role === "agent" && teamExts.has(l.destinationNumber));
-
-  const everyCall = [...classified.calls, ...classified.excluded]
-    .filter(inTeam)
-    .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
+  const everyCall = [...classified.calls, ...classified.excluded].sort(
+    (a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0),
+  );
 
   const callRows: CallDiagnosticRow[] = everyCall.slice(0, MAX_CALL_ROWS).map((c) => {
     // A repeated `new_id` is dropped before the call exists, so the surviving
@@ -376,6 +405,9 @@ export async function runKpiValidation(
       const probeSec = probeMinutes * 60;
 
       for (const c of [...wideCalls.calls, ...wideCalls.excluded]) {
+        // Same team scope as the totals, or a Telesales run would list Customer
+        // Care neighbours as candidates for its own shortfall.
+        if (!inTeam(c)) continue;
         if (c.startedAt == null) continue;
         const inStrict = c.startedAt >= cdr.startEpoch && c.startedAt <= cdr.endEpoch;
         if (inStrict) continue;
@@ -482,9 +514,11 @@ export async function runKpiValidation(
       cdrCache: opts.cdrCache ?? { status: "cold", ageMs: null },
     },
     stats: {
-      rawRows: classified.rowsInspected,
+      // Row counts describe the FETCH and stay window-level; call counts follow
+      // the active team scope.
+      rawRows: classifiedAll.rowsInspected,
       normalizedCalls: classified.calls.length + classified.excluded.length,
-      duplicateLegsRemoved: classified.duplicateRowsDropped,
+      duplicateLegsRemoved: classifiedAll.duplicateRowsDropped,
       directionCorrections: classified.directionCorrections.reduce((n, d) => n + d.count, 0),
       callsExcluded: classified.excluded.length,
       queueCalls: classified.calls.filter((c) => c.reachedQueue).length,
