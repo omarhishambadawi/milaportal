@@ -140,6 +140,74 @@ function YeastarDiagnostics() {
                   {validation.roster.extensionCount} extensions · queues{" "}
                   {validation.roster.queueNumbers.join(", ") || "none"}
                 </span>
+                <Badge
+                  variant={validation.businessHours ? "secondary" : "outline"}
+                  className="font-normal"
+                >
+                  {validation.businessHours
+                    ? `hours ${validation.businessHours.start}–${validation.businessHours.end}`
+                    : "after-hours rule off"}
+                </Badge>
+              </div>
+
+              {/* Why calls were left out — one row per category, zeros included. */}
+              <div>
+                <Label className="text-xs text-muted-foreground">
+                  Excluded calls ({validation.callsSeen - validation.calls} of{" "}
+                  {validation.callsSeen} not operational)
+                </Label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-1 text-xs">
+                  {validation.exclusions.map((e) => (
+                    <div key={e.reason} className="rounded border border-border/60 p-2">
+                      <div className="text-muted-foreground font-mono">{e.reason}</div>
+                      <div className="text-sm font-semibold tabular-nums">{e.count}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {validation.directionCorrections.length > 0 && (
+                <div>
+                  <Label className="text-xs text-muted-foreground">
+                    Direction corrections — PBX label overruled by the call's own endpoints
+                  </Label>
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {validation.directionCorrections.map((d) => (
+                      <Badge
+                        key={`${d.declared}-${d.corrected}`}
+                        variant="secondary"
+                        className="font-mono font-normal"
+                      >
+                        {d.declared} → {d.corrected}: {d.count}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <Label className="text-xs text-muted-foreground">
+                  Operational calls by hour (business timezone)
+                  <span className="block font-normal normal-case">
+                    read the real operating window off this before setting business hours
+                  </span>
+                </Label>
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {validation.callsByHour.map((h) => (
+                    <div
+                      key={h.hour}
+                      className={`rounded px-1.5 py-1 text-[11px] tabular-nums border ${
+                        h.calls > 0
+                          ? "border-border/60 bg-muted"
+                          : "border-border/30 text-muted-foreground"
+                      }`}
+                      title={`${h.hour}:00 — ${h.calls} calls`}
+                    >
+                      {String(h.hour).padStart(2, "0")}
+                      <span className="ml-1 font-semibold">{h.calls}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">

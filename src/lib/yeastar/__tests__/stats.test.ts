@@ -8,7 +8,12 @@ import {
   type AgentRef,
   type OrderRef,
 } from "../stats.server";
-import { buildContext, type RawCdrRow } from "../normalize";
+import {
+  buildContext,
+  isWithinBusinessHours,
+  parseBusinessHours,
+  type RawCdrRow,
+} from "../normalize";
 import { failedChecks, validateAnalytics } from "../validate";
 
 /**
@@ -235,8 +240,8 @@ const OUTBOUND_ANSWERED: RawCdrRow[] = [
     disposition: "ANSWERED",
     call_from: "Ahmed Mousad<1000>",
     call_from_number: "1000",
-    call_to: "0501XXXX23",
-    call_to_number: "0501XXXX23",
+    call_to: "0501234523",
+    call_to_number: "0501234523",
     dod_number: "+966920032101",
     duration: 128,
     ring_duration: 8,
@@ -254,8 +259,8 @@ const OUTBOUND_NO_ANSWER: RawCdrRow[] = [
     disposition: "NO ANSWER",
     call_from: "Ahmed Mousad<1000>",
     call_from_number: "1000",
-    call_to: "0509XXXX88",
-    call_to_number: "0509XXXX88",
+    call_to: "0509876588",
+    call_to_number: "0509876588",
     duration: 25,
     ring_duration: 25,
   },
@@ -295,9 +300,10 @@ describe("platform totals", () => {
   const r = run();
 
   it("counts calls, not CDR rows", () => {
-    // 15 non-internal rows collapse to 6 calls.
-    expect(r.totals.total).toBe(6);
-    expect(r.totals.inbound).toBe(4);
+    // 15 non-internal rows collapse to 6 calls, of which 5 are operational —
+    // the IVR-only hang-up is reported but never counted (Phase 3 rule).
+    expect(r.totals.total).toBe(5);
+    expect(r.totals.inbound).toBe(3);
     expect(r.totals.outbound).toBe(2);
   });
 
@@ -320,10 +326,12 @@ describe("platform totals", () => {
     expect(r.totals.abandoned).toBe(1);
   });
 
-  it("separates IVR hang-ups from Missed", () => {
+  it("reports IVR-only calls but keeps them out of every KPI", () => {
+    // Parity target is Yeastar Reports > Extension Call Statistics, which counts
+    // only calls that reached an extension. An IVR hang-up never did.
     expect(r.totals.ivrOnly).toBe(1);
-    // The IVR-only call is still a call, and still drags the answer rate down.
-    expect(r.totals.inbound).toBe(r.totals.inboundAnswered + 1 + 1 + 1);
+    expect(r.totals.inbound).toBe(r.totals.inboundAnswered + 1 + 1); // answered + missed + abandoned
+    expect(run(IVR_ONLY).totals.total).toBe(0);
   });
 });
 
@@ -371,21 +379,21 @@ describe("queue wait vs agent ring", () => {
 describe("answer rates", () => {
   const r = run();
 
-  it("computes the platform answer rate over every call", () => {
-    expect(r.totals.answerRate).toBeCloseTo((2 / 6) * 100, 6);
+  it("computes the platform answer rate over operational calls", () => {
+    expect(r.totals.answerRate).toBeCloseTo((2 / 5) * 100, 6);
   });
 
-  it("computes inbound answer rate with IVR hang-ups in the denominator", () => {
-    expect(r.totals.inboundAnswerRate).toBe(25);
+  it("computes inbound answer rate without IVR hang-ups in the denominator", () => {
+    expect(r.totals.inboundAnswerRate).toBeCloseTo((1 / 3) * 100, 6);
   });
 
   it("computes queue answer rate over calls agents were actually offered", () => {
     expect(r.totals.queueAnswerRate).toBeCloseTo((1 / 3) * 100, 6);
   });
 
-  it("computes missed and abandon rates against inbound", () => {
-    expect(r.totals.missedRate).toBe(25);
-    expect(r.totals.abandonRate).toBe(25);
+  it("computes missed and abandon rates against operational inbound", () => {
+    expect(r.totals.missedRate).toBeCloseTo((1 / 3) * 100, 6);
+    expect(r.totals.abandonRate).toBeCloseTo((1 / 3) * 100, 6);
   });
 });
 
@@ -456,8 +464,9 @@ describe("queue KPIs", () => {
   it("only counts calls that reached a queue as queue calls", () => {
     const r = run();
     expect(r.totals.queueCalls).toBe(3);
-    // The IVR-only call never queued.
-    expect(r.totals.queueCalls).toBe(r.totals.inbound - r.totals.ivrOnly);
+    // Every operational inbound call here reached the queue; the one that did
+    // not is the IVR-only call, already excluded.
+    expect(r.totals.queueCalls).toBe(r.totals.inbound);
   });
 
   it("classifies a short queue hang-up as abandoned and a long one as missed", () => {
@@ -474,7 +483,7 @@ describe("day and hour buckets", () => {
   it("buckets calls by business-timezone day", () => {
     expect(r.byDay).toHaveLength(1);
     expect(r.byDay[0].date).toBe(DAY);
-    expect(r.byDay[0].total).toBe(6);
+    expect(r.byDay[0].total).toBe(5);
     expect(r.byDay[0].answered).toBe(2);
     expect(r.byDay[0].missed).toBe(1);
     expect(r.byDay[0].abandoned).toBe(1);
@@ -484,8 +493,8 @@ describe("day and hour buckets", () => {
 
   it("returns all 24 hours with the calls in the right one", () => {
     expect(r.byHour).toHaveLength(24);
-    expect(r.byHour[HOUR].total).toBe(6);
-    expect(r.byHour.reduce((n, h) => n + h.total, 0)).toBe(6);
+    expect(r.byHour[HOUR].total).toBe(5);
+    expect(r.byHour.reduce((n, h) => n + h.total, 0)).toBe(5);
   });
 });
 
@@ -508,7 +517,7 @@ describe("team comparison", () => {
 
 describe("filters and scope", () => {
   it("filters by direction at call level", () => {
-    expect(run(ALL_ROWS, [], { direction: "Inbound" }).totals.total).toBe(4);
+    expect(run(ALL_ROWS, [], { direction: "Inbound" }).totals.total).toBe(3);
     expect(run(ALL_ROWS, [], { direction: "Outbound" }).totals.total).toBe(2);
   });
 
@@ -604,8 +613,10 @@ describe("grouping regressions the live audit found", () => {
   });
 
   it("does not merge unrelated calls that share a from/to pair", () => {
-    const { calls } = classifyRecords([...IVR_ONLY, ...MISSED, ...ABANDONED], ctx);
-    expect(calls).toHaveLength(3);
+    // Counted across both ledgers: grouping is what's under test here, not the
+    // business rule that later excludes the IVR-only call.
+    const c = classifyRecords([...IVR_ONLY, ...MISSED, ...ABANDONED], ctx);
+    expect(c.calls.length + c.excluded.length).toBe(3);
   });
 });
 
@@ -644,9 +655,12 @@ describe("the captured live payload, end to end", () => {
   });
 
   it("collapses 12 live rows into 4 calls", () => {
-    const { calls } = classifyRecords(liveRows, liveCtx);
+    const c = classifyRecords(liveRows, liveCtx);
     expect(liveRows).toHaveLength(12);
-    expect(calls).toHaveLength(4);
+    expect(c.calls.length + c.excluded.length).toBe(4);
+    // Two of the four are IVR hang-ups, excluded from KPIs but still reported.
+    expect(c.calls).toHaveLength(2);
+    expect(c.exclusionCounts.find((e) => e.reason === "ivr_only")?.count).toBe(2);
   });
 
   it("resolves the answering agent from the agent leg of the live call", () => {
@@ -669,11 +683,11 @@ describe("the captured live payload, end to end", () => {
 
   it("does not score the live IVR hang-ups as answered calls", () => {
     const r = aggregateAnalytics(liveRows, liveCtx, AGENTS, [], { tzOffsetMin: TZ });
-    // The old parser scored all four of these as answered. Two of them are
-    // callers who hung up in the IVR; the fourth is the call whose agent leg
-    // falls on the next page of this 12-row capture, so it reads as queued and
-    // unanswered here.
-    expect(r.totals.inbound).toBe(4);
+    // The old parser scored all four of these as answered. Two are callers who
+    // hung up in the IVR — reported, not counted. The fourth is the call whose
+    // agent leg falls on the next page of this 12-row capture, so it reads as
+    // queued and unanswered here.
+    expect(r.totals.inbound).toBe(2);
     expect(r.totals.answered).toBe(1);
     expect(r.totals.ivrOnly).toBe(2);
     expect(r.totals.missed).toBe(1);
@@ -683,7 +697,7 @@ describe("the captured live payload, end to end", () => {
   it("passes every KPI invariant on the live payload", () => {
     const classified = classifyRecords(liveRows, liveCtx);
     const result = aggregateClassified(classified, AGENTS, [], { tzOffsetMin: TZ });
-    expect(failedChecks(validateAnalytics(classified.calls, result))).toEqual([]);
+    expect(failedChecks(validateAnalytics(classified, result))).toEqual([]);
   });
 });
 
@@ -691,7 +705,7 @@ describe("KPI validation invariants", () => {
   it("passes every invariant on the live-transcribed fixture set", () => {
     const classified = classifyRecords(ALL_ROWS, ctx);
     const result = aggregateClassified(classified, AGENTS, [], { tzOffsetMin: TZ });
-    const failures = failedChecks(validateAnalytics(classified.calls, result));
+    const failures = failedChecks(validateAnalytics(classified, result));
     expect(failures.map((f) => `${f.name}: expected ${f.expected}, got ${f.actual}`)).toEqual([]);
   });
 
@@ -700,7 +714,7 @@ describe("KPI validation invariants", () => {
     const result = aggregateClassified(classified, AGENTS, [], { tzOffsetMin: TZ });
     // Simulate the old bug: every inbound call scored as answered.
     result.totals.answered = result.totals.total;
-    const failures = failedChecks(validateAnalytics(classified.calls, result));
+    const failures = failedChecks(validateAnalytics(classified, result));
     expect(failures.map((f) => f.name)).toContain("answered");
   });
 
@@ -708,7 +722,204 @@ describe("KPI validation invariants", () => {
     const classified = classifyRecords(ALL_ROWS, ctx);
     const result = aggregateClassified(classified, AGENTS, [], { tzOffsetMin: TZ });
     result.totals.talkSeconds *= 2;
-    const failures = failedChecks(validateAnalytics(classified.calls, result));
+    const failures = failedChecks(validateAnalytics(classified, result));
     expect(failures.map((f) => f.name)).toContain("talk-seconds");
+  });
+});
+
+describe("direction accuracy (Phase 3)", () => {
+  /**
+   * The reported production defect: outbound calls appearing in inbound
+   * analytics. Two outbound Busy calls put the dashboard at Inbound 46 against
+   * an official Yeastar Inbound of 44.
+   *
+   * The signature is a row the PBX labels `Inbound` whose `call_from_number` is
+   * one of our own extensions. An inbound call's caller is external by
+   * definition, so the label is wrong and the endpoints win.
+   */
+  const OUTBOUND_BUSY_MISLABELLED: RawCdrRow[] = [
+    {
+      uid: "20260630220000A777",
+      new_id: "67C6751A-06000001",
+      call_id: "c-out-busy-mislabelled",
+      timestamp: T + 1200,
+      call_type: "Inbound", // ← wrong: the caller below is our own extension
+      disposition: "BUSY",
+      call_from: "Ahmed Mousad<1000>",
+      call_from_number: "1000",
+      call_to: "0512223344",
+      call_to_number: "0512223344",
+      duration: 4,
+      ring_duration: 4,
+    },
+  ];
+
+  it("never counts a call placed from one of our extensions as inbound", () => {
+    const r = run(OUTBOUND_BUSY_MISLABELLED);
+    expect(r.totals.inbound).toBe(0);
+    expect(r.totals.outbound).toBe(1);
+    expect(r.totals.busy).toBe(1);
+  });
+
+  it("records the correction so it can be audited, not silently applied", () => {
+    const c = classifyRecords(OUTBOUND_BUSY_MISLABELLED, ctx);
+    expect(c.directionCorrections).toEqual([
+      { declared: "Inbound", corrected: "Outbound", count: 1 },
+    ]);
+  });
+
+  it("reproduces the reported 46 → 44 inbound correction", () => {
+    const twoBusy: RawCdrRow[] = [
+      ...OUTBOUND_BUSY_MISLABELLED,
+      {
+        ...OUTBOUND_BUSY_MISLABELLED[0],
+        new_id: "67C6751A-06000002",
+        call_id: "c-out-busy-mislabelled-2",
+        timestamp: T + 1260,
+      },
+    ];
+    const withDefect = run([...ALL_ROWS, ...twoBusy]);
+    const baseline = run(ALL_ROWS);
+    // The two extra calls land in outbound, and inbound is untouched.
+    expect(withDefect.totals.inbound).toBe(baseline.totals.inbound);
+    expect(withDefect.totals.outbound).toBe(baseline.totals.outbound + 2);
+  });
+
+  it("treats an internally-placed call with no external leg as Internal, not inbound", () => {
+    const extToExt: RawCdrRow[] = [
+      {
+        ...OUTBOUND_BUSY_MISLABELLED[0],
+        new_id: "67C6751A-07000001",
+        call_id: "c-ext-to-ext",
+        call_to: "Fadwa Shawky<4006>",
+        call_to_number: "4006",
+      },
+    ];
+    const r = run(extToExt);
+    expect(r.totals.total).toBe(0);
+    expect(r.totals.inbound).toBe(0);
+    expect(r.totals.outbound).toBe(0);
+  });
+
+  it("leaves correctly-labelled outbound alone", () => {
+    const c = classifyRecords([...OUTBOUND_ANSWERED, ...OUTBOUND_NO_ANSWER], ctx);
+    expect(c.directionCorrections).toEqual([]);
+    expect(c.calls.every((x) => x.direction === "Outbound")).toBe(true);
+  });
+});
+
+describe("operational business rules (Phase 3)", () => {
+  it("keeps a full ledger of why each call was excluded", () => {
+    const c = classifyRecords(ALL_ROWS, ctx);
+    const byReason = Object.fromEntries(c.exclusionCounts.map((e) => [e.reason, e.count]));
+    expect(byReason).toEqual({ ivr_only: 1, internal: 1 });
+    expect(c.calls).toHaveLength(5);
+    expect(c.excluded).toHaveLength(2);
+  });
+
+  it("counts duplicate rows dropped during grouping", () => {
+    const c = classifyRecords([...QUEUE_ANSWERED, ...QUEUE_ANSWERED], ctx);
+    expect(c.duplicateRowsDropped).toBe(6);
+    expect(c.calls).toHaveLength(1);
+  });
+
+  it("excludes PBX system events with no counterparty at all", () => {
+    const systemRow: RawCdrRow[] = [
+      {
+        uid: "20260630230000B888",
+        new_id: "67C6751A-08000001",
+        call_id: "c-system",
+        timestamp: T + 2000,
+        call_type: "Inbound",
+        disposition: "ANSWERED",
+        call_from_number: "",
+        call_to: "Play Prompt",
+        call_to_number: "",
+        duration: 3,
+      },
+    ];
+    const c = classifyRecords(systemRow, ctx);
+    expect(c.calls).toHaveLength(0);
+    expect(c.exclusionCounts).toEqual([{ reason: "system_event", count: 1 }]);
+  });
+
+  it("never drops a real call just because its destination did not parse", () => {
+    // A destination the leg classifier cannot label must not make the call
+    // disappear — exclusion is far more damaging than a mislabelled leg.
+    const oddDestination: RawCdrRow[] = [
+      {
+        ...OUTBOUND_ANSWERED[0],
+        new_id: "67C6751A-09000001",
+        call_id: "c-odd-dest",
+        call_to: "sip:pharmacy@partner.example",
+        call_to_number: "sip:pharmacy@partner.example",
+      },
+    ];
+    const r = run(oddDestination);
+    expect(r.totals.total).toBe(1);
+    expect(r.totals.outbound).toBe(1);
+    expect(r.totals.answered).toBe(1);
+  });
+});
+
+describe("business hours (Phase 3)", () => {
+  const withHours = (spec: string) =>
+    buildContext(
+      [{ number: "4005" }, { number: "4006" }, { number: "1000" }, { number: "1001" }],
+      [{ number: "6400" }],
+      undefined,
+      parseBusinessHours(spec, TZ),
+    );
+
+  it("applies no after-hours rule when hours are not configured", () => {
+    // Default posture: an unverified window would silently move every KPI.
+    expect(parseBusinessHours("", TZ)).toBeNull();
+    expect(parseBusinessHours(undefined, TZ)).toBeNull();
+    expect(ctx.businessHours ?? null).toBeNull();
+    expect(
+      classifyRecords(ALL_ROWS, ctx).exclusionCounts.some((e) => e.reason === "after_hours"),
+    ).toBe(false);
+  });
+
+  it("parses day ranges, lists and wrapping windows", () => {
+    expect(parseBusinessHours("sun-thu 08:00-17:00", TZ)).toEqual({
+      days: [0, 1, 2, 3, 4],
+      startMinute: 480,
+      endMinute: 1020,
+      utcOffsetMinutes: TZ,
+    });
+    expect(parseBusinessHours("sat,sun 09:30-22:00", TZ)?.days).toEqual([0, 6]);
+    expect(parseBusinessHours("fri-mon 09:00-17:00", TZ)?.days).toEqual([0, 1, 5, 6]);
+    expect(parseBusinessHours("garbage", TZ)).toBeNull();
+  });
+
+  it("excludes calls that arrive outside the window", () => {
+    // The fixtures all start 21:37 local on a Tuesday.
+    const office = withHours("sun-thu 08:00-17:00");
+    const c = classifyRecords(ALL_ROWS, office);
+    const byReason = Object.fromEntries(c.exclusionCounts.map((e) => [e.reason, e.count]));
+    expect(byReason.after_hours).toBeGreaterThan(0);
+    expect(c.calls).toHaveLength(0);
+  });
+
+  it("keeps calls that arrive inside the window", () => {
+    const evening = withHours("sun-sat 18:00-23:59");
+    const c = classifyRecords(ALL_ROWS, evening);
+    expect(c.calls).toHaveLength(5);
+    expect(c.exclusionCounts.some((e) => e.reason === "after_hours")).toBe(false);
+  });
+
+  it("reports a queued call that arrived while the queue was closed separately", () => {
+    const office = withHours("sun-thu 08:00-17:00");
+    // ABANDONED reached the queue and never rang an agent.
+    const c = classifyRecords(ABANDONED, office);
+    expect(c.exclusionCounts).toEqual([{ reason: "queue_closed", count: 1 }]);
+  });
+
+  it("treats a window that wraps past midnight correctly", () => {
+    const overnight = parseBusinessHours("sun-sat 22:00-06:00", TZ)!;
+    // 21:37 local is outside; 23:00 is inside.
+    expect(isWithinBusinessHours(T, overnight)).toBe(false);
+    expect(isWithinBusinessHours(T + 90 * 60, overnight)).toBe(true);
   });
 });

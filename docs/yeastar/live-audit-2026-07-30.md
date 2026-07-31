@@ -281,6 +281,68 @@ the PBX's own `waiting_calls` / `active_calls` / `ringing_calls` scalars, and tr
 60001` as "idle" rather than as a failure. It previously read `data` / `queue_call_status_list`,
 neither of which exists, and therefore always rendered zeros.
 
+---
+
+## 8. Phase 3 — parity with Yeastar Reports › Extension Call Statistics
+
+The parity target is **Reports › Extension Call Statistics**, which counts only calls that reached
+an extension. That single fact drives the business rules below.
+
+### Direction accuracy
+
+Reported defect: official Inbound 44, dashboard Inbound 46 — two outbound **Busy** calls counted as
+inbound.
+
+Root cause: direction was taken verbatim from `call_type` on the first leg. The fix reads the call's
+own endpoints and overrules the label when they contradict it — **an inbound call's caller is
+external by definition**, so a row labelled `Inbound` whose `call_from_number` is one of our own
+extensions is not inbound. `call_from_number` is trustworthy here: it matched the extension roster on
+4,744 of 4,745 outbound rows.
+
+The correction is **one-way** — it can only move a call OUT of Inbound, never into it — so the
+outbound totals verified in §5 cannot regress. Every correction is counted and reported
+(`directionCorrections`) rather than applied silently.
+
+### Operational business rules
+
+A call is operational unless one of these applies, in precedence order:
+
+| Reason         | Meaning                                                | Live behaviour                              |
+| -------------- | ------------------------------------------------------ | ------------------------------------------- |
+| `internal`     | Extension-to-extension                                 | as before                                   |
+| `system_event` | No counterparty at either end                          | rare                                        |
+| `queue_closed` | Queued while closed, never offered to an agent         | **0 while `enable_time_condition: 0`**      |
+| `after_hours`  | Arrived outside the configured window                  | **0 until `YEASTAR_BUSINESS_HOURS` is set** |
+| `ivr_only`     | Caller hung up in the IVR — never reached an extension | the largest exclusion                       |
+
+Excluded calls are reported with counts but **never** move Total, Answered, Missed, Abandoned,
+Answer Rate, queue, agent or conversion figures.
+
+> `system_event` is deliberately decided on the **numbers**, not on leg roles. An earlier role-based
+> rule dropped real outbound calls whose destination did not parse as a clean number. Excluding a
+> call is far more damaging than mislabelling a leg.
+
+### Business hours are configuration, not PBX data
+
+Queue 6400 reports `enable_time_condition: 0`, so the queue never closes; any time condition lives
+on the inbound route, which this firmware exposes no API for. Hours are therefore set via
+`YEASTAR_BUSINESS_HOURS` (e.g. `"sun-thu 08:00-17:00"`), and **when unset no call is excluded for
+arriving after hours** — an unverified window would silently move every KPI. The validation report
+prints an operational-calls-per-hour histogram so the real window can be read off live data first.
+
+### Performance
+
+Normalization already ran once per window; Phase 3 removed the remaining repeated work. The CDR and
+PBX-roster caches now match the client's own 5-minute `staleTime` instead of expiring at 60s, and the
+agent roster (three Supabase reads + a PBX fetch) is cached rather than reloaded on every filter
+toggle. The Call Center page also stopped replacing live numbers with skeletons during a refetch —
+`keepPreviousData` was already holding the previous values, so the skeletons were pure flicker.
+
+None of this touches how a KPI is computed; the caches are keyed by window **and** roster **and**
+business-hours signature, so any change to those invalidates them.
+
+---
+
 **Roster gap found while replaying the captured payload:** `/extension/list` is paginated, and the
 captured page holds 8 of the PBX's 28 extensions — 4005, who answers the sample call, is not on it.
 `buildContext()` now folds queue MEMBERS (`queue_list[].static_agent_list[].text2`) into the

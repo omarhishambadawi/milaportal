@@ -840,7 +840,12 @@ const analyticsInput = statsInput.extend({
   includeOrders: z.boolean().default(true),
 });
 
-const CDR_CACHE_TTL_MS = 60_000;
+// Aligned with the Call Center query's own `staleTime` (5 min). The client will
+// not ask for fresher data than this, so a shorter server TTL only produced
+// redundant full-window CDR sweeps — the dominant cost of the page. Caching
+// longer changes nothing about how a KPI is computed, only how often the same
+// rows are re-fetched.
+const CDR_CACHE_TTL_MS = 5 * 60_000;
 const CDR_CACHE_MAX = 20;
 const cdrCache = new Map<string, { at: number; promise: Promise<any> }>();
 
@@ -940,7 +945,7 @@ const TELESALES_STATIC_EXTS: Array<{ ext: string; name: string }> = [
   { ext: "1001", name: "Kamr Elsayed" },
 ];
 
-const ROSTER_TTL_MS = 60_000;
+const ROSTER_TTL_MS = 5 * 60_000;
 
 interface PbxRoster {
   /** Customer Care queue members: extension → display name. */
@@ -1046,7 +1051,7 @@ async function buildNormalizationContext(
   fallbackExts: Iterable<string> = [],
 ): Promise<NormalizationContext> {
   const { extensionNumbers, queueNumbers, queueMemberExts } = await fetchPbxRoster();
-  const { buildContext } = await import("@/lib/yeastar/normalize");
+  const { buildContext, parseBusinessHours } = await import("@/lib/yeastar/normalize");
   const exts = new Set(extensionNumbers);
   // Queue members are extensions by definition, and /extension/list is paged —
   // an agent on an unfetched page must still be recognisable.
@@ -1057,21 +1062,69 @@ async function buildNormalizationContext(
       if (e) exts.add(e);
     }
   }
+  // Business hours are configuration, not something this firmware exposes:
+  // queue 6400 reports `enable_time_condition: 0`, so any time condition lives
+  // on the inbound route and there is no API for it. Unset means NO call is
+  // excluded for arriving after hours — guessing a window would silently move
+  // every KPI, which is worse than not applying the rule.
+  //   YEASTAR_BUSINESS_HOURS="sun-thu 08:00-17:00"
+  const businessHours = parseBusinessHours(
+    process.env.YEASTAR_BUSINESS_HOURS,
+    Number(process.env.YEASTAR_UTC_OFFSET_MINUTES ?? BUSINESS_UTC_OFFSET_MINUTES),
+  );
+
   return buildContext(
     [...exts].map((number) => ({ number })),
     [...queueNumbers].map((number) => ({ number })),
+    undefined,
+    businessHours,
   );
 }
 
 /** Cheap stable fingerprint of a roster, so a roster change busts the cache. */
 function rosterSignature(ctx: NormalizationContext): string {
-  const src = `${[...ctx.extensionNumbers].sort().join(",")}|${[...ctx.queueNumbers].sort().join(",")}`;
+  const bh = ctx.businessHours;
+  const src =
+    `${[...ctx.extensionNumbers].sort().join(",")}|${[...ctx.queueNumbers].sort().join(",")}` +
+    // Business hours change which calls are operational, so they must bust the
+    // normalization cache exactly like a roster change does.
+    `|${bh ? `${bh.days.join("")}:${bh.startMinute}-${bh.endMinute}@${bh.utcOffsetMinutes}` : "none"}`;
   let h = 2166136261;
   for (let i = 0; i < src.length; i++) {
     h ^= src.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
   return (h >>> 0).toString(36);
+}
+
+/**
+ * Agent roster cache.
+ *
+ * `loadAgents` issues three Supabase reads plus a PBX queue fetch, and it ran on
+ * every analytics request — so each filter toggle paid for it again even though
+ * the roster is identical. It is cached for the same window as the PBX roster.
+ * The roster only decides ATTRIBUTION (which agent a call belongs to), never how
+ * a KPI is computed, and a newly added agent appears within the TTL.
+ */
+const AGENT_ROSTER_TTL_MS = ROSTER_TTL_MS;
+let agentRosterCache: {
+  at: number;
+  promise: Promise<
+    Array<{ id: string; name: string; team: "customer_care" | "telesales"; ext: string }>
+  >;
+} | null = null;
+
+async function loadAgentsCached(supabase: any) {
+  const now = Date.now();
+  if (agentRosterCache && now - agentRosterCache.at < AGENT_ROSTER_TTL_MS) {
+    return agentRosterCache.promise;
+  }
+  const promise = loadAgents(supabase).catch((e) => {
+    agentRosterCache = null;
+    throw e;
+  });
+  agentRosterCache = { at: now, promise };
+  return promise;
 }
 
 async function loadAgents(_supabase: any) {
@@ -1188,7 +1241,7 @@ export const getCallCenterAnalytics = createServerFn({ method: "POST" })
 
     // `allAgents` stays unfiltered: it only ever feeds the roster fallback for
     // normalization, which must not depend on the active team/agent filter.
-    const allAgents = await loadAgents(supabase);
+    const allAgents = await loadAgentsCached(supabase);
     let agents = allAgents;
 
     if (data.team !== "all") agents = agents.filter((a) => a.team === data.team);

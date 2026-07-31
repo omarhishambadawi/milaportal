@@ -78,7 +78,13 @@ export interface CallTotals {
   answered: number; // a human agent answered (IVR pickup does NOT count)
   missed: number; // inbound, reached the queue, no agent answered, waited >= 5s
   abandoned: number; // inbound, reached the queue, caller hung up < 5s
-  ivrOnly: number; // inbound, hung up inside the IVR — never offered to an agent
+  /**
+   * Inbound callers who hung up inside the IVR. REPORTING ONLY — these are
+   * excluded from `total` and from every rate, because the parity target
+   * (Yeastar Reports › Extension Call Statistics) counts only calls that
+   * reached an extension.
+   */
+  ivrOnly: number;
   noAnswerOutbound: number; // outbound calls customer didn't pick up
   busy: number;
   failed: number;
@@ -280,20 +286,33 @@ function matchesStatus(c: NormalizedCall, status: AggregateOptions["status"]): b
 
 /** Output of the scope-independent phase 1 (see `classifyRecords`). */
 export interface ClassifiedRecords {
-  /** One entry per call, grouped by `call_id`. Internal calls already dropped. */
+  /**
+   * OPERATIONAL calls only — the sole input to every KPI. Internal calls,
+   * after-hours calls, queue-closed calls, IVR-only informational calls and
+   * PBX system events are not here.
+   */
   calls: NormalizedCall[];
-  /** How many raw rows produced `calls`. Diagnostics only — never a KPI input. */
+  /** Non-operational calls, kept for reporting. These never move a KPI. */
+  excluded: NormalizedCall[];
+  /** How many calls were dropped, per reason. */
+  exclusionCounts: { reason: string; count: number }[];
+  /** How many raw rows produced these calls. Diagnostics only. */
   rowsInspected: number;
+  /** Rows discarded as repeats of a `new_id` already seen. */
+  duplicateRowsDropped: number;
+  /** Calls whose direction contradicted the PBX label and had to be corrected. */
+  directionCorrections: { declared: string; corrected: string; count: number }[];
 }
 
 /**
- * Phase 1 — normalize raw CDR rows into calls.
+ * Phase 1 — normalize raw CDR rows into calls, then split operational calls
+ * from the ones business rules exclude.
  *
  * Pure over `records` + `ctx`: it does NOT depend on the agent roster, orders,
  * or the direction/status/scope filters, which is what makes the result safe to
  * cache per CDR window and reuse across every filter permutation the UI
- * requests. The expensive work — row de-dup and `call_id` grouping — runs once
- * per window instead of once per filter toggle.
+ * requests. The expensive work — row de-dup, `call_id` grouping and business-
+ * rule classification — runs once per window instead of once per filter toggle.
  *
  * `ctx` carries the PBX extension and queue rosters. They are what distinguish
  * an agent leg from a queue or IVR leg, so an empty extension roster would make
@@ -304,8 +323,46 @@ export function classifyRecords(
   records: CdrRecord[],
   ctx: NormalizationContext,
 ): ClassifiedRecords {
-  const calls = normalizeCdr(records, ctx).filter((c) => c.direction !== "Internal");
-  return { calls, rowsInspected: records.length };
+  const all = normalizeCdr(records, ctx);
+
+  const calls: NormalizedCall[] = [];
+  const excluded: NormalizedCall[] = [];
+  const reasons = new Map<string, number>();
+  const corrections = new Map<string, number>();
+  let legTotal = 0;
+
+  for (const c of all) {
+    legTotal += c.legs.length;
+    if (c.directionCorrected) {
+      const key = `${c.declaredDirection || "(none)"}→${c.direction}`;
+      corrections.set(key, (corrections.get(key) ?? 0) + 1);
+    }
+    if (c.operational) {
+      calls.push(c);
+    } else {
+      excluded.push(c);
+      const reason = c.exclusion ?? "other";
+      reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+    }
+  }
+
+  return {
+    calls,
+    excluded,
+    exclusionCounts: [...reasons.entries()]
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count),
+    rowsInspected: records.length,
+    // `groupByCall` drops repeats of a `new_id` it has already seen, so any
+    // shortfall between rows in and legs out is exactly the duplicates.
+    duplicateRowsDropped: Math.max(0, records.length - legTotal),
+    directionCorrections: [...corrections.entries()]
+      .map(([key, count]) => {
+        const [declared, corrected] = key.split("→");
+        return { declared, corrected, count };
+      })
+      .sort((a, b) => b.count - a.count),
+  };
 }
 
 /**
@@ -383,6 +440,10 @@ export function aggregateClassified(
     queueAnswerRate: 0,
   };
 
+  // Reporting-only: excluded by business rule, so it is read off the exclusion
+  // ledger rather than accumulated from the operational calls below.
+  totals.ivrOnly = input.exclusionCounts.find((e) => e.reason === "ivr_only")?.count ?? 0;
+
   const dayMap = new Map<string, DayBucket>();
   const hourMap = new Map<number, HourBucket>();
   // Queue wait is averaged over the calls that actually reached a queue — the
@@ -407,7 +468,6 @@ export function aggregateClassified(
       if (handling > totals.longestSec) totals.longestSec = handling;
     } else if (c.outcome === "missed") totals.missed++;
     else if (c.outcome === "abandoned") totals.abandoned++;
-    else if (c.outcome === "ivr_only") totals.ivrOnly++;
     else if (c.outcome === "no_answer_outbound") totals.noAnswerOutbound++;
     else if (c.outcome === "busy") totals.busy++;
     else if (c.outcome === "failed") totals.failed++;

@@ -20,7 +20,7 @@
  * Validation is only meaningful over an UNFILTERED, UNSCOPED result — pass the
  * exact calls the result was computed from.
  */
-import type { AnalyticsResult } from "./stats.server";
+import type { AnalyticsResult, ClassifiedRecords } from "./stats.server";
 import type { NormalizedCall } from "./normalize";
 
 export interface KpiCheck {
@@ -47,10 +47,26 @@ const eq = (
   actual: String(actual),
 });
 
+/**
+ * `input` must be the exact ClassifiedRecords the result was computed from.
+ * Passing a bare call array still works and is treated as the operational set
+ * with an empty exclusion ledger.
+ */
 export function validateAnalytics(
-  calls: readonly NormalizedCall[],
+  input: ClassifiedRecords | readonly NormalizedCall[],
   result: AnalyticsResult,
 ): KpiCheck[] {
+  const classified: ClassifiedRecords = Array.isArray(input)
+    ? {
+        calls: input as NormalizedCall[],
+        excluded: [],
+        exclusionCounts: [],
+        rowsInspected: 0,
+        duplicateRowsDropped: 0,
+        directionCorrections: [],
+      }
+    : (input as ClassifiedRecords);
+  const calls = classified.calls;
   const t = result.totals;
 
   // ---- independent recount ------------------------------------------------
@@ -61,8 +77,10 @@ export function validateAnalytics(
   let inboundAnswered = 0;
   let missed = 0;
   let abandoned = 0;
-  let ivrOnly = 0;
+  // Must stay zero: an IVR-only call is excluded before it can reach a KPI.
+  const ivrOnly = calls.filter((c) => c.outcome === "ivr_only").length;
   let noAnswerOutbound = 0;
+  let nonOperationalLeak = 0;
   let talk = 0;
   let ring = 0;
   let wait = 0;
@@ -86,6 +104,7 @@ export function validateAnalytics(
     callIds.add(c.callId);
 
     if (c.direction === "Internal") internalLeaked++;
+    if (!c.operational) nonOperationalLeak++;
 
     total++;
     if (c.direction === "Inbound") inbound++;
@@ -114,7 +133,6 @@ export function validateAnalytics(
       if (c.talkSeconds > legMax * Math.max(1, answeredAgentLegs.length)) talkExceedsLegMax++;
     } else if (c.outcome === "missed") missed++;
     else if (c.outcome === "abandoned") abandoned++;
-    else if (c.outcome === "ivr_only") ivrOnly++;
     else if (c.outcome === "no_answer_outbound") noAnswerOutbound++;
 
     if (c.reachedQueue) queueCalls++;
@@ -148,7 +166,13 @@ export function validateAnalytics(
       abandoned,
       t.abandoned,
     ),
-    eq("ivr-only", "IVR-only hang-ups tracked separately, never as Missed.", ivrOnly, t.ivrOnly),
+    eq(
+      "ivr-only-excluded",
+      "IVR-only calls are reported but excluded from operational KPIs.",
+      classified.exclusionCounts.find((e) => e.reason === "ivr_only")?.count ?? 0,
+      t.ivrOnly,
+    ),
+    eq("ivr-only-not-in-total", "No IVR-only call survives into the operational set.", 0, ivrOnly),
     eq(
       "no-answer-outbound",
       "Outbound the far end did not pick up.",
@@ -186,6 +210,24 @@ export function validateAnalytics(
     // --- structural guards (must all be zero) -------------------------------
     eq("no-duplicate-calls", "No call_id appears twice — legs are not calls.", 0, duplicateCallIds),
     eq("no-internal-leak", "Internal calls are excluded from analytics.", 0, internalLeaked),
+    eq(
+      "no-non-operational-leak",
+      "No business-rule-excluded call reaches a KPI.",
+      0,
+      nonOperationalLeak,
+    ),
+    eq(
+      "no-outbound-in-inbound",
+      "No call the PBX labelled Outbound is counted as inbound.",
+      0,
+      calls.filter((c) => c.direction === "Inbound" && c.declaredDirection === "Outbound").length,
+    ),
+    eq(
+      "inbound-callers-are-external",
+      "Every inbound call has an external caller, never one of our extensions.",
+      0,
+      calls.filter((c) => c.direction === "Inbound" && c.directionCorrected).length,
+    ),
     eq(
       "no-ivr-pickup-as-answered",
       "No answered inbound call lacking an answered agent leg (IVR pickup).",

@@ -110,9 +110,12 @@ export function useCallCenterAnalytics({
   const data = q.data;
   const ok = data && data.ok === true;
   const configured = !data || (data as any).configured !== false;
-  // Use isFetching so the loading state persists across every fetch (initial + refetches),
-  // and treat auth loading as loading too to avoid a flash of empty KPIs.
-  const isLoading = authLoading || q.isFetching || (q.isPending && q.fetchStatus !== "idle");
+  // Skeletons are for when there is nothing to show. `keepPreviousData` keeps
+  // the previous window's numbers on screen during a refetch, so gating on
+  // `isFetching` replaced live values with skeletons on every filter toggle —
+  // the page appeared to reload constantly. Refetch progress is still visible
+  // via the progress bar, which reads `q.isFetching` directly.
+  const isLoading = authLoading || (!data && (q.isPending || q.isFetching));
   const errored = (data && data.ok === false) || !!q.error;
   const errMsg =
     q.error instanceof Error

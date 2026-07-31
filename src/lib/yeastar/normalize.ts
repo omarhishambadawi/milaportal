@@ -124,10 +124,52 @@ export interface NormalizedLeg {
   timestamp: number | null;
 }
 
+/**
+ * Why a call does not count toward operational KPIs.
+ *
+ * `null` means it does. Anything else is reported separately and MUST NOT move
+ * Total / Answered / Missed / Abandoned / Answer Rate / queue / agent /
+ * conversion numbers.
+ */
+export type CallExclusionReason =
+  /** Arrived outside configured business hours. */
+  | "after_hours"
+  /** Reached the queue while it was closed and was never offered to an agent. */
+  | "queue_closed"
+  /** Caller hung up inside the IVR — informational, never offered to an agent. */
+  | "ivr_only"
+  /** PBX-generated: no external party and no agent/queue/IVR stage. */
+  | "system_event"
+  /** Extension-to-extension. */
+  | "internal";
+
+/**
+ * Operating window of the call centre, in the business timezone.
+ *
+ * Not readable from this PBX: queue 6400 reports `enable_time_condition: 0`, so
+ * the queue never closes and any time condition lives upstream on the inbound
+ * route, which the firmware exposes no API for. It is therefore configuration,
+ * and when it is absent no call is excluded for being after-hours.
+ */
+export interface BusinessHours {
+  /** Days open. 0 = Sunday … 6 = Saturday. */
+  days: readonly number[];
+  /** Opening time as minutes from midnight. */
+  startMinute: number;
+  /** Closing time as minutes from midnight. Less than `startMinute` wraps past midnight. */
+  endMinute: number;
+  /** Business timezone offset, minutes east of UTC. */
+  utcOffsetMinutes: number;
+}
+
 export interface NormalizedCall {
   /** `call_id` — the verified linked-call identifier. */
   callId: string;
   direction: CallDirection;
+  /** Raw `call_type` before any correction. Kept so disagreements are auditable. */
+  declaredDirection: string;
+  /** True when `direction` had to be corrected against the PBX's own label. */
+  directionCorrected: boolean;
   /** Epoch seconds of the first leg. */
   startedAt: number | null;
   callerNumber: string;
@@ -153,6 +195,10 @@ export interface NormalizedCall {
   agentRingSeconds: number | null;
   /** Talk seconds counted once, from the agent leg only. */
   talkSeconds: number;
+  /** `null` when the call counts toward operational KPIs. */
+  exclusion: CallExclusionReason | null;
+  /** Convenience mirror of `exclusion === null`. */
+  operational: boolean;
   legs: NormalizedLeg[];
 }
 
@@ -163,6 +209,12 @@ export interface NormalizationContext {
   queueNumbers: ReadonlySet<string>;
   /** Below this many seconds of queue wait, an unanswered call is "abandoned". */
   abandonThresholdSeconds?: number;
+  /**
+   * Operating window. When absent (the default), NO call is excluded for
+   * arriving after hours — an unverified schedule would silently move every
+   * KPI, which is worse than not applying the rule at all.
+   */
+  businessHours?: BusinessHours | null;
 }
 
 export const DEFAULT_ABANDON_THRESHOLD_SEC = 5;
@@ -198,7 +250,9 @@ export function classifyLeg(row: RawCdrRow, ctx: NormalizationContext): LegRole 
   if (/^voicemail/i.test(label)) return "ivr";
 
   // A long/E.164-looking destination is the far end of an outbound call.
-  if (/^\+?\d{6,}$/.test(dest)) return "external";
+  // Separators are stripped first: the PBX renders some destinations with
+  // spaces or dashes, and a formatting difference must not change a leg's role.
+  if (/^\+?\d{6,}$/.test(dest.replace(/[\s-]/g, ""))) return "external";
   return "unknown";
 }
 
@@ -253,6 +307,148 @@ export function groupByCall(rows: readonly RawCdrRow[]): Map<string, RawCdrRow[]
   return groups;
 }
 
+/** Is this instant inside the configured operating window? */
+export function isWithinBusinessHours(epochSeconds: number, bh: BusinessHours): boolean {
+  const local = new Date(epochSeconds * 1000 + bh.utcOffsetMinutes * 60_000);
+  if (!bh.days.includes(local.getUTCDay())) return false;
+  const minute = local.getUTCHours() * 60 + local.getUTCMinutes();
+  return bh.endMinute > bh.startMinute
+    ? minute >= bh.startMinute && minute < bh.endMinute
+    : // Window wraps past midnight (e.g. 22:00 → 06:00).
+      minute >= bh.startMinute || minute < bh.endMinute;
+}
+
+const DAY_NAMES = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
+
+/**
+ * Parse a schedule such as `"sun-thu 08:00-17:00"` or `"sat,sun 09:00-22:00"`.
+ * Returns null for empty or unparseable input — the caller then applies no
+ * after-hours rule at all rather than guessing a window.
+ */
+export function parseBusinessHours(
+  spec: string | undefined | null,
+  utcOffsetMinutes: number,
+): BusinessHours | null {
+  const text = str(spec).toLowerCase();
+  if (!text) return null;
+  const m = /^([a-z,-]+)\s+(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/.exec(text);
+  if (!m) return null;
+
+  const days = new Set<number>();
+  for (const part of m[1].split(",")) {
+    const range = part.split("-");
+    if (range.length === 2) {
+      const from = DAY_NAMES.indexOf(range[0] as (typeof DAY_NAMES)[number]);
+      const to = DAY_NAMES.indexOf(range[1] as (typeof DAY_NAMES)[number]);
+      if (from === -1 || to === -1) return null;
+      // Ranges wrap: "fri-mon" is Fri, Sat, Sun, Mon.
+      for (let i = from; ; i = (i + 1) % 7) {
+        days.add(i);
+        if (i === to) break;
+      }
+    } else {
+      const d = DAY_NAMES.indexOf(part as (typeof DAY_NAMES)[number]);
+      if (d === -1) return null;
+      days.add(d);
+    }
+  }
+  if (days.size === 0) return null;
+
+  const startMinute = Number(m[2]) * 60 + Number(m[3]);
+  const endMinute = Number(m[4]) * 60 + Number(m[5]);
+  if (startMinute > 1439 || endMinute > 1440 || startMinute === endMinute) return null;
+
+  return { days: [...days].sort(), startMinute, endMinute, utcOffsetMinutes };
+}
+
+/**
+ * Decide a call's direction, correcting the PBX's own label when the call's
+ * endpoints contradict it.
+ *
+ * An inbound call's caller is an external party — that is what "inbound" means.
+ * When a row is labelled `Inbound` but `call_from_number` is one of our own
+ * extensions, the call originated inside the PBX and is not inbound, whatever
+ * the label says. `call_from_number` is the trustworthy signal here: the live
+ * audit matched it to the extension roster on 4,744 of 4,745 outbound rows.
+ *
+ * The correction is deliberately one-way. It can only move a call OUT of
+ * Inbound, never into it, so outbound totals — verified correct against the
+ * live PBX — cannot regress.
+ */
+function deriveDirection(
+  first: RawCdrRow,
+  legs: readonly NormalizedLeg[],
+  ctx: NormalizationContext,
+): { direction: CallDirection; declared: string; corrected: boolean } {
+  const declared = str(first.call_type);
+  const caller = str(first.call_from_number);
+  const callerIsExtension = caller !== "" && ctx.extensionNumbers.has(caller);
+  const hasExternalDestination = legs.some((l) => l.role === "external");
+
+  if (declared === "Inbound" && callerIsExtension) {
+    return {
+      direction: hasExternalDestination ? "Outbound" : "Internal",
+      declared,
+      corrected: true,
+    };
+  }
+  if (declared === "Inbound" || declared === "Outbound" || declared === "Internal") {
+    return { direction: declared, declared, corrected: false };
+  }
+  // Unlabelled. `call_type` is present on 100% of live rows, so this is a
+  // defensive branch; it stays Internal so an unknown label can never inflate
+  // inbound.
+  return { direction: "Internal", declared, corrected: false };
+}
+
+/**
+ * Why this call does not count as an operational call, or null if it does.
+ *
+ * Precedence runs most-specific first, so a call that is both after-hours and
+ * queue-terminated reports the queue reason.
+ */
+function classifyExclusion(
+  args: {
+    direction: CallDirection;
+    outcome: CallOutcome;
+    startedAt: number | null;
+    callerNumber: string;
+    reachedQueue: boolean;
+    hasAgentLeg: boolean;
+    legs: readonly NormalizedLeg[];
+  },
+  ctx: NormalizationContext,
+): CallExclusionReason | null {
+  const { direction, outcome, startedAt, callerNumber, reachedQueue, hasAgentLeg, legs } = args;
+
+  if (direction === "Internal") return "internal";
+
+  // PBX-generated: no counterparty at either end, so there is no call to speak
+  // of. Deliberately based on the NUMBERS rather than on leg roles — a role is
+  // a best-effort classification, and an unrecognised destination (an oddly
+  // formatted external number, say) must never cause a real call to vanish from
+  // the KPIs. Excluding a call is far more damaging than mis-labelling a leg.
+  const hasCounterparty = callerNumber !== "" || legs.some((l) => l.destinationNumber !== "");
+  if (!hasCounterparty) return "system_event";
+  if (direction === "Inbound" && callerNumber === "") return "system_event";
+
+  const bh = ctx.businessHours;
+  const outsideHours = bh != null && startedAt != null && !isWithinBusinessHours(startedAt, bh);
+  if (outsideHours) {
+    // Reached the queue while closed and was never offered to an agent — the
+    // queue terminated it, so it is not a missed call by anybody.
+    if (reachedQueue && !hasAgentLeg) return "queue_closed";
+    return "after_hours";
+  }
+
+  // Informational: the caller never reached a queue or an agent. The parity
+  // target (Yeastar Reports › Extension Call Statistics) counts only calls that
+  // reached an extension, so these must not appear in operational KPIs.
+  if (outcome === "ivr_only") return "ivr_only";
+
+  return null;
+}
+
 function inboundOutcome(
   legs: NormalizedLeg[],
   agentAnswered: boolean,
@@ -289,11 +485,11 @@ export function normalizeCall(
   const first = ordered[0];
   const legs = ordered.map((r) => normalizeLeg(r, ctx));
 
-  const rawDirection = str(first.call_type);
-  const direction: CallDirection =
-    rawDirection === "Inbound" || rawDirection === "Outbound" || rawDirection === "Internal"
-      ? rawDirection
-      : "Internal";
+  const {
+    direction,
+    declared: declaredDirection,
+    corrected: directionCorrected,
+  } = deriveDirection(first, legs, ctx);
 
   const queueLeg = legs.find((l) => l.role === "queue");
   const answeredAgentLegs = legs.filter((l) => l.role === "agent" && l.answered);
@@ -339,12 +535,29 @@ export function normalizeCall(
   }
 
   const lastLeg = legs[legs.length - 1];
+  const startedAt = numOrNull(first.timestamp);
+  const callerNumber = str(first.call_from_number);
+
+  const exclusion = classifyExclusion(
+    {
+      direction,
+      outcome,
+      startedAt,
+      callerNumber,
+      reachedQueue: queueLeg != null,
+      hasAgentLeg: legs.some((l) => l.role === "agent"),
+      legs,
+    },
+    ctx,
+  );
 
   return {
     callId: str(first.call_id) || legs[0].rowId,
     direction,
-    startedAt: numOrNull(first.timestamp),
-    callerNumber: str(first.call_from_number),
+    declaredDirection,
+    directionCorrected,
+    startedAt,
+    callerNumber,
     calleeNumber: (lastAnsweredAgentLeg ?? lastLeg).destinationNumber,
     didNumber: str(first.did_number) || str(first.did) || null,
     queueNumber: queueLeg ? queueLeg.destinationNumber : null,
@@ -358,6 +571,8 @@ export function normalizeCall(
     queueWaitSeconds: queueLeg ? queueLeg.ringSeconds : null,
     agentRingSeconds,
     talkSeconds,
+    exclusion,
+    operational: exclusion === null,
     legs,
   };
 }
@@ -403,6 +618,7 @@ export function buildContext(
   extensionListData: ReadonlyArray<{ number?: unknown }> | null | undefined,
   queueListData: ReadonlyArray<QueueListEntry> | null | undefined,
   abandonThresholdSeconds = DEFAULT_ABANDON_THRESHOLD_SEC,
+  businessHours: BusinessHours | null = null,
 ): NormalizationContext {
   const extensionNumbers = new Set<string>();
   for (const e of extensionListData ?? []) {
@@ -420,5 +636,5 @@ export function buildContext(
   }
   // A number configured as a queue is never an agent, whatever else it appears in.
   for (const q of queueNumbers) extensionNumbers.delete(q);
-  return { extensionNumbers, queueNumbers, abandonThresholdSeconds };
+  return { extensionNumbers, queueNumbers, abandonThresholdSeconds, businessHours };
 }
