@@ -189,9 +189,9 @@ export function ChartTooltip({ active, payload, label, format, hideLabel }: Char
   };
 
   return (
-    <div className="min-w-[9rem] rounded-lg border border-border bg-popover px-2.5 py-2 text-popover-foreground shadow-xl shadow-black/10 dark:shadow-black/40">
+    <div className="min-w-[10rem] rounded-xl border border-border/80 bg-popover px-3 py-2.5 text-popover-foreground shadow-2xl shadow-black/15 ring-1 ring-black/5 dark:shadow-black/50 dark:ring-white/5">
       {!hideLabel && label != null && label !== "" && (
-        <div className="mb-1.5 border-b border-border/60 pb-1.5 text-[11px] font-semibold text-foreground">
+        <div className="mb-2 border-b border-border/60 pb-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground">
           {label}
         </div>
       )}
