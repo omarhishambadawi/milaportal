@@ -21,30 +21,33 @@ export function DeliveryMatrix({
     <AnalyticsCard title={title} flush>
       {/* A crosstab grows a column per method, so the min width has to grow with
           it — otherwise five methods squeeze into a phone and every figure
-          wraps. */}
-      <AnalyticsTable minWidth={220 + methods.length * 110}>
+          wraps. Each money column needs room for "123,456 SAR" on one line, so
+          the per-method budget is 140px rather than 110. */}
+      <AnalyticsTable minWidth={240 + (methods.length + 1) * 140}>
         <Thead>
           <tr>
-            <Th>Key</Th>
+            <Th className="min-w-[10rem]">Key</Th>
             {methods.map((m) => (
-              <Th key={m} align="right">
+              <Th key={m} align="right" className="min-w-[8.5rem]">
                 {m}
               </Th>
             ))}
-            <Th align="right">Total</Th>
+            <Th align="right" className="min-w-[9rem] bg-muted/70 text-foreground">
+              Total
+            </Th>
           </tr>
         </Thead>
         <Tbody>
           {rows.length === 0 && <EmptyRow colSpan={methods.length + 2} />}
           {rows.map((r) => (
             <tr key={r.k}>
-              <Td className="font-medium">{r.k}</Td>
+              <Td className="whitespace-nowrap font-medium">{r.k}</Td>
               {methods.map((m) => (
                 <Td key={m} numeric className={r.v[m] ? undefined : "text-muted-foreground"}>
                   {r.v[m] ? fmtSAR(r.v[m]) : "—"}
                 </Td>
               ))}
-              <Td numeric className="font-semibold">
+              <Td numeric className="border-l border-border/60 bg-muted/25 font-semibold">
                 {fmtSAR(r.total)}
               </Td>
             </tr>
