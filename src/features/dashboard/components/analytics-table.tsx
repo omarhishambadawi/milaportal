@@ -19,9 +19,12 @@ import { cn } from "@/lib/utils";
 /**
  * Scroll container + table element.
  *
- * `overflow-x-auto` on a wrapper rather than the card body: the card has
- * `overflow-hidden` for its rounded corners, and a sticky header inside an
- * ancestor that clips would never stick.
+ * Vertical scrolling was removed: a card that clipped its own rows at 26rem
+ * forced a nested scrollbar inside the page scroller, so the last rows of
+ * "Sales by branch × delivery method" and "Complaints by branch" were hidden
+ * behind a gesture nobody looks for. The card now grows with its content and
+ * only scrolls horizontally, which is the one axis a wide crosstab genuinely
+ * needs on a phone.
  */
 export function AnalyticsTable({
   children,
@@ -34,7 +37,7 @@ export function AnalyticsTable({
   className?: string;
 }) {
   return (
-    <div className={cn("relative max-h-[26rem] overflow-auto", className)}>
+    <div className={cn("relative overflow-x-auto", className)}>
       <table
         className="w-full border-separate border-spacing-0 text-sm"
         style={minWidth ? { minWidth } : undefined}
@@ -44,6 +47,7 @@ export function AnalyticsTable({
     </div>
   );
 }
+
 
 /**
  * Sticky header row.
