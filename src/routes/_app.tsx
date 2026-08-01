@@ -11,7 +11,7 @@ import {
   ShieldAlert,
   MessageSquareWarning,
   Headphones,
-  BadgeDollarSign,
+  PhoneOutgoing,
   Stethoscope,
   Phone,
   ChartNoAxesCombined,
@@ -83,7 +83,7 @@ function AppLayout() {
     () => [
       ...(canDashboard ? [{ to: "/dashboard", label: "Dashboard", icon: LayoutDashboard }] : []),
       ...(canOrders ? [{ to: "/orders", label: "Orders", icon: ListOrdered }] : []),
-      ...(canCreate ? [{ to: "/orders/new", label: "New", icon: Plus }] : []),
+      ...(canCreate ? [{ to: "/orders/new", label: "New Order", icon: Plus }] : []),
       ...(canComplaints
         ? [{ to: "/complaints", label: "Complaints", icon: MessageSquareWarning }]
         : []),
@@ -102,7 +102,7 @@ function AppLayout() {
               icon: Phone,
               children: [
                 { to: "/calls/customer-care", label: "Customer Care", icon: Headphones },
-                { to: "/calls/telesales", label: "Telesales", icon: BadgeDollarSign },
+                { to: "/calls/telesales", label: "Telesales", icon: PhoneOutgoing },
                 ...(isAdministrator(role)
                   ? [
                       {

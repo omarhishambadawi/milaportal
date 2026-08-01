@@ -19,9 +19,12 @@ import { cn } from "@/lib/utils";
 /**
  * Scroll container + table element.
  *
- * `overflow-x-auto` on a wrapper rather than the card body: the card has
- * `overflow-hidden` for its rounded corners, and a sticky header inside an
- * ancestor that clips would never stick.
+ * Vertical scrolling was removed: a card that clipped its own rows at 26rem
+ * forced a nested scrollbar inside the page scroller, so the last rows of
+ * "Sales by branch × delivery method" and "Complaints by branch" were hidden
+ * behind a gesture nobody looks for. The card now grows with its content and
+ * only scrolls horizontally, which is the one axis a wide crosstab genuinely
+ * needs on a phone.
  */
 export function AnalyticsTable({
   children,
@@ -34,7 +37,7 @@ export function AnalyticsTable({
   className?: string;
 }) {
   return (
-    <div className={cn("relative max-h-[26rem] overflow-auto", className)}>
+    <div className={cn("relative overflow-x-auto", className)}>
       <table
         className="w-full border-separate border-spacing-0 text-sm"
         style={minWidth ? { minWidth } : undefined}
@@ -46,20 +49,13 @@ export function AnalyticsTable({
 }
 
 /**
- * Sticky header row.
+ * Header row.
  *
- * `border-separate` on the table above is what makes this work: with
- * `border-collapse: collapse` — the Tailwind preflight default — borders belong
- * to the table rather than the cell, and a sticky `<th>` leaves its bottom
- * border behind as it detaches. Separate borders travel with the cell, so the
- * rule under the header stays under the header.
+ * `border-separate` on the table above keeps each cell's own bottom border, so
+ * the rule under the header belongs to the header rather than to the table.
  */
 export function Thead({ children }: { children: React.ReactNode }) {
-  return (
-    <thead className="sticky top-0 z-10 [&_th]:bg-muted/60 [&_th]:backdrop-blur-sm">
-      {children}
-    </thead>
-  );
+  return <thead className="[&_th]:bg-muted/50">{children}</thead>;
 }
 
 export function Th({
@@ -75,7 +71,7 @@ export function Th({
     <th
       scope="col"
       className={cn(
-        "whitespace-nowrap border-b border-border/70 px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground",
+        "whitespace-nowrap border-b border-border/70 px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground",
         align === "right" ? "text-right" : "text-left",
         className,
       )}
@@ -109,7 +105,7 @@ export function Td({
   return (
     <td
       className={cn(
-        "border-b border-border/40 px-3 py-2.5",
+        "border-b border-border/40 px-4 py-3 leading-6",
         numeric ? "text-right tabular-nums" : align === "right" ? "text-right" : "text-left",
         className,
       )}

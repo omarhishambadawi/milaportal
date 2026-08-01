@@ -138,9 +138,11 @@ const NavItem = memo(function NavItem({
       title={item.label}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "group relative flex items-center overflow-hidden rounded-xl px-2 py-1.5 outline-none transition-colors duration-200 ease-out",
+        "group relative flex items-center overflow-hidden rounded-xl px-2 py-1.5 outline-none transition-[background-color,box-shadow] duration-200 ease-out",
         "focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
-        active ? "bg-primary/10" : "hover:bg-accent/70",
+        active
+          ? "bg-primary/10 shadow-sm shadow-primary/5 dark:bg-primary/15"
+          : "hover:bg-accent/60 dark:hover:bg-accent/40",
       )}
     >
       {/* Active rail — animates in from the left edge; fades away in rail mode
@@ -236,7 +238,7 @@ const SidebarInner = memo(function SidebarInner({
   return (
     <div className="flex h-full flex-col">
       {/* Brand */}
-      <div className="flex h-16 shrink-0 items-center border-b border-border/60 px-4">
+      <div className="flex h-16 shrink-0 items-center border-b border-border/60 px-3.5">
         <div className="flex min-w-0 items-center">
           <BrandLogo />
           <div
@@ -270,7 +272,7 @@ const SidebarInner = memo(function SidebarInner({
       {/* Navigation */}
       <nav
         className={cn(
-          "flex-1 overflow-y-auto overflow-x-hidden px-3 py-3",
+          "flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-4",
           "[&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent",
           "[&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-transparent",
           "hover:[&::-webkit-scrollbar-thumb]:bg-border/70",
@@ -286,7 +288,7 @@ const SidebarInner = memo(function SidebarInner({
                 // swap.
                 "mt-5 border-t border-transparent transition-[margin,padding,border-color]",
                 RAIL_CLOCK,
-                "group-data-[state=collapsed]/rail:mt-2 group-data-[state=collapsed]/rail:pt-2 group-data-[state=collapsed]/rail:border-border/50",
+                "group-data-[state=collapsed]/rail:mt-3 group-data-[state=collapsed]/rail:pt-3 group-data-[state=collapsed]/rail:border-border/60",
               ],
             )}
           >
@@ -302,7 +304,7 @@ const SidebarInner = memo(function SidebarInner({
             >
               {g.label}
             </div>
-            <div className="space-y-0.5">
+            <div className="space-y-1">
               {g.items.map((it) => (
                 <NavItem
                   key={it.to}
