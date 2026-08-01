@@ -50,21 +50,15 @@ export function AnalyticsTable({
 
 
 /**
- * Sticky header row.
+ * Header row.
  *
- * `border-separate` on the table above is what makes this work: with
- * `border-collapse: collapse` — the Tailwind preflight default — borders belong
- * to the table rather than the cell, and a sticky `<th>` leaves its bottom
- * border behind as it detaches. Separate borders travel with the cell, so the
- * rule under the header stays under the header.
+ * `border-separate` on the table above keeps each cell's own bottom border, so
+ * the rule under the header belongs to the header rather than to the table.
  */
 export function Thead({ children }: { children: React.ReactNode }) {
-  return (
-    <thead className="sticky top-0 z-10 [&_th]:bg-muted/60 [&_th]:backdrop-blur-sm">
-      {children}
-    </thead>
-  );
+  return <thead className="[&_th]:bg-muted/50">{children}</thead>;
 }
+
 
 export function Th({
   children,
