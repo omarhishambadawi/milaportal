@@ -184,42 +184,7 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
       </ChartPanel>
 
       <ChartPanel title="Sales by team" subtitle="Completed sales per team">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data.teamData} margin={CHART_MARGIN} maxBarSize={64}>
-            <CartesianGrid
-              vertical={false}
-              strokeDasharray="3 3"
-              stroke={GRID_STROKE}
-              strokeOpacity={GRID_OPACITY}
-            />
-            <XAxis
-              dataKey="name"
-              tick={AXIS_TICK}
-              tickLine={false}
-              axisLine={false}
-              tickMargin={8}
-            />
-            <YAxis
-              tick={AXIS_TICK}
-              tickFormatter={fmtAxisSAR}
-              tickLine={false}
-              axisLine={false}
-              width={52}
-              tickMargin={6}
-            />
-            <Tooltip
-              content={<ChartTooltip format={fmtSAR} />}
-              cursor={BAR_CURSOR}
-              wrapperStyle={TOOLTIP_WRAPPER}
-            />
-            <Bar
-              dataKey="sales"
-              name="Completed sales"
-              fill="var(--color-chart-2)"
-              radius={[5, 5, 0, 0]}
-            />
-          </BarChart>
-        </ResponsiveContainer>
+        <TeamBarChart data={data.teamData} />
       </ChartPanel>
 
       <HorizontalBarPanel
