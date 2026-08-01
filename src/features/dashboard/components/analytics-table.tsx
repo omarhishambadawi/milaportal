@@ -105,8 +105,14 @@ export function Td({
   return (
     <td
       className={cn(
-        "border-b border-border/40 px-4 py-3 leading-6",
-        numeric ? "text-right tabular-nums" : align === "right" ? "text-right" : "text-left",
+        "border-b border-border/40 px-4 py-3 align-middle leading-6",
+        // Money never breaks across lines: "12,300 SAR" is one token to a reader,
+        // and letting the currency wrap is what made these columns look ragged.
+        numeric
+          ? "whitespace-nowrap text-right tabular-nums"
+          : align === "right"
+            ? "text-right"
+            : "text-left",
         className,
       )}
     >
