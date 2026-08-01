@@ -73,7 +73,7 @@ export function Th({
     <th
       scope="col"
       className={cn(
-        "whitespace-nowrap border-b border-border/70 px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground",
+        "whitespace-nowrap border-b border-border/70 px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground",
         align === "right" ? "text-right" : "text-left",
         className,
       )}
@@ -107,7 +107,7 @@ export function Td({
   return (
     <td
       className={cn(
-        "border-b border-border/40 px-3 py-2.5",
+        "border-b border-border/40 px-4 py-3 leading-6",
         numeric ? "text-right tabular-nums" : align === "right" ? "text-right" : "text-left",
         className,
       )}
