@@ -21,9 +21,13 @@
  * ---------------------------------------------------------------------------
  *   CDR          — every historical KPI. The normalization pipeline is unchanged
  *                  and remains the primary source.
- *   Call Report  — authoritative for ONE metric: per-agent missed calls. This
- *                  firmware writes an agent-leg CDR row only when the agent
- *                  answers, so an unanswered ring leaves no CDR trace at all.
+ *   Call Report  — authoritative for TWO things, and nothing else:
+ *                    1. per-agent missed calls. This firmware writes an
+ *                       agent-leg CDR row only when the agent answers, so an
+ *                       unanswered ring leaves no CDR trace at all.
+ *                    2. the Missed / Abandoned SPLIT of unanswered queue calls
+ *                       (Sprint 3.5 — see `resolveQueueOutcomeSplit`). CDR can
+ *                       count the population but cannot say who hung up.
  *                  Everything else Call Report publishes is already derived from
  *                  CDR at equal or better fidelity.
  *   Queue API    — realtime tiles only. It reports the present moment and can
@@ -105,26 +109,30 @@ export interface CustomerCareAgentRow {
 }
 
 /**
- * The O1 comparison — the dashboard's split against the PBX's, side by side.
+ * The O1 comparison — the CDR split against the PBX's, side by side.
  *
- * TODO(O1): the two systems partition the SAME population of unanswered queue
- * calls by different rules. The dashboard splits on a 5-second wait threshold;
- * Yeastar splits on who ended the call. Over July 2026 both counted 97, split
- * 95/2 (dashboard) against 1/96 (Yeastar).
+ * O1 (RESOLVED, Sprint 3.5): the two systems partition the SAME population of
+ * unanswered queue calls by different rules. CDR splits on a 5-second wait
+ * threshold; Yeastar splits on who ended the call. Over July 2026 both counted
+ * 97, split 95/2 (CDR) against 1/96 (Yeastar).
  *
- * Per Sprint 3 objective 8 the dashboard's definition is LEFT UNCHANGED until
- * O1 is resolved, which is blocked on confirming Yeastar's own definitions from
- * the Web UI. This block exists so the divergence is visible rather than
- * silently reconciled. See Open Issue **O1** and §9.4 of
- * `docs/yeastar/sprint2-source-validation.md`.
+ * The business decision is that the dashboard reports Yeastar's split, because
+ * supervisors reconcile this page against the PBX's own Queue panel and a
+ * dashboard that disagrees with it on Abandoned is not usable for that. The
+ * mapping lives in `resolveQueueOutcomeSplit`; CDR's own threshold split stays
+ * on THIS object so the divergence remains inspectable rather than erased.
+ *
+ * `cdr*` fields are what the wait-threshold rule produced. `report*` fields are
+ * what the PBX published — and, when available, what the dashboard renders.
+ * See §9.4 of `docs/yeastar/sprint2-source-validation.md`.
  */
 export interface UnansweredSplitComparison {
-  /** Dashboard: queued, unanswered, waited >= the abandon threshold. */
-  dashboardMissed: number;
-  /** Dashboard: queued, unanswered, hung up under the threshold. */
-  dashboardAbandoned: number;
+  /** CDR: queued, unanswered, waited >= the abandon threshold. */
+  cdrMissed: number;
+  /** CDR: queued, unanswered, hung up under the threshold. */
+  cdrAbandoned: number;
   /** Both sides should agree on this even while the split differs. */
-  dashboardUnansweredTotal: number;
+  cdrUnansweredTotal: number;
   /** Yeastar: the queue released the call. Null when Call Report is unavailable. */
   reportMissed: number | null;
   /** Yeastar: the caller hung up while waiting. Null when unavailable. */
@@ -132,6 +140,24 @@ export interface UnansweredSplitComparison {
   reportUnansweredTotal: number | null;
   /** True when both sides counted the same population, whatever the split. */
   populationsAgree: boolean | null;
+  /**
+   * True when the rendered Missed / Abandoned differ from CDR's own split —
+   * i.e. Yeastar's definition is in force and the two systems disagree. Drives
+   * the info banner, which is otherwise noise.
+   */
+  splitDiffers: boolean;
+}
+
+/** Which agents lead the table, so no component has to sort for a badge. */
+export interface AgentHighlights {
+  /** `agentId` → 1 | 2 | 3, ranked by queue answered. Empty when meaningless. */
+  ranks: Record<string, number>;
+  /** Most calls answered from the queue. */
+  topAnsweredId: string | null;
+  /** Highest answer rate. */
+  topAnswerRateId: string | null;
+  /** Most time on the phone. */
+  topTalkTimeId: string | null;
 }
 
 export interface CustomerCareMetrics {
@@ -149,6 +175,12 @@ export interface CustomerCareMetrics {
     agentsReady: number;
     agentsBusy: number;
     agentsPaused: number;
+    /**
+     * Live and carrying no traffic at all — nobody waiting, talking or ringing.
+     * A wall of zeros reads as "broken"; this lets the UI say "idle" instead,
+     * without hiding the tiles.
+     */
+    idle: boolean;
   };
   serviceLevel: {
     slaSeconds: number;
@@ -162,9 +194,24 @@ export interface CustomerCareMetrics {
     maxQueueWaitSec: number;
   };
   queue: {
+    /** Inbound calls that reached the queue — answered, missed and abandoned. */
     queueCalls: number;
+    /**
+     * Inbound calls the queue ANSWERED. Excludes missed and abandoned, which is
+     * what makes it the number a supervisor reads as "handled". Yeastar labels
+     * the same figure both "Queue Inbound Calls" and "Answered Calls"; it is one
+     * population and therefore one field.
+     */
+    answered: number;
+    /** Unanswered, released by the queue. Yeastar's definition — see O1. */
     missed: number;
+    /** Unanswered, the caller hung up. Yeastar's definition — see O1. */
     abandoned: number;
+    /**
+     * The unanswered population, always CDR-derived, so that
+     * `answered + unansweredTotal === queueCalls` holds against the other
+     * CDR figures on this object. Only the SPLIT of it follows Yeastar.
+     */
     unansweredTotal: number;
     queueAnswerRate: number;
   };
@@ -198,6 +245,11 @@ export interface CustomerCareMetrics {
     visible: CustomerCareAgentRow[];
     /** True when Call Report supplied the missed column. */
     missedAvailable: boolean;
+    /**
+     * Who leads on what. Derived here rather than in the table because ranking
+     * is a derivation, and the table is not allowed to perform one.
+     */
+    highlights: AgentHighlights;
   };
   /** True when the window produced no calls at all — drives the empty state. */
   isEmpty: boolean;
@@ -211,6 +263,12 @@ export interface CustomerCareMetrics {
     overview: MetricSource;
     serviceLevel: MetricSource;
     queue: MetricSource;
+    /**
+     * The Missed / Abandoned split specifically — `call_report` once Yeastar's
+     * definition is in force, `cdr` while it is falling back to the wait
+     * threshold. Separate from `queue` because the rest of that group stays CDR.
+     */
+    queueOutcome: MetricSource;
     direction: MetricSource;
     time: MetricSource;
     trends: MetricSource;
@@ -316,6 +374,91 @@ export function isCallReportApplicable(
 }
 
 /**
+ * Decide which system's Missed / Abandoned definition the dashboard reports.
+ *
+ * O1, resolved (Sprint 3.5). Both systems count the same unanswered queue calls
+ * and disagree only on how to label them:
+ *
+ *   Yeastar  — abandoned = the CALLER hung up while waiting;
+ *              missed    = the QUEUE released the call to its failover.
+ *   CDR      — abandoned = hung up inside 5 seconds; missed = waited longer.
+ *
+ * The wait threshold is a proxy for "the caller gave up", and on live data it is
+ * a poor one: it labels a 30-second wait that the caller ended as "missed". The
+ * PBX knows who hung up; CDR only knows how long they waited. So Yeastar's split
+ * wins whenever it is available.
+ *
+ * When Call Report is unavailable or inapplicable (an Outbound-filtered view,
+ * for instance) the CDR split stands in — it is the same population, labelled by
+ * the weaker rule — and `source` says so, so the UI never presents a fallback as
+ * a PBX-confirmed figure.
+ */
+export function resolveQueueOutcomeSplit(
+  totals: Pick<CallTotals, "missed" | "abandoned">,
+  reportQueue: { missedCalls: number; abandonedCalls: number } | null,
+  cdrSource: MetricSource,
+): { missed: number; abandoned: number; source: MetricSource } {
+  if (reportQueue) {
+    return {
+      missed: reportQueue.missedCalls,
+      abandoned: reportQueue.abandonedCalls,
+      source: "call_report",
+    };
+  }
+  return { missed: totals.missed, abandoned: totals.abandoned, source: cdrSource };
+}
+
+/**
+ * Rank the agent table once, here, so no component sorts for a badge.
+ *
+ * Ranking is by calls answered — the queue's own measure of who carried the
+ * shift — with answer rate and then talk time breaking ties, and `agentId` last
+ * so the order is stable across renders. A leader is only named when the metric
+ * is non-zero and there is somebody to lead: a "#1" on a table of one, or on a
+ * table where nobody answered anything, is decoration rather than information.
+ */
+export function rankAgents(rows: CustomerCareAgentRow[]): AgentHighlights {
+  const empty: AgentHighlights = {
+    ranks: {},
+    topAnsweredId: null,
+    topAnswerRateId: null,
+    topTalkTimeId: null,
+  };
+  if (rows.length < 2) return empty;
+
+  const best = (pick: (r: CustomerCareAgentRow) => number): string | null => {
+    let winner: CustomerCareAgentRow | null = null;
+    for (const r of rows) {
+      if (pick(r) <= 0) continue;
+      if (!winner || pick(r) > pick(winner)) winner = r;
+    }
+    return winner?.agentId ?? null;
+  };
+
+  const ordered = [...rows]
+    .filter((r) => r.answered > 0)
+    .sort(
+      (a, b) =>
+        b.answered - a.answered ||
+        b.answerRate - a.answerRate ||
+        b.talkSeconds - a.talkSeconds ||
+        a.agentId.localeCompare(b.agentId),
+    );
+
+  const ranks: Record<string, number> = {};
+  ordered.slice(0, 3).forEach((r, i) => {
+    ranks[r.agentId] = i + 1;
+  });
+
+  return {
+    ranks,
+    topAnsweredId: best((r) => r.answered),
+    topAnswerRateId: best((r) => r.answerRate),
+    topTalkTimeId: best((r) => r.talkSeconds),
+  };
+}
+
+/**
  * Build the complete metric set for one render of the Customer Care dashboard.
  *
  * Pure and synchronous: same inputs, same output. Every branch is reachable from
@@ -378,25 +521,30 @@ export function buildCustomerCareMetrics(input: MetricsEngineInput): CustomerCar
     ? rows.filter((r) => r.name.toLowerCase().includes(term) || r.ext.toLowerCase().includes(term))
     : rows;
 
-  // --- O1 comparison, surfaced not reconciled -------------------------------
+  // --- O1: Yeastar's split rendered, CDR's kept alongside -------------------
   const reportQueue = applicable ? (snapshot?.queue ?? null) : null;
-  const dashboardUnanswered = totals.missed + totals.abandoned;
+  const cdrUnanswered = totals.missed + totals.abandoned;
   const reportUnanswered =
     reportQueue != null ? reportQueue.missedCalls + reportQueue.abandonedCalls : null;
+  const split = resolveQueueOutcomeSplit(totals, reportQueue, cdrSource);
 
   const unansweredSplit: UnansweredSplitComparison = {
-    dashboardMissed: totals.missed,
-    dashboardAbandoned: totals.abandoned,
-    dashboardUnansweredTotal: dashboardUnanswered,
+    cdrMissed: totals.missed,
+    cdrAbandoned: totals.abandoned,
+    cdrUnansweredTotal: cdrUnanswered,
     reportMissed: reportQueue?.missedCalls ?? null,
     reportAbandoned: reportQueue?.abandonedCalls ?? null,
     reportUnansweredTotal: reportUnanswered,
-    populationsAgree: reportUnanswered == null ? null : reportUnanswered === dashboardUnanswered,
+    populationsAgree: reportUnanswered == null ? null : reportUnanswered === cdrUnanswered,
+    splitDiffers: split.missed !== totals.missed || split.abandoned !== totals.abandoned,
   };
 
   // --- realtime -------------------------------------------------------------
   const rt = input.realtime;
   const rtOk = rt?.ok === true;
+  const rtCalls = rtOk
+    ? (rt?.calls?.waiting ?? 0) + (rt?.calls?.active ?? 0) + (rt?.calls?.ringing ?? 0)
+    : 0;
 
   const hourly: LabelledHourBucket[] = byHour.map((h) => ({ ...h, label: hourLabel(h.hour) }));
   // Same formula as the headline answer rate, applied per day. Kept beside it so
@@ -421,6 +569,9 @@ export function buildCustomerCareMetrics(input: MetricsEngineInput): CustomerCar
       agentsReady: rtOk ? (rt?.agents?.ready ?? 0) : 0,
       agentsBusy: rtOk ? (rt?.agents?.busy ?? 0) : 0,
       agentsPaused: rtOk ? (rt?.agents?.paused ?? 0) : 0,
+      // Idle is a statement about live traffic, not about staffing: a queue with
+      // agents ready and no calls IS idle, and that is the useful thing to say.
+      idle: rtOk && rtCalls === 0,
     },
     serviceLevel: {
       slaSeconds: totals.slaSeconds,
@@ -432,10 +583,13 @@ export function buildCustomerCareMetrics(input: MetricsEngineInput): CustomerCar
     },
     queue: {
       queueCalls: totals.queueCalls,
-      // TODO(O1) — unchanged on purpose; see `UnansweredSplitComparison`.
-      missed: totals.missed,
-      abandoned: totals.abandoned,
-      unansweredTotal: dashboardUnanswered,
+      // The numerator of the validated `queueAnswerRate`, exposed as its own
+      // KPI. Kept as the SAME field the rate divides by, so a card and the rate
+      // beside it can never tell different stories.
+      answered: totals.inboundAnswered,
+      missed: split.missed,
+      abandoned: split.abandoned,
+      unansweredTotal: cdrUnanswered,
       queueAnswerRate: totals.queueAnswerRate,
     },
     direction: {
@@ -455,13 +609,14 @@ export function buildCustomerCareMetrics(input: MetricsEngineInput): CustomerCar
       hasHourlyData: byHour.some((h) => h.total > 0),
       hasDailyData: byDay.length > 0,
     },
-    agents: { rows, visible, missedAvailable },
+    agents: { rows, visible, missedAvailable, highlights: rankAgents(rows) },
     isEmpty: hasAnalytics && totals.total === 0,
     unansweredSplit,
     sources: {
       overview: cdrSource,
       serviceLevel: cdrSource,
       queue: cdrSource,
+      queueOutcome: split.source,
       direction: cdrSource,
       time: cdrSource,
       trends: cdrSource,

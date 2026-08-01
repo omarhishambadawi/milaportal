@@ -10,6 +10,25 @@ export const tooltipStyle: CSSProperties = {
   color: "var(--color-foreground)",
 };
 
+/**
+ * A hairline colour stripe down the left edge of a KPI card, used to group
+ * cards that answer the same kind of question (queue volume vs. timing vs.
+ * agent performance).
+ *
+ * Deliberately at 40% opacity on the existing tone palette rather than a new
+ * set of colours: the page has to stay readable as a monochrome print-out, so
+ * grouping is a supporting cue, never the only one — the section header above
+ * the grid still carries the meaning.
+ */
+export const accentMap: Record<Tone, string> = {
+  primary: "border-l-primary/40",
+  secondary: "border-l-secondary/40",
+  success: "border-l-success/40",
+  warning: "border-l-warning/40",
+  destructive: "border-l-destructive/40",
+  muted: "border-l-border",
+};
+
 export const toneMap: Record<
   Tone,
   { text: string; ring: string; iconBg: string; iconText: string }

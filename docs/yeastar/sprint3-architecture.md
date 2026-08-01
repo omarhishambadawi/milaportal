@@ -94,7 +94,7 @@ flowchart TD
 | **Per-agent missed calls** | **Call Report** | **CDR physically cannot supply it** — this firmware writes an agent-leg row only when the agent answers |
 | Per-agent answered / talk / ring | **CDR** | Exact parity; keeps per-call drill-down |
 | Waiting / active / ringing · agent states | **Queue API** | Only source of present-moment state |
-| Missed vs Abandoned split | **CDR** (unchanged) | **TODO(O1)** — Yeastar's split is surfaced beside ours, never merged |
+| Missed vs Abandoned split | **Call Report**, CDR fallback | **O1 resolved in Sprint 3.5** — the PBX knows who hung up, CDR only knows how long they waited. `sources.queueOutcome` discloses which rule is in force; CDR's split is retained beside it |
 
 ---
 

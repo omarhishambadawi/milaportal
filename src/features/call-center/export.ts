@@ -27,13 +27,17 @@ export async function exportCustomerCare(
       Source: metrics.sources.overview,
     },
     { Metric: "Queue calls", Value: queue.queueCalls, Source: metrics.sources.queue },
+    { Metric: "Queue inbound calls", Value: queue.answered, Source: metrics.sources.queue },
+    { Metric: "Queue answered", Value: queue.answered, Source: metrics.sources.queue },
     {
       Metric: "Queue answer rate %",
       Value: queue.queueAnswerRate.toFixed(2),
       Source: metrics.sources.queue,
     },
-    { Metric: "Missed (queue)", Value: queue.missed, Source: metrics.sources.queue },
-    { Metric: "Abandoned", Value: queue.abandoned, Source: metrics.sources.queue },
+    // Source differs from the rest of the queue group on purpose: the SPLIT is
+    // Yeastar's, the population is ours. See `resolveQueueOutcomeSplit`.
+    { Metric: "Queue missed", Value: queue.missed, Source: metrics.sources.queueOutcome },
+    { Metric: "Queue abandoned", Value: queue.abandoned, Source: metrics.sources.queueOutcome },
     { Metric: "Unanswered total", Value: queue.unansweredTotal, Source: metrics.sources.queue },
     {
       Metric: `SLA (answered <= ${serviceLevel.slaSeconds}s) %`,
@@ -46,17 +50,17 @@ export async function exportCustomerCare(
       Source: metrics.sources.serviceLevel,
     },
     {
-      Metric: "Avg queue wait (all)",
+      Metric: "Average queue wait (all calls)",
       Value: hhmmss(serviceLevel.avgQueueWaitSec),
       Source: metrics.sources.serviceLevel,
     },
     {
-      Metric: "Avg queue wait (answered)",
+      Metric: "Average queue wait (answered)",
       Value: hhmmss(serviceLevel.avgQueueWaitAnsweredSec),
       Source: metrics.sources.serviceLevel,
     },
     {
-      Metric: "Max queue wait",
+      Metric: "Longest queue wait",
       Value: hhmmss(serviceLevel.maxQueueWaitSec),
       Source: metrics.sources.serviceLevel,
     },
@@ -72,17 +76,19 @@ export async function exportCustomerCare(
   ];
 
   // The O1 divergence travels with the export, so a spreadsheet compared
-  // against a Yeastar report explains its own difference.
+  // against a Yeastar report — or against an older export — explains its own
+  // difference. `Reported` marks the split the KPI sheet above actually used.
   const o1Sheet = [
-    { Split: "Dashboard missed", Value: unansweredSplit.dashboardMissed },
-    { Split: "Dashboard abandoned", Value: unansweredSplit.dashboardAbandoned },
-    { Split: "Dashboard unanswered total", Value: unansweredSplit.dashboardUnansweredTotal },
+    { Split: "Reported split", Value: metrics.sources.queueOutcome },
     { Split: "Yeastar missed", Value: unansweredSplit.reportMissed ?? "unavailable" },
     { Split: "Yeastar abandoned", Value: unansweredSplit.reportAbandoned ?? "unavailable" },
     {
       Split: "Yeastar unanswered total",
       Value: unansweredSplit.reportUnansweredTotal ?? "unavailable",
     },
+    { Split: "CDR missed (wait threshold)", Value: unansweredSplit.cdrMissed },
+    { Split: "CDR abandoned (wait threshold)", Value: unansweredSplit.cdrAbandoned },
+    { Split: "CDR unanswered total", Value: unansweredSplit.cdrUnansweredTotal },
     {
       Split: "Populations agree",
       Value:
@@ -92,6 +98,7 @@ export async function exportCustomerCare(
             ? "yes"
             : "no",
     },
+    { Split: "Splits differ", Value: unansweredSplit.splitDiffers ? "yes" : "no" },
   ];
 
   const wb = XLSX.utils.book_new();

@@ -120,23 +120,25 @@ export interface CallReportQueueStats {
   totalCalls: number;
   answeredCalls: number;
   /**
-   * REFERENCE ONLY — do NOT wire this to the dashboard's Missed KPI.
+   * The queue released the call to its failover destination.
    *
-   * TODO(O1): Yeastar splits unanswered queue calls by *who ended the call*
-   * (`abandoned` = the caller hung up while waiting; `missed` = the queue
-   * released the call to its failover destination). The dashboard splits the
-   * same population by a 5-second wait threshold. Over July 2026 both sides
-   * counted 97 unanswered calls, but split them 1/96 (Yeastar) against 95/2
-   * (dashboard). Neither is wrong; they answer different questions.
+   * O1 (RESOLVED, Sprint 3.5): Yeastar splits unanswered queue calls by *who
+   * ended the call* (`abandoned` = the caller hung up while waiting; `missed` =
+   * the queue gave up on them). CDR splits the same population by a 5-second
+   * wait threshold. Over July 2026 both sides counted 97 unanswered calls, but
+   * split them 1/96 (Yeastar) against 95/2 (CDR).
    *
-   * Resolution is blocked on confirming Yeastar's own definitions from the Web
-   * UI — see Open Issue **O1** and §9.4 of
-   * `docs/yeastar/sprint2-source-validation.md`. Until then the dashboard's
-   * definition stands unchanged and this field is surfaced only as a labelled
-   * comparison.
+   * The dashboard now reports THIS split, because the page is reconciled against
+   * the PBX's own Queue panel. The mapping is `resolveQueueOutcomeSplit` in
+   * `metrics-engine.ts`; CDR's threshold split is retained beside it on
+   * `UnansweredSplitComparison`. See §9.4 of
+   * `docs/yeastar/sprint2-source-validation.md`.
+   *
+   * Still not a general licence: every OTHER field on this interface remains
+   * reference-only, because CDR produces it at equal or better fidelity.
    */
   missedCalls: number;
-  /** REFERENCE ONLY — see the TODO(O1) on `missedCalls`. */
+  /** The caller hung up while waiting. See the O1 note on `missedCalls`. */
   abandonedCalls: number;
   /** Mean wait over ANSWERED queue calls. */
   avgWaitAnsweredSec: number;

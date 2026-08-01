@@ -333,7 +333,7 @@ the business already depends on. Pure CDR is not viable either, because of §5.
 
 | ID | Severity | Issue | Evidence | Proposed resolution |
 | --- | --- | --- | --- | --- |
-| **O1** | **High** | Missed/Abandoned definitions are inverted relative to the PBX. Anyone comparing the dashboard to a Yeastar report sees 95 vs 1 and 2 vs 96. | §4.2 D1/D2; three windows | Adopt Yeastar's definition (Abandoned = caller hung up; Missed = queue released). **Sprint 3 decision — not made here.** |
+| **O1** | **High** | Missed/Abandoned definitions are inverted relative to the PBX. Anyone comparing the dashboard to a Yeastar report sees 95 vs 1 and 2 vs 96. | §4.2 D1/D2; three windows | Adopt Yeastar's definition (Abandoned = caller hung up; Missed = queue released). ~~Sprint 3 decision — not made here.~~ **Adopted in Sprint 3.5 — see §10.** |
 | **O2** | **High** | Per-agent missed is permanently 0; 71 missed rings in July are invisible. | §5 | Source K24 from `queueagentperformance`. Requires a new Call Report client. |
 | **O3** | Low | June SLA differs by one call (92.59% vs 92.49%). | §6 controls | Likely a window-boundary call. Re-check with the boundary probe already in `kpi-validation.server.ts`. |
 | **O4** | Medium | Extension Call Statistics is not yet definition-aligned with our extension-scoped totals (1,807 vs 1,879 calls). | §6 | Not a defect — the populations were never aligned. Needs its own definition pass before any comparison. |
@@ -392,6 +392,14 @@ Please confirm, from the UI's own tooltips/help or from Yeastar support:
 O1 cannot be resolved without answer 1 and 2. Everything else in Sprint 3 can
 proceed without them.
 
+> **Superseded by Sprint 3.5.** O1 was resolved by business decision rather than
+> by confirmation: the dashboard now reports Yeastar's split verbatim, because
+> supervisors reconcile the page against the PBX's own Queue panel and a
+> dashboard that disagrees with it on Abandoned cannot be used for that. Answers
+> 1 and 2 above are still worth obtaining — they would let us describe the
+> figures precisely rather than merely mirror them — but nothing is blocked on
+> them now. See §10, row O1.
+
 ### 9.5 A screenshot is fine
 
 A screenshot of each of the three report screens for that date range answers all
@@ -420,7 +428,7 @@ findings above. Current state of §8:
 
 | ID | Status after Sprint 3 |
 | --- | --- |
-| **O1** | **Still open, deliberately.** Missed/Abandoned keep the dashboard's definition. The divergence is now *surfaced* rather than hidden: `UnansweredSplitComparison` carries both splits, the dashboard renders an explanatory notice, the XLSX export ships a "Missed vs Abandoned (O1)" sheet, and `TODO(O1)` markers in `metrics-engine.ts`, `call-report.server.ts` and the parity test all point back to §9.4. **Blocked on §9.4.** |
+| **O1** | **Resolved in Sprint 3.5** (was: still open, blocked on §9.4). The dashboard now reports Yeastar's split — `resolveQueueOutcomeSplit` in `metrics-engine.ts` takes Missed/Abandoned from `queueperformance` whenever Call Report applies, and falls back to the CDR wait threshold with `sources.queueOutcome: "cdr"` when it does not. The population stays CDR's, so `answered + unansweredTotal === queueCalls` still holds. CDR's own split is retained on `UnansweredSplitComparison` (`cdrMissed` / `cdrAbandoned`), shown in a collapsed info banner when the two differ, and exported on the "Missed vs Abandoned (O1)" sheet. Pinned by `yeastar-parity.test.ts`. |
 | **O2** | **Resolved.** Per-agent missed calls now come from `queueagentperformance` on `openapi/v2.0` via `call-report.server.ts`. When unavailable the column renders "—", never a zero. |
 | **O3** | Still open. One-call SLA difference on the June window; needs the boundary probe. |
 | **O4** | Still open. Extension Call Statistics remains definition-unaligned and is not consumed. |

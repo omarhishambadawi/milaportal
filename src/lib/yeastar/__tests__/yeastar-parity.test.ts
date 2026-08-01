@@ -217,7 +217,7 @@ describe("Yeastar parity — queue 6400, 2026-07-29 (live fixture)", () => {
     expect(trunc(metrics.overview.avgTalkSec)).toBe(report.average_talking_time);
   });
 
-  // ---- O1: same population, different split -------------------------------
+  // ---- O1: same population, Yeastar's split -------------------------------
 
   it("counts the same unanswered population as Yeastar", () => {
     const reported = report.missed_calls + report.abandoned_calls;
@@ -225,16 +225,23 @@ describe("Yeastar parity — queue 6400, 2026-07-29 (live fixture)", () => {
     expect(metrics.unansweredSplit.populationsAgree).toBe(true);
   });
 
-  it("TODO(O1): the missed/abandoned SPLIT is deliberately still ours", () => {
-    // Sprint 3 objective 8 — do not reconcile this until O1 is resolved. The
-    // dashboard splits on how long the caller waited; Yeastar splits on who
-    // ended the call. This test pins the CURRENT behaviour so a change to it
-    // has to be deliberate. See docs/yeastar/sprint2-source-validation.md §9.4.
-    expect(metrics.queue.missed).toBe(8);
-    expect(metrics.queue.abandoned).toBe(0);
-    // And the PBX's opposite split is carried alongside, not thrown away.
-    expect(metrics.unansweredSplit.reportMissed).toBe(0);
-    expect(metrics.unansweredSplit.reportAbandoned).toBe(8);
+  it("O1 (resolved): the missed/abandoned split matches Yeastar exactly", () => {
+    // Sprint 3.5 — the dashboard adopted Yeastar's definition, because this
+    // page is reconciled against the PBX's Queue panel. Live shape: the PBX
+    // calls all 8 unanswered calls abandoned (the caller hung up); the wait
+    // threshold called them missed. See sprint2-source-validation.md §9.4.
+    expect(metrics.queue.missed).toBe(report.missed_calls);
+    expect(metrics.queue.abandoned).toBe(report.abandoned_calls);
+    expect(metrics.sources.queueOutcome).toBe("call_report");
+
+    // And CDR's own split is carried alongside, not thrown away.
+    expect(metrics.unansweredSplit.cdrMissed).toBe(8);
+    expect(metrics.unansweredSplit.cdrAbandoned).toBe(0);
+    expect(metrics.unansweredSplit.splitDiffers).toBe(true);
+  });
+
+  it("queue answered matches Yeastar, and is the number the rate divides by", () => {
+    expect(metrics.queue.answered).toBe(report.answered_calls);
   });
 
   it("total = answered + missed + abandoned, on both sides", () => {
@@ -242,6 +249,11 @@ describe("Yeastar parity — queue 6400, 2026-07-29 (live fixture)", () => {
       report.total_calls,
     );
     expect(metrics.overview.answeredCalls + metrics.queue.unansweredTotal).toBe(
+      metrics.queue.queueCalls,
+    );
+    // The rendered split has to close the same books as the population it came
+    // from — otherwise the four Queue cards do not add up on screen.
+    expect(metrics.queue.answered + metrics.queue.missed + metrics.queue.abandoned).toBe(
       metrics.queue.queueCalls,
     );
   });
@@ -325,10 +337,24 @@ describe("Yeastar parity — Call Report degradation is safe", () => {
 
   it("every CDR-derived KPI is identical with Call Report absent", () => {
     expect(withoutReport.overview).toEqual(metrics.overview);
-    expect(withoutReport.queue).toEqual(metrics.queue);
     expect(withoutReport.serviceLevel).toEqual(metrics.serviceLevel);
     expect(withoutReport.time).toEqual(metrics.time);
     expect(withoutReport.direction).toEqual(metrics.direction);
+    // The queue group too, apart from the one field Call Report owns.
+    expect({ ...withoutReport.queue, missed: 0, abandoned: 0 }).toEqual({
+      ...metrics.queue,
+      missed: 0,
+      abandoned: 0,
+    });
+  });
+
+  it("degrades the split to CDR's, and says so instead of showing Yeastar's", () => {
+    // Losing the PBX must not blank the two cards — it changes which definition
+    // they follow, which `sources.queueOutcome` is there to disclose.
+    expect(withoutReport.queue.missed).toBe(8);
+    expect(withoutReport.queue.abandoned).toBe(0);
+    expect(withoutReport.sources.queueOutcome).toBe("cdr");
+    expect(withoutReport.queue.unansweredTotal).toBe(metrics.queue.unansweredTotal);
   });
 
   it("the missed column reports itself unavailable rather than showing zero", () => {

@@ -5,17 +5,22 @@
  * already covered against the live PBX in `yeastar-parity.test.ts`. What matters
  * here is the source policy:
  *
- *   - CDR owns every historical KPI and Call Report must never move one.
+ *   - CDR owns every historical KPI and Call Report must never move one, with
+ *     exactly one carved-out exception: the Missed/Abandoned split (O1).
  *   - Call Report owns per-agent missed calls, and only when it is applicable.
  *   - An unavailable metric reports itself unavailable; it never renders a zero
  *     that reads as "none".
- *   - The O1 divergence is surfaced, never reconciled.
+ *   - The O1 divergence is still surfaced after being resolved, so a number that
+ *     moved between sprints can explain itself.
  */
 import { describe, expect, it } from "vitest";
 import {
   buildCustomerCareMetrics,
   hourLabel,
   isCallReportApplicable,
+  rankAgents,
+  resolveQueueOutcomeSplit,
+  type CustomerCareAgentRow,
   type MetricsEngineInput,
 } from "../metrics-engine";
 import type { AgentCallStats, CallTotals, DayBucket, HourBucket } from "../stats.server";
@@ -206,15 +211,25 @@ describe("source policy", () => {
     }
   });
 
-  it("Call Report never moves a CDR-derived KPI", () => {
+  it("Call Report moves nothing except the missed/abandoned split", () => {
     // The snapshot deliberately disagrees with the CDR totals on the split and
-    // on avgWaitAll. None of it may leak into the rendered KPIs.
+    // on avgWaitAll. Only the split is allowed through.
     const withReport = build();
     const withoutReport = build({ callReport: null });
     expect(withReport.overview).toEqual(withoutReport.overview);
-    expect(withReport.queue).toEqual(withoutReport.queue);
     expect(withReport.serviceLevel).toEqual(withoutReport.serviceLevel);
     expect(withReport.time).toEqual(withoutReport.time);
+    expect(withReport.direction).toEqual(withoutReport.direction);
+    expect(withReport.trends).toEqual(withoutReport.trends);
+    // The queue group differs ONLY on missed/abandoned — the volumes, the
+    // population total and the rate stay CDR's.
+    expect({ ...withReport.queue, missed: 0, abandoned: 0 }).toEqual({
+      ...withoutReport.queue,
+      missed: 0,
+      abandoned: 0,
+    });
+    expect(withReport.queue.queueCalls).toBe(withoutReport.queue.queueCalls);
+    expect(withReport.queue.unansweredTotal).toBe(withoutReport.queue.unansweredTotal);
     // Specifically: the engine reports OUR avg wait, not the PBX's.
     expect(withReport.serviceLevel.avgQueueWaitSec).toBe(12.5);
     expect(withReport.serviceLevel.avgQueueWaitSec).not.toBe(snapshot().queue!.avgWaitAllSec);
@@ -252,7 +267,25 @@ describe("source policy", () => {
       agentsReady: 4,
       agentsBusy: 2,
       agentsPaused: 1,
+      idle: false,
     });
+  });
+
+  it("calls a live queue with no traffic idle, staffed or not", () => {
+    const idle = build({
+      realtime: { ok: true, calls: {}, agents: { ready: 4, busy: 0, paused: 0 } },
+    });
+    expect(idle.realtime.idle).toBe(true);
+    expect(idle.realtime.available).toBe(true);
+
+    // One ringing call is still traffic.
+    const busy = build({ realtime: { ok: true, calls: { ringing: 1 }, agents: {} } });
+    expect(busy.realtime.idle).toBe(false);
+  });
+
+  it("never calls an unreachable queue idle — that would invent good news", () => {
+    expect(build({ realtime: { ok: false } }).realtime.idle).toBe(false);
+    expect(build({ realtime: null }).realtime.idle).toBe(false);
   });
 
   it("zeroes realtime tiles when the snapshot is not ok", () => {
@@ -321,24 +354,58 @@ describe("Call Report applicability", () => {
   });
 });
 
-describe("O1 — missed vs abandoned", () => {
-  it("keeps the dashboard's split unchanged", () => {
+describe("O1 — missed vs abandoned (resolved, Sprint 3.5)", () => {
+  it("reports Yeastar's split, not CDR's wait threshold", () => {
+    // The whole point of the correction: the PBX knows who hung up, CDR only
+    // knows how long they waited. The fixture has them inverted (CDR 8/2,
+    // Yeastar 1/9) exactly as live data does.
     const m = build();
-    expect(m.queue.missed).toBe(8);
-    expect(m.queue.abandoned).toBe(2);
+    expect(m.queue.missed).toBe(1);
+    expect(m.queue.abandoned).toBe(9);
+    expect(m.sources.queueOutcome).toBe("call_report");
   });
 
-  it("surfaces the PBX's opposite split alongside, without reconciling", () => {
+  it("keeps the population CDR's, so the queue arithmetic still ties out", () => {
+    const m = build();
+    expect(m.queue.unansweredTotal).toBe(10);
+    expect(m.queue.answered + m.queue.unansweredTotal).toBe(m.queue.queueCalls);
+  });
+
+  it("counts queue answered as INBOUND answered, not every answered call", () => {
+    // "Queue answered" and the overview's "Answered calls" are different
+    // questions the moment an agent dials out. Wiring the card to
+    // `totals.answered` would inflate it by the team's outbound work.
+    const m = build({
+      analytics: {
+        totals: totals({ answered: 75, inboundAnswered: 70, outboundAnswered: 5 }),
+        agents: [],
+        byDay,
+        byHour,
+      },
+    });
+    expect(m.queue.answered).toBe(70);
+    expect(m.overview.answeredCalls).toBe(75);
+  });
+
+  it("retains CDR's split beside it rather than erasing it", () => {
     const m = build();
     expect(m.unansweredSplit).toMatchObject({
-      dashboardMissed: 8,
-      dashboardAbandoned: 2,
-      dashboardUnansweredTotal: 10,
+      cdrMissed: 8,
+      cdrAbandoned: 2,
+      cdrUnansweredTotal: 10,
       reportMissed: 1,
       reportAbandoned: 9,
       reportUnansweredTotal: 10,
       populationsAgree: true,
+      splitDiffers: true,
     });
+  });
+
+  it("does not flag a divergence when the two systems already agree", () => {
+    const m = build({
+      callReport: snapshot({ queue: { ...snapshot().queue!, missedCalls: 8, abandonedCalls: 2 } }),
+    });
+    expect(m.unansweredSplit.splitDiffers).toBe(false);
   });
 
   it("flags a genuine population disagreement", () => {
@@ -346,6 +413,24 @@ describe("O1 — missed vs abandoned", () => {
       callReport: snapshot({ queue: { ...snapshot().queue!, missedCalls: 1, abandonedCalls: 20 } }),
     });
     expect(m.unansweredSplit.populationsAgree).toBe(false);
+    // The rendered split still follows Yeastar; the banner explains the gap.
+    expect(m.queue.abandoned).toBe(20);
+  });
+
+  it("falls back to CDR's split — labelled as such — when the report is absent", () => {
+    const m = build({ callReport: null });
+    expect(m.queue.missed).toBe(8);
+    expect(m.queue.abandoned).toBe(2);
+    expect(m.sources.queueOutcome).toBe("cdr");
+    expect(m.unansweredSplit.splitDiffers).toBe(false);
+  });
+
+  it("falls back on an Outbound-filtered view, where the queue report cannot apply", () => {
+    const m = build({
+      filters: { direction: "Outbound", queue: "6400", agentId: "all", search: "" },
+    });
+    expect(m.queue.missed).toBe(8);
+    expect(m.sources.queueOutcome).toBe("cdr");
   });
 
   it("reports unknown rather than false when Call Report is absent", () => {
@@ -353,7 +438,123 @@ describe("O1 — missed vs abandoned", () => {
     expect(m.unansweredSplit.populationsAgree).toBeNull();
     expect(m.unansweredSplit.reportUnansweredTotal).toBeNull();
     // Our own side is still fully populated.
-    expect(m.unansweredSplit.dashboardUnansweredTotal).toBe(10);
+    expect(m.unansweredSplit.cdrUnansweredTotal).toBe(10);
+  });
+
+  it("claims no source at all when nothing has loaded", () => {
+    const m = build({ analytics: null, callReport: null });
+    expect(m.sources.queueOutcome).toBe("unavailable");
+  });
+});
+
+describe("resolveQueueOutcomeSplit", () => {
+  const cdr = { missed: 95, abandoned: 2 };
+
+  it("prefers the PBX whenever it has an opinion", () => {
+    expect(resolveQueueOutcomeSplit(cdr, { missedCalls: 1, abandonedCalls: 96 }, "cdr")).toEqual({
+      missed: 1,
+      abandoned: 96,
+      source: "call_report",
+    });
+  });
+
+  it("passes CDR through, carrying CDR's own availability", () => {
+    expect(resolveQueueOutcomeSplit(cdr, null, "cdr")).toEqual({
+      missed: 95,
+      abandoned: 2,
+      source: "cdr",
+    });
+    expect(resolveQueueOutcomeSplit(cdr, null, "unavailable").source).toBe("unavailable");
+  });
+
+  it("takes an all-zero report at face value — a quiet queue is a real answer", () => {
+    expect(resolveQueueOutcomeSplit(cdr, { missedCalls: 0, abandonedCalls: 0 }, "cdr")).toEqual({
+      missed: 0,
+      abandoned: 0,
+      source: "call_report",
+    });
+  });
+});
+
+describe("agent ranking", () => {
+  const row = (over: Partial<CustomerCareAgentRow>): CustomerCareAgentRow => ({
+    agentId: "a",
+    name: "A",
+    ext: "4001",
+    total: 10,
+    inbound: 10,
+    outbound: 0,
+    answered: 5,
+    missedCalls: 0,
+    missedSource: "unavailable",
+    noAnswerOutbound: 0,
+    busy: 0,
+    failed: 0,
+    talkSeconds: 100,
+    avgTalkSec: 20,
+    avgRingSec: 5,
+    longestSec: 40,
+    answerRate: 50,
+    ...over,
+  });
+
+  it("ranks the top three by calls answered", () => {
+    const h = rankAgents([
+      row({ agentId: "a", answered: 3 }),
+      row({ agentId: "b", answered: 9 }),
+      row({ agentId: "c", answered: 7 }),
+      row({ agentId: "d", answered: 1 }),
+    ]);
+    expect(h.ranks).toEqual({ b: 1, c: 2, a: 3 });
+    expect(h.topAnsweredId).toBe("b");
+  });
+
+  it("names a leader per column independently", () => {
+    const h = rankAgents([
+      row({ agentId: "a", answered: 9, answerRate: 40, talkSeconds: 100 }),
+      row({ agentId: "b", answered: 2, answerRate: 95, talkSeconds: 100 }),
+      row({ agentId: "c", answered: 5, answerRate: 50, talkSeconds: 900 }),
+    ]);
+    expect(h.topAnsweredId).toBe("a");
+    expect(h.topAnswerRateId).toBe("b");
+    expect(h.topTalkTimeId).toBe("c");
+  });
+
+  it("breaks ties deterministically, so badges do not shuffle between renders", () => {
+    const tied = [
+      row({ agentId: "b", answered: 5, answerRate: 50, talkSeconds: 100 }),
+      row({ agentId: "a", answered: 5, answerRate: 50, talkSeconds: 100 }),
+    ];
+    expect(rankAgents(tied).ranks).toEqual(rankAgents([...tied].reverse()).ranks);
+  });
+
+  it("awards nothing on a single-agent table — a #1 of one is decoration", () => {
+    expect(rankAgents([row({ agentId: "a", answered: 9 })])).toEqual({
+      ranks: {},
+      topAnsweredId: null,
+      topAnswerRateId: null,
+      topTalkTimeId: null,
+    });
+    expect(rankAgents([])).toMatchObject({ ranks: {} });
+  });
+
+  it("does not crown a zero", () => {
+    const h = rankAgents([
+      row({ agentId: "a", answered: 0, answerRate: 0, talkSeconds: 0 }),
+      row({ agentId: "b", answered: 0, answerRate: 0, talkSeconds: 0 }),
+    ]);
+    expect(h.ranks).toEqual({});
+    expect(h.topAnsweredId).toBeNull();
+    expect(h.topAnswerRateId).toBeNull();
+    expect(h.topTalkTimeId).toBeNull();
+  });
+
+  it("ranks over the full roster, so a search cannot rewrite the badges", () => {
+    const m = build({
+      filters: { direction: "all", queue: "6400", agentId: "all", search: "4003" },
+    });
+    expect(m.agents.visible).toHaveLength(1);
+    expect(Object.keys(m.agents.highlights.ranks)).toHaveLength(2);
   });
 });
 
