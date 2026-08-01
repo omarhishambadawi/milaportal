@@ -86,6 +86,9 @@ export function validateAnalytics(
   let ring = 0;
   let wait = 0;
   let queueWaitCount = 0;
+  let waitAnswered = 0;
+  let queueWaitAnsweredCount = 0;
+  let maxWait = 0;
   let queueCalls = 0;
 
   const callIds = new Set<string>();
@@ -141,6 +144,11 @@ export function validateAnalytics(
     if (c.queueWaitSeconds != null) {
       wait += c.queueWaitSeconds;
       queueWaitCount++;
+      if (c.queueWaitSeconds > maxWait) maxWait = c.queueWaitSeconds;
+      if (c.outcome === "answered") {
+        waitAnswered += c.queueWaitSeconds;
+        queueWaitAnsweredCount++;
+      }
       if (!c.reachedQueue) waitWithoutQueue++;
     }
   }
@@ -210,6 +218,31 @@ export function validateAnalytics(
       queueWaitCount ? wait / queueWaitCount : 0,
       t.avgWaitSec,
       0.001,
+    ),
+    eq(
+      "queue-wait-answered-seconds",
+      "Answered-only wait is the queue-leg ring of calls an agent picked up.",
+      waitAnswered,
+      t.waitSecondsAnswered,
+    ),
+    eq(
+      "avg-queue-wait-answered",
+      "Yeastar's headline Average Waiting Time — answered queue calls only.",
+      queueWaitAnsweredCount ? waitAnswered / queueWaitAnsweredCount : 0,
+      t.avgWaitAnsweredSec,
+      0.001,
+    ),
+    eq(
+      "max-queue-wait",
+      "Longest queue wait in the window, answered or not.",
+      maxWait,
+      t.maxWaitSec,
+    ),
+    eq(
+      "answered-wait-within-total-wait",
+      "Answered wait is a subset of total wait and can never exceed it.",
+      0,
+      t.waitSecondsAnswered > t.waitSeconds ? 1 : 0,
     ),
     eq(
       "avg-talk",

@@ -586,3 +586,21 @@ matching report data. Candidate causes, none yet tested:
    Performance counts queue legs, the CDR pipeline counts `call_id` groups.
 
 **No dashboard, analytics or KPI code has been changed.**
+
+---
+
+# SUPERSEDED by Sprint 2 — see `sprint2-source-validation.md`
+
+Two conclusions in this document were overturned by live probing on 2026-08-01:
+
+1. **"`total_number: 0` — data retrieval unconfirmed."** The cause was the **API
+   version**, not the data. `call_report/*` must be called on **`openapi/v2.0`**;
+   on v1.0 the time window is silently ignored and every windowed query returns
+   zero. On v2.0 the same params return 1,323 queue calls for July 2026.
+2. **"`openapi/v2.0` exists for CDR only."** Wrong for Call Report —
+   `call_report/list` is the one family that *requires* v2.0 to honour a window.
+3. **The date format is `DD/MM/YYYY hh:mm:ss AM|PM`**, not `YYYY/MM/DD hh:mm:ss AM`.
+   The v2.0 validator states it outright: `valid format: 02/01/2006 03:04:05 PM`.
+
+Sections above are preserved rather than edited, per this document's own
+convention.

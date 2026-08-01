@@ -160,6 +160,14 @@ export const queryKeys = {
     analytics: (f: CallCenterFilters) => ["call-center", "analytics", f] as const,
     realtime: () => ["call-center", "realtime"] as const,
     queues: () => ["call-center", "queues"] as const,
+    /**
+     * Yeastar's own Call Report for a window. Keyed by window + queue only —
+     * the report is queue-scoped and inbound by construction, so the direction
+     * and agent filters do not change the response, and including them would
+     * refetch the same rows on every toggle.
+     */
+    callReport: (f: { from: string; to: string; queue: string }) =>
+      ["call-center", "call-report", f] as const,
   },
 
   yeastar: {

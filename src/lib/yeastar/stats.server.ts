@@ -99,10 +99,25 @@ export interface CallTotals {
   talkSeconds: number; // agent-leg talk, counted once per call
   ringSeconds: number; // agent-leg ring on answered calls
   waitSeconds: number; // queue-leg ring across every call that reached a queue
+  /**
+   * Queue-leg ring summed over ANSWERED queue calls only.
+   *
+   * Distinct from `waitSeconds`, which spans every queued call. Yeastar's Queue
+   * Performance publishes both — `answered_waiting_time` and
+   * `total_waiting_time` — and its headline "Average Waiting Time" is derived
+   * from this one, not from the all-call figure. Verified equal to Yeastar's
+   * `answered_waiting_time` (17,322s over July 2026); see
+   * `docs/yeastar/sprint2-source-validation.md` §6.
+   */
+  waitSecondsAnswered: number;
   handlingSeconds: number;
   longestSec: number;
   avgTalkSec: number; // avg talk on answered calls
   avgWaitSec: number; // avg queue wait across calls that reached a queue
+  /** Avg queue wait over ANSWERED queue calls — Yeastar `average_waiting_time`. */
+  avgWaitAnsweredSec: number;
+  /** Longest queue wait in the window, answered or not — Yeastar `max_waiting_time`. */
+  maxWaitSec: number;
   avgRingAnsweredSec: number; // avg agent-ring on answered calls
   answerRate: number;
   missedRate: number;
@@ -482,10 +497,13 @@ export function aggregateClassified(
     talkSeconds: 0,
     ringSeconds: 0,
     waitSeconds: 0,
+    waitSecondsAnswered: 0,
     handlingSeconds: 0,
     longestSec: 0,
     avgTalkSec: 0,
     avgWaitSec: 0,
+    avgWaitAnsweredSec: 0,
+    maxWaitSec: 0,
     avgRingAnsweredSec: 0,
     answerRate: 0,
     missedRate: 0,
@@ -513,6 +531,9 @@ export function aggregateClassified(
   // only calls for which a wait exists. Verified: `ring_duration` is present on
   // 100% of queue legs.
   let queueWaitCount = 0;
+  // Answered queue calls carrying a wait — the denominator behind Yeastar's
+  // headline "Average Waiting Time".
+  let queueWaitAnsweredCount = 0;
   // Ring-before-cancel is averaged only over cancelled calls that reported a
   // ring duration, so a missing field cannot drag the mean toward zero.
   let cancelRingSeconds = 0;
@@ -555,6 +576,15 @@ export function aggregateClassified(
     if (c.queueWaitSeconds != null) {
       totals.waitSeconds += c.queueWaitSeconds;
       queueWaitCount++;
+      if (c.queueWaitSeconds > totals.maxWaitSec) totals.maxWaitSec = c.queueWaitSeconds;
+      // The answered-only wait is a SEPARATE series, not a subset filter applied
+      // later: Yeastar publishes `average_waiting_time` (answered) alongside
+      // `all_call_average_waiting_time`, and the two differ materially whenever
+      // callers abandon after a long wait.
+      if (answered) {
+        totals.waitSecondsAnswered += c.queueWaitSeconds;
+        queueWaitAnsweredCount++;
+      }
     }
 
     // Buckets — inbound + outbound only
@@ -601,6 +631,9 @@ export function aggregateClassified(
   totals.avgTalkSec = totals.answered ? totals.talkSeconds / totals.answered : 0;
   totals.avgRingAnsweredSec = totals.answered ? totals.ringSeconds / totals.answered : 0;
   totals.avgWaitSec = queueWaitCount ? totals.waitSeconds / queueWaitCount : 0;
+  totals.avgWaitAnsweredSec = queueWaitAnsweredCount
+    ? totals.waitSecondsAnswered / queueWaitAnsweredCount
+    : 0;
   totals.answerRate = totals.total ? (totals.answered / totals.total) * 100 : 0;
   totals.missedRate = totals.inbound ? (totals.missed / totals.inbound) * 100 : 0;
   totals.abandonRate = totals.inbound ? (totals.abandoned / totals.inbound) * 100 : 0;

@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import {
   BarChart,
   Bar,
@@ -16,35 +15,41 @@ import { ChartCard } from "./chart-card";
 
 interface DayRow {
   date: string;
-  total: number;
-  answered: number;
   inbound: number;
   outbound: number;
+}
+
+interface RatePoint {
+  date: string;
+  rate: number;
 }
 
 /**
  * Inbound-vs-outbound volume and answer rate over time.
  *
- * Lifted unchanged from the combined Call Center page so the Customer Care and
- * Telesales dashboards render exactly the same charts rather than each growing
- * their own copy. Purely presentational — every number arrives pre-computed by
- * the analytics engine.
+ * Purely presentational — every number arrives pre-computed by the Metrics
+ * Engine, including `answerRate` and `hasData`. This component previously
+ * derived the answer-rate series itself, which made it a second place a KPI
+ * was defined; the engine owns it now. Do not reintroduce a calculation here.
+ *
+ * Both arrays are memoised upstream, which matters: Recharts replays its enter
+ * animation whenever a `data` prop is a new reference, and rebuilding these per
+ * render is what made the charts visibly redraw.
  */
-export function CallTrendCharts({ byDay, loading }: { byDay: DayRow[]; loading: boolean }) {
-  // See the note in telesales-trend-charts: a fresh array identity per render
-  // makes Recharts replay its animation, which reads as the chart flickering.
-  const answerRate = useMemo(
-    () =>
-      byDay.map((d) => ({
-        date: d.date,
-        rate: d.total ? (d.answered / d.total) * 100 : 0,
-      })),
-    [byDay],
-  );
-
+export function CallTrendCharts({
+  byDay,
+  answerRate,
+  hasData,
+  loading,
+}: {
+  byDay: DayRow[];
+  answerRate: RatePoint[];
+  hasData: boolean;
+  loading: boolean;
+}) {
   return (
     <div className="grid lg:grid-cols-2 gap-3">
-      <ChartCard title="Inbound vs outbound" loading={loading} hasData={byDay.length > 0}>
+      <ChartCard title="Inbound vs outbound" loading={loading} hasData={hasData}>
         <ResponsiveContainer>
           <BarChart data={byDay} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
             <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
@@ -83,7 +88,7 @@ export function CallTrendCharts({ byDay, loading }: { byDay: DayRow[]; loading: 
         </ResponsiveContainer>
       </ChartCard>
 
-      <ChartCard title="Answer rate over time" loading={loading} hasData={byDay.length > 0}>
+      <ChartCard title="Answer rate over time" loading={loading} hasData={hasData}>
         <ResponsiveContainer>
           <LineChart data={answerRate} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
             <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />

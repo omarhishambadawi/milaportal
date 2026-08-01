@@ -16,6 +16,7 @@ import { z } from "zod";
 import type { DiagnosticsReport as YeastarDiagnosticsReport } from "@/lib/yeastar/diagnostics.server";
 import type { KpiValidationReport } from "@/lib/yeastar/kpi-validation.server";
 import type { NormalizationContext } from "@/lib/yeastar/normalize";
+import type { CallReportSnapshot } from "@/lib/yeastar/call-report.server";
 
 async function assertAdmin(ctx: { supabase: any; userId: string }) {
   const { data, error } = await ctx.supabase.rpc("is_administrator", { _user_id: ctx.userId });
@@ -1276,8 +1277,19 @@ interface PbxRoster {
   extensionNumbers: Set<string>;
   /** Members of every queue — extensions by definition, whatever page they are on. */
   queueMemberExts: Set<string>;
-  /** Configured queues, for the Customer Care queue filter and member list. */
-  queues: Array<{ number: string; name: string; members: Array<{ ext: string; name: string }> }>;
+  /**
+   * Configured queues, for the Customer Care queue filter and member list.
+   *
+   * `id` is the PBX's internal numeric queue id, which is what the Call Report
+   * API addresses queues by — its `queue_id` / `queue_id_list` parameters do NOT
+   * accept the dialable queue NUMBER. Null when the PBX omitted it.
+   */
+  queues: Array<{
+    id: number | null;
+    number: string;
+    name: string;
+    members: Array<{ ext: string; name: string }>;
+  }>;
 }
 
 let rosterCache: { at: number; roster: PbxRoster } | null = null;
@@ -1317,6 +1329,7 @@ async function fetchPbxRoster(): Promise<PbxRoster> {
         if (qnum) {
           queueNumbers.add(qnum);
           queues.push({
+            id: typeof q?.id === "number" ? q.id : null,
             number: qnum,
             name: String(q?.name ?? "").trim() || qnum,
             members: qMembers,
@@ -1716,6 +1729,116 @@ export const yeastarQueueOptions = createServerFn({ method: "POST" })
       return { ok: true, configured: true, queues };
     },
   );
+
+// ---- Call Report snapshot (Sprint 3) ---------------------------------------
+//
+// Yeastar's own queue report for a window, read from `openapi/v2.0`. It exists
+// to supply the ONE metric CDR cannot produce on this firmware — per-agent
+// missed calls — plus the queue-level Missed/Abandoned figures used for the O1
+// comparison. It is NOT a second analytics engine and must never be wired to a
+// KPI that CDR already derives.
+//
+// Read-only, best-effort: a failure returns `available: false` with a reason so
+// the dashboard degrades one column instead of failing to render.
+
+const callReportInput = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  /** Queue NUMBER (e.g. "6400"), or omitted for the Customer Care queue. */
+  queue: z.string().max(20).optional(),
+});
+
+/**
+ * Call Report cache — same contract as the CDR cache above, and for the same
+ * reason.
+ *
+ * The Customer Care dashboard polls every 20 seconds, and each uncached miss is
+ * TWO live PBX requests (`queueperformance` + `queueagentperformance`). With
+ * several viewers on the page that multiplies directly into PBX load, against a
+ * box whose `get_token` rate-limits hard enough to lock the whole integration
+ * out (`errcode 60002`). CDR is protected by a 5-minute server cache precisely
+ * because of this; Call Report needs the same protection or it becomes the
+ * weakest point in the same page.
+ *
+ * The TTL matches `CDR_CACHE_TTL_MS` so both halves of a comparison come from
+ * the same moment. A shorter one would buy nothing: the client's own
+ * `staleTime` is 20s and the report is an aggregate that moves slowly.
+ */
+const callReportCache = new Map<string, { at: number; promise: Promise<CallReportSnapshot> }>();
+
+function getCallReportCached(
+  key: string,
+  fetcher: () => Promise<CallReportSnapshot>,
+): Promise<CallReportSnapshot> {
+  const now = Date.now();
+  for (const [k, v] of callReportCache) {
+    if (now - v.at > CDR_CACHE_TTL_MS) callReportCache.delete(k);
+  }
+  const hit = callReportCache.get(key);
+  if (hit && now - hit.at < CDR_CACHE_TTL_MS) return hit.promise;
+
+  // A rejected fetch must not be cached, or one transient PBX blip would pin
+  // "unavailable" for five minutes.
+  const promise = fetcher().catch((e) => {
+    callReportCache.delete(key);
+    throw e;
+  });
+  callReportCache.set(key, { at: now, promise });
+  while (callReportCache.size > CDR_CACHE_MAX) {
+    const oldest = callReportCache.keys().next().value;
+    if (oldest === undefined) break;
+    callReportCache.delete(oldest);
+  }
+  return promise;
+}
+
+export const yeastarCallReport = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => callReportInput.parse(d))
+  .handler(async ({ context, data }): Promise<CallReportSnapshot> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    const { canView } = await callCenterAccess(supabase, userId);
+    if (!canView) throw new Error("Forbidden: call analytics access required");
+
+    const { callReportWindow, fetchCallReportSnapshot } =
+      await import("@/lib/yeastar/call-report.server");
+    const unavailable = (error: string): CallReportSnapshot => {
+      const w = callReportWindow(data.from, data.to);
+      return {
+        available: false,
+        error,
+        window: { start: w.start, end: w.end },
+        queue: null,
+        agents: [],
+        elapsedMs: 0,
+      };
+    };
+
+    const { isConfigured } = await import("@/lib/yeastar/client.server");
+    if (!isConfigured()) return unavailable("Yeastar is not configured.");
+
+    // Call Report addresses queues by internal numeric id, never by the
+    // dialable number — resolve it from the roster we already cache.
+    const wanted = (data.queue ?? CUSTOMER_CARE_QUEUE_NUMBER).trim();
+    const { queues } = await fetchPbxRoster();
+    const match = queues.find((q) => q.number === wanted);
+    if (!match || match.id == null) {
+      return unavailable(`Queue ${wanted} has no PBX id; Call Report cannot be addressed.`);
+    }
+
+    // Keyed by window + resolved queue id, NOT by the client's `queue` string:
+    // "all" and "6400" resolve to the same report on this PBX and must share
+    // one cache entry rather than each paying for their own PBX round-trip.
+    const queueId = match.id;
+    return getCallReportCached(`${data.from}|${data.to}|${queueId}`, () =>
+      fetchCallReportSnapshot({
+        from: data.from,
+        to: data.to,
+        queueId,
+        queueNumber: match.number,
+      }),
+    );
+  });
 
 // ---- Realtime queue widgets ------------------------------------------------
 //

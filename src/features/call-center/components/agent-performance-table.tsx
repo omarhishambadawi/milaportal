@@ -2,6 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { hhmmss } from "../utils";
+import type { MetricSource } from "@/lib/yeastar/metrics-engine";
 
 export interface AgentRow {
   agentId: string;
@@ -11,7 +12,6 @@ export interface AgentRow {
   inbound: number;
   outbound: number;
   answered: number;
-  missed: number;
   noAnswerOutbound: number;
   busy: number;
   failed: number;
@@ -20,6 +20,17 @@ export interface AgentRow {
   avgRingSec: number;
   longestSec: number;
   answerRate: number;
+  /**
+   * Queue mode only: the agent's phone rang and they did not pick up.
+   *
+   * Supplied by the Metrics Engine from Yeastar's Call Report — CDR cannot
+   * produce it, because this firmware writes an agent-leg row only when the
+   * agent answers. `missedSource` says whether the value is real; when it is
+   * not, the cell renders "—" rather than a zero that would read as "missed
+   * nothing".
+   */
+  missedCalls?: number;
+  missedSource?: MetricSource;
 }
 
 interface AgentPerformanceTableProps {
@@ -114,7 +125,16 @@ export function AgentPerformanceTable({
                   </td>
                   {isQueue ? (
                     <td className="px-3 py-2 text-right tabular-nums text-destructive">
-                      {agent.missed}
+                      {agent.missedSource === "call_report" ? (
+                        agent.missedCalls
+                      ) : (
+                        <span
+                          className="text-muted-foreground"
+                          title="Unavailable for this filter — Yeastar's Call Report is the only source for this figure."
+                        >
+                          —
+                        </span>
+                      )}
                     </td>
                   ) : (
                     <>
@@ -149,9 +169,10 @@ export function AgentPerformanceTable({
         </table>
         {isQueue && (
           <div className="px-3 py-2 text-[11px] text-muted-foreground">
-            *Missed = the agent's own ring went unanswered. Individual performance metric only — not
-            summed into the platform Missed KPI (the queue auto-forwards to the next available
-            agent).
+            *Missed = the agent's own ring went unanswered, sourced from Yeastar's Call Report.
+            Individual performance metric only — not summed into the platform Missed KPI (the queue
+            auto-forwards to the next available agent). A dash means the figure is unavailable for
+            the current filter, not zero.
           </div>
         )}
       </CardContent>
