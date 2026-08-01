@@ -87,6 +87,84 @@ function ChartPanel({
   );
 }
 
+/**
+ * "Sales by team", with a hover state you can actually see.
+ *
+ * A single `<Bar fill>` gives every bar one immutable paint, so the only hover
+ * feedback was Recharts' grey cursor band — nearly invisible against the card.
+ * Tracking the hovered index lets each `<Cell>` brighten itself and fade its
+ * siblings, which is the BI-dashboard convention and reads instantly.
+ */
+function TeamBarChart({ data }: { data: (Named & { sales: number })[] }) {
+  const [active, setActive] = useState<number | null>(null);
+
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart
+        data={data}
+        margin={CHART_MARGIN}
+        maxBarSize={64}
+        onMouseLeave={() => setActive(null)}
+      >
+        <defs>
+          <linearGradient id="teamBar" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--color-chart-2)" stopOpacity={1} />
+            <stop offset="100%" stopColor="var(--color-chart-2)" stopOpacity={0.7} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid
+          vertical={false}
+          strokeDasharray="3 3"
+          stroke={GRID_STROKE}
+          strokeOpacity={GRID_OPACITY}
+        />
+        <XAxis dataKey="name" tick={AXIS_TICK} tickLine={false} axisLine={false} tickMargin={8} />
+        <YAxis
+          tick={AXIS_TICK}
+          tickFormatter={fmtAxisSAR}
+          tickLine={false}
+          axisLine={false}
+          width={52}
+          tickMargin={6}
+        />
+        <Tooltip
+          content={<ChartTooltip format={fmtSAR} />}
+          cursor={BAR_CURSOR}
+          wrapperStyle={TOOLTIP_WRAPPER}
+        />
+        <Bar
+          dataKey="sales"
+          name="Completed sales"
+          fill="url(#teamBar)"
+          radius={[6, 6, 0, 0]}
+          isAnimationActive={false}
+          onMouseEnter={(_, index: number) => setActive(index)}
+        >
+          {data.map((t, i) => {
+            const isActive = active === i;
+            const dimmed = active !== null && !isActive;
+            return (
+              <Cell
+                key={t.name}
+                cursor="pointer"
+                fillOpacity={dimmed ? 0.35 : 1}
+                stroke={isActive ? "var(--color-chart-2)" : "transparent"}
+                strokeWidth={isActive ? 1.5 : 0}
+                style={{
+                  transition: "opacity 220ms ease, filter 220ms ease, transform 220ms ease",
+                  filter: isActive
+                    ? "brightness(1.12) drop-shadow(0 6px 14px color-mix(in oklab, var(--color-chart-2) 45%, transparent))"
+                    : "none",
+                }}
+              />
+            );
+          })}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
 function SalesChartsImpl({ data }: { data: SalesChartsData }) {
   return (
     <div className="grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
