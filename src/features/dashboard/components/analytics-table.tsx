@@ -48,7 +48,6 @@ export function AnalyticsTable({
   );
 }
 
-
 /**
  * Header row.
  *
@@ -58,7 +57,6 @@ export function AnalyticsTable({
 export function Thead({ children }: { children: React.ReactNode }) {
   return <thead className="[&_th]:bg-muted/50">{children}</thead>;
 }
-
 
 export function Th({
   children,
