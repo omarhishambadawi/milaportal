@@ -1,3 +1,4 @@
+import { memo } from "react";
 import {
   Area,
   AreaChart,
@@ -13,13 +14,14 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fmtSAR } from "@/lib/branches";
 import { COLORS, STATUS_COLORS } from "../constants";
 import {
   AXIS_TICK,
   BAR_CURSOR,
+  CHART_MARGIN,
   ChartTooltip,
+  GRID_OPACITY,
   GRID_STROKE,
   LEGEND_STYLE,
   PIE_LABEL,
@@ -27,6 +29,9 @@ import {
   TOOLTIP_WRAPPER,
   legendText,
 } from "../chart-theme";
+import { fmtAxisSAR } from "../chart-format";
+import { AnalyticsCard } from "./analytics-card";
+import { HorizontalBarPanel } from "./horizontal-bar-panel";
 import { CHART_PANEL_HEIGHT } from "./sales-charts-skeleton";
 
 /**
@@ -41,12 +46,15 @@ import { CHART_PANEL_HEIGHT } from "./sales-charts-skeleton";
  * behind a charting library.
  *
  * Split out, the route paints its numbers off an 87KB chunk and the charts
- * arrive when they arrive. Nothing about the charts themselves changed; this is
- * a verbatim move plus a props interface.
+ * arrive when they arrive.
  *
  * Kept as one component rather than six, deliberately. Six lazy boundaries mean
  * six chunks, six waterfalls and six independently-arriving cards popping into
  * a grid at different moments — worse than one skeleton that resolves at once.
+ *
+ * The three ranked bar charts live in `HorizontalBarPanel`; they were three
+ * copies of one chart differing only in a hard-coded axis width, which is what
+ * clipped their labels. See that file.
  */
 
 interface Named {
@@ -62,23 +70,29 @@ export interface SalesChartsData {
   cityData: (Named & { sales: number })[];
 }
 
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+/** A fixed-height panel, for the charts whose height does not follow row count. */
+function ChartPanel({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{title}</CardTitle>
-      </CardHeader>
-      <CardContent className={CHART_PANEL_HEIGHT}>{children}</CardContent>
-    </Card>
+    <AnalyticsCard title={title} subtitle={subtitle}>
+      <div className={`w-full ${CHART_PANEL_HEIGHT}`}>{children}</div>
+    </AnalyticsCard>
   );
 }
 
-export function SalesCharts({ data }: { data: SalesChartsData }) {
+function SalesChartsImpl({ data }: { data: SalesChartsData }) {
   return (
-    <div className="grid gap-3 sm:gap-4 lg:grid-cols-2">
-      <Panel title="Daily sales trend">
+    <div className="grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
+      <ChartPanel title="Daily sales trend" subtitle="All orders against completed">
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data.dailyData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+          <AreaChart data={data.dailyData} margin={CHART_MARGIN}>
             <defs>
               <linearGradient id="dailyAll" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="var(--color-chart-1)" stopOpacity={0.35} />
@@ -89,15 +103,28 @@ export function SalesCharts({ data }: { data: SalesChartsData }) {
                 <stop offset="100%" stopColor="var(--positive)" stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid vertical={false} strokeDasharray="3 3" stroke={GRID_STROKE} />
+            <CartesianGrid
+              vertical={false}
+              strokeDasharray="3 3"
+              stroke={GRID_STROKE}
+              strokeOpacity={GRID_OPACITY}
+            />
             <XAxis
               dataKey="date"
               tick={AXIS_TICK}
-              tickMargin={6}
+              tickMargin={8}
+              minTickGap={12}
               axisLine={false}
               tickLine={false}
             />
-            <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={48} />
+            <YAxis
+              tick={AXIS_TICK}
+              tickFormatter={fmtAxisSAR}
+              axisLine={false}
+              tickLine={false}
+              width={52}
+              tickMargin={6}
+            />
             <Tooltip
               content={<ChartTooltip format={fmtSAR} />}
               cursor={POINT_CURSOR}
@@ -128,9 +155,9 @@ export function SalesCharts({ data }: { data: SalesChartsData }) {
             />
           </AreaChart>
         </ResponsiveContainer>
-      </Panel>
+      </ChartPanel>
 
-      <Panel title="Orders by status">
+      <ChartPanel title="Orders by status" subtitle="Share of orders in the period">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie
@@ -154,14 +181,32 @@ export function SalesCharts({ data }: { data: SalesChartsData }) {
             <Tooltip content={<ChartTooltip hideLabel />} wrapperStyle={TOOLTIP_WRAPPER} />
           </PieChart>
         </ResponsiveContainer>
-      </Panel>
+      </ChartPanel>
 
-      <Panel title="Sales by team">
+      <ChartPanel title="Sales by team" subtitle="Completed sales per team">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data.teamData}>
-            <CartesianGrid vertical={false} strokeDasharray="3 3" stroke={GRID_STROKE} />
-            <XAxis dataKey="name" tick={AXIS_TICK} tickLine={false} axisLine={false} />
-            <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} />
+          <BarChart data={data.teamData} margin={CHART_MARGIN} maxBarSize={64}>
+            <CartesianGrid
+              vertical={false}
+              strokeDasharray="3 3"
+              stroke={GRID_STROKE}
+              strokeOpacity={GRID_OPACITY}
+            />
+            <XAxis
+              dataKey="name"
+              tick={AXIS_TICK}
+              tickLine={false}
+              axisLine={false}
+              tickMargin={8}
+            />
+            <YAxis
+              tick={AXIS_TICK}
+              tickFormatter={fmtAxisSAR}
+              tickLine={false}
+              axisLine={false}
+              width={52}
+              tickMargin={6}
+            />
             <Tooltip
               content={<ChartTooltip format={fmtSAR} />}
               cursor={BAR_CURSOR}
@@ -171,98 +216,63 @@ export function SalesCharts({ data }: { data: SalesChartsData }) {
               dataKey="sales"
               name="Completed sales"
               fill="var(--color-chart-2)"
-              radius={[4, 4, 0, 0]}
+              radius={[5, 5, 0, 0]}
             />
           </BarChart>
         </ResponsiveContainer>
-      </Panel>
+      </ChartPanel>
 
-      <Panel title="Top agents by sales">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data.agentSalesData} layout="vertical">
-            <CartesianGrid horizontal={false} strokeDasharray="3 3" stroke={GRID_STROKE} />
-            <XAxis type="number" tick={AXIS_TICK} tickLine={false} axisLine={false} />
-            <YAxis
-              type="category"
-              dataKey="name"
-              width={130}
-              tick={AXIS_TICK}
-              tickLine={false}
-              axisLine={false}
-            />
-            <Tooltip
-              content={<ChartTooltip format={fmtSAR} />}
-              cursor={BAR_CURSOR}
-              wrapperStyle={TOOLTIP_WRAPPER}
-            />
-            <Bar
-              dataKey="sales"
-              name="Completed sales"
-              fill="var(--color-chart-3)"
-              radius={[0, 4, 4, 0]}
-            />
-          </BarChart>
-        </ResponsiveContainer>
-      </Panel>
+      <HorizontalBarPanel
+        title="Top agents by sales"
+        subtitle="Completed sales per agent"
+        data={data.agentSalesData}
+        color="var(--color-chart-3)"
+      />
 
-      <Panel title="Sales by branch (top 10)">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data.branchData} layout="vertical">
-            <CartesianGrid horizontal={false} strokeDasharray="3 3" stroke={GRID_STROKE} />
-            <XAxis type="number" tick={AXIS_TICK} tickLine={false} axisLine={false} />
-            <YAxis
-              type="category"
-              dataKey="name"
-              width={80}
-              tick={AXIS_TICK}
-              tickLine={false}
-              axisLine={false}
-            />
-            <Tooltip
-              content={<ChartTooltip format={fmtSAR} />}
-              cursor={BAR_CURSOR}
-              wrapperStyle={TOOLTIP_WRAPPER}
-            />
-            <Bar
-              dataKey="sales"
-              name="Completed sales"
-              fill="var(--color-chart-4)"
-              radius={[0, 4, 4, 0]}
-            />
-          </BarChart>
-        </ResponsiveContainer>
-      </Panel>
+      <HorizontalBarPanel
+        title="Sales by branch (top 10)"
+        subtitle="Completed sales per branch"
+        data={data.branchData}
+        color="var(--color-chart-4)"
+      />
 
-      <Panel title="Sales by city">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data.cityData} layout="vertical">
-            <CartesianGrid horizontal={false} strokeDasharray="3 3" stroke={GRID_STROKE} />
-            <XAxis type="number" tick={AXIS_TICK} tickLine={false} axisLine={false} />
-            <YAxis
-              type="category"
-              dataKey="name"
-              width={90}
-              tick={AXIS_TICK}
-              tickLine={false}
-              axisLine={false}
-            />
-            <Tooltip
-              content={<ChartTooltip format={fmtSAR} />}
-              cursor={BAR_CURSOR}
-              wrapperStyle={TOOLTIP_WRAPPER}
-            />
-            <Bar
-              dataKey="sales"
-              name="Completed sales"
-              fill="var(--color-chart-5)"
-              radius={[0, 4, 4, 0]}
-            />
-          </BarChart>
-        </ResponsiveContainer>
-      </Panel>
+      <HorizontalBarPanel
+        title="Sales by city"
+        subtitle="Completed sales per city"
+        data={data.cityData}
+        color="var(--color-chart-5)"
+      />
     </div>
   );
 }
+
+/** The series this component actually reads. */
+const SERIES_KEYS = [
+  "dailyData",
+  "statusData",
+  "teamData",
+  "agentSalesData",
+  "branchData",
+  "cityData",
+] as const;
+
+/**
+ * Memoised at the boundary, with a comparator rather than the default.
+ *
+ * `useDashboardData` returns a fresh object literal on every render, so a plain
+ * `memo` here would never once hit — the `data` prop is a new reference each
+ * time even when nothing in it changed. The six series *inside* it are each
+ * `useMemo`d and are stable, so comparing them by reference is both correct and
+ * as cheap as the default shallow compare would have been.
+ *
+ * This matters because the route re-renders on every filter change and every
+ * background refetch, and re-running six Recharts layouts is the most expensive
+ * no-op on the page.
+ */
+export const SalesCharts = memo(
+  SalesChartsImpl,
+  (prev, next) => !SERIES_KEYS.some((k) => prev.data[k] !== next.data[k]),
+);
 
 // The Suspense fallback lives in ./sales-charts-skeleton so importing it does
 // not pull Recharts back into the route's chunk.

@@ -1,4 +1,5 @@
 import type { CSSProperties, ReactNode } from "react";
+import { ellipsize } from "./text-metrics";
 
 /**
  * Shared chrome for every Recharts panel on the dashboard.
@@ -27,9 +28,28 @@ import type { CSSProperties, ReactNode } from "react";
  */
 
 /** Axis tick text. The `fill` is the whole point; without it, `#666`. */
-export const AXIS_TICK = { fontSize: 11, fill: "var(--color-muted-foreground)" } as const;
+export const AXIS_TICK = { fontSize: 11.5, fill: "var(--color-muted-foreground)" } as const;
 
 export const GRID_STROKE = "var(--color-border)";
+
+/**
+ * Grid opacity, applied on top of `--color-border`.
+ *
+ * The border token is tuned for a 1px divider between two surfaces, and a full
+ * grid drawn at that weight competes with the data. Pulling it back leaves the
+ * gridlines readable as a reference without them reading as content.
+ */
+export const GRID_OPACITY = 0.55;
+
+/** Type size for a category (name) axis. Slightly larger than the value axis:
+ *  those labels are words, and words at 11px in Arabic are hard work. */
+export const CATEGORY_TICK_SIZE = 12;
+
+/** Gap between a category label and the plot area, in px. */
+export const CATEGORY_TICK_GUTTER = 10;
+
+/** One margin for every panel, so no two charts sit at different insets. */
+export const CHART_MARGIN = { top: 8, right: 16, left: 0, bottom: 0 } as const;
 
 /**
  * The band behind a hovered bar.
@@ -77,6 +97,60 @@ export function legendText(value: ReactNode): ReactNode {
 
 /** Pie slice labels, which default to the slice's own fill. */
 export const PIE_LABEL = { fontSize: 11, fill: "var(--color-foreground)" } as const;
+
+interface CategoryTickProps {
+  x?: number;
+  y?: number;
+  payload?: { value?: string | number };
+  /** Px available for the label itself, gutter already subtracted. */
+  maxWidth: number;
+}
+
+/**
+ * A left-hand category label: vertically centred, ellipsised only if it must be,
+ * and carrying its full text as a native tooltip when it was.
+ *
+ * Recharts' stock tick renders at the axis baseline rather than the band centre,
+ * which is what made every horizontal bar chart look half a line out of step
+ * with its own bars. `dy="0.32em"` is the correction — it centres the cap-height
+ * box on the tick's y, which is the band centre.
+ *
+ * `unicodeBidi: "plaintext"` is the SVG equivalent of `dir="auto"`: it resolves
+ * direction per string from its first strong character, so an Arabic city name
+ * orders right-to-left and an English branch name left-to-right, in the same
+ * axis, without either being reversed.
+ *
+ * The gutter is NOT applied here. Recharts has already moved `x` inward by
+ * `tickSize + tickMargin` before handing it over, so the axis owns the gap and
+ * this draws at the x it is given. Subtracting a gutter as well double-counted
+ * it, which is exactly how a label that the axis had reserved room for still
+ * ended up four pixels off the left edge. Callers pair this with
+ * `tickSize={0} tickMargin={CATEGORY_TICK_GUTTER}`.
+ */
+export function CategoryTick({ x = 0, y = 0, payload, maxWidth }: CategoryTickProps) {
+  const full = String(payload?.value ?? "");
+  const shown = ellipsize(full, maxWidth, CATEGORY_TICK_SIZE);
+  const clipped = shown !== full;
+
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <text
+        x={0}
+        y={0}
+        dy="0.32em"
+        textAnchor="end"
+        fontSize={CATEGORY_TICK_SIZE}
+        fill="var(--color-muted-foreground)"
+        style={{ unicodeBidi: "plaintext" }}
+      >
+        {/* Only when the label was actually shortened — a native tooltip that
+            repeats what is already fully visible is noise on every hover. */}
+        {clipped && <title>{full}</title>}
+        {shown}
+      </text>
+    </g>
+  );
+}
 
 /** One row of a tooltip, as Recharts hands it over. */
 interface TooltipEntry {

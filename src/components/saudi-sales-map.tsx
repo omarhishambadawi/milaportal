@@ -329,6 +329,60 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
   const hover = placed.find((p) => p.name === activeName) ?? null;
   const sortedByRank = useMemo(() => [...placed].sort((a, b) => a.rank - b.rank), [placed]);
 
+  /**
+   * Pointer position in SVG user units.
+   *
+   * Via `getScreenCTM`, not by scaling the client rect: the SVG carries
+   * `preserveAspectRatio="xMidYMid meet"` under a `max-h` clamp, so whenever the
+   * height cap bites, the viewBox is letterboxed inside the element and a naive
+   * `(clientX - rect.left) / rect.width * W` is wrong by the letterbox offset.
+   * The CTM already knows the real mapping.
+   */
+  const svgPoint = (clientX: number, clientY: number): { x: number; y: number } | null => {
+    const svg = svgRef.current;
+    const ctm = svg?.getScreenCTM();
+    if (!svg || !ctm) return null;
+    const p = new DOMPoint(clientX, clientY).matrixTransform(ctm.inverse());
+    return { x: p.x, y: p.y };
+  };
+
+  /**
+   * The city a pointer at (x, y) is asking about — nearest wins, within reach.
+   *
+   * This replaces per-city hit circles, which could not work here. The old
+   * radius was `min(max(r, 8), nearest/2 - 1)` — capped at half the distance to
+   * the neighbouring city so two targets never overlapped — and the Eastern
+   * Province is four cities inside seven SVG units: Khobar and Dhahran are 4.2
+   * units apart, so every one of them collapsed to the `max(4, …)` floor. A
+   * radius-4 target in a 900-unit viewBox is about seven screen pixels across,
+   * which is why hovering "did not reliably show the tooltip".
+   *
+   * Nearest-marker has no such failure mode: the whole map is live, every city
+   * owns the region closest to it, and no city can be occluded by another. The
+   * reach cap is what stops the empty Rub' al Khali from claiming a tooltip.
+   */
+  const cityAt = (x: number, y: number): Placed | null => {
+    let best: Placed | null = null;
+    let bestDistance = Infinity;
+    for (const p of placed) {
+      const d = Math.hypot(p.cx - x, p.cy - y);
+      if (d < bestDistance) {
+        bestDistance = d;
+        best = p;
+      }
+    }
+    if (!best) return null;
+    return bestDistance <= Math.max(best.r + 34, 56) ? best : null;
+  };
+
+  const handlePointer = (clientX: number, clientY: number): Placed | null => {
+    const pt = svgPoint(clientX, clientY);
+    if (!pt) return null;
+    const next = cityAt(pt.x, pt.y);
+    setHoverName(next?.name ?? null);
+    return next;
+  };
+
   const focusCityByOffset = (currentName: string, offset: number) => {
     const idx = sortedByRank.findIndex((p) => p.name === currentName);
     if (idx < 0) return;
@@ -500,7 +554,13 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                   y1={p.cy}
                   x2={tx}
                   y2={ty}
-                  style={{ stroke: "var(--map-leader)", transition: "opacity 220ms ease" }}
+                  style={{
+                    stroke: "var(--map-leader)",
+                    transition: "opacity 220ms ease",
+                    // A stroked line is a pointer target by default, and these
+                    // criss-cross the map between every bubble and its label.
+                    pointerEvents: "none",
+                  }}
                   strokeWidth={0.7}
                   opacity={active ? 0.95 : 0.35}
                   strokeDasharray={active ? "0" : "2 3"}
@@ -516,11 +576,11 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                   key={`glow-${p.name}`}
                   cx={p.cx}
                   cy={p.cy}
-                  r={p.r * (active ? 2.2 : 1.7)}
+                  r={p.r * (active ? 2.45 : 1.7)}
                   fill={`url(#bg-${slug(p.name)})`}
                   style={{
                     pointerEvents: "none",
-                    opacity: mounted ? (active ? 1 : 0.75) : 0,
+                    opacity: mounted ? (active ? 1 : 0.7) : 0,
                     transition: "opacity 400ms ease, r 260ms cubic-bezier(.34,1.4,.5,1)",
                   }}
                 />
@@ -692,101 +752,120 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                 );
               })}
 
-            {/* Hit-target layer */}
-            {[...placed]
-              .map((p) => {
-                let nearest = Infinity;
-                for (const q of placed) {
-                  if (q.name === p.name) continue;
-                  const d = Math.hypot(p.cx - q.cx, p.cy - q.cy);
-                  if (d < nearest) nearest = d;
-                }
-                const cap = Number.isFinite(nearest) ? Math.max(4, nearest / 2 - 1) : Infinity;
-                const hitR = Math.min(Math.max(p.r, 8), cap);
-                return { ...p, hitR };
-              })
-              .sort((a, b) => b.hitR - a.hitR)
-              .map((p) => {
-                const isActive = activeName === p.name;
-                // Deliberately no `<title>` child. SVG `title` renders as the
-                // *browser's own* tooltip — the small bordered box that appears
-                // beside the cursor after a delay — so hovering a city produced
-                // two overlapping readouts: the styled card and a bare native
-                // label repeating the city name across it. `aria-label` below is
-                // what the title was really contributing, and it stays.
-                return (
-                  <circle
-                    key={`hit-${p.name}`}
-                    ref={(el) => {
-                      if (el) cityRefs.current.set(p.name, el);
-                      else cityRefs.current.delete(p.name);
-                    }}
-                    cx={p.cx}
-                    cy={p.cy}
-                    r={p.hitR}
-                    fill="transparent"
-                    tabIndex={0}
-                    role="button"
-                    aria-label={ariaLabelFor(p)}
-                    aria-describedby={isActive ? tooltipId : undefined}
-                    aria-pressed={pinned === p.name}
-                    style={{ cursor: "pointer", outline: "none" }}
-                    onMouseEnter={() => setHoverName(p.name)}
-                    onMouseLeave={() => setHoverName((n) => (n === p.name ? null : n))}
-                    onTouchStart={() => setHoverName(p.name)}
-                    onFocus={() => {
-                      setHoverName(p.name);
-                      setPinned(p.name);
-                    }}
-                    onBlur={(e) => {
-                      // Only clear when focus leaves the map entirely.
-                      const svg = svgRef.current;
-                      const next = e.relatedTarget as Node | null;
-                      if (!svg || !next || !svg.contains(next)) {
-                        setPinned((cur) => (cur === p.name ? null : cur));
-                        setHoverName((cur) => (cur === p.name ? null : cur));
-                      }
-                    }}
-                    onClick={() => {
+            {/*
+              Keyboard targets.
+
+              `pointerEvents: none` on purpose — the pointer is served by the
+              nearest-marker layer below, and leaving these live would reinstate
+              the occlusion problem they used to have. Focusability is
+              unaffected: `pointer-events` governs hit testing, not the tab
+              order, so every city is still reachable by keyboard and still
+              draws its focus ring.
+            */}
+            {placed.map((p) => {
+              const isActive = activeName === p.name;
+              // Deliberately no `<title>` child. SVG `title` renders as the
+              // *browser's own* tooltip — the small bordered box that appears
+              // beside the cursor after a delay — so hovering a city produced
+              // two overlapping readouts: the styled card and a bare native
+              // label repeating the city name across it. `aria-label` below is
+              // what the title was really contributing, and it stays.
+              return (
+                <circle
+                  key={`hit-${p.name}`}
+                  ref={(el) => {
+                    if (el) cityRefs.current.set(p.name, el);
+                    else cityRefs.current.delete(p.name);
+                  }}
+                  cx={p.cx}
+                  cy={p.cy}
+                  r={Math.max(p.r, 10)}
+                  fill="transparent"
+                  tabIndex={0}
+                  role="button"
+                  aria-label={ariaLabelFor(p)}
+                  aria-describedby={isActive ? tooltipId : undefined}
+                  aria-pressed={pinned === p.name}
+                  style={{ pointerEvents: "none", outline: "none" }}
+                  onFocus={() => {
+                    setHoverName(p.name);
+                    setPinned(p.name);
+                  }}
+                  onBlur={(e) => {
+                    // Only clear when focus leaves the map entirely.
+                    const svg = svgRef.current;
+                    const next = e.relatedTarget as Node | null;
+                    if (!svg || !next || !svg.contains(next)) {
+                      setPinned((cur) => (cur === p.name ? null : cur));
+                      setHoverName((cur) => (cur === p.name ? null : cur));
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
                       setPinned((cur) => (cur === p.name ? null : p.name));
-                      setHoverName(p.name);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        setPinned((cur) => (cur === p.name ? null : p.name));
-                      } else if (e.key === "Escape") {
-                        setPinned(null);
-                        setHoverName(null);
-                        (e.currentTarget as SVGCircleElement).blur();
-                      } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-                        e.preventDefault();
-                        focusCityByOffset(p.name, 1);
-                      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-                        e.preventDefault();
-                        focusCityByOffset(p.name, -1);
-                      } else if (e.key === "Home") {
-                        e.preventDefault();
-                        const first = sortedByRank[0];
-                        if (first) {
-                          setPinned(first.name);
-                          setHoverName(first.name);
-                          cityRefs.current.get(first.name)?.focus();
-                        }
-                      } else if (e.key === "End") {
-                        e.preventDefault();
-                        const last = sortedByRank[sortedByRank.length - 1];
-                        if (last) {
-                          setPinned(last.name);
-                          setHoverName(last.name);
-                          cityRefs.current.get(last.name)?.focus();
-                        }
+                    } else if (e.key === "Escape") {
+                      setPinned(null);
+                      setHoverName(null);
+                      (e.currentTarget as SVGCircleElement).blur();
+                    } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+                      e.preventDefault();
+                      focusCityByOffset(p.name, 1);
+                    } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+                      e.preventDefault();
+                      focusCityByOffset(p.name, -1);
+                    } else if (e.key === "Home") {
+                      e.preventDefault();
+                      const first = sortedByRank[0];
+                      if (first) {
+                        setPinned(first.name);
+                        setHoverName(first.name);
+                        cityRefs.current.get(first.name)?.focus();
                       }
-                    }}
-                    className="focus-visible:[stroke:var(--ring)] focus-visible:[stroke-width:2.5]"
-                  />
-                );
-              })}
+                    } else if (e.key === "End") {
+                      e.preventDefault();
+                      const last = sortedByRank[sortedByRank.length - 1];
+                      if (last) {
+                        setPinned(last.name);
+                        setHoverName(last.name);
+                        cityRefs.current.get(last.name)?.focus();
+                      }
+                    }
+                  }}
+                  className="focus-visible:[stroke:var(--ring)] focus-visible:[stroke-width:2.5]"
+                />
+              );
+            })}
+
+            {/*
+              The pointer surface — last, so it is on top of everything.
+
+              One transparent rectangle over the whole map that resolves the
+              pointer to its nearest city. Every marker is therefore always
+              reachable, no marker can be hidden behind another, and there are no
+              dead zones between them. `touch-action: manipulation` keeps a tap
+              from being held back by double-tap-to-zoom detection.
+            */}
+            <rect
+              width={W}
+              height={H}
+              fill="transparent"
+              style={{ cursor: hoverName ? "pointer" : "default", touchAction: "manipulation" }}
+              onPointerMove={(e) => handlePointer(e.clientX, e.clientY)}
+              onPointerLeave={() => setHoverName(null)}
+              onPointerDown={(e) => {
+                // Touch has no hover to precede the tap, so resolve the city on
+                // the press itself rather than waiting for a move that will
+                // never come.
+                if (e.pointerType === "touch") handlePointer(e.clientX, e.clientY);
+              }}
+              onClick={(e) => {
+                const next = handlePointer(e.clientX, e.clientY);
+                // Clicking bare desert clears the pin rather than leaving a
+                // card stuck to a city the pointer has long since left.
+                setPinned((cur) => (next && cur !== next.name ? next.name : null));
+              }}
+            />
           </svg>
 
           {/* Screen-reader live region — announces the active city on focus/hover. */}

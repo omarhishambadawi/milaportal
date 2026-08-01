@@ -1,5 +1,4 @@
 ﻿import { createFileRoute } from "@tanstack/react-router";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -15,6 +14,15 @@ import { DateRangePicker } from "@/components/date-range-picker";
 import { SaudiSalesMap } from "@/components/saudi-sales-map";
 import { exportDashboard } from "@/features/dashboard/export";
 import { SalesChartsSkeleton } from "@/features/dashboard/components/sales-charts-skeleton";
+import { AnalyticsCard } from "@/features/dashboard/components/analytics-card";
+import {
+  AnalyticsTable,
+  EmptyRow,
+  Tbody,
+  Td,
+  Th,
+  Thead,
+} from "@/features/dashboard/components/analytics-table";
 import { SectionTitle } from "@/features/dashboard/components/section-title";
 import { StatCard } from "@/features/dashboard/components/stat-card";
 import { DashKpiCard } from "@/features/dashboard/components/dash-kpi-card";
@@ -185,48 +193,42 @@ function Dashboard() {
       <div>
         <SectionTitle title="Call Center Invoice verification" />
 
-        <Card className="mt-3">
-          <CardHeader>
-            <CardTitle className="text-base">Call Center Invoices Tracking</CardTitle>
-          </CardHeader>
-          <CardContent className="p-0 overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left text-xs text-muted-foreground">
-                  <th className="px-3 py-2">Agent</th>
-                  <th className="px-3 py-2 text-right">Total orders</th>
-                  <th className="px-3 py-2 text-right">Verified</th>
-                  <th className="px-3 py-2 text-right">Non-verified</th>
-                  <th className="px-3 py-2 text-right">Rate</th>
-                  <th className="px-3 py-2 text-right">Verified value</th>
+        <AnalyticsCard
+          title="Call Center Invoices Tracking"
+          subtitle="Verification status per agent"
+          className="mt-3"
+          flush
+        >
+          <AnalyticsTable minWidth={640}>
+            <Thead>
+              <tr>
+                <Th>Agent</Th>
+                <Th align="right">Total orders</Th>
+                <Th align="right">Verified</Th>
+                <Th align="right">Non-verified</Th>
+                <Th align="right">Rate</Th>
+                <Th align="right">Verified value</Th>
+              </tr>
+            </Thead>
+            <Tbody>
+              {d.verifData.length === 0 && <EmptyRow colSpan={6} />}
+              {d.verifData.map((r) => (
+                <tr key={r.name}>
+                  <Td className="whitespace-nowrap font-medium">{r.name}</Td>
+                  <Td numeric>{r.total}</Td>
+                  <Td numeric className="font-semibold text-[var(--positive)]">
+                    {r.verified}
+                  </Td>
+                  <Td numeric className="text-muted-foreground">
+                    {r.nonVerified}
+                  </Td>
+                  <Td numeric>{r.rate.toFixed(0)}%</Td>
+                  <Td numeric>{fmtSAR(r.verifiedValue)}</Td>
                 </tr>
-              </thead>
-              <tbody>
-                {d.verifData.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="text-center text-muted-foreground py-6">
-                      No data
-                    </td>
-                  </tr>
-                )}
-                {d.verifData.map((r) => (
-                  <tr key={r.name} className="border-b last:border-0">
-                    <td className="px-3 py-2 font-medium whitespace-nowrap">{r.name}</td>
-                    <td className="px-3 py-2 text-right">{r.total}</td>
-                    <td className="px-3 py-2 text-right text-[var(--positive)] font-semibold">
-                      {r.verified}
-                    </td>
-                    <td className="px-3 py-2 text-right text-muted-foreground">{r.nonVerified}</td>
-                    <td className="px-3 py-2 text-right">{r.rate.toFixed(0)}%</td>
-                    <td className="px-3 py-2 text-right font-mono text-xs">
-                      {fmtSAR(r.verifiedValue)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </CardContent>
-        </Card>
+              ))}
+            </Tbody>
+          </AnalyticsTable>
+        </AnalyticsCard>
       </div>
 
       {/* Sales charts — behind a lazy boundary; see sales-charts.tsx */}
@@ -247,52 +249,47 @@ function Dashboard() {
       {/* Delivery method analysis */}
       <div>
         <SectionTitle title="Delivery methods" />
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Delivery method performance</CardTitle>
-          </CardHeader>
-          <CardContent className="p-0 overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left text-xs text-muted-foreground">
-                  <th className="px-3 py-2">Method</th>
-                  <th className="px-3 py-2 text-right">Orders</th>
-                  <th className="px-3 py-2 text-right">Completed sales</th>
-                  <th className="px-3 py-2 text-right">Completion rate</th>
+        <AnalyticsCard
+          title="Delivery method performance"
+          subtitle="Orders and completed sales by method"
+          flush
+        >
+          <AnalyticsTable minWidth={520}>
+            <Thead>
+              <tr>
+                <Th>Method</Th>
+                <Th align="right">Orders</Th>
+                <Th align="right">Completed sales</Th>
+                <Th align="right">Completion rate</Th>
+              </tr>
+            </Thead>
+            <Tbody>
+              {d.deliveryData.length === 0 && <EmptyRow colSpan={4} />}
+              {d.deliveryData.map((dd) => (
+                <tr key={dd.name}>
+                  <Td className="font-medium">{dd.name}</Td>
+                  <Td numeric>{dd.count}</Td>
+                  <Td numeric>{fmtSAR(dd.sales)}</Td>
+                  <Td numeric>{dd.rate.toFixed(0)}%</Td>
                 </tr>
-              </thead>
-              <tbody>
-                {d.deliveryData.length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="text-center text-muted-foreground py-6">
-                      No data
-                    </td>
-                  </tr>
-                )}
-                {d.deliveryData.map((dd) => (
-                  <tr key={dd.name} className="border-b last:border-0">
-                    <td className="px-3 py-2 font-medium">{dd.name}</td>
-                    <td className="px-3 py-2 text-right">{dd.count}</td>
-                    <td className="px-3 py-2 text-right font-mono text-xs">{fmtSAR(dd.sales)}</td>
-                    <td className="px-3 py-2 text-right">{dd.rate.toFixed(0)}%</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </CardContent>
-        </Card>
+              ))}
+            </Tbody>
+          </AnalyticsTable>
+        </AnalyticsCard>
 
-        <div className="grid lg:grid-cols-2 gap-3 sm:gap-4 mt-3 min-w-0">
+        <div className="mt-3 grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
           <div className="min-w-0">
+            {/* The separator here was mojibake — "أ—", a UTF-8 "×" decoded as
+                cp1256 — and had been rendering as Arabic alef + em dash. */}
             <DeliveryMatrix
-              title="Sales by branch أ— delivery method"
+              title="Sales by branch × delivery method"
               matrix={d.deliveryBranchMatrix}
               methods={d.deliveryMethods}
             />
           </div>
           <div className="min-w-0">
             <DeliveryMatrix
-              title="Sales by city أ— delivery method"
+              title="Sales by city × delivery method"
               matrix={d.deliveryCityMatrix}
               methods={d.deliveryMethods}
             />
@@ -321,74 +318,56 @@ function Dashboard() {
           />
         </div>
 
-        <div className="grid lg:grid-cols-2 gap-3 sm:gap-4 mt-3">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Complaints by branch (top 10)</CardTitle>
-            </CardHeader>
-            <CardContent className="p-0 overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-xs text-muted-foreground">
-                    <th className="px-3 py-2">Branch</th>
-                    <th className="px-3 py-2 text-right">Total</th>
-                    <th className="px-3 py-2 text-right">Resolved</th>
-                    <th className="px-3 py-2 text-right">Open</th>
+        <div className="mt-3 grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
+          <AnalyticsCard title="Complaints by branch (top 10)" flush>
+            <AnalyticsTable minWidth={420}>
+              <Thead>
+                <tr>
+                  <Th>Branch</Th>
+                  <Th align="right">Total</Th>
+                  <Th align="right">Resolved</Th>
+                  <Th align="right">Open</Th>
+                </tr>
+              </Thead>
+              <Tbody>
+                {d.cmpBranchData.length === 0 && <EmptyRow colSpan={4} />}
+                {d.cmpBranchData.map((r) => (
+                  <tr key={r.name}>
+                    <Td className="font-medium">{r.name}</Td>
+                    <Td numeric>{r.total}</Td>
+                    <Td numeric className="text-[var(--positive)]">
+                      {r.resolved}
+                    </Td>
+                    <Td numeric className="text-[var(--attention)]">
+                      {r.open}
+                    </Td>
                   </tr>
-                </thead>
-                <tbody>
-                  {d.cmpBranchData.length === 0 && (
-                    <tr>
-                      <td colSpan={4} className="text-center text-muted-foreground py-6">
-                        No data
-                      </td>
-                    </tr>
-                  )}
-                  {d.cmpBranchData.map((r) => (
-                    <tr key={r.name} className="border-b last:border-0">
-                      <td className="px-3 py-2 font-medium">{r.name}</td>
-                      <td className="px-3 py-2 text-right">{r.total}</td>
-                      <td className="px-3 py-2 text-right text-[var(--positive)]">{r.resolved}</td>
-                      <td className="px-3 py-2 text-right text-[var(--attention)]">{r.open}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </CardContent>
-          </Card>
+                ))}
+              </Tbody>
+            </AnalyticsTable>
+          </AnalyticsCard>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Complaints by city</CardTitle>
-            </CardHeader>
-            <CardContent className="p-0 overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-xs text-muted-foreground">
-                    <th className="px-3 py-2">City</th>
-                    <th className="px-3 py-2 text-right">Total</th>
-                    <th className="px-3 py-2 text-right">Resolution rate</th>
+          <AnalyticsCard title="Complaints by city" flush>
+            <AnalyticsTable minWidth={360}>
+              <Thead>
+                <tr>
+                  <Th>City</Th>
+                  <Th align="right">Total</Th>
+                  <Th align="right">Resolution rate</Th>
+                </tr>
+              </Thead>
+              <Tbody>
+                {d.cmpCityData.length === 0 && <EmptyRow colSpan={3} />}
+                {d.cmpCityData.map((r) => (
+                  <tr key={r.name}>
+                    <Td className="font-medium">{r.name}</Td>
+                    <Td numeric>{r.total}</Td>
+                    <Td numeric>{r.rate.toFixed(0)}%</Td>
                   </tr>
-                </thead>
-                <tbody>
-                  {d.cmpCityData.length === 0 && (
-                    <tr>
-                      <td colSpan={3} className="text-center text-muted-foreground py-6">
-                        No data
-                      </td>
-                    </tr>
-                  )}
-                  {d.cmpCityData.map((r) => (
-                    <tr key={r.name} className="border-b last:border-0">
-                      <td className="px-3 py-2 font-medium">{r.name}</td>
-                      <td className="px-3 py-2 text-right">{r.total}</td>
-                      <td className="px-3 py-2 text-right">{r.rate.toFixed(0)}%</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </CardContent>
-          </Card>
+                ))}
+              </Tbody>
+            </AnalyticsTable>
+          </AnalyticsCard>
         </div>
       </div>
     </div>
