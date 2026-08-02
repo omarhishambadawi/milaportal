@@ -264,12 +264,14 @@ function Dashboard() {
 
       {/* Delivery method analysis */}
       <div>
-        <SectionTitle title="Delivery methods" />
+        <SectionTitle title="Delivery methods" icon={Truck} />
         <AnalyticsCard
           title="Delivery method performance"
           subtitle="Orders and completed sales by method"
+          icon={PackageCheck}
           flush
         >
+
           <AnalyticsTable minWidth={520}>
             <Thead>
               <tr>
