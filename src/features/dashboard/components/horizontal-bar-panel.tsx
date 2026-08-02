@@ -120,7 +120,7 @@ function HorizontalBarPanelImpl({
   const height = Math.max(232, data.length * ROW_HEIGHT + CHART_CHROME);
 
   return (
-    <AnalyticsCard title={title} subtitle={subtitle}>
+    <AnalyticsCard title={title} subtitle={subtitle} icon={icon}>
       <div ref={ref} className="w-full" style={{ height }}>
         {data.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
