@@ -205,13 +205,15 @@ function Dashboard() {
 
       {/* Call Center Invoice Verification — details table (redundant KPI cards removed per spec) */}
       <div>
-        <SectionTitle title="Call Center Invoice verification" />
+        <SectionTitle title="Call Center Invoice verification" icon={PhoneCall} />
 
         <AnalyticsCard
           title="Call Center Invoices Tracking"
           subtitle="Verification status per agent"
+          icon={ShoppingCart}
           className="mt-3"
           flush
+
         >
           <AnalyticsTable minWidth={640}>
             <Thead>
