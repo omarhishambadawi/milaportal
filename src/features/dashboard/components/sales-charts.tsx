@@ -74,18 +74,21 @@ export interface SalesChartsData {
 function ChartPanel({
   title,
   subtitle,
+  icon,
   children,
 }: {
   title: string;
   subtitle?: string;
+  icon?: LucideIcon;
   children: React.ReactNode;
 }) {
   return (
-    <AnalyticsCard title={title} subtitle={subtitle}>
+    <AnalyticsCard title={title} subtitle={subtitle} icon={icon}>
       <div className={`w-full ${CHART_PANEL_HEIGHT}`}>{children}</div>
     </AnalyticsCard>
   );
 }
+
 
 /**
  * "Sales by team", with a hover state you can actually see.
