@@ -368,7 +368,7 @@ function Dashboard() {
             </AnalyticsTable>
           </AnalyticsCard>
 
-          <AnalyticsCard title="Complaints by city" flush>
+          <AnalyticsCard title="Complaints by city" icon={CircleAlert} flush>
             <AnalyticsTable minWidth={360}>
               <Thead>
                 <tr>
