@@ -86,16 +86,19 @@ function usePanelWidth() {
 function HorizontalBarPanelImpl({
   title,
   subtitle,
+  icon,
   data,
   color,
   barName = "Completed sales",
 }: {
   title: string;
   subtitle?: string;
+  icon?: LucideIcon;
   data: Row[];
   color: string;
   barName?: string;
 }) {
+
   const { ref, width } = usePanelWidth();
 
   const axisWidth = useMemo(() => {
