@@ -64,7 +64,6 @@ export function AnalyticsTable({
   );
 }
 
-
 /**
  * Header row.
  *
