@@ -320,7 +320,7 @@ function Dashboard() {
 
       {/* Complaints analytics */}
       <div>
-        <SectionTitle title="Complaints" />
+        <SectionTitle title="Complaints" icon={MessageSquareWarning} />
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
           <StatCard label="Total complaints" value={Number(d.cmpKpi?.total ?? 0)} />
           <StatCard
