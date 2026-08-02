@@ -10,7 +10,6 @@ import {
 import { Suspense, lazy } from "react";
 import { fmtSAR } from "@/lib/branches";
 import {
-  Building2,
   CircleAlert,
   Download,
   LayoutDashboard,
@@ -213,7 +212,6 @@ function Dashboard() {
           icon={ShoppingCart}
           className="mt-3"
           flush
-
         >
           <AnalyticsTable minWidth={640}>
             <Thead>
@@ -271,7 +269,6 @@ function Dashboard() {
           icon={PackageCheck}
           flush
         >
-
           <AnalyticsTable minWidth={520}>
             <Thead>
               <tr>
@@ -315,7 +312,6 @@ function Dashboard() {
             />
           </div>
         </div>
-
       </div>
 
       {/* Complaints analytics */}

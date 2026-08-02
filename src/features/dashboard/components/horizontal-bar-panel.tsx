@@ -100,7 +100,6 @@ function HorizontalBarPanelImpl({
   color: string;
   barName?: string;
 }) {
-
   const { ref, width } = usePanelWidth();
 
   const axisWidth = useMemo(() => {

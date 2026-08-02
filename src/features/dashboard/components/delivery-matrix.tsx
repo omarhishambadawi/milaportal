@@ -22,7 +22,6 @@ export function DeliveryMatrix({
 
   return (
     <AnalyticsCard title={title} icon={icon} flush>
-
       {/* Columns size themselves to their content (`fit`), so the label column
           absorbs the slack instead of every money column being padded out to a
           fixed 140px. The min width is only a floor for genuinely narrow

@@ -92,7 +92,6 @@ function ChartPanel({
   );
 }
 
-
 /**
  * "Sales by team", with a hover state you can actually see.
  *
@@ -179,7 +178,6 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
         subtitle="All orders against completed"
         icon={ChartColumn}
       >
-
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data.dailyData} margin={CHART_MARGIN}>
             <defs>
@@ -299,7 +297,6 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
         data={data.cityData}
         color="var(--color-chart-5)"
       />
-
     </div>
   );
 }
