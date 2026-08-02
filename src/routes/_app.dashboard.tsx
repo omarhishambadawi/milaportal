@@ -9,7 +9,21 @@ import {
 } from "@/components/ui/select";
 import { Suspense, lazy } from "react";
 import { fmtSAR } from "@/lib/branches";
-import { Download, ShieldAlert } from "lucide-react";
+import {
+  Building2,
+  CircleAlert,
+  Download,
+  LayoutDashboard,
+  Map,
+  MessageSquareWarning,
+  PackageCheck,
+  PhoneCall,
+  Route as RouteIcon,
+  ShieldAlert,
+  ShoppingCart,
+  Truck,
+} from "lucide-react";
+
 import { DateRangePicker } from "@/components/date-range-picker";
 import { SaudiSalesMap } from "@/components/saudi-sales-map";
 import { exportDashboard } from "@/features/dashboard/export";
