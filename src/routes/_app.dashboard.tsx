@@ -254,7 +254,7 @@ function Dashboard() {
 
       {/* Geographic heat map */}
       <div>
-        <SectionTitle title="Geographic distribution" />
+        <SectionTitle title="Geographic distribution" icon={Map} />
         <div className="mt-3">
           <SaudiSalesMap cities={d.cityMapData} />
         </div>
