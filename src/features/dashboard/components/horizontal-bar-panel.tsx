@@ -1,4 +1,6 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { LucideIcon } from "lucide-react";
+
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { fmtSAR } from "@/lib/branches";
 import { AnalyticsCard } from "./analytics-card";
@@ -86,12 +88,14 @@ function usePanelWidth() {
 function HorizontalBarPanelImpl({
   title,
   subtitle,
+  icon,
   data,
   color,
   barName = "Completed sales",
 }: {
   title: string;
   subtitle?: string;
+  icon?: LucideIcon;
   data: Row[];
   color: string;
   barName?: string;
@@ -120,7 +124,7 @@ function HorizontalBarPanelImpl({
   const height = Math.max(232, data.length * ROW_HEIGHT + CHART_CHROME);
 
   return (
-    <AnalyticsCard title={title} subtitle={subtitle}>
+    <AnalyticsCard title={title} subtitle={subtitle} icon={icon}>
       <div ref={ref} className="w-full" style={{ height }}>
         {data.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">

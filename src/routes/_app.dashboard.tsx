@@ -9,7 +9,20 @@ import {
 } from "@/components/ui/select";
 import { Suspense, lazy } from "react";
 import { fmtSAR } from "@/lib/branches";
-import { Download, ShieldAlert } from "lucide-react";
+import {
+  CircleAlert,
+  Download,
+  LayoutDashboard,
+  Map,
+  MessageSquareWarning,
+  PackageCheck,
+  PhoneCall,
+  Route as RouteIcon,
+  ShieldAlert,
+  ShoppingCart,
+  Truck,
+} from "lucide-react";
+
 import { DateRangePicker } from "@/components/date-range-picker";
 import { SaudiSalesMap } from "@/components/saudi-sales-map";
 import { exportDashboard } from "@/features/dashboard/export";
@@ -168,7 +181,7 @@ function Dashboard() {
       </div>
 
       <div>
-        <SectionTitle title="Performance for selected period" />
+        <SectionTitle title="Performance for selected period" icon={LayoutDashboard} />
         <div className="grid gap-3 sm:grid-cols-3">
           <DashKpiCard
             label="Cash"
@@ -191,11 +204,12 @@ function Dashboard() {
 
       {/* Call Center Invoice Verification — details table (redundant KPI cards removed per spec) */}
       <div>
-        <SectionTitle title="Call Center Invoice verification" />
+        <SectionTitle title="Call Center Invoice verification" icon={PhoneCall} />
 
         <AnalyticsCard
           title="Call Center Invoices Tracking"
           subtitle="Verification status per agent"
+          icon={ShoppingCart}
           className="mt-3"
           flush
         >
@@ -238,7 +252,7 @@ function Dashboard() {
 
       {/* Geographic heat map */}
       <div>
-        <SectionTitle title="Geographic distribution" />
+        <SectionTitle title="Geographic distribution" icon={Map} />
         <div className="mt-3">
           <SaudiSalesMap cities={d.cityMapData} />
         </div>
@@ -248,10 +262,11 @@ function Dashboard() {
 
       {/* Delivery method analysis */}
       <div>
-        <SectionTitle title="Delivery methods" />
+        <SectionTitle title="Delivery methods" icon={Truck} />
         <AnalyticsCard
           title="Delivery method performance"
           subtitle="Orders and completed sales by method"
+          icon={PackageCheck}
           flush
         >
           <AnalyticsTable minWidth={520}>
@@ -283,6 +298,7 @@ function Dashboard() {
                 cp1256 — and had been rendering as Arabic alef + em dash. */}
             <DeliveryMatrix
               title="Sales by branch × delivery method"
+              icon={Truck}
               matrix={d.deliveryBranchMatrix}
               methods={d.deliveryMethods}
             />
@@ -290,6 +306,7 @@ function Dashboard() {
           <div className="min-w-0">
             <DeliveryMatrix
               title="Sales by city × delivery method"
+              icon={RouteIcon}
               matrix={d.deliveryCityMatrix}
               methods={d.deliveryMethods}
             />
@@ -299,7 +316,7 @@ function Dashboard() {
 
       {/* Complaints analytics */}
       <div>
-        <SectionTitle title="Complaints" />
+        <SectionTitle title="Complaints" icon={MessageSquareWarning} />
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
           <StatCard label="Total complaints" value={Number(d.cmpKpi?.total ?? 0)} />
           <StatCard
@@ -319,7 +336,7 @@ function Dashboard() {
         </div>
 
         <div className="mt-3 grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
-          <AnalyticsCard title="Complaints by branch (top 10)" flush>
+          <AnalyticsCard title="Complaints by branch (top 10)" icon={ShieldAlert} flush>
             <AnalyticsTable minWidth={420}>
               <Thead>
                 <tr>
@@ -347,7 +364,7 @@ function Dashboard() {
             </AnalyticsTable>
           </AnalyticsCard>
 
-          <AnalyticsCard title="Complaints by city" flush>
+          <AnalyticsCard title="Complaints by city" icon={CircleAlert} flush>
             <AnalyticsTable minWidth={360}>
               <Thead>
                 <tr>

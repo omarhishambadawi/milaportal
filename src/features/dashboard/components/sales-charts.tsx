@@ -1,4 +1,7 @@
 import { memo, useState } from "react";
+import type { LucideIcon } from "lucide-react";
+import { ChartColumn, ChartPie, Trophy, Building2, MapPinned, Users } from "lucide-react";
+
 import {
   Area,
   AreaChart,
@@ -74,14 +77,16 @@ export interface SalesChartsData {
 function ChartPanel({
   title,
   subtitle,
+  icon,
   children,
 }: {
   title: string;
   subtitle?: string;
+  icon?: LucideIcon;
   children: React.ReactNode;
 }) {
   return (
-    <AnalyticsCard title={title} subtitle={subtitle}>
+    <AnalyticsCard title={title} subtitle={subtitle} icon={icon}>
       <div className={`w-full ${CHART_PANEL_HEIGHT}`}>{children}</div>
     </AnalyticsCard>
   );
@@ -168,7 +173,11 @@ function TeamBarChart({ data }: { data: (Named & { sales: number })[] }) {
 function SalesChartsImpl({ data }: { data: SalesChartsData }) {
   return (
     <div className="grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
-      <ChartPanel title="Daily sales trend" subtitle="All orders against completed">
+      <ChartPanel
+        title="Daily sales trend"
+        subtitle="All orders against completed"
+        icon={ChartColumn}
+      >
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data.dailyData} margin={CHART_MARGIN}>
             <defs>
@@ -235,7 +244,7 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
         </ResponsiveContainer>
       </ChartPanel>
 
-      <ChartPanel title="Orders by status" subtitle="Share of orders in the period">
+      <ChartPanel title="Orders by status" subtitle="Share of orders in the period" icon={ChartPie}>
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie
@@ -261,13 +270,14 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
         </ResponsiveContainer>
       </ChartPanel>
 
-      <ChartPanel title="Sales by team" subtitle="Completed sales per team">
+      <ChartPanel title="Sales by team" subtitle="Completed sales per team" icon={Users}>
         <TeamBarChart data={data.teamData} />
       </ChartPanel>
 
       <HorizontalBarPanel
         title="Top agents by sales"
         subtitle="Completed sales per agent"
+        icon={Trophy}
         data={data.agentSalesData}
         color="var(--color-chart-3)"
       />
@@ -275,6 +285,7 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
       <HorizontalBarPanel
         title="Sales by branch (top 10)"
         subtitle="Completed sales per branch"
+        icon={Building2}
         data={data.branchData}
         color="var(--color-chart-4)"
       />
@@ -282,6 +293,7 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
       <HorizontalBarPanel
         title="Sales by city"
         subtitle="Completed sales per city"
+        icon={MapPinned}
         data={data.cityData}
         color="var(--color-chart-5)"
       />
