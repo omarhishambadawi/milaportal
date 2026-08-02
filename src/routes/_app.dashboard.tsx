@@ -340,7 +340,7 @@ function Dashboard() {
         </div>
 
         <div className="mt-3 grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
-          <AnalyticsCard title="Complaints by branch (top 10)" flush>
+          <AnalyticsCard title="Complaints by branch (top 10)" icon={ShieldAlert} flush>
             <AnalyticsTable minWidth={420}>
               <Thead>
                 <tr>
