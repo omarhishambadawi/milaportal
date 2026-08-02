@@ -1,3 +1,4 @@
+import type { LucideIcon } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +18,10 @@ import { cn } from "@/lib/utils";
 export function AnalyticsCard({
   title,
   subtitle,
+  /** A Lucide component naming what the panel measures. Rendered in a tinted
+   *  square so every header has the same leading rhythm whether or not the
+   *  title wraps, and so the icon reads as chrome rather than as content. */
+  icon: Icon,
   actions,
   /** Drop the body padding — for tables, which manage their own insets. */
   flush,
@@ -29,6 +34,7 @@ export function AnalyticsCard({
 }: {
   title: string;
   subtitle?: string;
+  icon?: LucideIcon;
   actions?: React.ReactNode;
   flush?: boolean;
   loading?: boolean;
@@ -39,7 +45,7 @@ export function AnalyticsCard({
   return (
     <Card
       className={cn(
-        "flex h-full flex-col overflow-hidden rounded-xl border-border/60",
+        "group/card flex h-full flex-col overflow-hidden rounded-xl border-border/60",
         // The hover lift is deliberately slow and small. A dashboard is a wall
         // of cards; anything faster reads as the page twitching as the pointer
         // crosses it.
@@ -48,17 +54,32 @@ export function AnalyticsCard({
       )}
     >
       <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 px-4 py-3.5 sm:px-5">
-        <div className="min-w-0">
-          {loading ? (
-            <div className="h-4 w-36 animate-pulse rounded bg-muted" />
-          ) : (
-            <CardTitle className="truncate text-sm font-semibold tracking-tight sm:text-base">
-              {title}
-            </CardTitle>
+        <div className="flex min-w-0 items-center gap-2.5">
+          {Icon && !loading && (
+            <span
+              aria-hidden
+              className={cn(
+                "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
+                "bg-primary/8 text-primary/80 ring-1 ring-inset ring-primary/10",
+                "transition-colors duration-300 group-hover/card:bg-primary/12 group-hover/card:text-primary",
+              )}
+            >
+              <Icon className="h-[18px] w-[18px]" strokeWidth={2} />
+            </span>
           )}
-          {subtitle && !loading && (
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">{subtitle}</p>
-          )}
+          {loading && <span className="h-9 w-9 shrink-0 animate-pulse rounded-lg bg-muted" />}
+          <div className="min-w-0">
+            {loading ? (
+              <div className="h-4 w-36 animate-pulse rounded bg-muted" />
+            ) : (
+              <CardTitle className="truncate text-sm font-semibold tracking-tight sm:text-base">
+                {title}
+              </CardTitle>
+            )}
+            {subtitle && !loading && (
+              <p className="mt-0.5 truncate text-xs text-muted-foreground">{subtitle}</p>
+            )}
+          </div>
         </div>
         {actions && <div className="shrink-0">{actions}</div>}
       </CardHeader>
@@ -74,3 +95,4 @@ export function AnalyticsCard({
     </Card>
   );
 }
+
