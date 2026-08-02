@@ -182,7 +182,7 @@ function Dashboard() {
       </div>
 
       <div>
-        <SectionTitle title="Performance for selected period" />
+        <SectionTitle title="Performance for selected period" icon={LayoutDashboard} />
         <div className="grid gap-3 sm:grid-cols-3">
           <DashKpiCard
             label="Cash"
