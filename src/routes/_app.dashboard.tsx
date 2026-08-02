@@ -301,6 +301,7 @@ function Dashboard() {
                 cp1256 — and had been rendering as Arabic alef + em dash. */}
             <DeliveryMatrix
               title="Sales by branch × delivery method"
+              icon={Truck}
               matrix={d.deliveryBranchMatrix}
               methods={d.deliveryMethods}
             />
@@ -308,11 +309,13 @@ function Dashboard() {
           <div className="min-w-0">
             <DeliveryMatrix
               title="Sales by city × delivery method"
+              icon={RouteIcon}
               matrix={d.deliveryCityMatrix}
               methods={d.deliveryMethods}
             />
           </div>
         </div>
+
       </div>
 
       {/* Complaints analytics */}
