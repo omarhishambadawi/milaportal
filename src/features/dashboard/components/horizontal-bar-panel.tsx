@@ -1,4 +1,6 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { LucideIcon } from "lucide-react";
+
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { fmtSAR } from "@/lib/branches";
 import { AnalyticsCard } from "./analytics-card";
