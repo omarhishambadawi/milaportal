@@ -19,20 +19,21 @@ export function DeliveryMatrix({
 
   return (
     <AnalyticsCard title={title} flush>
-      {/* A crosstab grows a column per method, so the min width has to grow with
-          it — otherwise five methods squeeze into a phone and every figure
-          wraps. Each money column needs room for "123,456 SAR" on one line, so
-          the per-method budget is 140px rather than 110. */}
-      <AnalyticsTable minWidth={240 + (methods.length + 1) * 140}>
+      {/* Columns size themselves to their content (`fit`), so the label column
+          absorbs the slack instead of every money column being padded out to a
+          fixed 140px. The min width is only a floor for genuinely narrow
+          viewports — ~96px per numeric column fits "123,456 SAR" at this
+          density — so a desktop card shows the whole crosstab without scroll. */}
+      <AnalyticsTable fit dense minWidth={150 + (methods.length + 1) * 96}>
         <Thead>
           <tr>
-            <Th className="min-w-[10rem]">Key</Th>
+            <Th>Key</Th>
             {methods.map((m) => (
-              <Th key={m} align="right" className="min-w-[8.5rem]">
+              <Th key={m} align="right">
                 {m}
               </Th>
             ))}
-            <Th align="right" className="min-w-[9rem] bg-muted/70 text-foreground">
+            <Th align="right" className="bg-muted/70 text-foreground">
               Total
             </Th>
           </tr>
@@ -47,7 +48,7 @@ export function DeliveryMatrix({
                   {r.v[m] ? fmtSAR(r.v[m]) : "—"}
                 </Td>
               ))}
-              <Td numeric className="border-l border-border/60 bg-muted/25 font-semibold">
+              <Td numeric className="bg-muted/30 font-semibold text-foreground">
                 {fmtSAR(r.total)}
               </Td>
             </tr>
@@ -57,3 +58,4 @@ export function DeliveryMatrix({
     </AnalyticsCard>
   );
 }
+
