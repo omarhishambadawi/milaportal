@@ -174,7 +174,12 @@ function TeamBarChart({ data }: { data: (Named & { sales: number })[] }) {
 function SalesChartsImpl({ data }: { data: SalesChartsData }) {
   return (
     <div className="grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
-      <ChartPanel title="Daily sales trend" subtitle="All orders against completed">
+      <ChartPanel
+        title="Daily sales trend"
+        subtitle="All orders against completed"
+        icon={ChartColumn}
+      >
+
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data.dailyData} margin={CHART_MARGIN}>
             <defs>
