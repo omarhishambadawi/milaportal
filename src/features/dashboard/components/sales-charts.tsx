@@ -246,7 +246,7 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
         </ResponsiveContainer>
       </ChartPanel>
 
-      <ChartPanel title="Orders by status" subtitle="Share of orders in the period">
+      <ChartPanel title="Orders by status" subtitle="Share of orders in the period" icon={ChartPie}>
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie
@@ -272,13 +272,14 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
         </ResponsiveContainer>
       </ChartPanel>
 
-      <ChartPanel title="Sales by team" subtitle="Completed sales per team">
+      <ChartPanel title="Sales by team" subtitle="Completed sales per team" icon={Users}>
         <TeamBarChart data={data.teamData} />
       </ChartPanel>
 
       <HorizontalBarPanel
         title="Top agents by sales"
         subtitle="Completed sales per agent"
+        icon={Trophy}
         data={data.agentSalesData}
         color="var(--color-chart-3)"
       />
@@ -286,6 +287,7 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
       <HorizontalBarPanel
         title="Sales by branch (top 10)"
         subtitle="Completed sales per branch"
+        icon={Building2}
         data={data.branchData}
         color="var(--color-chart-4)"
       />
@@ -293,9 +295,11 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
       <HorizontalBarPanel
         title="Sales by city"
         subtitle="Completed sales per city"
+        icon={MapPinned}
         data={data.cityData}
         color="var(--color-chart-5)"
       />
+
     </div>
   );
 }
