@@ -1,3 +1,4 @@
+import type { LucideIcon } from "lucide-react";
 import { fmtSAR } from "@/lib/branches";
 import { AnalyticsCard } from "./analytics-card";
 import { AnalyticsTable, EmptyRow, Tbody, Td, Th, Thead } from "./analytics-table";
@@ -5,10 +6,12 @@ import { AnalyticsTable, EmptyRow, Tbody, Td, Th, Thead } from "./analytics-tabl
 /** Location × delivery-method crosstab (top 10 by total). */
 export function DeliveryMatrix({
   title,
+  icon,
   matrix,
   methods,
 }: {
   title: string;
+  icon?: LucideIcon;
   matrix: Record<string, Record<string, number>>;
   methods: string[];
 }) {
@@ -18,7 +21,8 @@ export function DeliveryMatrix({
     .slice(0, 10);
 
   return (
-    <AnalyticsCard title={title} flush>
+    <AnalyticsCard title={title} icon={icon} flush>
+
       {/* Columns size themselves to their content (`fit`), so the label column
           absorbs the slack instead of every money column being padded out to a
           fixed 140px. The min width is only a floor for genuinely narrow
