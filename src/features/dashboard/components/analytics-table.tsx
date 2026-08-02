@@ -30,16 +30,32 @@ export function AnalyticsTable({
   children,
   /** Minimum width before the container scrolls instead of crushing columns. */
   minWidth = 0,
+  /**
+   * Content-sized columns. `table-auto` + `w-full` lets each column take only
+   * the width its longest cell needs and gives the slack to the first (label)
+   * column, which is what stops a five-column crosstab from stretching into a
+   * field of empty gutters.
+   */
+  fit,
+  /** Tighter cells — for wide crosstabs that must fit a card without scrolling. */
+  dense,
   className,
 }: {
   children: React.ReactNode;
   minWidth?: number;
+  fit?: boolean;
+  dense?: boolean;
   className?: string;
 }) {
   return (
     <div className={cn("relative overflow-x-auto", className)}>
       <table
-        className="w-full border-separate border-spacing-0 text-sm"
+        className={cn(
+          "w-full border-separate border-spacing-0 text-sm",
+          fit ? "table-auto" : undefined,
+          dense &&
+            "[&_td]:px-2.5 [&_td]:py-2 [&_th]:px-2.5 [&_th]:py-2 sm:[&_td]:px-3 sm:[&_th]:px-3",
+        )}
         style={minWidth ? { minWidth } : undefined}
       >
         {children}
@@ -47,6 +63,7 @@ export function AnalyticsTable({
     </div>
   );
 }
+
 
 /**
  * Header row.
