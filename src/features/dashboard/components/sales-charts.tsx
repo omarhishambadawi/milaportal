@@ -1,4 +1,7 @@
 import { memo, useState } from "react";
+import type { LucideIcon } from "lucide-react";
+import { ChartColumn, ChartPie, Trophy, Building2, MapPinned, Users } from "lucide-react";
+
 import {
   Area,
   AreaChart,
