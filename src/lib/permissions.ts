@@ -1,6 +1,7 @@
 import type { AppRole } from "@/lib/auth";
 import { isAdministrator } from "@/lib/auth";
 import { CALL_CENTER_VIEW_PERMISSIONS } from "@/lib/call-center-permissions";
+import { callsPageAllowedForRole, type CallsPage } from "@/lib/calls-access";
 
 export type PermissionGroup =
   | "Orders"
@@ -249,6 +250,22 @@ export function canViewCallCenter(
   permissions: string[] | null | undefined,
 ): boolean {
   return CALL_CENTER_VIEW_PERMISSIONS.some((perm) => hasPerm(role, permissions, perm));
+}
+
+/**
+ * Per-page gate for the Calls module. Layers the team-agent confinement in
+ * `calls-access.ts` on top of the shared Call Center view permission, so a
+ * Telesales agent sees exactly one Calls page and a Customer Care agent exactly
+ * one other. Administrator-only and owner-only pages keep their own extra gate
+ * at the call site.
+ */
+export function canViewCallsPage(
+  role: AppRole | null,
+  permissions: string[] | null | undefined,
+  page: CallsPage,
+): boolean {
+  if (!canViewCallCenter(role, permissions)) return false;
+  return callsPageAllowedForRole(role, page);
 }
 
 export const PERMISSION_GROUPS: PermissionGroup[] = [
