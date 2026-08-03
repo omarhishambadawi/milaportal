@@ -10,7 +10,7 @@
  * Nothing here names the PBX vendor. "Calls" is the product feature; the
  * integration behind it is an implementation detail.
  */
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, Navigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -28,6 +28,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth, isAdministrator } from "@/lib/auth";
 import { canViewCallCenter } from "@/lib/permissions";
+import { callsTeamForRole } from "@/lib/calls-access";
 import { StatusCard } from "@/features/calls/status-card";
 import { yeastarQueueOptions, getCallCenterAnalytics } from "@/lib/yeastar.functions";
 import { queryKeys } from "@/lib/query-keys";
@@ -78,6 +79,18 @@ function CallsOverview() {
     enabled: !authLoading && canView,
     staleTime: 5 * 60_000,
   });
+
+  // Team agents have no module landing page: the overview aggregates both
+  // teams, so they are sent to the one dashboard they own instead.
+  const callsTeam = callsTeamForRole(role);
+  if (!authLoading && callsTeam) {
+    return (
+      <Navigate
+        to={callsTeam === "telesales" ? "/calls/telesales" : "/calls/customer-care"}
+        replace
+      />
+    );
+  }
 
   if (!authLoading && !canView) {
     return (

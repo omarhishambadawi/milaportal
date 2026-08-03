@@ -101,7 +101,12 @@ function AppLayout() {
       ...(canCallCenter
         ? [
             {
-              to: callsTeam === "telesales" ? "/calls/telesales" : callsTeam ? "/calls/customer-care" : "/calls",
+              to:
+                callsTeam === "telesales"
+                  ? "/calls/telesales"
+                  : callsTeam
+                    ? "/calls/customer-care"
+                    : "/calls",
               label: "Calls",
               icon: Phone,
               children: [
@@ -132,7 +137,17 @@ function AppLayout() {
       ...(canUsers ? [{ to: "/admin/users", label: "Users", icon: Users }] : []),
       ...(canBranches ? [{ to: "/branches", label: "Branches", icon: MapPin }] : []),
     ],
-    [canDashboard, canOrders, canCreate, canComplaints, canCallCenter, callsTeam, canUsers, canBranches, role],
+    [
+      canDashboard,
+      canOrders,
+      canCreate,
+      canComplaints,
+      canCallCenter,
+      callsTeam,
+      canUsers,
+      canBranches,
+      role,
+    ],
   );
 
   if (loading || !session) {
