@@ -14,6 +14,15 @@ interface UseDashboardDataArgs {
   dashFilters: DashboardFilters;
   cmpFilters: Omit<DashboardFilters, "team">;
   enabled: boolean;
+  /** The signed-in user, used to recognise their own rows. */
+  viewerId?: string;
+  /**
+   * True for agent roles (no `view_all_agents`). Invoice verification is then
+   * narrowed to the viewer's own records, and every other agent's name in the
+   * "Top agents by sales" ranking is anonymised while the ranking, the values
+   * and the chart layout stay exactly as they are.
+   */
+  restrictAgentIdentity?: boolean;
 }
 
 /**
@@ -32,6 +41,8 @@ export function useDashboardData({
   dashFilters,
   cmpFilters,
   enabled,
+  viewerId,
+  restrictAgentIdentity = false,
 }: UseDashboardDataArgs) {
   // Headline KPI cards now come from the orders_kpis RPC (server-side
   // aggregation) instead of the client-side cash/wasfaty/total reduction.
@@ -170,10 +181,12 @@ export function useDashboardData({
   });
   const agentSalesData = useMemo(
     () =>
-      (agentRows ?? [])
-        .slice(0, 10)
-        .map((r) => ({ name: r.agent_name, sales: Number(r.completed_sales) })),
-    [agentRows],
+      (agentRows ?? []).slice(0, 10).map((r, i) => ({
+        name:
+          !restrictAgentIdentity || r.agent_id === viewerId ? r.agent_name : `Agent ${i + 1}`,
+        sales: Number(r.completed_sales),
+      })),
+    [agentRows, restrictAgentIdentity, viewerId],
   );
 
   // Sales by branch / city + heat map from orders_locations RPC.
@@ -321,15 +334,18 @@ export function useDashboardData({
   });
   const verifData = useMemo(
     () =>
-      (verificationRows ?? []).slice(0, 12).map((r) => ({
+      (verificationRows ?? [])
+        .filter((r) => !restrictAgentIdentity || r.agent_id === viewerId)
+        .slice(0, 12)
+        .map((r) => ({
         name: r.agent_name,
         total: Number(r.total_orders),
         verified: Number(r.verified),
         nonVerified: Number(r.non_verified),
         rate: Number(r.rate),
-        verifiedValue: Number(r.verified_value),
-      })),
-    [verificationRows],
+          verifiedValue: Number(r.verified_value),
+        })),
+    [verificationRows, restrictAgentIdentity, viewerId],
   );
 
   // Complaints analytics (scoped by date + agent only; complaints have no team).
