@@ -182,8 +182,7 @@ export function useDashboardData({
   const agentSalesData = useMemo(
     () =>
       (agentRows ?? []).slice(0, 10).map((r, i) => ({
-        name:
-          !restrictAgentIdentity || r.agent_id === viewerId ? r.agent_name : `Agent ${i + 1}`,
+        name: !restrictAgentIdentity || r.agent_id === viewerId ? r.agent_name : `Agent ${i + 1}`,
         sales: Number(r.completed_sales),
       })),
     [agentRows, restrictAgentIdentity, viewerId],
@@ -338,11 +337,11 @@ export function useDashboardData({
         .filter((r) => !restrictAgentIdentity || r.agent_id === viewerId)
         .slice(0, 12)
         .map((r) => ({
-        name: r.agent_name,
-        total: Number(r.total_orders),
-        verified: Number(r.verified),
-        nonVerified: Number(r.non_verified),
-        rate: Number(r.rate),
+          name: r.agent_name,
+          total: Number(r.total_orders),
+          verified: Number(r.verified),
+          nonVerified: Number(r.non_verified),
+          rate: Number(r.rate),
           verifiedValue: Number(r.verified_value),
         })),
     [verificationRows, restrictAgentIdentity, viewerId],
