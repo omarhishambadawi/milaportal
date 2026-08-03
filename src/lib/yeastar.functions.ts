@@ -51,7 +51,10 @@ async function callCenterAccess(
  * receive Telesales figures and a Customer Care agent only Customer Care ones,
  * whatever team the request asks for.
  */
-async function callerCallsTeam(supabase: any, userId: string): Promise<string | null> {
+async function callerCallsTeam(
+  supabase: any,
+  userId: string,
+): Promise<"customer_care" | "telesales" | null> {
   const { data } = await supabase
     .from("user_roles")
     .select("role")
