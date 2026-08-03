@@ -73,6 +73,10 @@ function Dashboard() {
     dashFilters: f.dashFilters,
     cmpFilters: f.cmpFilters,
     enabled: f.canViewDashboard,
+    viewerId: f.userId,
+    // Agent roles (no `view_all_agents`) see only their own verification rows and
+    // an anonymised agent ranking; every other analytic is unchanged for them.
+    restrictAgentIdentity: !f.canViewAllAgents,
   });
   const { refetchExport, exportBusy } = useDashboardExportData({
     from: f.from,

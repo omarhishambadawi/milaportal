@@ -10,6 +10,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { BUSINESS_UTC_OFFSET_MINUTES } from "@/lib/timezone";
 import { CALL_CENTER_VIEW_PERMISSIONS } from "@/lib/call-center-permissions";
+import { callsTeamForRole } from "@/lib/calls-access";
 import { z } from "zod";
 // Type-only: erased at compile time, so the server-only diagnostics module is
 // never pulled into a client bundle.
@@ -41,6 +42,25 @@ async function callCenterAccess(
   ]);
   const canView = !!isAdmin || permResults.some((r: any) => !!r?.data);
   return { canView, isAdmin: !!isAdmin };
+}
+
+/**
+ * The team a caller is confined to, or null when unrestricted.
+ *
+ * Server-side mirror of the Calls module RBAC: a Telesales agent may only ever
+ * receive Telesales figures and a Customer Care agent only Customer Care ones,
+ * whatever team the request asks for.
+ */
+async function callerCallsTeam(
+  supabase: any,
+  userId: string,
+): Promise<"customer_care" | "telesales" | null> {
+  const { data } = await supabase
+    .from("user_roles")
+    .select("role")
+    .eq("user_id", userId)
+    .maybeSingle();
+  return callsTeamForRole((data as { role?: string } | null)?.role ?? null);
 }
 
 /**
@@ -1587,6 +1607,17 @@ export const getCallCenterAnalytics = createServerFn({ method: "POST" })
     ]);
     if (!canView) throw new Error("Forbidden: call analytics access required");
     const seesAll = !!canAll || isAdmin;
+
+    // Team confinement, enforced server-side: a team agent's request is pinned
+    // to its own team regardless of what the client asked for, and a request for
+    // the other team is refused rather than silently rewritten.
+    const lockedTeam = seesAll ? null : await callerCallsTeam(supabase, userId);
+    if (lockedTeam) {
+      if (data.team !== "all" && data.team !== lockedTeam) {
+        throw new Error("Forbidden: team access required");
+      }
+      data = { ...data, team: lockedTeam };
+    }
 
     // Namespace the client-supplied job id to the caller. cdr_progress has no
     // owner column, so without this any authenticated user could read (or

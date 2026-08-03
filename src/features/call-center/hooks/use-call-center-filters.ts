@@ -3,7 +3,7 @@ import type { DateRange } from "react-day-picker";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useAuth } from "@/lib/auth";
-import { hasPerm, canViewCallCenter } from "@/lib/permissions";
+import { canViewCallsPage, hasPerm } from "@/lib/permissions";
 import { useAgentDirectory } from "@/lib/directory";
 import { yeastarQueueOptions } from "@/lib/yeastar.functions";
 import { queryKeys } from "@/lib/query-keys";
@@ -33,7 +33,13 @@ export function useCallCenterFilters(options: UseCallCenterFiltersOptions = {}) 
   const { team: fixedTeam, withQueue = false } = options;
   const queueOptionsFn = useServerFn(yeastarQueueOptions);
   const { role, profile, loading: authLoading } = useAuth();
-  const canView = canViewCallCenter(role, profile?.permissions as any);
+  // A team agent may only open its own team's dashboard; every other Calls page
+  // (including the other team's) is refused here as well as hidden in the nav.
+  const canView = canViewCallsPage(
+    role,
+    profile?.permissions as any,
+    fixedTeam === "customer_care" || fixedTeam === "telesales" ? fixedTeam : "overview",
+  );
   const canAll = hasPerm(role, profile?.permissions as any, "view_all_agents");
   const canExport = hasPerm(role, profile?.permissions as any, "export_reports");
 

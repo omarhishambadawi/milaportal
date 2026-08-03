@@ -18,6 +18,7 @@ import {
   Settings2,
 } from "lucide-react";
 import { hasPerm, canViewCallCenter } from "@/lib/permissions";
+import { callsTeamForRole } from "@/lib/calls-access";
 import { AppHeader } from "@/components/app-header";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ForcePasswordChange } from "@/features/profile/components/force-password-change";
@@ -78,6 +79,9 @@ function AppLayout() {
     hasPerm(role, profile?.permissions as any, "view_branches") ||
     hasPerm(role, profile?.permissions as any, "admin_access");
   const canCallCenter = canViewCallCenter(role, profile?.permissions as any);
+  // Team agents get one Calls page and no module landing page, so the parent
+  // entry points straight at it and the sibling pages are never rendered.
+  const callsTeam = callsTeamForRole(role);
 
   const nav = useMemo(
     () => [
@@ -97,12 +101,21 @@ function AppLayout() {
       ...(canCallCenter
         ? [
             {
-              to: "/calls",
+              to:
+                callsTeam === "telesales"
+                  ? "/calls/telesales"
+                  : callsTeam
+                    ? "/calls/customer-care"
+                    : "/calls",
               label: "Calls",
               icon: Phone,
               children: [
-                { to: "/calls/customer-care", label: "Customer Care", icon: Headphones },
-                { to: "/calls/telesales", label: "Telesales", icon: PhoneOutgoing },
+                ...(callsTeam && callsTeam !== "customer_care"
+                  ? []
+                  : [{ to: "/calls/customer-care", label: "Customer Care", icon: Headphones }]),
+                ...(callsTeam && callsTeam !== "telesales"
+                  ? []
+                  : [{ to: "/calls/telesales", label: "Telesales", icon: PhoneOutgoing }]),
                 ...(isAdministrator(role)
                   ? [
                       {
@@ -124,7 +137,17 @@ function AppLayout() {
       ...(canUsers ? [{ to: "/admin/users", label: "Users", icon: Users }] : []),
       ...(canBranches ? [{ to: "/branches", label: "Branches", icon: MapPin }] : []),
     ],
-    [canDashboard, canOrders, canCreate, canComplaints, canCallCenter, canUsers, canBranches, role],
+    [
+      canDashboard,
+      canOrders,
+      canCreate,
+      canComplaints,
+      canCallCenter,
+      callsTeam,
+      canUsers,
+      canBranches,
+      role,
+    ],
   );
 
   if (loading || !session) {
