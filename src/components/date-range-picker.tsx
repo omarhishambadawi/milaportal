@@ -45,7 +45,6 @@ export function buildRange(kind: Preset): DateRange {
   };
 }
 
-
 export function DateRangePicker({
   range,
   onChange,
