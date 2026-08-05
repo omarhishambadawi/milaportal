@@ -15,7 +15,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
-  BadgeDollarSign,
+  PhoneOutgoing,
   ChartNoAxesCombined,
   Headphones,
   Database,
@@ -221,7 +221,7 @@ function CallsOverview() {
           />
           <Destination
             to="/calls/telesales"
-            icon={BadgeDollarSign}
+            icon={PhoneOutgoing}
             title="Telesales"
             body="Outbound sales activity, lead contact rate, conversion and revenue."
           />

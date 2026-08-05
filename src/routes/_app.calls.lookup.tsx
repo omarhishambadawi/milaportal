@@ -25,7 +25,6 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import {
   AlertTriangle,
-  BadgeDollarSign,
   Headphones,
   PhoneIncoming,
   PhoneOutgoing,
@@ -364,7 +363,7 @@ function DirectionBadge({ direction }: { direction: CallLookupRow["direction"] }
 function TeamBadge({ team }: { team: CallLookupRow["team"] }) {
   if (!team) return <span className="text-muted-foreground">—</span>;
   const care = team === "customer_care";
-  const Icon = care ? Headphones : BadgeDollarSign;
+  const Icon = care ? Headphones : PhoneOutgoing;
   return (
     <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
       <Icon className="h-3 w-3" aria-hidden="true" />

@@ -27,7 +27,6 @@ import { createFileRoute } from "@tanstack/react-router";
 import {
   Activity,
   AlertTriangle,
-  BadgeDollarSign,
   Clock,
   Download,
   Gauge,
@@ -276,7 +275,7 @@ function TelesalesPage() {
             label="Conversion rate"
             value={pct(conv?.overall.conversionRate)}
             loading={isLoading}
-            icon={BadgeDollarSign}
+            icon={PhoneOutgoing}
             tone="secondary"
             accent="secondary"
             hint="Total orders ÷ answered calls"
@@ -463,7 +462,7 @@ function TelesalesPage() {
       <DashboardSection
         title="Conversion"
         description="What the answered calls turned into. Order figures come from Orders, not the PBX."
-        icon={BadgeDollarSign}
+        icon={PhoneOutgoing}
       >
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">

@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { BadgeDollarSign, Headphones } from "lucide-react";
+import { PhoneOutgoing, Headphones } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -21,7 +21,7 @@ export interface TeamCompareRow {
 
 const TEAM_META = {
   customer_care: { label: "Customer Care", icon: Headphones, color: INBOUND },
-  telesales: { label: "Telesales", icon: BadgeDollarSign, color: OUTBOUND },
+  telesales: { label: "Telesales", icon: PhoneOutgoing, color: OUTBOUND },
 } as const;
 
 /**
