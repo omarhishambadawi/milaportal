@@ -1112,7 +1112,6 @@ function FloatingCityCard({
     const update = () => {
       const el = ref.current;
       const anchor = getAnchorRef.current();
-      console.log('DBG place', !!el, !!anchor, city.name);
       if (!el || !anchor) return;
 
       const a = anchor.getBoundingClientRect();
@@ -1154,6 +1153,7 @@ function FloatingCityCard({
 
   return createPortal(
     <div
+      ref={ref}
       id={id}
       role="tooltip"
       className="pointer-events-none fixed z-[9999] hidden w-[280px] rounded-2xl border border-border/60 bg-popover px-4 py-3.5 text-popover-foreground duration-200 ease-out animate-in fade-in-0 zoom-in-95 sm:block md:w-[300px]"
