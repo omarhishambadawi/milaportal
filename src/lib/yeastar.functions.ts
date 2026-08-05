@@ -1784,30 +1784,45 @@ const callReportInput = z.object({
  * because of this; Call Report needs the same protection or it becomes the
  * weakest point in the same page.
  *
- * The TTL matches `CDR_CACHE_TTL_MS` so both halves of a comparison come from
- * the same moment. A shorter one would buy nothing: the client's own
- * `staleTime` is 20s and the report is an aggregate that moves slowly.
+ * The TTL scales with the WINDOW, for the same reason the CDR day store does. A
+ * report whose last day has already ended is finished — the PBX will not revise
+ * last month's queue performance — so re-fetching it every five minutes bought
+ * nothing and cost two slow PBX requests each time. Only a window that includes
+ * today can still move, and only that one expires quickly.
+ *
+ * This was the last flat five-minute TTL on the Customer Care path: with CDR
+ * served from the day store, a month-wide Call Report was the one thing still
+ * going back to the PBX three times an hour for an answer that could not change.
  */
-const callReportCache = new Map<string, { at: number; promise: Promise<CallReportSnapshot> }>();
+const callReportCache = new Map<
+  string,
+  { at: number; ttlMs: number; promise: Promise<CallReportSnapshot> }
+>();
+
+/** Long for a window that has closed, short for one that still includes today. */
+function callReportTtl(to: string): number {
+  return to < businessDay(Date.now()) ? CDR_WINDOW_TTLS.CLOSED_DAY_TTL_MS : CDR_CACHE_TTL_MS;
+}
 
 function getCallReportCached(
   key: string,
+  ttlMs: number,
   fetcher: () => Promise<CallReportSnapshot>,
 ): Promise<CallReportSnapshot> {
   const now = Date.now();
   for (const [k, v] of callReportCache) {
-    if (now - v.at > CDR_CACHE_TTL_MS) callReportCache.delete(k);
+    if (now - v.at > v.ttlMs) callReportCache.delete(k);
   }
   const hit = callReportCache.get(key);
-  if (hit && now - hit.at < CDR_CACHE_TTL_MS) return hit.promise;
+  if (hit && now - hit.at < hit.ttlMs) return hit.promise;
 
   // A rejected fetch must not be cached, or one transient PBX blip would pin
-  // "unavailable" for five minutes.
+  // "unavailable" for the whole TTL.
   const promise = fetcher().catch((e) => {
     callReportCache.delete(key);
     throw e;
   });
-  callReportCache.set(key, { at: now, promise });
+  callReportCache.set(key, { at: now, ttlMs, promise });
   while (callReportCache.size > CDR_CACHE_MAX) {
     const oldest = callReportCache.keys().next().value;
     if (oldest === undefined) break;
@@ -1854,7 +1869,7 @@ export const yeastarCallReport = createServerFn({ method: "POST" })
     // "all" and "6400" resolve to the same report on this PBX and must share
     // one cache entry rather than each paying for their own PBX round-trip.
     const queueId = match.id;
-    return getCallReportCached(`${data.from}|${data.to}|${queueId}`, () =>
+    return getCallReportCached(`${data.from}|${data.to}|${queueId}`, callReportTtl(data.to), () =>
       fetchCallReportSnapshot({
         from: data.from,
         to: data.to,

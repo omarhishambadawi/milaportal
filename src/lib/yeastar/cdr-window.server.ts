@@ -67,6 +67,13 @@ const CLOSED_DAY_TTL_MS = 12 * 60 * 60_000;
 const LIVE_DAY_TTL_MS = 5 * 60_000;
 /** ~6 months of days. Entries hold row references, not copies. */
 const MAX_CACHED_DAYS = 200;
+/**
+ * How many missing RANGES to sweep at once.
+ *
+ * Deliberately small: every range already fetches its own pages concurrently,
+ * so this multiplies with that fan-out rather than adding to it.
+ */
+const RANGE_CONCURRENCY = 2;
 
 interface DayEntry {
   /** When this day was fetched. */
@@ -183,10 +190,27 @@ export async function getCdrWindow(from: string, to: string, jobId?: string): Pr
     // Contiguous ranges, so a cold month is ONE sweep — the same request the
     // old code made — while a warm month that only lost today is one small one.
     const ranges = contiguousRanges(missing);
-    const results = await Promise.all(
-      ranges.map((r, i) =>
-        fetchCdrRange({ from: r.from, to: r.to, jobId: i === 0 ? jobId : undefined }),
-      ),
+
+    // Bounded, because each range ALREADY pages itself concurrently. A window
+    // pocked with holes can produce many ranges, and letting them all start at
+    // once would multiply their internal fan-out into a burst the appliance has
+    // to queue — which is slower than doing them two at a time, not faster.
+    const results = new Array<Awaited<ReturnType<typeof fetchCdrRange>>>(ranges.length);
+    let next = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(RANGE_CONCURRENCY, ranges.length) }, async () => {
+        for (;;) {
+          const i = next++;
+          if (i >= ranges.length) return;
+          const r = ranges[i]!;
+          results[i] = await fetchCdrRange({
+            from: r.from,
+            to: r.to,
+            // Progress describes one fetch; the first range is the one to report.
+            jobId: i === 0 ? jobId : undefined,
+          });
+        }
+      }),
     );
     sweeps = results.length;
 
