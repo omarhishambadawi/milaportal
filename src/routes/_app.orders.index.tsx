@@ -50,6 +50,8 @@ function OrdersList() {
     team: f.team,
     agent: f.agent,
     status: f.status,
+    fulfillment: f.fulfillment,
+
     mineOnly: f.mineOnly,
     userId: f.userId,
     canFilterAgents: f.canFilterAgents,
@@ -201,6 +203,26 @@ function OrdersList() {
               ))}
             </SelectContent>
           </Select>
+          {/* Delivery & Pickup — coarser than the courier stored on the row:
+              anything collected at the branch is a pickup, everything else a
+              delivery. Feeds the list, the KPI summary and the export alike. */}
+          <Select
+            value={f.fulfillment}
+            onValueChange={(v) => f.onFilterChange(() => f.setFulfillment(v))}
+          >
+            <SelectTrigger className="h-10 w-[170px]">
+              <SelectValue placeholder="Delivery & Pickup" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Delivery &amp; Pickup</SelectItem>
+              {FULFILLMENT_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
           <DateRangePicker
             range={f.range}
             onChange={(r) => {
