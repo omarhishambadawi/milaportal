@@ -19,7 +19,8 @@ import {
   PhoneCall,
   Route as RouteIcon,
   ShieldAlert,
-  ShoppingCart,
+  ReceiptText,
+  FileCheck2,
   Truck,
 } from "lucide-react";
 
@@ -208,12 +209,12 @@ function Dashboard() {
 
       {/* Call Center Invoice Verification — details table (redundant KPI cards removed per spec) */}
       <div>
-        <SectionTitle title="Call Center Invoice verification" icon={PhoneCall} />
+        <SectionTitle title="Call Center Invoice verification" icon={ReceiptText} />
 
         <AnalyticsCard
           title="Call Center Invoices Tracking"
           subtitle="Verification status per agent"
-          icon={ShoppingCart}
+          icon={FileCheck2}
           className="mt-3"
           flush
         >
@@ -269,7 +270,7 @@ function Dashboard() {
         <SectionTitle title="Delivery methods" icon={Truck} />
         <AnalyticsCard
           title="Delivery method performance"
-          subtitle="Orders and completed sales by method"
+          subtitle="Completed orders and their sales by method"
           icon={PackageCheck}
           flush
         >
@@ -277,9 +278,9 @@ function Dashboard() {
             <Thead>
               <tr>
                 <Th>Method</Th>
-                <Th align="right">Orders</Th>
+                <Th align="right">Completed orders</Th>
                 <Th align="right">Completed sales</Th>
-                <Th align="right">Completion rate</Th>
+                <Th align="right">Share of sales</Th>
               </tr>
             </Thead>
             <Tbody>
@@ -289,7 +290,7 @@ function Dashboard() {
                   <Td className="font-medium">{dd.name}</Td>
                   <Td numeric>{dd.count}</Td>
                   <Td numeric>{fmtSAR(dd.sales)}</Td>
-                  <Td numeric>{dd.rate.toFixed(0)}%</Td>
+                  <Td numeric>{dd.rate.toFixed(1)}%</Td>
                 </tr>
               ))}
             </Tbody>
