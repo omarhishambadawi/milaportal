@@ -38,3 +38,7 @@ dist-ssr
 .env
 .env.*
 !.env.example
+
+# Supabase CLI local link state (project ref, pooler URL, server versions).
+# Machine-local and re-created by `supabase link` — never commit it.
+supabase/.temp/
