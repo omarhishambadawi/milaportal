@@ -171,6 +171,22 @@ export const queryKeys = {
     callReport: (f: { from: string; to: string; queue: string }) =>
       ["call-center", "call-report", f] as const,
     /**
+     * The Abandoned / Missed drill-down for a window.
+     *
+     * Carries the same filter identity as `analytics` minus the pieces that
+     * cannot change which calls are listed (`team` is fixed per dashboard, and
+     * the agent search only narrows a table). `kind` is part of the key because
+     * abandoned and missed are two different lists off one window.
+     */
+    unanswered: (f: {
+      from: string;
+      to: string;
+      kind: "abandoned" | "missed";
+      agentId: string;
+      direction: string;
+      queue: string;
+    }) => ["call-center", "unanswered", f] as const,
+    /**
      * Call Lookup — one customer number over a trailing window.
      *
      * Keyed by the raw number the user typed rather than its normalized form,

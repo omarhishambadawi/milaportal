@@ -1575,6 +1575,86 @@ async function loadAgents(_supabase: any) {
 // use `getCallCenterAnalytics` below which is the queue-aware, order-joined
 // analytics engine.
 
+type AgentRosterEntry = Awaited<ReturnType<typeof loadAgentsCached>>[number];
+type CallScopeT = import("@/lib/yeastar/stats.server").CallScope;
+
+interface ResolvedCallScope {
+  /** The team the request is actually confined to, after RBAC. */
+  team: "all" | "customer_care" | "telesales";
+  /** The whole roster — feeds the normalization fallback, never filtered. */
+  allAgents: AgentRosterEntry[];
+  /** The agents this request is about. */
+  agents: AgentRosterEntry[];
+  effectiveAgentId: string | null;
+  /** Undefined when nothing is filtered and every call is in scope. */
+  scope?: CallScopeT;
+  seesAll: boolean;
+}
+
+/**
+ * Who this request is allowed to see, and which calls that makes it about.
+ *
+ * Shared by the analytics aggregation and the Abandoned / Missed drill-down.
+ * Both have to answer "which calls belong to this view" identically — a
+ * drill-down that resolved the roster or the queue ownership even slightly
+ * differently would list calls the KPI above it did not count. It is also the
+ * single place the server-side RBAC for the Calls module is enforced: view
+ * access, self-scoping for non-privileged users and team confinement.
+ */
+async function resolveCallCenterScope(
+  supabase: any,
+  userId: string,
+  req: { team: "all" | "customer_care" | "telesales"; agentId?: string | null },
+): Promise<ResolvedCallScope> {
+  const [{ canView, isAdmin }, { data: canAll }] = await Promise.all([
+    callCenterAccess(supabase, userId),
+    supabase.rpc("has_permission", { _user_id: userId, _permission: "view_all_agents" }),
+  ]);
+  if (!canView) throw new Error("Forbidden: call analytics access required");
+  const seesAll = !!canAll || isAdmin;
+
+  // Team confinement, enforced server-side: a team agent's request is pinned
+  // to its own team regardless of what the client asked for, and a request for
+  // the other team is refused rather than silently rewritten.
+  let team = req.team;
+  const lockedTeam = seesAll ? null : await callerCallsTeam(supabase, userId);
+  if (lockedTeam) {
+    if (team !== "all" && team !== lockedTeam) {
+      throw new Error("Forbidden: team access required");
+    }
+    team = lockedTeam;
+  }
+
+  // `allAgents` stays unfiltered: it only ever feeds the roster fallback for
+  // normalization, which must not depend on the active team/agent filter.
+  const allAgents = await loadAgentsCached(supabase);
+  let agents = allAgents;
+
+  if (team !== "all") agents = agents.filter((a) => a.team === team);
+  if (!seesAll) agents = agents.filter((a) => a.id === userId);
+  else if (req.agentId) agents = agents.filter((a) => a.id === req.agentId);
+
+  // Active scope for EVERY KPI. Non-privileged users are always scoped to
+  // themselves; privileged users are scoped by the team/agent filter. When
+  // no filter is active (team=all, no agent, privileged) scope stays
+  // undefined and all calls/orders are included (prior behaviour).
+  const effectiveAgentId = !seesAll ? userId : (req.agentId ?? null);
+  const scopeActive = team !== "all" || !!effectiveAgentId;
+  let scope: CallScopeT | undefined;
+  if (scopeActive) {
+    const exts = new Set(agents.map((a) => String(a.ext).trim()).filter((e) => e.length > 0));
+    // A team-level selection (no specific agent) also owns its queue's
+    // unanswered inbound calls. Only Customer Care owns a queue (6400).
+    const ownedQueueNumbers =
+      team === "customer_care" && !effectiveAgentId
+        ? new Set([CUSTOMER_CARE_QUEUE_NUMBER])
+        : undefined;
+    scope = { exts, ownedQueueNumbers };
+  }
+
+  return { team, allAgents, agents, effectiveAgentId, scope, seesAll };
+}
+
 /**
  * Full Call Center Analytics — queue-aware, order-joined.
  */
@@ -1586,23 +1666,12 @@ export const getCallCenterAnalytics = createServerFn({ method: "POST" })
     const { isConfigured } = await import("@/lib/yeastar/client.server");
     if (!isConfigured()) return { ok: false as const, configured: false as const };
 
-    const [{ canView, isAdmin }, { data: canAll }] = await Promise.all([
-      callCenterAccess(supabase, userId),
-      supabase.rpc("has_permission", { _user_id: userId, _permission: "view_all_agents" }),
-    ]);
-    if (!canView) throw new Error("Forbidden: call analytics access required");
-    const seesAll = !!canAll || isAdmin;
-
-    // Team confinement, enforced server-side: a team agent's request is pinned
-    // to its own team regardless of what the client asked for, and a request for
-    // the other team is refused rather than silently rewritten.
-    const lockedTeam = seesAll ? null : await callerCallsTeam(supabase, userId);
-    if (lockedTeam) {
-      if (data.team !== "all" && data.team !== lockedTeam) {
-        throw new Error("Forbidden: team access required");
-      }
-      data = { ...data, team: lockedTeam };
-    }
+    const { team, allAgents, agents, effectiveAgentId, scope } = await resolveCallCenterScope(
+      supabase,
+      userId,
+      data,
+    );
+    data = { ...data, team };
 
     // Namespace the client-supplied job id to the caller. cdr_progress has no
     // owner column, so without this any authenticated user could read (or
@@ -1612,33 +1681,6 @@ export const getCallCenterAnalytics = createServerFn({ method: "POST" })
     const scopedJobId = data.jobId ? `${userId}:${data.jobId}` : undefined;
     const progress = scopedJobId ? await import("@/lib/yeastar/progress.server") : null;
     if (progress && scopedJobId) await progress.initJob(scopedJobId);
-
-    // `allAgents` stays unfiltered: it only ever feeds the roster fallback for
-    // normalization, which must not depend on the active team/agent filter.
-    const allAgents = await loadAgentsCached(supabase);
-    let agents = allAgents;
-
-    if (data.team !== "all") agents = agents.filter((a) => a.team === data.team);
-    if (!seesAll) agents = agents.filter((a) => a.id === userId);
-    else if (data.agentId) agents = agents.filter((a) => a.id === data.agentId);
-
-    // Active scope for EVERY KPI. Non-privileged users are always scoped to
-    // themselves; privileged users are scoped by the team/agent filter. When
-    // no filter is active (team=all, no agent, privileged) scope stays
-    // undefined and all calls/orders are included (prior behaviour).
-    const effectiveAgentId = !seesAll ? userId : (data.agentId ?? null);
-    const scopeActive = data.team !== "all" || !!effectiveAgentId;
-    let scope: { exts: Set<string>; ownedQueueNumbers?: Set<string> } | undefined;
-    if (scopeActive) {
-      const exts = new Set(agents.map((a) => String(a.ext).trim()).filter((e) => e.length > 0));
-      // A team-level selection (no specific agent) also owns its queue's
-      // unanswered inbound calls. Only Customer Care owns a queue (6400).
-      const ownedQueueNumbers =
-        data.team === "customer_care" && !effectiveAgentId
-          ? new Set([CUSTOMER_CARE_QUEUE_NUMBER])
-          : undefined;
-      scope = { exts, ownedQueueNumbers };
-    }
 
     try {
       // Four independent I/O stages that used to run one after another: the CDR
@@ -1724,6 +1766,178 @@ export const getCallCenterAnalytics = createServerFn({ method: "POST" })
       if (progress && scopedJobId) await progress.failJob(scopedJobId, msg);
       throw err;
     }
+  });
+
+// ---- Abandoned / Missed drill-down -----------------------------------------
+//
+// The call list behind two KPI cards. Read-only, aggregates nothing, and shares
+// every filter and permission decision with the analytics request above through
+// `resolveCallCenterScope` and `selectDashboardCalls` — a drill-down that
+// resolved either differently would list calls the card did not count.
+//
+// It is deliberately cheap: the window it reads is the SAME classified window
+// the dashboard already built, so opening the dialog on a page that has already
+// loaded costs no PBX request at all — one filter pass and a binary search per
+// row over an index that is itself cached per window.
+
+export type { UnansweredCallRow, UnansweredKind } from "@/lib/yeastar/unanswered";
+
+/**
+ * Hard cap on returned rows. A month of Customer Care produces roughly a
+ * hundred unanswered queue calls, so this is a guard against a pathological
+ * window rather than a working limit — and `total` still reports the real count.
+ */
+const UNANSWERED_MAX_ROWS = 1000;
+
+const unansweredInput = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  kind: z.enum(["abandoned", "missed"]),
+  team: z.enum(["all", "customer_care", "telesales"]).default("customer_care"),
+  agentId: z.string().uuid().nullable().optional(),
+  direction: z.enum(["all", "Inbound", "Outbound"]).default("all"),
+  queue: z.string().max(20).optional(),
+});
+
+type FollowUpIndexT = import("@/lib/yeastar/unanswered").FollowUpIndex;
+
+/**
+ * Follow-up index per classified window.
+ *
+ * The index answers "when was this customer next reached", which depends on the
+ * window alone — not on direction, queue, agent or which of the two KPIs is
+ * being drilled into. A WeakMap keyed on the classified window means the four
+ * ways into this dialog share one index, and it is collected with the window it
+ * describes rather than pinning a month of calls in memory.
+ */
+const followUpIndexCache = new WeakMap<object, FollowUpIndexT>();
+
+async function getFollowUpIndex(classified: ClassifiedRecordsT): Promise<FollowUpIndexT> {
+  const hit = followUpIndexCache.get(classified);
+  if (hit) return hit;
+  const { buildFollowUpIndex } = await import("@/lib/yeastar/unanswered");
+  // Excluded calls are a follow-up source too: an answered call that arrived
+  // after hours still reached the customer, and leaving it out would report
+  // "never handled" for somebody who was.
+  const index = buildFollowUpIndex([...classified.calls, ...classified.excluded]);
+  followUpIndexCache.set(classified, index);
+  return index;
+}
+
+export interface UnansweredCallsResult {
+  ok: boolean;
+  configured: boolean;
+  kind: "abandoned" | "missed";
+  window: {
+    from: string;
+    to: string;
+    team: string;
+    agentId: string | null;
+    direction: string;
+    queue: string | null;
+  };
+  rows: import("@/lib/yeastar/unanswered").UnansweredCallRow[];
+  /** Matching calls before the row cap. */
+  total: number;
+  /** How many of `total` were reached on a later answered call. */
+  handled: number;
+  truncated: boolean;
+  /** Server-side wall time, in ms. */
+  elapsedMs: number;
+  /** Days answered from the CDR day store against days fetched from the PBX. */
+  cdr: { daysFromCache: number; daysFetched: number };
+}
+
+export const getUnansweredCalls = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => unansweredInput.parse(d))
+  .handler(async ({ context, data }): Promise<UnansweredCallsResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    const emptyWindow = {
+      from: data.from,
+      to: data.to,
+      team: data.team,
+      agentId: data.agentId ?? null,
+      direction: data.direction,
+      queue: data.queue ?? null,
+    };
+
+    const { isConfigured } = await import("@/lib/yeastar/client.server");
+    if (!isConfigured()) {
+      return {
+        ok: false,
+        configured: false,
+        kind: data.kind,
+        window: emptyWindow,
+        rows: [],
+        total: 0,
+        handled: 0,
+        truncated: false,
+        elapsedMs: 0,
+        cdr: { daysFromCache: 0, daysFetched: 0 },
+      };
+    }
+
+    const started = Date.now();
+    const { team, allAgents, scope } = await resolveCallCenterScope(supabase, userId, data);
+
+    const [cdr, ctx, statsModule] = await Promise.all([
+      getCdrCached(data.from, data.to),
+      buildNormalizationContext(allAgents.map((a) => a.ext)),
+      import("@/lib/yeastar/stats.server"),
+    ]);
+
+    const classified = getClassifiedCached(
+      data.from,
+      data.to,
+      cdr.records as any[],
+      ctx,
+      statsModule.classifyRecords,
+    );
+
+    // The same population the KPI counted — status is deliberately "all", since
+    // the outcome itself is what this drill-down selects on.
+    const calls = statsModule.selectDashboardCalls(classified, {
+      direction: data.direction,
+      status: "all",
+      queueNumber: data.queue ?? null,
+      scope,
+    });
+
+    const [{ selectUnansweredCalls }, followUps] = await Promise.all([
+      import("@/lib/yeastar/unanswered"),
+      getFollowUpIndex(classified),
+    ]);
+
+    // Built from the FULL roster, not the scoped one: a callback taken by a
+    // Telesales agent is still the answer to "was this customer reached", and
+    // an unnamed extension would read as nobody having handled it.
+    const agentByExt = new Map(
+      allAgents
+        .filter((a) => String(a.ext).trim())
+        .map((a) => [String(a.ext).trim(), { name: a.name, team: a.team }]),
+    );
+
+    const selection = selectUnansweredCalls({
+      calls,
+      kind: data.kind,
+      agentByExt,
+      followUps,
+      limit: UNANSWERED_MAX_ROWS,
+    });
+
+    return {
+      ok: true,
+      configured: true,
+      kind: data.kind,
+      window: { ...emptyWindow, team },
+      rows: selection.rows,
+      total: selection.total,
+      handled: selection.handled,
+      truncated: selection.truncated,
+      elapsedMs: Date.now() - started,
+      cdr: { daysFromCache: cdr.daysFromCache, daysFetched: cdr.daysFetched },
+    };
   });
 
 // ---- Queue options (Customer Care queue filter) ----------------------------

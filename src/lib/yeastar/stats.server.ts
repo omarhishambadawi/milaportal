@@ -273,7 +273,7 @@ export interface AggregateOptions {
    * owning queue — Customer Care owns 6400). When undefined (team = all, no
    * agent), every call is included.
    */
-  scope?: { exts: Set<string>; ownedQueueNumbers?: Set<string> };
+  scope?: CallScope;
 }
 
 const num = (v: unknown) => Number(v ?? 0);
@@ -431,6 +431,59 @@ export function classifyRecords(
   };
 }
 
+/** The team/agent scope a request is confined to. See `AggregateOptions.scope`. */
+export type CallScope = {
+  exts: ReadonlySet<string>;
+  ownedQueueNumbers?: ReadonlySet<string>;
+};
+
+/**
+ * Is this call inside the active team/agent scope?
+ *
+ * An in-scope extension took part in it (answered it, or had their phone ring
+ * for it) — or, for a team selection, it is an unanswered inbound call that
+ * queued on the team's own queue. No scope means every call qualifies.
+ *
+ * Exported because the Abandoned / Missed drill-down has to select exactly the
+ * calls the KPI counted. A second implementation of this predicate is a second
+ * definition of "this team's calls", and the two would drift.
+ */
+export function callInScope(c: NormalizedCall, scope?: CallScope): boolean {
+  if (!scope) return true;
+  for (const ext of participantsOf(c).keys()) if (scope.exts.has(ext)) return true;
+  return (
+    scope.ownedQueueNumbers != null &&
+    scope.ownedQueueNumbers.size > 0 &&
+    c.direction === "Inbound" &&
+    !c.answeredByAgent &&
+    c.queueNumber != null &&
+    scope.ownedQueueNumbers.has(c.queueNumber)
+  );
+}
+
+/**
+ * The operational calls one dashboard request is about: direction, status and
+ * queue applied at CALL level, then the team/agent scope.
+ *
+ * The single definition of "the calls behind this view", shared by the KPI
+ * aggregation below and by the drill-down that lists them.
+ */
+export function selectDashboardCalls(
+  input: Pick<ClassifiedRecords, "calls">,
+  opts: Pick<AggregateOptions, "direction" | "status" | "queueNumber" | "scope"> = {},
+): NormalizedCall[] {
+  const direction = opts.direction ?? "all";
+  const status = opts.status ?? "all";
+  const queueNumber = opts.queueNumber ? String(opts.queueNumber).trim() : "";
+  return input.calls.filter(
+    (c) =>
+      (direction === "all" || c.direction === direction) &&
+      matchesStatus(c, status) &&
+      (queueNumber === "" || c.queueNumber === queueNumber) &&
+      callInScope(c, opts.scope),
+  );
+}
+
 /**
  * Phase 2 — filter normalized calls by the active scope and accumulate every
  * KPI. Cheap relative to phase 1, and dependent on the roster/orders/filters, so
@@ -451,35 +504,15 @@ export function aggregateClassified(
   const byExt = new Map<string, AgentRef>();
   for (const a of agents) if (a.ext) byExt.set(String(a.ext).trim(), a);
 
-  // Direction / status / queue filters apply at CALL level, post-normalization.
-  const queueNumber = opts.queueNumber ? String(opts.queueNumber).trim() : "";
-  const filtered = input.calls.filter(
-    (c) =>
-      (direction === "all" || c.direction === direction) &&
-      matchesStatus(c, status) &&
-      (queueNumber === "" || c.queueNumber === queueNumber),
-  );
-
-  // Scope filter: with a team/agent selection active, keep only calls an
-  // in-scope extension took part in, plus (team selection only) unanswered
-  // inbound calls that queued on the team's own queue. No scope = keep all.
-  const scope = opts.scope;
-  const inScope = (c: NormalizedCall): boolean => {
-    if (!scope) return true;
-    for (const ext of participantsOf(c).keys()) if (scope.exts.has(ext)) return true;
-    if (
-      scope.ownedQueueNumbers &&
-      scope.ownedQueueNumbers.size > 0 &&
-      c.direction === "Inbound" &&
-      !c.answeredByAgent &&
-      c.queueNumber != null &&
-      scope.ownedQueueNumbers.has(c.queueNumber)
-    ) {
-      return true;
-    }
-    return false;
-  };
-  const calls = scope ? filtered.filter(inScope) : filtered;
+  // Direction / status / queue at CALL level, then the team/agent scope. Shared
+  // with the drill-down through `selectDashboardCalls` so a listed call and a
+  // counted call are the same call.
+  const calls = selectDashboardCalls(input, {
+    direction,
+    status,
+    queueNumber: opts.queueNumber,
+    scope: opts.scope,
+  });
 
   const totals: CallTotals = {
     total: 0,

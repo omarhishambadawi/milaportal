@@ -82,8 +82,10 @@ import {
   AgentPerformanceTable,
   agentRowId,
 } from "@/features/call-center/components/agent-performance-table";
+import { UnansweredCallsDialog } from "@/features/call-center/components/unanswered-calls-dialog";
 import { useCallCenterFilters } from "@/features/call-center/hooks/use-call-center-filters";
 import { useCustomerCareMetrics } from "@/features/call-center/hooks/use-customer-care-metrics";
+import type { UnansweredKind } from "@/lib/yeastar.functions";
 
 // Cadence for a LIVE window (today, or today plus yesterday) — inside the
 // 15-30s operational band, and slow enough not to feel busy. Larger and closed
@@ -127,6 +129,29 @@ function CustomerCarePage() {
   const visibleQueues = useMemo(
     () => f.queues.filter((qq) => f.queue === "all" || qq.number === f.queue),
     [f.queues, f.queue],
+  );
+
+  // Which unanswered KPI is being drilled into, or null when none is. One piece
+  // of state for all four cards: Abandoned and Missed each appear twice on this
+  // page (Overview and Queue statistics) and both copies open the same list, so
+  // a flag per card would be four ways to describe one thing.
+  const [drillKind, setDrillKind] = useState<UnansweredKind | null>(null);
+  const showAbandoned = useCallback(() => setDrillKind("abandoned"), []);
+  const showMissed = useCallback(() => setDrillKind("missed"), []);
+
+  // Memoised because it is a prop of the dialog, which holds a query keyed on it.
+  const drillFilters = useMemo(
+    () => ({
+      from: f.from,
+      to: f.to,
+      agentId: f.agentId,
+      direction: f.direction,
+      queue: f.queue,
+      canAll: f.canAll,
+      canView: f.canView,
+      authLoading: f.authLoading,
+    }),
+    [f.from, f.to, f.agentId, f.direction, f.queue, f.canAll, f.canView, f.authLoading],
   );
 
   // Queue-member chips scroll to an agent and flag their row. Deliberately NOT
@@ -309,6 +334,8 @@ function CustomerCarePage() {
             tone="warning"
             accent="primary"
             hint={yeastarSplit ? "Caller hung up while waiting" : "Yeastar's split unavailable"}
+            onClick={showAbandoned}
+            actionLabel="Open the list of abandoned calls"
           />
           {/*
             Queue Missed, not Average Talk Time. Talk time is still on the page
@@ -325,6 +352,8 @@ function CustomerCarePage() {
             tone="destructive"
             accent="destructive"
             hint={yeastarSplit ? "Queue released the call" : "Yeastar's split unavailable"}
+            onClick={showMissed}
+            actionLabel="Open the list of missed calls"
           />
         </div>
       </DashboardSection>
@@ -395,6 +424,8 @@ function CustomerCarePage() {
               loading={isLoading}
               hint="Queue released the call"
               footnote={yeastarSplit ? "Yeastar definition" : "CDR fallback"}
+              onClick={showMissed}
+              actionLabel="Open the list of missed calls"
             />
             <Kpi
               label="Queue abandoned"
@@ -405,6 +436,8 @@ function CustomerCarePage() {
               loading={isLoading}
               hint="Caller hung up waiting"
               footnote={yeastarSplit ? "Yeastar definition" : "CDR fallback"}
+              onClick={showAbandoned}
+              actionLabel="Open the list of abandoned calls"
             />
             <Kpi
               label="Unanswered total"
@@ -639,6 +672,23 @@ function CustomerCarePage() {
           highlightExt={highlightExt}
         />
       </DashboardSection>
+
+      {/*
+        Kept mounted with `open` driven by state rather than rendered
+        conditionally, so Radix runs its close animation and focus restoration
+        instead of the dialog vanishing mid-transition. Its query is disabled
+        while closed, so a page nobody drills into fetches nothing.
+      */}
+      <UnansweredCallsDialog
+        open={drillKind != null}
+        onOpenChange={(next) => {
+          if (!next) setDrillKind(null);
+        }}
+        kind={drillKind ?? "abandoned"}
+        filters={drillFilters}
+        kpiValue={drillKind === "missed" ? queue.missed : queue.abandoned}
+        yeastarSplit={yeastarSplit}
+      />
     </div>
   );
 }
