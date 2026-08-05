@@ -23,7 +23,7 @@ import {
 import { STATUSES, STATUS_STYLES, TEAMS, fmtSAR, formatOrderNo } from "@/lib/branches";
 import { cn } from "@/lib/utils";
 import { DateRangePicker } from "@/components/date-range-picker";
-import { PAGE_SIZE_OPTIONS } from "@/features/orders/constants";
+import { FULFILLMENT_OPTIONS, PAGE_SIZE_OPTIONS } from "@/features/orders/constants";
 import { fmtOrderDate } from "@/features/orders/utils";
 import { CopyableOrderNo } from "@/features/orders/components/copyable-order-no";
 import { TeamBadge } from "@/features/orders/components/team-badge";
@@ -50,6 +50,8 @@ function OrdersList() {
     team: f.team,
     agent: f.agent,
     status: f.status,
+    fulfillment: f.fulfillment,
+
     mineOnly: f.mineOnly,
     userId: f.userId,
     canFilterAgents: f.canFilterAgents,
@@ -201,6 +203,26 @@ function OrdersList() {
               ))}
             </SelectContent>
           </Select>
+          {/* Delivery & Pickup — coarser than the courier stored on the row:
+              anything collected at the branch is a pickup, everything else a
+              delivery. Feeds the list, the KPI summary and the export alike. */}
+          <Select
+            value={f.fulfillment}
+            onValueChange={(v) => f.onFilterChange(() => f.setFulfillment(v))}
+          >
+            <SelectTrigger className="h-10 w-[170px]">
+              <SelectValue placeholder="Delivery & Pickup" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Delivery &amp; Pickup</SelectItem>
+              {FULFILLMENT_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
           <DateRangePicker
             range={f.range}
             onChange={(r) => {

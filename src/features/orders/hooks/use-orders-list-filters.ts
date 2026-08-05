@@ -64,6 +64,7 @@ export function useOrdersListFilters() {
   const [team, setTeam] = useState<string>(initial?.team ?? "all");
   const [agent, setAgent] = useState<string>(initial?.agent ?? "all");
   const [status, setStatus] = useState<string>(initial?.status ?? "all");
+  const [fulfillment, setFulfillment] = useState<string>(initial?.fulfillment ?? "all");
   const [mineOnly, setMineOnly] = useState<boolean>(initial?.mineOnly ?? false);
   const [page, setPage] = useState(initial?.page ?? 0);
   const [pageSize, setPageSizeState] = useState<number>(() => {
@@ -94,6 +95,7 @@ export function useOrdersListFilters() {
     team,
     agent,
     status,
+    fulfillment,
     mineOnly,
     page,
   };
@@ -135,6 +137,7 @@ export function useOrdersListFilters() {
     team,
     agent,
     status,
+    fulfillment,
     mineOnly,
     term,
     userId: user?.id,
@@ -153,6 +156,7 @@ export function useOrdersListFilters() {
       canFilterAgents,
       agent,
       term,
+      fulfillment,
     });
 
   /** Weekday and date, split so the header can emphasise the day name. */
@@ -189,6 +193,8 @@ export function useOrdersListFilters() {
     setAgent,
     status,
     setStatus,
+    fulfillment,
+    setFulfillment,
     mineOnly,
     setMineOnly,
     page,

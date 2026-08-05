@@ -9,12 +9,13 @@ import { cn } from "@/lib/utils";
 
 const toISO = (d: Date) => format(d, "yyyy-MM-dd");
 
-export type Preset = "today" | "yesterday" | "7d" | "month";
+export type Preset = "today" | "yesterday" | "7d" | "month" | "lastMonth";
 const PRESETS: { key: Preset; label: string }[] = [
   { key: "today", label: "Today" },
   { key: "yesterday", label: "Yesterday" },
   { key: "7d", label: "Last 7 days" },
   { key: "month", label: "This month" },
+  { key: "lastMonth", label: "Last month" },
 ];
 
 export function buildRange(kind: Preset): DateRange {
@@ -29,6 +30,14 @@ export function buildRange(kind: Preset): DateRange {
     const f = new Date();
     f.setDate(f.getDate() - 6);
     return { from: f, to: t };
+  }
+  if (kind === "lastMonth") {
+    // Day 0 of the current month is the last day of the previous month, so this
+    // stays correct across a January boundary.
+    return {
+      from: new Date(t.getFullYear(), t.getMonth() - 1, 1),
+      to: new Date(t.getFullYear(), t.getMonth(), 0),
+    };
   }
   return {
     from: new Date(t.getFullYear(), t.getMonth(), 1),

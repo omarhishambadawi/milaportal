@@ -1151,6 +1151,7 @@ export type Database = {
         Args: {
           _agent?: string
           _from: string
+          _fulfillment?: string
           _mine?: boolean
           _q?: string
           _status?: string
