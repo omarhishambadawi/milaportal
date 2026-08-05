@@ -1112,6 +1112,7 @@ function FloatingCityCard({
     const update = () => {
       const el = ref.current;
       const anchor = getAnchorRef.current();
+      console.log('DBG place', !!el, !!anchor, city.name);
       if (!el || !anchor) return;
 
       const a = anchor.getBoundingClientRect();
