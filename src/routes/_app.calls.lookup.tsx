@@ -10,18 +10,21 @@
  * far back to look — every one of those would slow down the only interaction
  * that matters, which is type-number-see-history.
  *
- * The query runs on submit rather than on every keystroke. A phone number is
- * pasted or typed in full and is meaningless half-entered, so per-keystroke
- * searching would spend a CDR sweep on each of eleven prefixes to answer a
- * question nobody asked. React Query caches by number + window, so re-checking
- * a number is instant.
+ * The query runs on a 300 ms debounce rather than on every keystroke, and only
+ * once enough digits are present to identify anybody. A half-entered number
+ * matches nothing by construction — the server compares whole trailing digits,
+ * not prefixes — so firing before then would spend requests answering a question
+ * nobody asked. The Search button flushes the debounce for anyone who would
+ * rather press it. React Query caches by number + window and aborts the previous
+ * request when a new one starts, so re-checking a number is instant and a fast
+ * typist never has two lookups racing.
  *
  * Access follows the module gate, but this page is deliberately NOT confined to
  * one team — see `UNCONFINED_PAGES` in `calls-access.ts`.
  */
-import { useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import {
   AlertTriangle,
@@ -58,6 +61,13 @@ const WINDOWS = [
   { value: "90", label: "Last 90 days" },
 ] as const;
 
+/** Long enough that a typist is not searched mid-number, short enough to feel live. */
+const DEBOUNCE_MS = 300;
+/** Mirrors `LOOKUP_MIN_DIGITS` on the server — below this it refuses anyway. */
+const MIN_DIGITS = 4;
+
+const digitCount = (s: string) => (s.match(/\d/g) ?? []).length;
+
 export const Route = createFileRoute("/_app/calls/lookup")({
   head: () => ({ meta: [{ title: "Call Lookup — MilaServ Portal" }] }),
   component: CallLookupPage,
@@ -68,23 +78,46 @@ function CallLookupPage() {
   const canView = canViewCallsPage(role, profile?.permissions as any, "lookup");
   const lookupFn = useServerFn(lookupCallsByNumber);
 
-  // `draft` is what the input holds; `query` is what has actually been asked
-  // for. Keeping them apart is what makes this submit-driven rather than
-  // keystroke-driven — see the note at the top.
+  // `draft` is what the input holds; `term` is what has actually been asked
+  // for. Keeping them apart is what lets the request lag the keystrokes by
+  // `DEBOUNCE_MS` — see the note at the top.
   const [draft, setDraft] = useState("");
   const [days, setDays] = useState<string>("30");
-  const [query, setQuery] = useState<{ number: string; days: number } | null>(null);
+  const [term, setTerm] = useState("");
+
+  // Trailing-edge debounce. The timer is cleared on every keystroke, so a burst
+  // of typing issues exactly one request — the one for what was finally typed.
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const trimmed = draft.trim();
+    if (trimmed === term) return;
+    timer.current = setTimeout(() => setTerm(trimmed), DEBOUNCE_MS);
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, [draft, term]);
+
+  const searchable = digitCount(term) >= MIN_DIGITS;
 
   const q = useQuery({
-    queryKey: queryKeys.callCenter.lookup(query?.number ?? "", query?.days ?? 0),
-    queryFn: () => lookupFn({ data: { number: query!.number, days: query!.days } }),
-    enabled: !authLoading && canView && query != null,
+    queryKey: queryKeys.callCenter.lookup(term, Number(days)),
+    // `signal` is React Query's — it fires the moment this query is superseded
+    // or unmounted, which aborts the in-flight HTTP request rather than letting
+    // a stale answer land on top of a newer one.
+    queryFn: ({ signal }) => lookupFn({ data: { number: term, days: Number(days) }, signal }),
+    enabled: !authLoading && canView && searchable,
     // A number's history for a closed window does not change while you look at
     // it. No polling, no refetch on focus — this is a point lookup.
     staleTime: 5 * 60_000,
-    placeholderData: keepPreviousData,
+    // Recent numbers stay resident well past `staleTime`, so going back to one
+    // checked a few minutes ago paints from cache with no request at all.
+    gcTime: 30 * 60_000,
+    // Deliberately NO `keepPreviousData`: this page answers "who called THIS
+    // number", and showing the previous number's history under a new one for
+    // the length of a request is not a loading state, it is a wrong answer.
     refetchOnWindowFocus: false,
     refetchOnMount: false,
+    retry: false,
   });
 
   const result = q.data;
@@ -94,17 +127,24 @@ function CallLookupPage() {
   // answered above the table rather than found in it.
   const lastHandled = useMemo(() => rows.find((r) => r.agentName), [rows]);
 
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = draft.trim();
-    if (!trimmed) return;
-    setQuery({ number: trimmed, days: Number(days) });
-  };
+  // Flush the debounce. Pressing Search should not wait out a timer that the
+  // keystroke which triggered it already started.
+  const submit = useCallback(
+    (e: React.FormEvent) => {
+      e.preventDefault();
+      if (timer.current) clearTimeout(timer.current);
+      const trimmed = draft.trim();
+      if (!trimmed) return;
+      setTerm(trimmed);
+    },
+    [draft],
+  );
 
-  const clear = () => {
+  const clear = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current);
     setDraft("");
-    setQuery(null);
-  };
+    setTerm("");
+  }, []);
 
   if (!authLoading && !canView) {
     return (
@@ -265,7 +305,51 @@ function CallLookupPage() {
 const TH = "px-3 py-2.5 font-medium whitespace-nowrap first:pl-4 last:pr-4";
 const TD = "px-3 py-3 first:pl-4 last:pr-4";
 
-function ResultsTable({ rows, truncated }: { rows: CallLookupRow[]; truncated: boolean }) {
+/**
+ * One row, memoized.
+ *
+ * Rows are immutable values keyed by `callId`, so a re-render of the page that
+ * did not change the data — a keystroke in the search box, most commonly — can
+ * skip all of them. Without this, every character typed re-rendered up to 200
+ * rows and their four badges each.
+ */
+const ResultRow = memo(function ResultRow({ r }: { r: CallLookupRow }) {
+  return (
+    <tr className="border-b border-border/40 transition-colors last:border-0 hover:bg-muted/40">
+      <td className={cn(TD, "whitespace-nowrap tabular-nums")}>{formatWhen(r.startedAt)}</td>
+      <td className={TD}>
+        <DirectionBadge direction={r.direction} />
+      </td>
+      <td className={cn(TD, "font-medium")}>
+        {r.agentName ?? <span className="text-muted-foreground">—</span>}
+      </td>
+      <td className={TD}>
+        <TeamBadge team={r.team} />
+      </td>
+      <td className={cn(TD, "font-mono text-xs text-muted-foreground")}>{r.agentExt ?? "—"}</td>
+      <td className={cn(TD, "font-mono text-xs text-muted-foreground")}>{r.queueNumber ?? "—"}</td>
+      <td className={TD}>
+        <OutcomeBadge outcome={r.outcome} />
+      </td>
+      <td className={cn(TD, "text-right tabular-nums")}>
+        {hhmmss(r.talkSeconds)}
+        {r.waitSeconds != null && r.waitSeconds > 0 && (
+          <span className="block text-[11px] text-muted-foreground">
+            waited {hhmmss(r.waitSeconds)}
+          </span>
+        )}
+      </td>
+    </tr>
+  );
+});
+
+const ResultsTable = memo(function ResultsTable({
+  rows,
+  truncated,
+}: {
+  rows: CallLookupRow[];
+  truncated: boolean;
+}) {
   return (
     <Card className="overflow-hidden">
       <CardContent className="overflow-x-auto p-0">
@@ -284,40 +368,7 @@ function ResultsTable({ rows, truncated }: { rows: CallLookupRow[]; truncated: b
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr
-                key={r.callId}
-                className="border-b border-border/40 transition-colors last:border-0 hover:bg-muted/40"
-              >
-                <td className={cn(TD, "whitespace-nowrap tabular-nums")}>
-                  {formatWhen(r.startedAt)}
-                </td>
-                <td className={TD}>
-                  <DirectionBadge direction={r.direction} />
-                </td>
-                <td className={cn(TD, "font-medium")}>
-                  {r.agentName ?? <span className="text-muted-foreground">—</span>}
-                </td>
-                <td className={TD}>
-                  <TeamBadge team={r.team} />
-                </td>
-                <td className={cn(TD, "font-mono text-xs text-muted-foreground")}>
-                  {r.agentExt ?? "—"}
-                </td>
-                <td className={cn(TD, "font-mono text-xs text-muted-foreground")}>
-                  {r.queueNumber ?? "—"}
-                </td>
-                <td className={TD}>
-                  <OutcomeBadge outcome={r.outcome} />
-                </td>
-                <td className={cn(TD, "text-right tabular-nums")}>
-                  {hhmmss(r.talkSeconds)}
-                  {r.waitSeconds != null && r.waitSeconds > 0 && (
-                    <span className="block text-[11px] text-muted-foreground">
-                      waited {hhmmss(r.waitSeconds)}
-                    </span>
-                  )}
-                </td>
-              </tr>
+              <ResultRow key={r.callId} r={r} />
             ))}
           </tbody>
         </table>
@@ -330,7 +381,7 @@ function ResultsTable({ rows, truncated }: { rows: CallLookupRow[]; truncated: b
       </CardContent>
     </Card>
   );
-}
+});
 
 function ResultsSkeleton() {
   return (
@@ -413,6 +464,23 @@ function OutcomeBadge({ outcome }: { outcome: string }) {
 }
 
 /**
+ * One formatter, built once.
+ *
+ * `toLocaleString` with an options bag constructs a fresh `Intl.DateTimeFormat`
+ * on every call, and this runs once per row — at the 200-row cap that was 200
+ * formatter constructions per render, which is the single most expensive thing
+ * the table did. Hoisting it makes the same work a lookup.
+ */
+const WHEN_FORMAT = new Intl.DateTimeFormat(undefined, {
+  timeZone: BUSINESS_TIMEZONE,
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
+/**
  * Epoch seconds → a readable local instant, in the business timezone.
  *
  * The PBX can omit a timestamp; that must render as a dash rather than as
@@ -420,12 +488,5 @@ function OutcomeBadge({ outcome }: { outcome: string }) {
  */
 function formatWhen(startedAt: number | null): string {
   if (startedAt == null) return "—";
-  return new Date(startedAt * 1000).toLocaleString(undefined, {
-    timeZone: BUSINESS_TIMEZONE,
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  return WHEN_FORMAT.format(new Date(startedAt * 1000));
 }

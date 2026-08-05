@@ -11,6 +11,7 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { BUSINESS_UTC_OFFSET_MINUTES } from "@/lib/timezone";
 import { CALL_CENTER_VIEW_PERMISSIONS } from "@/lib/call-center-permissions";
 import { callsTeamForRole } from "@/lib/calls-access";
+import { digitsOf, matchKey, numberVariants, LOOKUP_MIN_DIGITS } from "@/lib/yeastar/lookup-match";
 import { z } from "zod";
 // Type-only: erased at compile time, so the server-only diagnostics module is
 // never pulled into a client bundle.
@@ -1188,7 +1189,13 @@ const analyticsInput = statsInput.extend({
 // rows are re-fetched.
 const CDR_CACHE_TTL_MS = 5 * 60_000;
 const CDR_CACHE_MAX = 20;
-const cdrCache = new Map<string, { at: number; promise: Promise<any> }>();
+/**
+ * `settled` records whether the sweep has already finished. Call Lookup uses it
+ * to tell "the window is sitting in memory" from "somebody else is midway
+ * through a 30-day sweep" — it will happily reuse the former, but must not
+ * block on the latter when a targeted per-number query would answer sooner.
+ */
+const cdrCache = new Map<string, { at: number; settled: boolean; promise: Promise<any> }>();
 
 function evictCdrCache() {
   const now = Date.now();
@@ -1270,7 +1277,14 @@ async function getCdrCached(from: string, to: string, jobId?: string) {
     cdrCache.delete(key);
     throw e;
   });
-  cdrCache.set(key, { at: now, promise });
+  const entry = { at: now, settled: false, promise };
+  promise.then(
+    () => {
+      entry.settled = true;
+    },
+    () => {},
+  );
+  cdrCache.set(key, entry);
   if (cdrCache.size > CDR_CACHE_MAX) evictCdrCache();
   return promise;
 }
@@ -2101,18 +2115,6 @@ export const yeastarAnalyticsDebug = createServerFn({ method: "POST" })
 
 /** Longest window the lookup will sweep. Beyond this it stops being "fast". */
 const LOOKUP_MAX_DAYS = 90;
-/**
- * How many trailing digits must match.
- *
- * The PBX records the same subscriber inconsistently — `0501234567`,
- * `+966501234567` and `966501234567` are one person — so comparison is on the
- * trailing digits rather than the whole string. Nine is the KSA subscriber
- * number without its country code or trunk zero, which is the longest suffix
- * every recorded form still shares.
- */
-const LOOKUP_SUFFIX_DIGITS = 9;
-/** A shorter query than this matches half the country; refuse rather than sweep. */
-const LOOKUP_MIN_DIGITS = 4;
 /** Hard cap on returned rows. A number with more history than this needs a report. */
 const LOOKUP_MAX_ROWS = 200;
 
@@ -2139,6 +2141,14 @@ export interface CallLookupRow {
   waitSeconds: number | null;
 }
 
+/**
+ * Which of the three retrieval paths answered. Diagnostic only — the rows are
+ * identical whichever one ran — but it is the difference between a lookup that
+ * cost nothing and one that swept a month of CDR, so it is worth being able to
+ * see from the outside.
+ */
+export type CallLookupSource = "cache" | "targeted" | "swept";
+
 export interface CallLookupResult {
   ok: boolean;
   configured: boolean;
@@ -2150,17 +2160,79 @@ export interface CallLookupResult {
   truncated: boolean;
   /** Set when the query itself was unusable — too short, no digits. */
   error?: string;
+  /** How the answer was obtained. Absent on the early validation returns. */
+  source?: CallLookupSource;
+  /** Server-side wall time for the retrieval, in ms. */
+  elapsedMs?: number;
 }
 
-/** Digits only. `+966 50 123 4567` → `966501234567`. */
-function digitsOf(value: string): string {
-  return value.replace(/\D+/g, "");
+/**
+ * One normalized call → one lookup row.
+ *
+ * Only the eleven fields the table renders. The normalized call carries its
+ * whole leg array and every derived duration; none of that is serialized to the
+ * client, which is what keeps a 200-row answer small.
+ */
+function toLookupRow(
+  c: {
+    callId: string;
+    startedAt: number | null;
+    direction: CallLookupRow["direction"];
+    callerNumber: string | null;
+    calleeNumber: string | null;
+    answeringExtension: string | null;
+    queueNumber: string | null;
+    outcome: string;
+    exclusion?: string | null;
+    talkSeconds: number;
+    queueWaitSeconds: number | null;
+  },
+  wanted: string,
+  typed: string,
+  byExt: Map<string, { name: string; team: "customer_care" | "telesales" | null }>,
+): CallLookupRow {
+  // The counterparty is whichever end is NOT us.
+  const counterparty =
+    matchKey(c.callerNumber) === wanted ? c.callerNumber || typed : c.calleeNumber || typed;
+  const ext = c.answeringExtension ? String(c.answeringExtension).trim() : null;
+  const agent = ext ? byExt.get(ext) : undefined;
+
+  return {
+    callId: c.callId,
+    startedAt: c.startedAt,
+    direction: c.direction,
+    counterparty,
+    agentName: agent?.name ?? null,
+    agentExt: ext,
+    team: agent?.team ?? null,
+    queueNumber: c.queueNumber,
+    outcome: c.exclusion ? c.exclusion : c.outcome,
+    talkSeconds: c.talkSeconds,
+    waitSeconds: c.queueWaitSeconds,
+  };
 }
 
-/** The trailing slice two recordings of the same subscriber always share. */
-function matchKey(value: string | null | undefined): string {
-  const d = digitsOf(String(value ?? ""));
-  return d.length > LOOKUP_SUFFIX_DIGITS ? d.slice(-LOOKUP_SUFFIX_DIGITS) : d;
+/**
+ * The classified window, but ONLY if it is already sitting in memory.
+ *
+ * Returns null rather than starting — or waiting on — a sweep. A warm window is
+ * the fastest possible answer and costs no network at all; a cold one is the
+ * thing this page exists to stop paying for.
+ */
+async function peekClassifiedWindow(
+  from: string,
+  to: string,
+  ctx: NormalizationContext,
+): Promise<ClassifiedRecordsT | null> {
+  const hit = cdrCache.get(`${from}|${to}`);
+  if (!hit || !hit.settled || Date.now() - hit.at >= CDR_CACHE_TTL_MS) return null;
+  try {
+    const cdr = await hit.promise;
+    const { classifyRecords } = await import("@/lib/yeastar/stats.server");
+    return getClassifiedCached(from, to, cdr.records as any[], ctx, classifyRecords);
+  } catch {
+    return null;
+  }
 }
 
 export const lookupCallsByNumber = createServerFn({ method: "POST" })
@@ -2201,46 +2273,73 @@ export const lookupCallsByNumber = createServerFn({ method: "POST" })
       };
     }
 
-    // Same cached CDR window and same phase-1 normalization the dashboards use,
-    // so a lookup over a range someone is already viewing costs nothing extra.
+    const startedAtMs = Date.now();
     const agents = await loadAgentsCached(supabase);
     const ctx = await buildNormalizationContext(agents.map((a) => a.ext));
-    const cdr = await getCdrCached(from, to);
     const { classifyRecords } = await import("@/lib/yeastar/stats.server");
-    const classified = getClassifiedCached(from, to, cdr.records as any[], ctx, classifyRecords);
+
+    // ---- Pick the cheapest source that can answer -------------------------
+    //
+    // 1. A window already normalized in memory — free, and exact.
+    // 2. A targeted `/cdr/search` for this number alone — a few hundred rows
+    //    instead of the whole window.
+    // 3. The full window sweep — what this page used to do unconditionally,
+    //    now only reached when the targeted path found nothing and a spelling
+    //    we did not try could still be hiding history.
+    // Null until a path commits to an answer. It must NOT start at "cache":
+    // when the firmware ignores the number filter nothing is classified here,
+    // and a "cache" default would make the sweep guard below think the empty
+    // result was authoritative.
+    let source: CallLookupSource | null = null;
+    let classified = await peekClassifiedWindow(from, to, ctx);
+    if (classified) source = "cache";
+
+    if (!classified) {
+      const { fetchCdrByNumber } = await import("@/lib/yeastar/cdr.server");
+      const targeted = await fetchCdrByNumber({
+        from,
+        to,
+        variants: numberVariants(data.number),
+      });
+      if (targeted.filterEffective) {
+        source = "targeted";
+        // Classify ONLY this subscriber's rows. `classifyRecords` is pure over
+        // the rows it is given, and the PBX returns every leg of a matching
+        // call, so grouping and agent attribution are unchanged — there is
+        // simply far less to group.
+        classified = classifyRecords(targeted.records as any[], ctx);
+      }
+    }
 
     const byExt = new Map(agents.map((a) => [String(a.ext).trim(), a]));
 
     // Excluded calls are included on purpose. A caller who hung up in the IVR,
     // or rang after hours, moves no KPI — but it is still contact history, and
     // hiding it would answer "nobody has spoken to them" when somebody tried.
-    const rows: CallLookupRow[] = [];
-    for (const c of [...classified.calls, ...classified.excluded]) {
-      const callerKey = matchKey(c.callerNumber);
-      const calleeKey = matchKey(c.calleeNumber);
-      const hit = (callerKey && callerKey === wanted) || (calleeKey && calleeKey === wanted);
-      if (!hit) continue;
+    const collect = (c: ClassifiedRecordsT): CallLookupRow[] => {
+      const out: CallLookupRow[] = [];
+      for (const call of [...c.calls, ...c.excluded]) {
+        const callerKey = matchKey(call.callerNumber);
+        const calleeKey = matchKey(call.calleeNumber);
+        const hit = (callerKey && callerKey === wanted) || (calleeKey && calleeKey === wanted);
+        if (!hit) continue;
+        out.push(toLookupRow(call, wanted, data.number, byExt));
+      }
+      return out;
+    };
 
-      // The counterparty is whichever end is NOT us.
-      const counterparty =
-        callerKey === wanted ? c.callerNumber || data.number : c.calleeNumber || data.number;
+    let rows = classified ? collect(classified) : [];
 
-      const ext = c.answeringExtension ? String(c.answeringExtension).trim() : null;
-      const agent = ext ? byExt.get(ext) : undefined;
-
-      rows.push({
-        callId: c.callId,
-        startedAt: c.startedAt,
-        direction: c.direction,
-        counterparty,
-        agentName: agent?.name ?? null,
-        agentExt: ext,
-        team: agent?.team ?? null,
-        queueNumber: c.queueNumber,
-        outcome: c.exclusion ? c.exclusion : c.outcome,
-        talkSeconds: c.talkSeconds,
-        waitSeconds: c.queueWaitSeconds,
-      });
+    // A targeted search that found nothing is not proof of nothing: the PBX may
+    // have filed this subscriber under a spelling `numberVariants` did not
+    // enumerate. Only then do we pay for the sweep — the same cost this page
+    // used to pay every single time, and it warms the shared window cache so
+    // the next lookup takes path 1.
+    if (rows.length === 0 && source !== "cache") {
+      const cdr = await getCdrCached(from, to);
+      const full = getClassifiedCached(from, to, cdr.records as any[], ctx, classifyRecords);
+      rows = collect(full);
+      source = "swept";
     }
 
     // Newest first — the question is almost always "who spoke to them LAST".
@@ -2254,5 +2353,7 @@ export const lookupCallsByNumber = createServerFn({ method: "POST" })
       window,
       rows: truncated ? rows.slice(0, LOOKUP_MAX_ROWS) : rows,
       truncated,
+      source: source ?? "swept",
+      elapsedMs: Date.now() - startedAtMs,
     };
   });

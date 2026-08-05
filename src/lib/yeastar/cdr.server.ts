@@ -154,6 +154,144 @@ async function fetchAllPages(
   return { records, totalReported, pages: Math.min(page, maxPages), truncated };
 }
 
+// ---- Targeted single-number retrieval --------------------------------------
+//
+// `fetchCdrRange` is a WINDOW sweep: it pages the whole period because the
+// dashboards aggregate over all of it. Call Lookup wants the opposite — one
+// subscriber's calls — and paying for a 30-day sweep to answer that is the
+// dominant cost of the page.
+//
+// `/cdr/search` accepts `call_from` and `call_to` (verified in the P-Series
+// Appliance developer guide, "Search Specific CDR (v1.0)"), so the number filter
+// can be pushed to the PBX and only the matching rows cross the wire.
+//
+// Two properties make this safe:
+//
+//   1. **Legs survive.** Every leg of an inbound call carries the SAME
+//      `call_from_number` — the customer (verified against
+//      `docs/yeastar/samples/cdr-search.json`, where a six-leg call repeats
+//      `0538XXXX46` on the IVR, queue and agent rows alike). So filtering on
+//      `call_from` returns the COMPLETE leg set, and `call_id` grouping still
+//      sees the agent leg it needs to say who answered. Outbound is single-leg
+//      and carries the customer in `call_to`.
+//   2. **The PBX filter is only ever a pre-filter.** The caller still applies
+//      its own authoritative suffix match, exactly as `fetchCdrRange` re-applies
+//      its epoch window filter over `/cdr/search`'s date pre-filter. If this
+//      firmware ignored `call_from`/`call_to` the rows would be over-broad, not
+//      wrong — and `filterEffective` below reports that so the caller can fall
+//      back rather than issue one full sweep per variant.
+
+export interface FetchCdrByNumberOptions {
+  from: string;
+  to: string;
+  /**
+   * The spellings to search for. `/cdr/search` matches the number EXACTLY
+   * unless fuzzy search is enabled PBX-side, so the caller passes every form
+   * the same subscriber is recorded under (see `numberVariants`).
+   */
+  variants: string[];
+  signal?: AbortSignal;
+  /** Rows per page. Small by design — one subscriber has few calls. */
+  pageSize?: number;
+  maxPages?: number;
+}
+
+export interface FetchCdrByNumberResult {
+  /** De-duplicated rows, epoch-filtered to the window. */
+  records: CdrRecord[];
+  /**
+   * False when the PBX appears to have ignored the number parameters and
+   * answered with the whole window. The rows are still usable — the caller's
+   * own filter is authoritative — but it means this path saved nothing.
+   */
+  filterEffective: boolean;
+  queriesIssued: number;
+  elapsedMs: number;
+}
+
+/** Run `queries` with a bounded number in flight at once. */
+async function pooled<T>(items: T[], limit: number, run: (item: T) => Promise<void>) {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      await run(items[i]!);
+    }
+  });
+  await Promise.all(workers);
+}
+
+export async function fetchCdrByNumber(
+  opts: FetchCdrByNumberOptions,
+): Promise<FetchCdrByNumberResult> {
+  const started = Date.now();
+  const pageSize = opts.pageSize ?? 1_000;
+  const maxPages = opts.maxPages ?? 20;
+  const { startEpoch, endEpoch } = dayBounds(opts.from, opts.to);
+
+  // One query per (variant × end). `call_from` catches inbound — the customer
+  // placed the call — and `call_to` catches outbound.
+  const queries: Array<{ param: "call_from" | "call_to"; value: string }> = [];
+  for (const v of opts.variants) {
+    if (!v) continue;
+    queries.push({ param: "call_from", value: v });
+    queries.push({ param: "call_to", value: v });
+  }
+  if (queries.length === 0) {
+    return { records: [], filterEffective: true, queriesIssued: 0, elapsedMs: 0 };
+  }
+
+  // Row-level de-dup. `new_id` is unique per ROW (`uid` and `call_id` are
+  // call-level — de-duplicating on either would collapse a call to one leg).
+  const byRow = new Map<string, CdrRecord>();
+  const rowKey = (r: CdrRecord) =>
+    r.new_id != null
+      ? `n:${r.new_id}`
+      : `c:${r.call_id ?? ""}|${r.timestamp ?? ""}|${r.call_to_number ?? ""}|${r.call_from_number ?? ""}`;
+
+  let queriesIssued = 0;
+  let filterEffective = true;
+
+  const runQuery = async (q: { param: "call_from" | "call_to"; value: string }) => {
+    const r = await fetchAllPages(
+      "/openapi/v1.0/cdr/search",
+      { start_time: startEpoch, end_time: endEpoch, [q.param]: q.value },
+      pageSize,
+      maxPages,
+      opts.signal,
+    );
+    queriesIssued++;
+    for (const row of r.records) byRow.set(rowKey(row), row);
+  };
+
+  // Probe with one real query before fanning out. If this firmware ignores the
+  // number parameters it answers with the entire window, and firing the rest
+  // would then cost N full sweeps instead of the single one the caller already
+  // has a fallback for. The probe is not wasted work — it is the first query.
+  await runQuery(queries[0]!);
+  const probeRows = byRow.size;
+  if (probeRows >= pageSize) {
+    // A single subscriber does not have a full page of calls in one window;
+    // this is the whole window coming back unfiltered.
+    filterEffective = false;
+  }
+
+  if (filterEffective && queries.length > 1) {
+    await pooled(queries.slice(1), 6, runQuery);
+  }
+
+  const records = [...byRow.values()].filter(
+    (r) => typeof r.timestamp === "number" && r.timestamp >= startEpoch && r.timestamp <= endEpoch,
+  );
+
+  console.log(
+    `[yeastar cdr] by-number queries=${queriesIssued} rows=${records.length} effective=${filterEffective}`,
+  );
+
+  return { records, filterEffective, queriesIssued, elapsedMs: Date.now() - started };
+}
+
 export async function fetchCdrRange(opts: FetchCdrOptions): Promise<FetchCdrResult> {
   const started = Date.now();
   // v1.0 /cdr/list and /cdr/search accept page_size up to 10,000.
