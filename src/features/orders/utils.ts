@@ -73,6 +73,8 @@ export interface OrderFilterState {
   canFilterAgents: boolean;
   agent: string;
   term: string;
+  /** "all" | "delivery" | "pickup" — see FULFILLMENT_OPTIONS. */
+  fulfillment: string;
 }
 
 /**
@@ -86,9 +88,15 @@ export function applyOrderFilters(qb: any, s: OrderFilterState) {
   if (s.status !== "all") qb = qb.eq("status", s.status);
   if (s.mineOnly && s.userId) qb = qb.eq("agent_id", s.userId);
   if (s.canFilterAgents && s.agent !== "all") qb = qb.eq("agent_id", s.agent);
+  // Delivery & Pickup. `not(...ilike)` also drops rows with no method recorded,
+  // which is right: a row that names no hand-over method is not a known delivery.
+  if (s.fulfillment === "pickup") qb = qb.ilike("delivery_type", `%${PICKUP_MATCH}%`);
+  else if (s.fulfillment === "delivery")
+    qb = qb.not("delivery_type", "ilike", `%${PICKUP_MATCH}%`);
   if (s.searching) qb = qb.or(buildSearchOr(s.term));
   return qb;
 }
+
 
 export function defaultTeam(role: string | null): "customer_care" | "telesales" {
   return role === "telesales" ? "telesales" : "customer_care";
