@@ -3,6 +3,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
+import type { DateRange } from "react-day-picker";
+import { DateRangePicker, buildRange } from "@/components/date-range-picker";
+import { toISO } from "@/features/orders/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -88,6 +91,15 @@ function ComplaintsList() {
   const canExport = hasPerm(role, profile?.permissions as any, "export_reports");
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<string>("all");
+  /**
+   * Date window, on the same shared picker (and the same presets) the rest of
+   * the platform uses. Defaults to the current month so the list opens on a
+   * useful window rather than a single day, and is scoped on `complaint_date`
+   * — the business date on the row, not the row's creation timestamp.
+   */
+  const [range, setRange] = useState<DateRange | undefined>(() => buildRange("month"));
+  const from = range?.from ? toISO(range.from) : undefined;
+  const to = range?.to ? toISO(range.to) : from;
   const [mineOnly, setMineOnly] = useState(false);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSizeState] = useState<number>(() => {
@@ -136,12 +148,23 @@ function ComplaintsList() {
       .map((a: any) => a.id as string);
   }, [agentOpts, term, searching]);
 
-  const filters = { status, mineOnly, term, agentMatch: agentMatchIds.join(","), userId: user?.id };
+  const filters = {
+    status,
+    mineOnly,
+    term,
+    from,
+    to,
+    agentMatch: agentMatchIds.join(","),
+    userId: user?.id,
+  };
 
   // Apply the shared filter set to a PostgREST query builder. Preserves the
   // exact filters the client version had: status, mine-only, and search (no
   // date bound — the complaints list is not date-scoped).
   const applyFilters = (qb: any) => {
+    // The date window is dropped while searching, matching Orders: a search is
+    // for one specific complaint, not for one inside the current window.
+    if (!searching && from && to) qb = qb.gte("complaint_date", from).lte("complaint_date", to);
     if (status !== "all") qb = qb.eq("status", status);
     if (mineOnly && user?.id) qb = qb.eq("agent_id", user.id);
     if (searching) qb = qb.or(buildSearchOr(term, agentMatchIds));
@@ -291,7 +314,7 @@ function ComplaintsList() {
       </div>
 
       <Card>
-        <CardContent className="p-3 sm:p-4 grid gap-3 sm:grid-cols-3">
+        <CardContent className="p-3 sm:p-4 grid gap-3 sm:grid-cols-4">
           <div className="sm:col-span-2 relative">
             <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
@@ -323,6 +346,14 @@ function ComplaintsList() {
               ))}
             </SelectContent>
           </Select>
+          <DateRangePicker
+            range={range}
+            onChange={(r) => {
+              setRange(r);
+              setPage(0);
+            }}
+            disabled={searching}
+          />
         </CardContent>
       </Card>
 
