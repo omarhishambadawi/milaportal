@@ -16,7 +16,6 @@ import {
   Map,
   MessageSquareWarning,
   PackageCheck,
-  PhoneCall,
   Route as RouteIcon,
   ShieldAlert,
   ReceiptText,
