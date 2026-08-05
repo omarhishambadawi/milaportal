@@ -29,6 +29,8 @@ import { Route as AppOrdersIdRouteImport } from './routes/_app.orders.$id'
 import { Route as AppComplaintsNewRouteImport } from './routes/_app.complaints.new'
 import { Route as AppComplaintsIdRouteImport } from './routes/_app.complaints.$id'
 import { Route as AppCallsTelesalesRouteImport } from './routes/_app.calls.telesales'
+import { Route as AppCallsOverviewRouteImport } from './routes/_app.calls.overview'
+import { Route as AppCallsLookupRouteImport } from './routes/_app.calls.lookup'
 import { Route as AppCallsDiagnosticsRouteImport } from './routes/_app.calls.diagnostics'
 import { Route as AppCallsCustomerCareRouteImport } from './routes/_app.calls.customer-care'
 import { Route as AppCallsConfigurationRouteImport } from './routes/_app.calls.configuration'
@@ -143,6 +145,16 @@ const AppCallsTelesalesRoute = AppCallsTelesalesRouteImport.update({
   path: '/calls/telesales',
   getParentRoute: () => AppRoute,
 } as any)
+const AppCallsOverviewRoute = AppCallsOverviewRouteImport.update({
+  id: '/calls/overview',
+  path: '/calls/overview',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppCallsLookupRoute = AppCallsLookupRouteImport.update({
+  id: '/calls/lookup',
+  path: '/calls/lookup',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppCallsDiagnosticsRoute = AppCallsDiagnosticsRouteImport.update({
   id: '/calls/diagnostics',
   path: '/calls/diagnostics',
@@ -229,6 +241,8 @@ export interface FileRoutesByFullPath {
   '/calls/configuration': typeof AppCallsConfigurationRoute
   '/calls/customer-care': typeof AppCallsCustomerCareRoute
   '/calls/diagnostics': typeof AppCallsDiagnosticsRoute
+  '/calls/lookup': typeof AppCallsLookupRoute
+  '/calls/overview': typeof AppCallsOverviewRoute
   '/calls/telesales': typeof AppCallsTelesalesRoute
   '/complaints/$id': typeof AppComplaintsIdRoute
   '/complaints/new': typeof AppComplaintsNewRoute
@@ -262,6 +276,8 @@ export interface FileRoutesByTo {
   '/calls/configuration': typeof AppCallsConfigurationRoute
   '/calls/customer-care': typeof AppCallsCustomerCareRoute
   '/calls/diagnostics': typeof AppCallsDiagnosticsRoute
+  '/calls/lookup': typeof AppCallsLookupRoute
+  '/calls/overview': typeof AppCallsOverviewRoute
   '/calls/telesales': typeof AppCallsTelesalesRoute
   '/complaints/$id': typeof AppComplaintsIdRoute
   '/complaints/new': typeof AppComplaintsNewRoute
@@ -297,6 +313,8 @@ export interface FileRoutesById {
   '/_app/calls/configuration': typeof AppCallsConfigurationRoute
   '/_app/calls/customer-care': typeof AppCallsCustomerCareRoute
   '/_app/calls/diagnostics': typeof AppCallsDiagnosticsRoute
+  '/_app/calls/lookup': typeof AppCallsLookupRoute
+  '/_app/calls/overview': typeof AppCallsOverviewRoute
   '/_app/calls/telesales': typeof AppCallsTelesalesRoute
   '/_app/complaints/$id': typeof AppComplaintsIdRoute
   '/_app/complaints/new': typeof AppComplaintsNewRoute
@@ -332,6 +350,8 @@ export interface FileRouteTypes {
     | '/calls/configuration'
     | '/calls/customer-care'
     | '/calls/diagnostics'
+    | '/calls/lookup'
+    | '/calls/overview'
     | '/calls/telesales'
     | '/complaints/$id'
     | '/complaints/new'
@@ -365,6 +385,8 @@ export interface FileRouteTypes {
     | '/calls/configuration'
     | '/calls/customer-care'
     | '/calls/diagnostics'
+    | '/calls/lookup'
+    | '/calls/overview'
     | '/calls/telesales'
     | '/complaints/$id'
     | '/complaints/new'
@@ -399,6 +421,8 @@ export interface FileRouteTypes {
     | '/_app/calls/configuration'
     | '/_app/calls/customer-care'
     | '/_app/calls/diagnostics'
+    | '/_app/calls/lookup'
+    | '/_app/calls/overview'
     | '/_app/calls/telesales'
     | '/_app/complaints/$id'
     | '/_app/complaints/new'
@@ -567,6 +591,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppCallsTelesalesRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/calls/overview': {
+      id: '/_app/calls/overview'
+      path: '/calls/overview'
+      fullPath: '/calls/overview'
+      preLoaderRoute: typeof AppCallsOverviewRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/calls/lookup': {
+      id: '/_app/calls/lookup'
+      path: '/calls/lookup'
+      fullPath: '/calls/lookup'
+      preLoaderRoute: typeof AppCallsLookupRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/calls/diagnostics': {
       id: '/_app/calls/diagnostics'
       path: '/calls/diagnostics'
@@ -667,6 +705,8 @@ interface AppRouteChildren {
   AppCallsConfigurationRoute: typeof AppCallsConfigurationRoute
   AppCallsCustomerCareRoute: typeof AppCallsCustomerCareRoute
   AppCallsDiagnosticsRoute: typeof AppCallsDiagnosticsRoute
+  AppCallsLookupRoute: typeof AppCallsLookupRoute
+  AppCallsOverviewRoute: typeof AppCallsOverviewRoute
   AppCallsTelesalesRoute: typeof AppCallsTelesalesRoute
   AppComplaintsIdRoute: typeof AppComplaintsIdRoute
   AppComplaintsNewRoute: typeof AppComplaintsNewRoute
@@ -691,6 +731,8 @@ const AppRouteChildren: AppRouteChildren = {
   AppCallsConfigurationRoute: AppCallsConfigurationRoute,
   AppCallsCustomerCareRoute: AppCallsCustomerCareRoute,
   AppCallsDiagnosticsRoute: AppCallsDiagnosticsRoute,
+  AppCallsLookupRoute: AppCallsLookupRoute,
+  AppCallsOverviewRoute: AppCallsOverviewRoute,
   AppCallsTelesalesRoute: AppCallsTelesalesRoute,
   AppComplaintsIdRoute: AppComplaintsIdRoute,
   AppComplaintsNewRoute: AppComplaintsNewRoute,

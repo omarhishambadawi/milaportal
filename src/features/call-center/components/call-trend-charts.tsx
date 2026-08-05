@@ -13,6 +13,24 @@ import {
   ReferenceLine,
 } from "recharts";
 import { ChartCard } from "./chart-card";
+import {
+  INBOUND,
+  OUTBOUND,
+  axisTick,
+  gridStroke,
+  gridDash,
+  valueLabelStyle,
+  CHART_ANIMATION,
+  CHART_RESIZE_DEBOUNCE,
+  shortDate,
+  compactHour,
+  barGeometry,
+  LegendSwatch,
+  HeaderStat,
+  TooltipShell,
+  TooltipRow,
+  VolumeTooltip,
+} from "./chart-primitives";
 import type { PeakHour } from "@/lib/yeastar/metrics-engine";
 
 interface DayRow {
@@ -25,144 +43,6 @@ interface DayRow {
 interface RatePoint {
   date: string;
   rate: number;
-}
-
-/**
- * `2026-07-29` → `29 Jul`. Formatting only — the bucket itself is the engine's.
- *
- * Falls back to the raw key for the normalizer's `—` bucket (a call with no
- * usable timestamp), which must still render rather than throw.
- */
-function shortDate(value: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!m) return value;
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
-}
-
-const INBOUND = "var(--color-chart-1)";
-const OUTBOUND = "var(--color-chart-3)";
-
-/**
- * `3 PM` → `3p`, for the hourly axis only.
- *
- * Twenty-four labels is the whole point of the chart and also the thing that
- * breaks it: `12 AM` is about 34px at this type size, so a phone-width card can
- * fit six of them and Recharts renders all twenty-four on top of each other.
- * Two characters fit everywhere, and nothing is lost — the tooltip and the peak
- * badge both carry the unabbreviated hour.
- */
-function compactHour(label: string): string {
-  return label.replace(/\s*AM$/, "a").replace(/\s*PM$/, "p");
-}
-
-const axisTick = { fontSize: 11, fill: "var(--color-muted-foreground)" };
-const gridStroke = "var(--color-border)";
-const valueLabelStyle = {
-  fontSize: 10,
-  fontWeight: 600,
-  fill: "var(--color-muted-foreground)",
-} as const;
-
-/**
- * Enter animation is off on every series here, deliberately and everywhere.
- *
- * Two reasons, and the second is the one that settles it. Recharts replays the
- * animation whenever the `data` prop changes identity, so on a background
- * refresh the whole chart re-draws from zero — on a month that is 62 bars
- * animating for no new information. And `Bar` gates its `LabelList` on
- * `isAnimationFinished`, so an animated bar renders its value only once the
- * transition has run and not at all if it never completes; the value labels are
- * the point of the redesign and cannot be conditional on that.
- */
-const CHART_ANIMATION = false;
-
-/** A colour key that reads as part of the card header rather than chart furniture. */
-function LegendSwatch({ color, label, value }: { color: string; label: string; value?: number }) {
-  return (
-    <span className="inline-flex items-baseline gap-1.5 whitespace-nowrap text-xs">
-      <span
-        className="inline-block h-2 w-2 shrink-0 translate-y-[-1px] rounded-full"
-        style={{ background: color }}
-        aria-hidden="true"
-      />
-      <span className="text-muted-foreground">{label}</span>
-      {value != null && <span className="font-semibold tabular-nums text-foreground">{value}</span>}
-    </span>
-  );
-}
-
-/** Shared shell for the custom tooltips, so all three read identically. */
-function TooltipShell({ title, rows }: { title: string; rows: React.ReactNode }) {
-  return (
-    <div className="min-w-[172px] rounded-lg border border-border bg-popover px-3 py-2.5 shadow-lg">
-      <div className="mb-2 text-xs font-semibold text-foreground">{title}</div>
-      <div className="space-y-1.5">{rows}</div>
-    </div>
-  );
-}
-
-function TooltipRow({
-  swatch,
-  label,
-  value,
-  strong,
-}: {
-  swatch?: string;
-  label: string;
-  value: string;
-  strong?: boolean;
-}) {
-  return (
-    <div className="flex items-center gap-2.5 text-xs leading-none">
-      <span
-        className="h-2 w-2 shrink-0 rounded-full"
-        style={swatch ? { background: swatch } : undefined}
-        aria-hidden="true"
-      />
-      <span className={strong ? "flex-1 text-foreground" : "flex-1 text-muted-foreground"}>
-        {label}
-      </span>
-      <span className={strong ? "font-semibold tabular-nums" : "tabular-nums"}>{value}</span>
-    </div>
-  );
-}
-
-/**
- * Inbound / outbound / total, for both of the volume charts.
- *
- * Reads as the queue panel does — one line per direction, then the total under
- * a rule:
- *
- *     1 PM
- *     Inbound   5
- *     Outbound  2
- *     Total     7
- */
-function VolumeTooltip({ active, payload, label, formatTitle }: any) {
-  if (!active || !payload?.length) return null;
-  const row = payload[0].payload as { inbound: number; outbound: number; total?: number };
-  const total = row.total ?? row.inbound + row.outbound;
-  return (
-    <TooltipShell
-      title={formatTitle ? formatTitle(label) : String(label)}
-      rows={
-        <>
-          {payload.map((p: any) => (
-            <TooltipRow
-              key={p.dataKey}
-              swatch={p.color}
-              label={p.name}
-              value={String(p.value ?? 0)}
-            />
-          ))}
-          <div className="mt-2 border-t border-border/60 pt-2">
-            <TooltipRow label="Total" value={String(total)} strong />
-          </div>
-        </>
-      }
-    />
-  );
 }
 
 /**
@@ -212,19 +92,7 @@ export const CallTrendCharts = memo(function CallTrendCharts({
   hasData: boolean;
   loading: boolean;
 }) {
-  // Value labels only survive on a short window; past that they collide and the
-  // tooltip is the better answer. Grouped bars halve the room each label has, so
-  // the threshold is lower than the stacked version's.
-  const showLabels = byDay.length <= 10;
-
-  // Bar geometry has to follow the window or the chart looks wrong at one end of
-  // the range: a week's worth of bars at month spacing reads as scattered
-  // ticks, and a month's worth at week spacing comes out about four pixels wide.
-  // Measured in the preview harness at the half-width the card actually gets.
-  const dense = byDay.length > 10;
-  const barGap = dense ? 1 : 3;
-  const barCategoryGap = dense ? "6%" : "26%";
-  const maxBarSize = dense ? 14 : 28;
+  const { barGap, barCategoryGap, maxBarSize, showLabels } = barGeometry(byDay.length);
 
   return (
     <div className="grid gap-3 lg:grid-cols-2">
@@ -241,7 +109,7 @@ export const CallTrendCharts = memo(function CallTrendCharts({
           </div>
         }
       >
-        <ResponsiveContainer debounce={80}>
+        <ResponsiveContainer debounce={CHART_RESIZE_DEBOUNCE}>
           <BarChart
             data={byDay}
             margin={{ top: 18, right: 8, left: 0, bottom: 4 }}
@@ -259,7 +127,7 @@ export const CallTrendCharts = memo(function CallTrendCharts({
                 <stop offset="100%" stopColor={OUTBOUND} stopOpacity={0.65} />
               </linearGradient>
             </defs>
-            <CartesianGrid vertical={false} strokeDasharray="2 5" stroke={gridStroke} />
+            <CartesianGrid vertical={false} strokeDasharray={gridDash} stroke={gridStroke} />
             <XAxis
               dataKey="date"
               tick={axisTick}
@@ -313,16 +181,9 @@ export const CallTrendCharts = memo(function CallTrendCharts({
         loading={loading}
         hasData={hasData}
         bodyClassName="h-[19rem]"
-        actions={
-          <span className="inline-flex items-baseline gap-1.5 whitespace-nowrap rounded-full border border-border/60 bg-muted/40 px-2.5 py-1 text-xs">
-            <span className="text-muted-foreground">Window average</span>
-            <span className="font-semibold tabular-nums text-foreground">
-              {averageRate.toFixed(1)}%
-            </span>
-          </span>
-        }
+        actions={<HeaderStat label="Window average" value={`${averageRate.toFixed(1)}%`} />}
       >
-        <ResponsiveContainer debounce={80}>
+        <ResponsiveContainer debounce={CHART_RESIZE_DEBOUNCE}>
           {/* Right margin leaves room for the reference line's own label. */}
           <AreaChart data={answerRate} margin={{ top: 22, right: 16, left: 0, bottom: 4 }}>
             <defs>
@@ -331,7 +192,7 @@ export const CallTrendCharts = memo(function CallTrendCharts({
                 <stop offset="100%" stopColor={INBOUND} stopOpacity={0.02} />
               </linearGradient>
             </defs>
-            <CartesianGrid vertical={false} strokeDasharray="2 5" stroke={gridStroke} />
+            <CartesianGrid vertical={false} strokeDasharray={gridDash} stroke={gridStroke} />
             <XAxis
               dataKey="date"
               tick={axisTick}
@@ -470,7 +331,7 @@ export const HourlyDistributionChart = memo(function HourlyDistributionChart({
         </div>
       }
     >
-      <ResponsiveContainer debounce={80}>
+      <ResponsiveContainer debounce={CHART_RESIZE_DEBOUNCE}>
         <AreaChart data={hourly12} margin={{ top: 24, right: 12, left: 0, bottom: 4 }}>
           <defs>
             <linearGradient id="ccHourInbound" x1="0" y1="0" x2="0" y2="1">
@@ -482,7 +343,7 @@ export const HourlyDistributionChart = memo(function HourlyDistributionChart({
               <stop offset="100%" stopColor={OUTBOUND} stopOpacity={0.05} />
             </linearGradient>
           </defs>
-          <CartesianGrid vertical={false} strokeDasharray="2 5" stroke={gridStroke} />
+          <CartesianGrid vertical={false} strokeDasharray={gridDash} stroke={gridStroke} />
           <XAxis
             dataKey="label"
             tick={axisTick}

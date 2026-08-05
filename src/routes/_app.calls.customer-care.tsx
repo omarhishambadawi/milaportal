@@ -70,6 +70,7 @@ import { pct, hhmmss } from "@/features/call-center/utils";
 import { RefreshIndicator } from "@/features/call-center/components/fetch-progress";
 import { DashboardSection } from "@/features/call-center/components/dashboard-section";
 import { InfoBanner } from "@/features/call-center/components/info-banner";
+import { EmptyWindowNotice } from "@/features/call-center/components/empty-window-notice";
 import { QueueMembers } from "@/features/call-center/components/queue-members";
 import { HeroKpi } from "@/features/call-center/components/hero-kpi";
 import { Kpi } from "@/features/call-center/components/kpi";
@@ -266,6 +267,13 @@ function CustomerCarePage() {
           </CardContent>
         </Card>
       )}
+
+      {/*
+        A zero-call window is a complete, valid answer, not an error and not a
+        reason to stop rendering. It is announced once here and every section
+        below stays on screen showing its own zeros.
+      */}
+      {metrics.isEmpty && <EmptyWindowNotice from={f.from} to={f.to} />}
 
       {/* ---- OVERVIEW ------------------------------------------------------ */}
       <DashboardSection
@@ -572,70 +580,65 @@ function CustomerCarePage() {
         </div>
       </DashboardSection>
 
-      {metrics.isEmpty ? (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-2 p-10 text-center text-sm text-muted-foreground">
-            <PhoneOff className="h-8 w-8" />
-            No calls found for the selected filters.
-          </CardContent>
-        </Card>
-      ) : (
-        <>
-          <DashboardSection
-            title="Call trends"
-            description="Volume and answer rate across the window."
-            icon={TrendingUp}
-          >
-            <CallTrendCharts
-              byDay={trends.byDay}
-              answerRate={trends.dailyAnswerRate}
-              averageRate={overview.answerRate}
-              totalInbound={direction.inbound}
-              totalOutbound={direction.outbound}
-              hasData={trends.hasDailyData}
-              loading={isLoading}
-            />
-          </DashboardSection>
+      {/*
+        A zero-call window used to replace everything below with a single card.
+        It is a complete, valid answer — not an error and not a reason to stop
+        rendering — so the sections stay and each shows its own zeros. See the
+        note on `EmptyWindowNotice`.
+      */}
+      <DashboardSection
+        title="Call trends"
+        description="Volume and answer rate across the window."
+        icon={TrendingUp}
+      >
+        <CallTrendCharts
+          byDay={trends.byDay}
+          answerRate={trends.dailyAnswerRate}
+          averageRate={overview.answerRate}
+          totalInbound={direction.inbound}
+          totalOutbound={direction.outbound}
+          hasData={trends.hasDailyData}
+          loading={isLoading}
+        />
+      </DashboardSection>
 
-          <DashboardSection
-            title="Hourly distribution"
-            description="When the queue is busiest."
-            icon={Activity}
-          >
-            <HourlyDistributionChart
-              hourly12={trends.hourly}
-              peakHour={trends.peakHour}
-              loading={isLoading}
-              hasData={trends.hasHourlyData}
-            />
-          </DashboardSection>
+      <DashboardSection
+        title="Hourly distribution"
+        description="When the queue is busiest."
+        icon={Activity}
+      >
+        <HourlyDistributionChart
+          hourly12={trends.hourly}
+          peakHour={trends.peakHour}
+          loading={isLoading}
+          hasData={trends.hasHourlyData}
+        />
+      </DashboardSection>
 
-          <DashboardSection
-            title="Queue members"
-            description="Who is assigned to the queue. Select a member to jump to their row below — filters stay as they are."
-            icon={Users}
-          >
-            <QueueMembers queues={visibleQueues} onSelectMember={showAgent} />
-          </DashboardSection>
+      <DashboardSection
+        title="Queue members"
+        description="Who is assigned to the queue. Select a member to jump to their row below — filters stay as they are."
+        icon={Users}
+      >
+        <QueueMembers queues={visibleQueues} onSelectMember={showAgent} />
+      </DashboardSection>
 
-          <DashboardSection
-            id={AGENTS_ANCHOR}
-            title="Agent performance"
-            description="Per-agent detail for the selected window."
-            icon={UserCheck}
-          >
-            <AgentPerformanceTable
-              rows={agents.visible}
-              loading={isLoading}
-              search={f.search}
-              onSearch={f.setSearch}
-              mode="customer_care"
-              highlights={agents.highlights}
-              highlightExt={highlightExt}
-            />
-          </DashboardSection>
-        </>
-      )}
+      <DashboardSection
+        id={AGENTS_ANCHOR}
+        title="Agent performance"
+        description="Per-agent detail for the selected window."
+        icon={UserCheck}
+      >
+        <AgentPerformanceTable
+          rows={agents.visible}
+          loading={isLoading}
+          search={f.search}
+          onSearch={f.setSearch}
+          mode="customer_care"
+          highlights={agents.highlights}
+          highlightExt={highlightExt}
+        />
+      </DashboardSection>
     </div>
   );
 }

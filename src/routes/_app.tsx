@@ -16,11 +16,13 @@ import {
   Phone,
   ChartNoAxesCombined,
   Settings2,
+  LayoutList,
+  Search,
 } from "lucide-react";
 import { hasPerm, canViewCallCenter } from "@/lib/permissions";
 import { callsTeamForRole } from "@/lib/calls-access";
 import { AppHeader } from "@/components/app-header";
-import { AppSidebar } from "@/components/app-sidebar";
+import { AppSidebar, resolveActivePath } from "@/components/app-sidebar";
 import { ForcePasswordChange } from "@/features/profile/components/force-password-change";
 import { TemporaryPasswordExpired } from "@/features/profile/components/temporary-password-expired";
 import { temporaryPasswordState } from "@/lib/password-policy";
@@ -110,12 +112,23 @@ function AppLayout() {
               label: "Calls",
               icon: Phone,
               children: [
+                // The combined dashboard aggregates a team's performance next
+                // to the other's, which is not a team agent's to read — so it
+                // is hidden from them here and refused on direct URL access by
+                // the same `canViewCallsPage` rule.
+                ...(callsTeam
+                  ? []
+                  : [{ to: "/calls/overview", label: "Calls Overview", icon: LayoutList }]),
                 ...(callsTeam && callsTeam !== "customer_care"
                   ? []
                   : [{ to: "/calls/customer-care", label: "Customer Care", icon: Headphones }]),
                 ...(callsTeam && callsTeam !== "telesales"
                   ? []
                   : [{ to: "/calls/telesales", label: "Telesales", icon: PhoneOutgoing }]),
+                // Deliberately NOT confined to one team: it is a per-number
+                // contact history, most useful to the agent with that customer
+                // on the line. See UNCONFINED_PAGES in calls-access.ts.
+                { to: "/calls/lookup", label: "Call Lookup", icon: Search, separatorBefore: true },
                 ...(isAdministrator(role)
                   ? [
                       {
@@ -204,13 +217,15 @@ function AppLayout() {
     );
   }
 
-  const activePath = (() => {
-    const path = location.pathname;
-    const cands = nav.filter((m) => path === m.to || path.startsWith(m.to + "/"));
-    return cands.sort((a, b) => b.to.length - a.to.length)[0]?.to ?? "";
-  })();
+  // Resolves against children as well as top-level items — see the note on
+  // resolveActivePath for what breaks when it does not.
+  const activePath = resolveActivePath(nav, location.pathname);
 
-  const activeItem = nav.find((n) => n.to === activePath);
+  // Still the top-level item, so the header keeps naming the section ("Calls")
+  // rather than switching to the child's label.
+  const activeItem = nav.find(
+    (n) => n.to === activePath || (n.children ?? []).some((c) => c.to === activePath),
+  );
 
   return (
     <div

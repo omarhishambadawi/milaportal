@@ -16,9 +16,23 @@ export type CallsPage =
   | "overview"
   | "customer_care"
   | "telesales"
+  | "lookup"
   | "analytics"
   | "diagnostics"
   | "configuration";
+
+/**
+ * Pages every holder of the Calls view permission may open, team agents
+ * included.
+ *
+ * Only Call Lookup is on this list. It answers one question — has anyone here
+ * spoken to this number before, and who — which is most useful to the agent with
+ * that customer already on the line, and which the confinement rule would
+ * otherwise deny them. It is a per-number history rather than a dashboard: it
+ * aggregates nothing, ranks nobody and exposes no team's performance, so
+ * widening it does not hand an agent the other team's analytics.
+ */
+const UNCONFINED_PAGES: ReadonlySet<CallsPage> = new Set<CallsPage>(["lookup"]);
 
 /**
  * The single Calls page a role is confined to, or null when the role is not a
@@ -32,5 +46,6 @@ export function callsTeamForRole(role: string | null | undefined): CallsTeam | n
 /** True when the role may open `page`, given it already passes the view gate. */
 export function callsPageAllowedForRole(role: string | null | undefined, page: CallsPage): boolean {
   const team = callsTeamForRole(role);
-  return team ? page === team : true;
+  if (!team) return true;
+  return page === team || UNCONFINED_PAGES.has(page);
 }

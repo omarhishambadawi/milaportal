@@ -72,6 +72,8 @@ export function NavFlyout({
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Set only while Escape hands focus back, so that hand-back cannot reopen. */
+  const suppressFocusOpen = useRef(false);
   const panelId = useId();
 
   const cancelClose = useCallback(() => {
@@ -116,7 +118,20 @@ export function NavFlyout({
       setOpen(false);
       // Return focus to the trigger; dropping it on a removed node would send
       // the user back to the top of the document.
+      //
+      // That hand-back has to be guarded, though: the wrapper opens on focus,
+      // so moving focus to the trigger here reopens the panel Escape just
+      // closed. Both updates land in one render, so nothing flickers — the
+      // panel simply never shuts. It only appeared to work when focus was
+      // already on the trigger, where `.focus()` is a no-op and fires nothing.
+      //
+      // A ref, not state: this must be read by the focus handler that runs
+      // *during* the `.focus()` call below, long before any re-render. Native
+      // focus events dispatch synchronously, so bracketing the call is exact
+      // and needs no timer.
+      suppressFocusOpen.current = true;
       wrapRef.current?.querySelector<HTMLElement>("a,button")?.focus();
+      suppressFocusOpen.current = false;
     };
     const onPointerDown = (e: PointerEvent) => {
       const t = e.target as Node;
@@ -178,7 +193,10 @@ export function NavFlyout({
       className="relative"
       onMouseEnter={openNow}
       onMouseLeave={scheduleClose}
-      onFocusCapture={openNow}
+      onFocusCapture={() => {
+        if (suppressFocusOpen.current) return;
+        openNow();
+      }}
       onBlurCapture={(e) => {
         // Only close when focus actually left both the trigger and the panel.
         const next = e.relatedTarget as Node | null;
@@ -187,16 +205,32 @@ export function NavFlyout({
       }}
     >
       <div
-        onClick={(e) => {
+        onMouseDownCapture={(e) => {
+          // Stop the press from focusing the trigger. Focus opens the panel, so
+          // without this the mousedown opens it and the click below immediately
+          // reads `open` as true and shuts it again — the toggle would look
+          // dead on a first click. The chevron is `tabIndex={-1}` and reachable
+          // by keyboard through the link itself, so nothing is lost.
+          if ((e.target as HTMLElement).closest("[data-flyout-toggle]")) e.preventDefault();
+        }}
+        onClickCapture={(e) => {
           // Toggle without swallowing the parent link's own navigation: the
           // chevron area toggles, the label still goes to the overview page.
+          //
+          // CAPTURE phase, deliberately. The router's Link handles click on the
+          // <a> itself and only bows out when the event is already
+          // `defaultPrevented`; a bubble-phase handler out here runs after it
+          // has navigated, which made the chevron behave exactly like the link.
+          // Capture runs outside-in, so this lands first.
           const el = e.target as HTMLElement;
-          if (el.closest("[data-flyout-toggle]")) {
-            e.preventDefault();
-            e.stopPropagation();
-            if (open) setOpen(false);
-            else openNow();
-          }
+          if (!el.closest("[data-flyout-toggle]")) return;
+          // stopPropagation keeps the Link's handler from running; preventDefault
+          // is still required, since the browser's own anchor default would
+          // navigate regardless of propagation.
+          e.preventDefault();
+          e.stopPropagation();
+          if (open) setOpen(false);
+          else openNow();
         }}
       >
         {trigger}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupNav, isBranchActive, type NavItemData } from "../app-sidebar";
+import { groupNav, isBranchActive, resolveActivePath, type NavItemData } from "../app-sidebar";
 
 /**
  * The sidebar itself needs a browser to look at, but the two things that were
@@ -46,6 +46,57 @@ describe("isBranchActive", () => {
   it("handles an item with no children", () => {
     expect(isBranchActive({ to: "/orders", label: "Orders", icon }, "/orders")).toBe(true);
     expect(isBranchActive({ to: "/orders", label: "Orders", icon }, "/complaints")).toBe(false);
+  });
+});
+
+describe("resolveActivePath", () => {
+  const nav: NavItemData[] = [
+    { to: "/dashboard", label: "Dashboard", icon },
+    { to: "/orders", label: "Orders", icon },
+    calls,
+  ];
+
+  it("resolves a child route to the child, not to its parent", () => {
+    // The defect. Only top-level items were candidates, so this returned
+    // "/calls" — which is why the open child never highlighted, why
+    // isBranchActive's child arm never ran in production, and why the flyout
+    // stayed open when moving between two siblings.
+    expect(resolveActivePath(nav, "/calls/telesales")).toBe("/calls/telesales");
+    expect(resolveActivePath(nav, "/calls/analytics")).toBe("/calls/analytics");
+  });
+
+  it("still resolves a detail route up to its top-level item", () => {
+    // No child matches, so the parent prefix is correctly the best candidate.
+    expect(resolveActivePath(nav, "/orders/123")).toBe("/orders");
+  });
+
+  it("resolves a parent's own page to the parent", () => {
+    expect(resolveActivePath(nav, "/calls")).toBe("/calls");
+  });
+
+  it("prefers the longest match when parent and child both apply", () => {
+    expect(resolveActivePath(nav, "/calls/telesales/detail")).toBe("/calls/telesales");
+  });
+
+  it("does not match a sibling path that merely shares a prefix", () => {
+    expect(resolveActivePath(nav, "/calls-archive")).toBe("");
+  });
+
+  it("returns empty for a path outside the nav tree", () => {
+    expect(resolveActivePath(nav, "/settings")).toBe("");
+  });
+
+  it("feeds isBranchActive a value that lights the parent branch", () => {
+    // The two functions have to agree: this is the pairing the sidebar relies
+    // on to keep Calls lit while the user is on one of its children.
+    const active = resolveActivePath(nav, "/calls/telesales");
+    expect(isBranchActive(calls, active)).toBe(true);
+  });
+
+  it("changes between siblings, so close-on-navigate actually fires", () => {
+    expect(resolveActivePath(nav, "/calls/telesales")).not.toBe(
+      resolveActivePath(nav, "/calls/customer-care"),
+    );
   });
 });
 

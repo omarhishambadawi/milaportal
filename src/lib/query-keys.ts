@@ -168,6 +168,16 @@ export const queryKeys = {
      */
     callReport: (f: { from: string; to: string; queue: string }) =>
       ["call-center", "call-report", f] as const,
+    /**
+     * Call Lookup — one customer number over a trailing window.
+     *
+     * Keyed by the raw number the user typed rather than its normalized form,
+     * so two spellings of the same subscriber are two cache entries. That is
+     * deliberate: the server echoes back what it matched on, and a cache hit
+     * that silently answered a different string than the one in the box would
+     * be indistinguishable from a bug.
+     */
+    lookup: (number: string, days: number) => ["call-center", "lookup", number, days] as const,
   },
 
   yeastar: {

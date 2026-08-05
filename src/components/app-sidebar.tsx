@@ -95,6 +95,27 @@ export function isBranchActive(item: NavItemData, activePath: string): boolean {
   return (item.children ?? []).some((c) => activePath === c.to);
 }
 
+/**
+ * Which nav entry the current URL belongs to.
+ *
+ * Children are candidates alongside top-level items, and the longest match
+ * wins, so /orders/123 resolves to "/orders" while /calls/telesales resolves to
+ * itself.
+ *
+ * Considering only top-level items collapsed every child route onto its parent,
+ * and that single value feeds three separate things: the child link's own
+ * highlight (which could therefore never turn on), `isBranchActive` (whose
+ * child arm was consequently unreachable in production, while the parent still
+ * lit up via its exact match — so the tests below passed against logic the app
+ * never ran), and the flyout's close-on-navigate effect (which never fired when
+ * moving between two siblings, because the value did not change).
+ */
+export function resolveActivePath(nav: NavItemData[], pathname: string): string {
+  const entries = nav.flatMap((m) => [m, ...(m.children ?? [])]);
+  const matches = entries.filter((m) => pathname === m.to || pathname.startsWith(m.to + "/"));
+  return matches.sort((a, b) => b.to.length - a.to.length)[0]?.to ?? "";
+}
+
 export function groupNav(nav: NavItemData[]) {
   const groups = SECTIONS.map((s) => ({
     id: s.id,

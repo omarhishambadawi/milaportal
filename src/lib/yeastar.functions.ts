@@ -2087,3 +2087,172 @@ export const yeastarAnalyticsDebug = createServerFn({ method: "POST" })
       extensionCount: ctx.extensionNumbers.size,
     };
   });
+
+// ---- Call lookup (customer number → who handled them, and when) ------------
+//
+// A deliberately narrow read: paste a customer's number, get their call history
+// back. It exists because the question "who spoke to this person last time?" was
+// only answerable by exporting a dashboard and scrolling, which is not something
+// anyone does with a customer already on the line.
+//
+// It is NOT an analytics surface and must not become one. It aggregates nothing,
+// derives no KPI and returns whole calls in reverse-chronological order. Every
+// figure on a row is read straight off the normalized call.
+
+/** Longest window the lookup will sweep. Beyond this it stops being "fast". */
+const LOOKUP_MAX_DAYS = 90;
+/**
+ * How many trailing digits must match.
+ *
+ * The PBX records the same subscriber inconsistently — `0501234567`,
+ * `+966501234567` and `966501234567` are one person — so comparison is on the
+ * trailing digits rather than the whole string. Nine is the KSA subscriber
+ * number without its country code or trunk zero, which is the longest suffix
+ * every recorded form still shares.
+ */
+const LOOKUP_SUFFIX_DIGITS = 9;
+/** A shorter query than this matches half the country; refuse rather than sweep. */
+const LOOKUP_MIN_DIGITS = 4;
+/** Hard cap on returned rows. A number with more history than this needs a report. */
+const LOOKUP_MAX_ROWS = 200;
+
+const callLookupInput = z.object({
+  number: z.string().min(1).max(32),
+  days: z.number().int().min(1).max(LOOKUP_MAX_DAYS).default(30),
+});
+
+export interface CallLookupRow {
+  callId: string;
+  /** Epoch seconds of the first leg, or null when the PBX omitted a timestamp. */
+  startedAt: number | null;
+  direction: "Inbound" | "Outbound" | "Internal";
+  /** The customer's number as this call recorded it. */
+  counterparty: string;
+  /** Display name of the agent who handled it, or null when nobody did. */
+  agentName: string | null;
+  agentExt: string | null;
+  team: "customer_care" | "telesales" | null;
+  queueNumber: string | null;
+  outcome: string;
+  talkSeconds: number;
+  /** Queue wait, for a call that reached one. Null otherwise. */
+  waitSeconds: number | null;
+}
+
+export interface CallLookupResult {
+  ok: boolean;
+  configured: boolean;
+  /** Digits actually searched on, echoed so the UI can show what it matched. */
+  normalized: string;
+  window: { from: string; to: string; days: number };
+  rows: CallLookupRow[];
+  /** True when the cap trimmed the result. */
+  truncated: boolean;
+  /** Set when the query itself was unusable — too short, no digits. */
+  error?: string;
+}
+
+/** Digits only. `+966 50 123 4567` → `966501234567`. */
+function digitsOf(value: string): string {
+  return value.replace(/\D+/g, "");
+}
+
+/** The trailing slice two recordings of the same subscriber always share. */
+function matchKey(value: string | null | undefined): string {
+  const d = digitsOf(String(value ?? ""));
+  return d.length > LOOKUP_SUFFIX_DIGITS ? d.slice(-LOOKUP_SUFFIX_DIGITS) : d;
+}
+
+export const lookupCallsByNumber = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => callLookupInput.parse(d))
+  .handler(async ({ context, data }): Promise<CallLookupResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    const { canView } = await callCenterAccess(supabase, userId);
+    if (!canView) throw new Error("Forbidden: call analytics access required");
+
+    const now = Date.now();
+    const to = businessDay(now);
+    const from = businessDay(now - (data.days - 1) * 86_400_000);
+    const window = { from, to, days: data.days };
+
+    const wanted = matchKey(data.number);
+    if (digitsOf(data.number).length < LOOKUP_MIN_DIGITS) {
+      return {
+        ok: false,
+        configured: true,
+        normalized: wanted,
+        window,
+        rows: [],
+        truncated: false,
+        error: `Enter at least ${LOOKUP_MIN_DIGITS} digits.`,
+      };
+    }
+
+    const { isConfigured } = await import("@/lib/yeastar/client.server");
+    if (!isConfigured()) {
+      return {
+        ok: false,
+        configured: false,
+        normalized: wanted,
+        window,
+        rows: [],
+        truncated: false,
+      };
+    }
+
+    // Same cached CDR window and same phase-1 normalization the dashboards use,
+    // so a lookup over a range someone is already viewing costs nothing extra.
+    const agents = await loadAgentsCached(supabase);
+    const ctx = await buildNormalizationContext(agents.map((a) => a.ext));
+    const cdr = await getCdrCached(from, to);
+    const { classifyRecords } = await import("@/lib/yeastar/stats.server");
+    const classified = getClassifiedCached(from, to, cdr.records as any[], ctx, classifyRecords);
+
+    const byExt = new Map(agents.map((a) => [String(a.ext).trim(), a]));
+
+    // Excluded calls are included on purpose. A caller who hung up in the IVR,
+    // or rang after hours, moves no KPI — but it is still contact history, and
+    // hiding it would answer "nobody has spoken to them" when somebody tried.
+    const rows: CallLookupRow[] = [];
+    for (const c of [...classified.calls, ...classified.excluded]) {
+      const callerKey = matchKey(c.callerNumber);
+      const calleeKey = matchKey(c.calleeNumber);
+      const hit = (callerKey && callerKey === wanted) || (calleeKey && calleeKey === wanted);
+      if (!hit) continue;
+
+      // The counterparty is whichever end is NOT us.
+      const counterparty =
+        callerKey === wanted ? c.callerNumber || data.number : c.calleeNumber || data.number;
+
+      const ext = c.answeringExtension ? String(c.answeringExtension).trim() : null;
+      const agent = ext ? byExt.get(ext) : undefined;
+
+      rows.push({
+        callId: c.callId,
+        startedAt: c.startedAt,
+        direction: c.direction,
+        counterparty,
+        agentName: agent?.name ?? null,
+        agentExt: ext,
+        team: agent?.team ?? null,
+        queueNumber: c.queueNumber,
+        outcome: c.exclusion ? c.exclusion : c.outcome,
+        talkSeconds: c.talkSeconds,
+        waitSeconds: c.queueWaitSeconds,
+      });
+    }
+
+    // Newest first — the question is almost always "who spoke to them LAST".
+    rows.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
+    const truncated = rows.length > LOOKUP_MAX_ROWS;
+
+    return {
+      ok: true,
+      configured: true,
+      normalized: wanted,
+      window,
+      rows: truncated ? rows.slice(0, LOOKUP_MAX_ROWS) : rows,
+      truncated,
+    };
+  });

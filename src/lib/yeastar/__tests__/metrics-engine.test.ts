@@ -641,6 +641,105 @@ describe("no-analytics state (CDR delayed or still loading)", () => {
   });
 });
 
+describe("zero-call window (a quiet day, not a broken one)", () => {
+  /**
+   * The distinction the dashboards used to lose.
+   *
+   * `analytics: null` means the fetch has not produced anything yet. A window
+   * that RESOLVED and contains no calls is a different thing entirely: it is a
+   * complete answer, every KPI is a real zero, and the page must render every
+   * section around it. Both pages previously replaced everything below the KPI
+   * grids with a single "no calls found" card, which made a quiet Friday look
+   * like a failure.
+   */
+  const zeroTotals = totals({
+    total: 0,
+    inbound: 0,
+    outbound: 0,
+    answered: 0,
+    missed: 0,
+    abandoned: 0,
+    talkSeconds: 0,
+    avgTalkSec: 0,
+    avgWaitSec: 0,
+    avgWaitAnsweredSec: 0,
+    maxWaitSec: 0,
+    answerRate: 0,
+    missedRate: 0,
+    abandonRate: 0,
+    inboundAnswered: 0,
+    inboundAnswerRate: 0,
+    queueCalls: 0,
+    queueAnswerRate: 0,
+    slaAnsweredWithin: 0,
+    slaAttainment: 0,
+    noAnswerOutbound: 0,
+    busy: 0,
+    failed: 0,
+  });
+  const zero = () =>
+    build({
+      analytics: { totals: zeroTotals, agents: [], byDay: [], byHour: [] },
+      callReport: null,
+    });
+
+  it("reports the window as empty rather than as unloaded", () => {
+    const m = zero();
+    expect(m.isEmpty).toBe(true);
+    // Still CDR-sourced: the data arrived, it just says nobody called.
+    expect(m.sources.overview).toBe("cdr");
+  });
+
+  it("produces a finite zero for every numeric KPI — never NaN", () => {
+    // Every rate on this object is a division, and each one has a zero
+    // denominator here. One unguarded `a / b` renders as "NaN%" on a card.
+    const m = zero();
+    const groups = [m.overview, m.serviceLevel, m.queue, m.direction, m.time];
+    // `slaSeconds` is the configured answer TARGET, not a measurement — it is
+    // still 60 on a day nobody called, and zeroing it would be the bug.
+    const CONFIGURATION_NOT_MEASUREMENT = new Set(["slaSeconds"]);
+    for (const group of groups) {
+      for (const [key, value] of Object.entries(group)) {
+        if (typeof value !== "number") continue;
+        expect(Number.isFinite(value), `${key} = ${value}`).toBe(true);
+        if (CONFIGURATION_NOT_MEASUREMENT.has(key)) continue;
+        expect(value, `${key} = ${value}`).toBe(0);
+      }
+    }
+  });
+
+  it("returns empty series and no peak, so charts show an empty state", () => {
+    const m = zero();
+    expect(m.trends.byDay).toEqual([]);
+    expect(m.trends.hourly).toEqual([]);
+    expect(m.trends.dailyAnswerRate).toEqual([]);
+    expect(m.trends.peakHour).toBeNull();
+    expect(m.trends.hasDailyData).toBe(false);
+    expect(m.trends.hasHourlyData).toBe(false);
+    expect(m.trends.dayCount).toBe(0);
+  });
+
+  it("returns an empty agent table without ranking anybody", () => {
+    const m = zero();
+    expect(m.agents.rows).toEqual([]);
+    expect(m.agents.visible).toEqual([]);
+    expect(m.agents.highlights.ranks).toEqual({});
+    expect(m.agents.highlights.topAnsweredId).toBeNull();
+  });
+
+  it("raises no unanswered-split banner when there is nothing to split", () => {
+    const m = zero();
+    expect(m.unansweredSplit.cdrUnansweredTotal).toBe(0);
+    expect(m.unansweredSplit.splitDiffers).toBe(false);
+  });
+
+  it("does not confuse a zero window with an unloaded one", () => {
+    // `isEmpty` must stay false while the query is still in flight, or the page
+    // announces "no calls" over a skeleton.
+    expect(build({ analytics: null, callReport: null }).isEmpty).toBe(false);
+  });
+});
+
 describe("export-facing metrics", () => {
   it("carries no-answer outbound, which the XLSX reports but no card shows", () => {
     expect(build().direction.noAnswerOutbound).toBe(3);

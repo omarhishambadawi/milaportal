@@ -89,6 +89,33 @@ export interface PeakHour {
 }
 
 /**
+ * The busiest bucket in an hourly series, or null when none carried a call.
+ *
+ * Ties go to the earlier hour, so the annotation does not jump between two
+ * equal hours between refreshes.
+ *
+ * Exported because three surfaces annotate a peak — Customer Care's Calls by
+ * Hour, Telesales' Outbound Calls by Hour and the Calls Overview — and a
+ * maximum scanned separately in each chart is three places the same number is
+ * defined. `pick` chooses which series the peak is of: Customer Care and the
+ * overview read `total`, Telesales reads `outbound`, because a telesales peak
+ * is about when the team dialled.
+ */
+export function resolvePeakHour<T extends { hour: number; label: string }>(
+  hourly: readonly T[],
+  pick: (bucket: T) => number = (b) => (b as unknown as { total: number }).total,
+): PeakHour | null {
+  let peak: PeakHour | null = null;
+  for (const h of hourly) {
+    const total = pick(h);
+    if (total > 0 && (!peak || total > peak.total)) {
+      peak = { hour: h.hour, label: h.label, total };
+    }
+  }
+  return peak;
+}
+
+/**
  * One agent row, with CDR and Call Report reconciled.
  *
  * `missedCalls` is the only field whose source can vary, and `missedSource`
@@ -536,14 +563,7 @@ export function buildCustomerCareMetrics(input: MetricsEngineInput): CustomerCar
 
   // --- trends ---------------------------------------------------------------
   const hourly: LabelledHourBucket[] = byHour.map((h) => ({ ...h, label: hourLabel(h.hour) }));
-  // The busiest hour, resolved once. Ties go to the earlier hour, so the
-  // annotation does not jump between two equal hours between refreshes.
-  let peakHour: PeakHour | null = null;
-  for (const h of hourly) {
-    if (h.total > 0 && (!peakHour || h.total > peakHour.total)) {
-      peakHour = { hour: h.hour, label: h.label, total: h.total };
-    }
-  }
+  const peakHour = resolvePeakHour(hourly);
 
   // Same formula as the headline answer rate, applied per day. Kept beside it so
   // the card and the trend line cannot drift apart.
