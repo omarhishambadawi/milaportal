@@ -32,6 +32,8 @@ export interface OrdersFilters {
   team: string;
   agent: string;
   status: string;
+  /** "all" | "delivery" | "pickup" — the Delivery & Pickup filter. */
+  fulfillment: string;
   mineOnly: boolean;
   term: string;
   userId: string | undefined;

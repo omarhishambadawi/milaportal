@@ -8,6 +8,7 @@ export type OrdersFilterCache = {
   team: string;
   agent: string;
   status: string;
+  fulfillment: string;
   mineOnly: boolean;
   page: number;
 };

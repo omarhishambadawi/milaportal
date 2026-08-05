@@ -10,6 +10,7 @@ interface UseOrdersListDataArgs {
   team: string;
   agent: string;
   status: string;
+  fulfillment: string;
   mineOnly: boolean;
   userId: string | undefined;
   /** Mirrors `OrderFilterState.canFilterAgents` — see the note there. */
@@ -36,6 +37,7 @@ export function useOrdersListData({
   team,
   agent,
   status,
+  fulfillment,
   mineOnly,
   userId,
   canFilterAgents,
@@ -81,6 +83,7 @@ export function useOrdersListData({
         _status: status,
         _mine: mineOnly && !!userId,
         _q: searching ? term : null,
+        _fulfillment: fulfillment,
       });
       if (error) throw error;
       return (data ?? {}) as Record<string, number>;
