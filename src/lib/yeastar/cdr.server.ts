@@ -11,8 +11,10 @@
  *   3. Real CDR fields are mapped: `timestamp`, `disposition`, `call_type`,
  *      `duration`, `ring_duration`, `talk_duration`, `call_from_number`,
  *      `call_to_number`, etc.
- *   4. Pagination retrieves ALL records (page_size up to 10,000) until
- *      total_number is reached, with a high safety ceiling.
+ *   4. Pagination retrieves ALL records until total_number is reached, with a
+ *      high safety ceiling. Page 1 is a blocking probe — its `total_number`
+ *      sizes the job — and the remaining pages are then fetched concurrently.
+ *      See DEFAULT_PAGE_SIZE for why the page size is not the API maximum.
  *   5. Day boundaries are computed in the business timezone (default UTC+3,
  *      Asia/Riyadh — no DST) so buckets line up with dashboard filters.
  */
@@ -23,6 +25,42 @@ import { BUSINESS_UTC_OFFSET_MINUTES } from "@/lib/timezone";
 // Business timezone offset for day-boundary math. Defaults to the centralized
 // business timezone (Asia/Riyadh = UTC+3, no DST); override per-deployment.
 const TZ_OFFSET_MIN = Number(process.env.YEASTAR_UTC_OFFSET_MINUTES ?? BUSINESS_UTC_OFFSET_MINUTES);
+
+/**
+ * How many CDR pages to have in flight at once.
+ *
+ * The PBX is an appliance, not a cluster — this is enough to remove the serial
+ * stall on a multi-page window without turning a dashboard load into a burst
+ * the box has to queue. Tunable, because the right value depends on hardware
+ * this code cannot measure from here.
+ */
+const PAGE_CONCURRENCY = Math.max(1, Number(process.env.YEASTAR_CDR_PAGE_CONCURRENCY) || 6);
+
+/**
+ * Rows per CDR page.
+ *
+ * Was 10,000 — the API maximum — on the reasoning that fewer round-trips is
+ * fewer round-trips. That is backwards once the pages after the first are
+ * fetched together, because page 1 is a BLOCKING probe: nothing else can start
+ * until its `total_number` says how many pages there are. At 10,000 the probe
+ * alone carries three quarters of a month's rows, so the window is essentially
+ * fetched serially no matter what the rest do.
+ *
+ * Modelled over a 14,000-row month (the live-audit figure) across per-request
+ * overheads from 100 ms to 1 s, 10,000 is the WORST available choice at every
+ * point in that range and ~2,000 is at or near the best at all of them:
+ *
+ *   page_size   overhead 100ms   250ms   500ms   1000ms
+ *      10,000          3,200   3,500   4,000    5,000   ms
+ *       2,000            800   1,100   1,600    2,600   ms
+ *
+ * Small enough to keep the probe cheap, large enough that a month is still only
+ * a handful of requests. Tunable for the same reason as the concurrency.
+ */
+const DEFAULT_PAGE_SIZE = Math.min(
+  10_000,
+  Math.max(100, Number(process.env.YEASTAR_CDR_PAGE_SIZE) || 2_000),
+);
 
 /**
  * A raw CDR row, exactly as the live PBX emits it.
@@ -48,8 +86,8 @@ interface CdrPageResponse {
 export interface FetchCdrOptions {
   from: string; // "YYYY-MM-DD" (inclusive, business tz)
   to: string; // "YYYY-MM-DD" (inclusive, business tz)
-  pageSize?: number; // default 10,000 (Yeastar max)
-  maxPages?: number; // safety ceiling, default 200
+  pageSize?: number; // default DEFAULT_PAGE_SIZE (2,000); Yeastar max is 10,000
+  maxPages?: number; // safety ceiling, default 1,000
   signal?: AbortSignal;
   jobId?: string; // when set, progress is reported via progress.server.ts
 }
@@ -105,13 +143,14 @@ async function fetchAllPages(
   let totalReported: number | null = null;
   let page = 1;
   const progress = jobId ? await import("./progress.server") : null;
-  for (; page <= maxPages; page++) {
+
+  /** One page. Throws on any transport or errcode failure. */
+  const getPage = async (p: number): Promise<CdrRecord[]> => {
     const { httpStatus, json, body } = await yeastarFetch<CdrPageResponse>(
       endpoint,
-      { ...baseQuery, page, page_size: pageSize, sort_by: "time", order_by: "asc" },
+      { ...baseQuery, page: p, page_size: pageSize, sort_by: "time", order_by: "asc" },
       { signal },
     );
-
     if (httpStatus !== 200)
       throw new Error(`Yeastar CDR HTTP ${httpStatus}: ${body.slice(0, 200)}`);
     if (!json || json.errcode !== 0) {
@@ -119,34 +158,82 @@ async function fetchAllPages(
         `Yeastar CDR errcode ${json?.errcode ?? "n/a"}: ${json?.errmsg ?? "unknown"}`,
       );
     }
-
-    const list = json.data ?? []; // CORRECT field
     if (typeof json.total_number === "number") totalReported = json.total_number;
-    // Append element-by-element rather than `records.push(...list)`: with
-    // page_size up to 10,000 the spread pushes that many args onto the call
-    // stack in one call, which risks a RangeError on large pages. A plain loop
-    // has no argument-count ceiling.
-    for (const r of list) records.push(r);
-    const totalPages =
-      totalReported != null ? Math.max(1, Math.ceil(totalReported / pageSize)) : null;
-    if (progress && jobId) {
-      await progress.updateJob(jobId, {
-        status: "fetching",
-        page,
-        totalPages,
-        records: records.length,
-        totalReported,
-        message: totalPages ? `Fetching page ${page} of ${totalPages}…` : `Fetching page ${page}…`,
-      });
-    }
+    return json.data ?? []; // CORRECT field
+  };
 
+  // Append element-by-element rather than `records.push(...list)`: with
+  // page_size up to 10,000 the spread pushes that many args onto the call stack
+  // in one call, which risks a RangeError on large pages. A plain loop has no
+  // argument-count ceiling.
+  const append = (list: CdrRecord[]) => {
+    for (const r of list) records.push(r);
+  };
+
+  // Page 1 is the probe: it is the only one whose page count is unknown in
+  // advance, and its `total_number` tells us exactly how many more there are.
+  const first = await getPage(1);
+  append(first);
+  const report = (p: number, totalPages: number | null, got: number) => {
     console.log(
-      `[yeastar cdr] ${endpoint} page=${page} got=${list.length} total=${totalReported ?? "?"} acc=${records.length}`,
+      `[yeastar cdr] ${endpoint} page=${p} got=${got} total=${totalReported ?? "?"} acc=${records.length}`,
     );
-    if (list.length < pageSize) break;
-    if (totalReported !== null && records.length >= totalReported) break;
+    return progress && jobId
+      ? progress.updateJob(jobId, {
+          status: "fetching",
+          page: p,
+          totalPages,
+          records: records.length,
+          totalReported,
+          message: totalPages ? `Fetching page ${p} of ${totalPages}…` : `Fetching page ${p}…`,
+        })
+      : Promise.resolve();
+  };
+
+  const totalPages =
+    totalReported != null ? Math.max(1, Math.ceil(totalReported / pageSize)) : null;
+  await report(1, totalPages, first.length);
+
+  let truncated = false;
+  if (first.length >= pageSize && !(totalReported !== null && records.length >= totalReported)) {
+    if (totalPages != null) {
+      // The PBX told us the total, so the remaining pages are known up front and
+      // there is no reason to discover them one blocking round-trip at a time.
+      // This is where a big window used to spend most of its wall time.
+      const wanted = Math.min(totalPages, maxPages);
+      truncated = totalPages > maxPages;
+      const rest = Array.from({ length: wanted - 1 }, (_, i) => i + 2);
+      const pageRows = new Array<CdrRecord[]>(rest.length);
+      let next = 0;
+      await Promise.all(
+        Array.from({ length: Math.min(PAGE_CONCURRENCY, rest.length) }, async () => {
+          for (;;) {
+            const idx = next++;
+            if (idx >= rest.length) return;
+            pageRows[idx] = await getPage(rest[idx]!);
+          }
+        }),
+      );
+      // Concatenated in page order, so the `sort_by=time&order_by=asc` the
+      // request asked for still holds across the whole result.
+      for (let i = 0; i < pageRows.length; i++) {
+        append(pageRows[i] ?? []);
+        await report(rest[i]!, totalPages, pageRows[i]?.length ?? 0);
+      }
+      page = wanted;
+    } else {
+      // No total to go on — fall back to discovering pages sequentially.
+      for (page = 2; page <= maxPages; page++) {
+        const list = await getPage(page);
+        append(list);
+        await report(page, null, list.length);
+        if (list.length < pageSize) break;
+        if (totalReported !== null && records.length >= totalReported) break;
+      }
+      truncated = page > maxPages;
+    }
   }
-  const truncated = page > maxPages;
+
   if (truncated)
     console.warn(
       `[yeastar cdr] SAFETY CEILING hit at ${maxPages} pages — result may be incomplete`,
@@ -294,9 +381,12 @@ export async function fetchCdrByNumber(
 
 export async function fetchCdrRange(opts: FetchCdrOptions): Promise<FetchCdrResult> {
   const started = Date.now();
-  // v1.0 /cdr/list and /cdr/search accept page_size up to 10,000.
-  const pageSize = opts.pageSize ?? 10_000;
-  const maxPages = opts.maxPages ?? 200;
+  // v1.0 /cdr/list and /cdr/search accept page_size up to 10,000; see
+  // DEFAULT_PAGE_SIZE for why the maximum is not the fastest setting.
+  const pageSize = opts.pageSize ?? DEFAULT_PAGE_SIZE;
+  // Pages are smaller now, so the ceiling has to rise with them to cover the
+  // same volume. 2,000 × 1,000 is two million rows before it trips.
+  const maxPages = opts.maxPages ?? 1_000;
   const { startEpoch, endEpoch } = dayBounds(opts.from, opts.to);
   const inWindow = (r: CdrRecord) =>
     typeof r.timestamp === "number" && r.timestamp >= startEpoch && r.timestamp <= endEpoch;

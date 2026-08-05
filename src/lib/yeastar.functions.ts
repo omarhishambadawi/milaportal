@@ -12,6 +12,7 @@ import { BUSINESS_UTC_OFFSET_MINUTES } from "@/lib/timezone";
 import { CALL_CENTER_VIEW_PERMISSIONS } from "@/lib/call-center-permissions";
 import { callsTeamForRole } from "@/lib/calls-access";
 import { digitsOf, matchKey, numberVariants, LOOKUP_MIN_DIGITS } from "@/lib/yeastar/lookup-match";
+import { __ttls as CDR_WINDOW_TTLS } from "@/lib/yeastar/cdr-window.server";
 import { z } from "zod";
 // Type-only: erased at compile time, so the server-only diagnostics module is
 // never pulled into a client bundle.
@@ -153,15 +154,11 @@ export const callsConfiguration = createServerFn({ method: "POST" })
         }
       }
 
-      // Newest cached CDR window, as an indicator of the last successful sync.
-      let lastSyncAgeMs: number | null = null;
-      for (const entry of cdrCache.values()) {
-        const age = Date.now() - entry.at;
-        if (lastSyncAgeMs == null || age < lastSyncAgeMs) lastSyncAgeMs = age;
-      }
-      const warmWindows = [...cdrCache.values()].filter(
-        (e) => Date.now() - e.at < CDR_CACHE_TTL_MS,
-      ).length;
+      // Newest cached CDR day, as an indicator of the last successful sync.
+      const { cdrCacheStats } = await import("@/lib/yeastar/cdr-window.server");
+      const cacheStats = cdrCacheStats();
+      const lastSyncAgeMs = cacheStats.newestAgeMs;
+      const warmWindows = cacheStats.freshDays;
 
       const agents = await loadAgents((context as any).supabase);
       const cc = agents.filter((a) => a.team === "customer_care");
@@ -272,23 +269,24 @@ export const callsConfiguration = createServerFn({ method: "POST" })
                 label: "Last successful sync",
                 value:
                   lastSyncAgeMs == null
-                    ? "no window cached yet"
+                    ? "no day cached yet"
                     : `${Math.round(lastSyncAgeMs / 1000)}s ago`,
                 source: "application",
-                note: "Age of the most recently fetched CDR window.",
+                note: "Age of the most recently fetched CDR day.",
               },
               {
                 key: "cacheStatus",
                 label: "Cache status",
-                value: warmWindows > 0 ? `${warmWindows} window(s) warm` : "cold",
+                value: warmWindows > 0 ? `${warmWindows} day(s) warm` : "cold",
                 source: "application",
+                note: "CDR is cached per business day, so windows are composed from days rather than re-swept.",
               },
               {
                 key: "cdrCacheTtl",
                 label: "CDR cache",
-                value: `${CDR_CACHE_TTL_MS / 60_000} minutes`,
+                value: `${CDR_WINDOW_TTLS.CLOSED_DAY_TTL_MS / 3_600_000}h closed days · ${CDR_WINDOW_TTLS.LIVE_DAY_TTL_MS / 60_000} min today`,
                 source: "application",
-                note: "Matches the dashboards' own staleTime.",
+                note: "A day that has ended cannot gain a call, so only today expires quickly.",
               },
               {
                 key: "rosterCacheTtl",
@@ -1057,11 +1055,14 @@ export const yeastarKpiValidation = createServerFn({ method: "POST" })
 
       // Observe the production CDR cache WITHOUT touching it. Validation always
       // fetches its own copy, so running diagnostics can neither warm nor evict
-      // the cache the dashboards depend on.
-      const cached = cdrCache.get(`${from}|${to}`);
+      // the cache the dashboards depend on. A partially cached window reports as
+      // cold: the report means "were these numbers served from memory", and a
+      // window missing any day was not.
+      const { windowCacheState } = await import("@/lib/yeastar/cdr-window.server");
+      const warmth = windowCacheState(from, to);
       const cdrCacheState: { status: "warm" | "cold"; ageMs: number | null } =
-        cached && Date.now() - cached.at < CDR_CACHE_TTL_MS
-          ? { status: "warm", ageMs: Date.now() - cached.at }
+        warmth.status === "warm"
+          ? { status: "warm", ageMs: warmth.ageMs }
           : { status: "cold", ageMs: null };
 
       const { runKpiValidation } = await import("@/lib/yeastar/kpi-validation.server");
@@ -1189,27 +1190,16 @@ const analyticsInput = statsInput.extend({
 // rows are re-fetched.
 const CDR_CACHE_TTL_MS = 5 * 60_000;
 const CDR_CACHE_MAX = 20;
-/**
- * `settled` records whether the sweep has already finished. Call Lookup uses it
- * to tell "the window is sitting in memory" from "somebody else is midway
- * through a 30-day sweep" — it will happily reuse the former, but must not
- * block on the latter when a targeted per-number query would answer sooner.
- */
-const cdrCache = new Map<string, { at: number; settled: boolean; promise: Promise<any> }>();
 
-function evictCdrCache() {
-  const now = Date.now();
-  // TTL sweep
-  for (const [k, v] of cdrCache) {
-    if (now - v.at > CDR_CACHE_TTL_MS) cdrCache.delete(k);
-  }
-  // Size cap: drop oldest entries (Map preserves insertion order)
-  while (cdrCache.size > CDR_CACHE_MAX) {
-    const oldest = cdrCache.keys().next().value;
-    if (oldest === undefined) break;
-    cdrCache.delete(oldest);
-  }
-}
+/**
+ * In-flight window sweeps, keyed by `from|to`.
+ *
+ * The day store below is the cache; this map exists only so that two requests
+ * arriving for the same cold window — which is exactly what the Customer Care
+ * page does when analytics and Call Report mount together, and what two open
+ * tabs do — share one sweep instead of racing two.
+ */
+const inFlightWindows = new Map<string, Promise<CdrWindowT>>();
 
 // ---- Phase-1 (normalization) cache ------------------------------------------
 //
@@ -1249,43 +1239,24 @@ function getClassifiedCached(
   return value;
 }
 
-async function getCdrCached(from: string, to: string, jobId?: string) {
-  evictCdrCache();
+type CdrWindowT = import("@/lib/yeastar/cdr-window.server").CdrWindow;
+
+/**
+ * The CDR rows for a window, from the day store.
+ *
+ * Coalesces concurrent requests for the same window so a cold month is swept
+ * once even when several queries ask for it at the same instant.
+ */
+async function getCdrCached(from: string, to: string, jobId?: string): Promise<CdrWindowT> {
   const key = `${from}|${to}`;
-  const now = Date.now();
-  const hit = cdrCache.get(key);
-  if (hit && now - hit.at < CDR_CACHE_TTL_MS) {
-    if (jobId) {
-      const p = await import("@/lib/yeastar/progress.server");
-      hit.promise
-        .then((cdr) => {
-          p.updateJob(jobId, {
-            status: "aggregating",
-            page: 1,
-            totalPages: 1,
-            records: cdr.records.length,
-            totalReported: cdr.totalReported,
-            message: `Cached ${cdr.records.length.toLocaleString()} records — aggregating…`,
-          }).catch(() => {});
-        })
-        .catch(() => {});
-    }
-    return hit.promise;
-  }
-  const { fetchCdrRange } = await import("@/lib/yeastar/cdr.server");
-  const promise = fetchCdrRange({ from, to, jobId }).catch((e) => {
-    cdrCache.delete(key);
-    throw e;
+  const existing = inFlightWindows.get(key);
+  if (existing) return existing;
+
+  const { getCdrWindow } = await import("@/lib/yeastar/cdr-window.server");
+  const promise = getCdrWindow(from, to, jobId).finally(() => {
+    inFlightWindows.delete(key);
   });
-  const entry = { at: now, settled: false, promise };
-  promise.then(
-    () => {
-      entry.settled = true;
-    },
-    () => {},
-  );
-  cdrCache.set(key, entry);
-  if (cdrCache.size > CDR_CACHE_MAX) evictCdrCache();
+  inFlightWindows.set(key, promise);
   return promise;
 }
 
@@ -1670,7 +1641,38 @@ export const getCallCenterAnalytics = createServerFn({ method: "POST" })
     }
 
     try {
-      const cdr = await getCdrCached(data.from, data.to, scopedJobId);
+      // Four independent I/O stages that used to run one after another: the CDR
+      // sweep, the orders read, the PBX roster and the stats module import. On a
+      // month the sweep is the long pole, and everything else was queued BEHIND
+      // it for no reason — none of them is an input to any other.
+      //
+      // Orders is scoped to the same team/agent as the calls (Orders is the SSOT
+      // for order metrics; scoping here keeps conversion/completion aligned).
+      const ordersQuery = async (): Promise<any[]> => {
+        if (!data.includeOrders) return [];
+        let oq = supabase
+          .from("orders")
+          .select("id,agent_id,order_date,status,order_type,invoice_value")
+          .gte("order_date", data.from)
+          .lte("order_date", data.to);
+        if (data.team !== "all") oq = oq.eq("team", data.team);
+        if (effectiveAgentId) oq = oq.eq("agent_id", effectiveAgentId);
+        const { data: ord } = await oq;
+        return (ord as any[]) ?? [];
+      };
+
+      const [cdr, orders, ctx, statsModule] = await Promise.all([
+        getCdrCached(data.from, data.to, scopedJobId),
+        ordersQuery(),
+        // The PBX rosters drive leg classification: a queue is never an agent,
+        // and an agent leg is only recognisable by its extension being on the
+        // roster. Falls back to the app's own agent extensions if
+        // /extension/list is unreachable.
+        buildNormalizationContext(allAgents.map((a) => a.ext)),
+        import("@/lib/yeastar/stats.server"),
+      ]);
+      const { aggregateClassified, classifyRecords } = statsModule;
+
       if (progress && scopedJobId)
         await progress.updateJob(scopedJobId, {
           status: "aggregating",
@@ -1682,29 +1684,6 @@ export const getCallCenterAnalytics = createServerFn({ method: "POST" })
       // and dropping legs corrupts the call it belongs to. Filters are applied
       // to whole calls AFTER normalization.
       const records = cdr.records as any[];
-
-      // Load orders in the same window, for telesales conversion
-      // Orders scoped to the same team/agent as the calls (Orders is the SSOT
-      // for order metrics; scoping here keeps conversion/completion aligned).
-      let orders: any[] = [];
-      if (data.includeOrders) {
-        let oq = supabase
-          .from("orders")
-          .select("id,agent_id,order_date,status,order_type,invoice_value")
-          .gte("order_date", data.from)
-          .lte("order_date", data.to);
-        if (data.team !== "all") oq = oq.eq("team", data.team);
-        if (effectiveAgentId) oq = oq.eq("agent_id", effectiveAgentId);
-        const { data: ord } = await oq;
-        orders = (ord as any[]) ?? [];
-      }
-
-      const { aggregateClassified, classifyRecords } = await import("@/lib/yeastar/stats.server");
-      // The PBX rosters drive leg classification: a queue is never an agent,
-      // and an agent leg is only recognisable by its extension being on the
-      // roster. Fall back to the app's own agent extensions if /extension/list
-      // is unreachable.
-      const ctx = await buildNormalizationContext(allAgents.map((a) => a.ext));
       // Phase 1 (normalize) is cached per window + roster; phase 2 applies the
       // request's direction/status/scope filters over whole calls.
       const classified = getClassifiedCached(data.from, data.to, records, ctx, classifyRecords);
@@ -2224,10 +2203,12 @@ async function peekClassifiedWindow(
   to: string,
   ctx: NormalizationContext,
 ): Promise<ClassifiedRecordsT | null> {
-  const hit = cdrCache.get(`${from}|${to}`);
-  if (!hit || !hit.settled || Date.now() - hit.at >= CDR_CACHE_TTL_MS) return null;
+  const { windowCacheState, getCdrWindow } = await import("@/lib/yeastar/cdr-window.server");
+  // Only a FULLY cached window qualifies. A partial one would have to fetch the
+  // missing days, and a targeted per-number query answers sooner than that.
+  if (windowCacheState(from, to).status !== "warm") return null;
   try {
-    const cdr = await hit.promise;
+    const cdr = await getCdrWindow(from, to);
     const { classifyRecords } = await import("@/lib/yeastar/stats.server");
     return getClassifiedCached(from, to, cdr.records as any[], ctx, classifyRecords);
   } catch {
