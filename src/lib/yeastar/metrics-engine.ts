@@ -30,14 +30,17 @@
  *                       count the population but cannot say who hung up.
  *                  Everything else Call Report publishes is already derived from
  *                  CDR at equal or better fidelity.
- *   Queue API    — realtime tiles only. It reports the present moment and can
- *                  never answer a historical question.
+ *   Queue API    — nothing. It fed the realtime tiles, and those were removed
+ *                  from the dashboard; the metric group went with them, because
+ *                  a number nothing renders is a number nobody maintains. The
+ *                  `yeastarRealtimeQueue` server function is untouched and still
+ *                  serves /calls/diagnostics.
  *
  * Provenance is not implied — every metric's source is recorded on `sources`
  * and surfaced in the UI, so a viewer can tell where a number came from.
  *
  * See `docs/yeastar/sprint2-source-validation.md` for the evidence behind each
- * of those three lines.
+ * of those lines.
  */
 import type { AgentCallStats, CallTotals, DayBucket, HourBucket } from "./stats.server";
 import type { CallReportSnapshot } from "./call-report.server";
@@ -48,8 +51,6 @@ export type MetricSource =
   | "cdr"
   /** Read from Yeastar's own Call Report API (openapi/v2.0). */
   | "call_report"
-  /** Live PBX queue state. */
-  | "queue_api"
   /** The source was reachable but produced nothing for this window. */
   | "unavailable";
 
@@ -73,11 +74,18 @@ export interface DailyRatePoint {
   rate: number;
 }
 
-/** Live queue state, exactly as `yeastarRealtimeQueue` returns it. */
-export interface RealtimeQueueSnapshot {
-  ok?: boolean;
-  calls?: { waiting?: number; active?: number; ringing?: number };
-  agents?: { ready?: number; busy?: number; paused?: number };
+/**
+ * The busiest hour of the day across the window.
+ *
+ * Derived here rather than in the chart for the usual reason: picking the
+ * maximum of a series is a derivation, and a component that performs one is a
+ * second place the number is defined. The hourly chart annotates this hour, so
+ * the annotation and the bars are guaranteed to agree.
+ */
+export interface PeakHour {
+  hour: number;
+  label: string;
+  total: number;
 }
 
 /**
@@ -167,21 +175,6 @@ export interface CustomerCareMetrics {
     answerRate: number;
     avgTalkSec: number;
   };
-  realtime: {
-    available: boolean;
-    waiting: number;
-    active: number;
-    ringing: number;
-    agentsReady: number;
-    agentsBusy: number;
-    agentsPaused: number;
-    /**
-     * Live and carrying no traffic at all — nobody waiting, talking or ringing.
-     * A wall of zeros reads as "broken"; this lets the UI say "idle" instead,
-     * without hiding the tiles.
-     */
-    idle: boolean;
-  };
   serviceLevel: {
     slaSeconds: number;
     slaAttainment: number;
@@ -233,6 +226,10 @@ export interface CustomerCareMetrics {
      * Rate card, which is only guaranteed while both come off this engine.
      */
     dailyAnswerRate: DailyRatePoint[];
+    /** Busiest hour in the window. Null when no hour carried a call. */
+    peakHour: PeakHour | null;
+    /** Days in the window that produced a bucket — drives chart density. */
+    dayCount: number;
     /** False when every hour bucket is empty — charts render an empty state. */
     hasHourlyData: boolean;
     /** False when the window produced no daily buckets at all. */
@@ -276,7 +273,6 @@ export interface CustomerCareMetrics {
     agents: MetricSource;
     /** The one metric CDR cannot produce on this firmware. */
     agentMissed: MetricSource;
-    realtime: MetricSource;
   };
   /** How Call Report behaved, so the UI can be honest about a degraded column. */
   callReport: {
@@ -300,7 +296,6 @@ export interface MetricsEngineInput {
   /** Null while the analytics query has produced nothing yet. */
   analytics: AnalyticsSlice | null;
   callReport: CallReportSnapshot | null;
-  realtime: RealtimeQueueSnapshot | null;
   /** Active dashboard filters — they decide whether Call Report even applies. */
   filters: {
     direction: "all" | "Inbound" | "Outbound";
@@ -539,14 +534,17 @@ export function buildCustomerCareMetrics(input: MetricsEngineInput): CustomerCar
     splitDiffers: split.missed !== totals.missed || split.abandoned !== totals.abandoned,
   };
 
-  // --- realtime -------------------------------------------------------------
-  const rt = input.realtime;
-  const rtOk = rt?.ok === true;
-  const rtCalls = rtOk
-    ? (rt?.calls?.waiting ?? 0) + (rt?.calls?.active ?? 0) + (rt?.calls?.ringing ?? 0)
-    : 0;
-
+  // --- trends ---------------------------------------------------------------
   const hourly: LabelledHourBucket[] = byHour.map((h) => ({ ...h, label: hourLabel(h.hour) }));
+  // The busiest hour, resolved once. Ties go to the earlier hour, so the
+  // annotation does not jump between two equal hours between refreshes.
+  let peakHour: PeakHour | null = null;
+  for (const h of hourly) {
+    if (h.total > 0 && (!peakHour || h.total > peakHour.total)) {
+      peakHour = { hour: h.hour, label: h.label, total: h.total };
+    }
+  }
+
   // Same formula as the headline answer rate, applied per day. Kept beside it so
   // the card and the trend line cannot drift apart.
   const dailyAnswerRate: DailyRatePoint[] = byDay.map((d) => ({
@@ -560,18 +558,6 @@ export function buildCustomerCareMetrics(input: MetricsEngineInput): CustomerCar
       answeredCalls: totals.answered,
       answerRate: totals.answerRate,
       avgTalkSec: totals.avgTalkSec,
-    },
-    realtime: {
-      available: rtOk,
-      waiting: rtOk ? (rt?.calls?.waiting ?? 0) : 0,
-      active: rtOk ? (rt?.calls?.active ?? 0) : 0,
-      ringing: rtOk ? (rt?.calls?.ringing ?? 0) : 0,
-      agentsReady: rtOk ? (rt?.agents?.ready ?? 0) : 0,
-      agentsBusy: rtOk ? (rt?.agents?.busy ?? 0) : 0,
-      agentsPaused: rtOk ? (rt?.agents?.paused ?? 0) : 0,
-      // Idle is a statement about live traffic, not about staffing: a queue with
-      // agents ready and no calls IS idle, and that is the useful thing to say.
-      idle: rtOk && rtCalls === 0,
     },
     serviceLevel: {
       slaSeconds: totals.slaSeconds,
@@ -606,7 +592,9 @@ export function buildCustomerCareMetrics(input: MetricsEngineInput): CustomerCar
       byDay,
       hourly,
       dailyAnswerRate,
-      hasHourlyData: byHour.some((h) => h.total > 0),
+      peakHour,
+      dayCount: byDay.length,
+      hasHourlyData: peakHour != null,
       hasDailyData: byDay.length > 0,
     },
     agents: { rows, visible, missedAvailable, highlights: rankAgents(rows) },
@@ -622,7 +610,6 @@ export function buildCustomerCareMetrics(input: MetricsEngineInput): CustomerCar
       trends: cdrSource,
       agents: cdrSource,
       agentMissed: agentMissedSource,
-      realtime: rtOk ? "queue_api" : "unavailable",
     },
     callReport: {
       attempted: snapshot != null,

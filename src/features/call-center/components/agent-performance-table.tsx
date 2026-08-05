@@ -1,4 +1,5 @@
-import { Star } from "lucide-react";
+import { memo } from "react";
+import { Search, Star } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -74,9 +75,9 @@ function RankBadge({ rank }: { rank: number }) {
     <span
       title={`#${rank} by calls answered`}
       className={cn(
-        "inline-flex h-[18px] min-w-[22px] items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums",
+        "inline-flex h-5 min-w-[24px] shrink-0 items-center justify-center rounded-md px-1 text-[10px] font-semibold tabular-nums",
         rank === 1
-          ? "bg-primary/15 text-primary"
+          ? "bg-primary/15 text-primary ring-1 ring-inset ring-primary/25"
           : "bg-muted text-muted-foreground ring-1 ring-inset ring-border",
       )}
     >
@@ -99,7 +100,7 @@ function TopPerformerBadge() {
       className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary"
     >
       <Star className="h-3 w-3 fill-current" aria-hidden="true" />
-      Top performer
+      Top
     </span>
   );
 }
@@ -118,7 +119,7 @@ function Leader({
     <span
       title={title}
       className={cn(
-        "inline-flex items-center rounded px-1.5 py-0.5 font-semibold",
+        "inline-flex items-center rounded-md px-1.5 py-0.5 font-semibold",
         tone === "success" ? "bg-success/10 text-success" : "bg-primary/10 text-primary",
       )}
     >
@@ -127,16 +128,29 @@ function Leader({
   );
 }
 
-const TH = "px-3 py-2.5 font-medium whitespace-nowrap";
-const TD = "px-3 py-2.5 tabular-nums";
+const TH = "px-3 py-2.5 font-medium whitespace-nowrap first:pl-4 last:pr-4";
+const TD = "px-3 py-3 tabular-nums first:pl-4 last:pr-4";
+/**
+ * Hairline before the timing columns.
+ *
+ * Twelve numeric columns read as one undifferentiated block, and the split that
+ * actually matters is volume-and-outcome against how long it all took. One
+ * border is cheaper than the extra padding or the second header row that would
+ * otherwise be needed to say the same thing.
+ */
+const GROUP_EDGE = "border-l border-border/50";
 
 /**
  * Agent performance table, shared by both dashboards.
  *
  * The rows are identical — they come from the same analytics engine — only the
  * columns differ, because the two workflows are judged on different things.
+ *
+ * `memo` matters here: the table is the tallest thing on the Customer Care page
+ * and its props change only when the agent rows do, while the page around it
+ * re-renders on every filter and refresh tick.
  */
-export function AgentPerformanceTable({
+export const AgentPerformanceTable = memo(function AgentPerformanceTable({
   rows,
   loading,
   search,
@@ -147,32 +161,45 @@ export function AgentPerformanceTable({
 }: AgentPerformanceTableProps) {
   const isQueue = mode === "customer_care";
   const colCount = isQueue ? 12 : 13;
+  const ranked = isQueue && highlights && Object.keys(highlights.ranks).length > 0;
 
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0 py-4">
+    <Card className="overflow-hidden">
+      <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0 border-b border-border/60 bg-muted/20 px-4 py-3.5">
         <div className="min-w-0">
-          <CardTitle className="text-base">Agents ({rows.length})</CardTitle>
-          {isQueue && highlights && Object.keys(highlights.ranks).length > 0 && (
-            <p className="mt-0.5 text-xs text-muted-foreground">
+          <CardTitle className="flex items-baseline gap-2 text-sm font-semibold">
+            Agents
+            <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
+              {rows.length}
+            </span>
+          </CardTitle>
+          {ranked && (
+            <p className="mt-1 text-xs leading-snug text-muted-foreground">
               #1–#3 rank by queue answered; leading values are highlighted in their column.
             </p>
           )}
         </div>
-        <Input
-          placeholder="Search agent or ext…"
-          value={search}
-          onChange={(e) => onSearch(e.target.value)}
-          className="h-8 w-40 shrink-0 sm:w-48"
-        />
+        <div className="relative shrink-0">
+          <Search
+            className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <Input
+            placeholder="Search agent or ext…"
+            value={search}
+            onChange={(e) => onSearch(e.target.value)}
+            className="h-9 w-44 pl-8 sm:w-56"
+            aria-label="Search agents"
+          />
+        </div>
       </CardHeader>
       <CardContent className="overflow-x-auto p-0">
         {/* A min-width makes the container actually scroll on a narrow screen.
             Without it `w-full` just crushes twelve columns into the viewport
             and every number ends up wrapped. */}
-        <table className="w-full min-w-[920px] text-sm">
+        <table className="w-full min-w-[960px] text-sm">
           <thead>
-            <tr className="border-b bg-muted/30 text-left text-xs text-muted-foreground">
+            <tr className="border-b border-border/60 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
               <th className={TH}>Ext</th>
               <th className={TH}>Agent</th>
               <th className={cn(TH, "text-right")}>Total</th>
@@ -189,7 +216,7 @@ export function AgentPerformanceTable({
               <th className={cn(TH, "text-right")}>In</th>
               <th className={cn(TH, "text-right")}>Out</th>
               <th className={cn(TH, "text-right")}>Answer rate</th>
-              <th className={cn(TH, "text-right")}>Talk time</th>
+              <th className={cn(TH, "text-right", GROUP_EDGE)}>Talk time</th>
               <th className={cn(TH, "text-right")}>Avg talk</th>
               {isQueue && <th className={cn(TH, "text-right")}>Avg ring (answered)</th>}
               <th className={cn(TH, "text-right")}>Longest</th>
@@ -199,14 +226,14 @@ export function AgentPerformanceTable({
             {loading ? (
               Array.from({ length: 5 }).map((_, i) => (
                 <tr key={i}>
-                  <td colSpan={colCount} className="p-2">
-                    <Skeleton className="h-6 w-full" />
+                  <td colSpan={colCount} className="px-4 py-2">
+                    <Skeleton className="h-7 w-full" />
                   </td>
                 </tr>
               ))
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={colCount} className="py-6 text-center text-muted-foreground">
+                <td colSpan={colCount} className="py-10 text-center text-muted-foreground">
                   No agents matched.
                 </td>
               </tr>
@@ -224,14 +251,14 @@ export function AgentPerformanceTable({
                     // `scroll-mt` keeps the sticky page chrome off the row when
                     // something scrolls it into view.
                     className={cn(
-                      "scroll-mt-24 border-b transition-colors duration-500 last:border-0",
+                      "scroll-mt-24 border-b border-border/40 transition-colors duration-500 last:border-0",
                       flagged ? "bg-primary/10" : "hover:bg-muted/40",
                     )}
                   >
                     <td className={cn(TD, "font-mono text-xs text-muted-foreground")}>
                       {agent.ext}
                     </td>
-                    <td className="px-3 py-2.5 font-medium">
+                    <td className="px-3 py-3 font-medium first:pl-4">
                       {/* `min-w-0` is what lets the name actually truncate —
                           a flex child defaults to min-width:auto and would
                           instead push the badges out of the cell. */}
@@ -241,7 +268,7 @@ export function AgentPerformanceTable({
                         {rank === 1 && <TopPerformerBadge />}
                       </span>
                     </td>
-                    <td className={cn(TD, "text-right")}>{agent.total}</td>
+                    <td className={cn(TD, "text-right font-medium")}>{agent.total}</td>
                     <td className={cn(TD, "text-right")}>
                       {topAnswered ? (
                         <Leader tone="success" title="Most calls answered">
@@ -252,7 +279,7 @@ export function AgentPerformanceTable({
                       )}
                     </td>
                     {isQueue ? (
-                      <td className={cn(TD, "text-right text-destructive")}>
+                      <td className={cn(TD, "text-right font-medium text-destructive")}>
                         {agent.missedSource === "call_report" ? (
                           agent.missedCalls
                         ) : (
@@ -275,8 +302,8 @@ export function AgentPerformanceTable({
                         </td>
                       </>
                     )}
-                    <td className={cn(TD, "text-right")}>{agent.inbound}</td>
-                    <td className={cn(TD, "text-right")}>{agent.outbound}</td>
+                    <td className={cn(TD, "text-right text-muted-foreground")}>{agent.inbound}</td>
+                    <td className={cn(TD, "text-right text-muted-foreground")}>{agent.outbound}</td>
                     <td className={cn(TD, "text-right")}>
                       {topRate ? (
                         <Leader tone="primary" title="Highest answer rate">
@@ -286,7 +313,7 @@ export function AgentPerformanceTable({
                         `${agent.answerRate.toFixed(1)}%`
                       )}
                     </td>
-                    <td className={cn(TD, "text-right")}>
+                    <td className={cn(TD, "text-right", GROUP_EDGE)}>
                       {topTalk ? (
                         <Leader tone="primary" title="Most time on calls">
                           {hhmmss(agent.talkSeconds)}
@@ -311,7 +338,7 @@ export function AgentPerformanceTable({
           </tbody>
         </table>
         {isQueue && (
-          <div className="border-t px-3 py-2 text-[11px] leading-snug text-muted-foreground">
+          <div className="border-t border-border/60 bg-muted/20 px-4 py-2.5 text-[11px] leading-snug text-muted-foreground">
             *Missed = the agent's own ring went unanswered, sourced from Yeastar's Call Report.
             Individual performance metric only — not summed into the Queue Missed KPI (the queue
             auto-forwards to the next available agent). A dash means the figure is unavailable for
@@ -321,4 +348,4 @@ export function AgentPerformanceTable({
       </CardContent>
     </Card>
   );
-}
+});

@@ -18,27 +18,28 @@
  * on `buildCustomerCareMetrics`.
  *
  * Sources, per Sprint 3: CDR for every historical KPI, Yeastar Call Report
- * (openapi/v2.0) for per-agent missed calls and for the Missed/Abandoned split,
- * Queue API for the realtime tiles only. Evidence:
- * `docs/yeastar/sprint2-source-validation.md`.
+ * (openapi/v2.0) for per-agent missed calls and for the Missed/Abandoned split.
+ * Evidence: `docs/yeastar/sprint2-source-validation.md`.
  *
  * ---------------------------------------------------------------------------
- * Layout (Sprint 3.5)
+ * Layout
  * ---------------------------------------------------------------------------
- * The page reads top-down as an operations screen: what happened overall, what
- * is happening right now, then the queue's own numbers — which are the primary
- * section, because this is a queue dashboard and everything below them is
- * supporting detail. Terminology follows Yeastar's Queue panel throughout, so a
- * supervisor with both screens open is reading the same words for the same
- * figures.
+ * The page reads top-down as an operations screen: what happened overall, then
+ * the queue's own numbers — which are the primary section, because this is a
+ * queue dashboard and everything below them is supporting detail. Terminology
+ * follows Yeastar's Queue panel throughout, so a supervisor with both screens
+ * open is reading the same words for the same figures.
+ *
+ * The realtime queue tiles were removed: they were the only widget on the page
+ * describing the present moment rather than the selected window, and they cost a
+ * 15-second poll that re-rendered every chart beneath them.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import {
   Activity,
   AlertTriangle,
   Clock,
-  Download,
   Gauge,
   Hourglass,
   PhoneCall,
@@ -50,7 +51,6 @@ import {
   RefreshCw,
   ShieldAlert,
   Target,
-  Timer,
   TrendingUp,
   UserCheck,
   Users,
@@ -67,7 +67,6 @@ import {
 import { DateRangePicker } from "@/components/date-range-picker";
 import type { Direction } from "@/features/call-center/types";
 import { pct, hhmmss } from "@/features/call-center/utils";
-import { exportCustomerCare } from "@/features/call-center/export";
 import { RefreshIndicator } from "@/features/call-center/components/fetch-progress";
 import { DashboardSection } from "@/features/call-center/components/dashboard-section";
 import { InfoBanner } from "@/features/call-center/components/info-banner";
@@ -85,8 +84,9 @@ import {
 import { useCallCenterFilters } from "@/features/call-center/hooks/use-call-center-filters";
 import { useCustomerCareMetrics } from "@/features/call-center/hooks/use-customer-care-metrics";
 
-// Customer Care watches a live queue, so it refreshes every 20 seconds —
-// inside the 15-30s operational band, and slow enough not to feel busy.
+// Cadence for a LIVE window (today, or today plus yesterday) — inside the
+// 15-30s operational band, and slow enough not to feel busy. Larger and closed
+// windows back off automatically; see `resolveRefreshPolicy`.
 const CUSTOMER_CARE_REFRESH_MS = 20_000;
 
 /** Where the queue-member chips jump to. */
@@ -103,7 +103,7 @@ export const Route = createFileRoute("/_app/calls/customer-care")({
 
 function CustomerCarePage() {
   const f = useCallCenterFilters({ team: "customer_care", withQueue: true });
-  const { metrics, isLoading, isRefreshing, refreshFailed, errMsg, ok, realtimeLoading, refresh } =
+  const { metrics, isLoading, isRefreshing, refreshFailed, errMsg, ok, refreshPolicy, refresh } =
     useCustomerCareMetrics({
       from: f.from,
       to: f.to,
@@ -117,12 +117,16 @@ function CustomerCarePage() {
       refreshMs: CUSTOMER_CARE_REFRESH_MS,
     });
 
-  const { overview, realtime, serviceLevel, queue, direction, time, trends, agents, sources } =
-    metrics;
+  const { overview, serviceLevel, queue, direction, time, trends, agents, sources } = metrics;
   const split = metrics.unansweredSplit;
   const yeastarSplit = sources.queueOutcome === "call_report";
 
-  const visibleQueues = f.queues.filter((qq) => f.queue === "all" || qq.number === f.queue);
+  // Memoised because it is a prop of a memoised component: rebuilt per render it
+  // would defeat `QueueMembers`'s own memo on every refresh tick.
+  const visibleQueues = useMemo(
+    () => f.queues.filter((qq) => f.queue === "all" || qq.number === f.queue),
+    [f.queues, f.queue],
+  );
 
   // Queue-member chips scroll to an agent and flag their row. Deliberately NOT
   // a filter: the search box, the agent dropdown and every query stay untouched,
@@ -176,8 +180,16 @@ function CustomerCarePage() {
           <p className="truncate text-xs text-muted-foreground sm:text-sm">
             Queue analytics · {f.from} → {f.to}
           </p>
-          <div className="mt-1 flex items-center gap-2">
+          <div className="mt-1 flex flex-wrap items-center gap-2">
             <RefreshIndicator refreshing={isRefreshing} failed={refreshFailed} />
+            {/*
+              The cadence is derived from the window, so it has to be stated —
+              a page that silently stops polling on a month-wide range looks
+              stale rather than deliberate.
+            */}
+            <span className="text-[11px] text-muted-foreground/70 print:hidden">
+              {refreshPolicy.label}
+            </span>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 print:hidden">
@@ -232,21 +244,16 @@ function CustomerCarePage() {
             </SelectContent>
           </Select>
           {f.canExport && (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => exportCustomerCare(metrics, f.from, f.to)}
-                disabled={!ok}
-              >
-                <Download className="mr-2 h-4 w-4" />
-                Excel
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => window.print()} disabled={!ok}>
-                <Printer className="mr-2 h-4 w-4" />
-                PDF
-              </Button>
-            </>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => window.print()}
+              disabled={!ok}
+              className="ml-1"
+            >
+              <Printer className="mr-2 h-4 w-4" />
+              Export PDF
+            </Button>
           )}
         </div>
       </div>
@@ -295,75 +302,21 @@ function CustomerCarePage() {
             accent="primary"
             hint={yeastarSplit ? "Caller hung up while waiting" : "Yeastar's split unavailable"}
           />
+          {/*
+            Queue Missed, not Average Talk Time. Talk time is still on the page
+            twice — Time metrics reports it, and the agent table breaks it down
+            per agent — whereas the number a supervisor opens this page to see
+            is how many callers the queue failed. The same field the Queue
+            statistics card renders, so the two can never disagree.
+          */}
           <HeroKpi
-            label="Average talk time"
-            value={hhmmss(overview.avgTalkSec)}
+            label="Queue missed"
+            value={queue.missed}
             loading={isLoading}
-            icon={Clock}
-            tone="secondary"
-            accent="secondary"
-            hint="Per answered call"
-          />
-        </div>
-      </DashboardSection>
-
-      {/* ---- REALTIME ------------------------------------------------------ */}
-      <DashboardSection
-        title="Realtime queue"
-        description="Live PBX state, refreshed every 20 seconds."
-        icon={Timer}
-        actions={
-          realtime.idle ? (
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/40 px-2.5 py-1 text-xs text-muted-foreground">
-              <span className="h-1.5 w-1.5 rounded-full bg-success/70" aria-hidden="true" />
-              Queue is currently idle
-            </span>
-          ) : undefined
-        }
-      >
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          <Kpi
-            label="Waiting"
-            value={realtime.waiting}
-            tone="warning"
-            accent="primary"
-            loading={realtimeLoading}
-            hint="In queue now"
-          />
-          <Kpi
-            label="Active"
-            value={realtime.active}
-            tone="success"
-            accent="primary"
-            loading={realtimeLoading}
-            hint="On call"
-          />
-          <Kpi
-            label="Ringing"
-            value={realtime.ringing}
-            accent="primary"
-            loading={realtimeLoading}
-            hint="Offered to an agent"
-          />
-          <Kpi
-            label="Agents ready"
-            value={realtime.agentsReady}
-            tone="success"
-            accent="muted"
-            loading={realtimeLoading}
-          />
-          <Kpi
-            label="Agents busy"
-            value={realtime.agentsBusy}
-            tone="secondary"
-            accent="muted"
-            loading={realtimeLoading}
-          />
-          <Kpi
-            label="Paused"
-            value={realtime.agentsPaused}
-            accent="muted"
-            loading={realtimeLoading}
+            icon={PhoneMissed}
+            tone="destructive"
+            accent="destructive"
+            hint={yeastarSplit ? "Queue released the call" : "Yeastar's split unavailable"}
           />
         </div>
       </DashboardSection>
@@ -637,6 +590,8 @@ function CustomerCarePage() {
               byDay={trends.byDay}
               answerRate={trends.dailyAnswerRate}
               averageRate={overview.answerRate}
+              totalInbound={direction.inbound}
+              totalOutbound={direction.outbound}
               hasData={trends.hasDailyData}
               loading={isLoading}
             />
@@ -649,6 +604,7 @@ function CustomerCarePage() {
           >
             <HourlyDistributionChart
               hourly12={trends.hourly}
+              peakHour={trends.peakHour}
               loading={isLoading}
               hasData={trends.hasHourlyData}
             />

@@ -151,7 +151,6 @@ const metrics = buildCustomerCareMetrics({
     byHour: queueResult.byHour,
   },
   callReport: snapshot,
-  realtime: null,
   filters: { direction: "all", queue: QUEUE_NUMBER, agentId: "all", search: "" },
 });
 
@@ -331,7 +330,6 @@ describe("Yeastar parity — Call Report degradation is safe", () => {
       byHour: queueResult.byHour,
     },
     callReport: null,
-    realtime: null,
     filters: { direction: "all", queue: QUEUE_NUMBER, agentId: "all", search: "" },
   });
 

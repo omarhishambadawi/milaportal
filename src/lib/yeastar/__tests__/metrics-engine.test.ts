@@ -168,7 +168,6 @@ function build(over: Partial<MetricsEngineInput> = {}) {
   return buildCustomerCareMetrics({
     analytics: { totals: totals(), agents: [agent("4002"), agent("4003")], byDay, byHour },
     callReport: snapshot(),
-    realtime: null,
     filters: { direction: "all", queue: "6400", agentId: "all", search: "" },
     ...over,
   });
@@ -198,14 +197,13 @@ describe("source policy", () => {
       "time",
       "trends",
       "agents",
-      "realtime",
       "unansweredSplit",
       "isEmpty",
       "sources",
       "callReport",
     ];
     expect(Object.keys(m).sort()).toEqual([...groups].sort());
-    const valid = new Set(["cdr", "call_report", "queue_api", "unavailable"]);
+    const valid = new Set(["cdr", "call_report", "unavailable"]);
     for (const [name, src] of Object.entries(m.sources)) {
       expect(valid.has(src), `sources.${name} = ${src}`).toBe(true);
     }
@@ -250,49 +248,13 @@ describe("source policy", () => {
     expect(m.sources.agentMissed).toBe("unavailable");
   });
 
-  it("routes realtime tiles through the Queue API only", () => {
-    const m = build({
-      realtime: {
-        ok: true,
-        calls: { waiting: 3, active: 2, ringing: 1 },
-        agents: { ready: 4, busy: 2, paused: 1 },
-      },
-    });
-    expect(m.sources.realtime).toBe("queue_api");
-    expect(m.realtime).toEqual({
-      available: true,
-      waiting: 3,
-      active: 2,
-      ringing: 1,
-      agentsReady: 4,
-      agentsBusy: 2,
-      agentsPaused: 1,
-      idle: false,
-    });
-  });
-
-  it("calls a live queue with no traffic idle, staffed or not", () => {
-    const idle = build({
-      realtime: { ok: true, calls: {}, agents: { ready: 4, busy: 0, paused: 0 } },
-    });
-    expect(idle.realtime.idle).toBe(true);
-    expect(idle.realtime.available).toBe(true);
-
-    // One ringing call is still traffic.
-    const busy = build({ realtime: { ok: true, calls: { ringing: 1 }, agents: {} } });
-    expect(busy.realtime.idle).toBe(false);
-  });
-
-  it("never calls an unreachable queue idle — that would invent good news", () => {
-    expect(build({ realtime: { ok: false } }).realtime.idle).toBe(false);
-    expect(build({ realtime: null }).realtime.idle).toBe(false);
-  });
-
-  it("zeroes realtime tiles when the snapshot is not ok", () => {
-    const m = build({ realtime: { ok: false } });
-    expect(m.realtime.available).toBe(false);
-    expect(m.realtime.waiting).toBe(0);
-    expect(m.sources.realtime).toBe("unavailable");
+  it("publishes no Queue API source — the realtime group is gone", () => {
+    // The realtime tiles were removed from the dashboard, so the engine must not
+    // keep deriving them. This fails if the group is reintroduced without a
+    // consumer, which is how the last dead metric survived three sprints.
+    const m = build();
+    expect(m).not.toHaveProperty("realtime");
+    expect(Object.values(m.sources)).not.toContain("queue_api");
   });
 });
 
@@ -568,6 +530,23 @@ describe("derivations the components must not repeat", () => {
     expect(m.trends.hourly[17].label).toBe("5 PM");
   });
 
+  it("picks the busiest hour, so the hourly chart never has to", () => {
+    const m = build();
+    expect(m.trends.peakHour).toEqual({ hour: 9, label: "9 AM", total: 12 });
+  });
+
+  it("breaks a peak-hour tie towards the earlier hour, so it stays put", () => {
+    // Two equally busy hours must resolve the same way on every refresh —
+    // otherwise the annotation flickers between them for no reason.
+    const tied = byHour.map((h) => (h.hour === 9 || h.hour === 15 ? { ...h, total: 12 } : h));
+    const m = build({ analytics: { totals: totals(), agents: [], byDay, byHour: tied } });
+    expect(m.trends.peakHour?.hour).toBe(9);
+  });
+
+  it("counts the days in the window, so charts can pick their own density", () => {
+    expect(build().trends.dayCount).toBe(byDay.length);
+  });
+
   it("derives the daily answer-rate series, so no chart has to", () => {
     const m = build();
     expect(m.trends.dailyAnswerRate).toEqual([{ date: "2026-07-29", rate: 70 }]);
@@ -651,25 +630,14 @@ describe("no-analytics state (CDR delayed or still loading)", () => {
   });
 
   it("reports every source unavailable rather than claiming CDR", () => {
-    const m = build({ analytics: null, callReport: null, realtime: null });
+    const m = build({ analytics: null, callReport: null });
     expect(Object.values(m.sources).every((s) => s === "unavailable")).toBe(true);
   });
 
-  it("still renders realtime tiles while CDR is delayed", () => {
-    // The two sources are independent — a slow CDR sweep must not blank the
-    // live queue tiles, which are the operationally urgent half of the page.
-    const m = build({
-      analytics: null,
-      callReport: null,
-      realtime: {
-        ok: true,
-        calls: { waiting: 5, active: 1, ringing: 0 },
-        agents: { ready: 2, busy: 1, paused: 0 },
-      },
-    });
-    expect(m.realtime.waiting).toBe(5);
-    expect(m.sources.realtime).toBe("queue_api");
-    expect(m.sources.overview).toBe("unavailable");
+  it("reports no peak hour rather than a zero-call one", () => {
+    const m = build({ analytics: null, callReport: null });
+    expect(m.trends.peakHour).toBeNull();
+    expect(m.trends.hasHourlyData).toBe(false);
   });
 });
 

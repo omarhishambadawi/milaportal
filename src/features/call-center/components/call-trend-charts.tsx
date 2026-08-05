@@ -1,3 +1,4 @@
+import { memo } from "react";
 import {
   Area,
   AreaChart,
@@ -9,10 +10,10 @@ import {
   Tooltip,
   CartesianGrid,
   LabelList,
-  Legend,
   ReferenceLine,
 } from "recharts";
 import { ChartCard } from "./chart-card";
+import type { PeakHour } from "@/lib/yeastar/metrics-engine";
 
 interface DayRow {
   date: string;
@@ -39,13 +40,62 @@ function shortDate(value: string): string {
   return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
 }
 
+const INBOUND = "var(--color-chart-1)";
+const OUTBOUND = "var(--color-chart-3)";
+
+/**
+ * `3 PM` → `3p`, for the hourly axis only.
+ *
+ * Twenty-four labels is the whole point of the chart and also the thing that
+ * breaks it: `12 AM` is about 34px at this type size, so a phone-width card can
+ * fit six of them and Recharts renders all twenty-four on top of each other.
+ * Two characters fit everywhere, and nothing is lost — the tooltip and the peak
+ * badge both carry the unabbreviated hour.
+ */
+function compactHour(label: string): string {
+  return label.replace(/\s*AM$/, "a").replace(/\s*PM$/, "p");
+}
+
 const axisTick = { fontSize: 11, fill: "var(--color-muted-foreground)" };
 const gridStroke = "var(--color-border)";
+const valueLabelStyle = {
+  fontSize: 10,
+  fontWeight: 600,
+  fill: "var(--color-muted-foreground)",
+} as const;
+
+/**
+ * Enter animation is off on every series here, deliberately and everywhere.
+ *
+ * Two reasons, and the second is the one that settles it. Recharts replays the
+ * animation whenever the `data` prop changes identity, so on a background
+ * refresh the whole chart re-draws from zero — on a month that is 62 bars
+ * animating for no new information. And `Bar` gates its `LabelList` on
+ * `isAnimationFinished`, so an animated bar renders its value only once the
+ * transition has run and not at all if it never completes; the value labels are
+ * the point of the redesign and cannot be conditional on that.
+ */
+const CHART_ANIMATION = false;
+
+/** A colour key that reads as part of the card header rather than chart furniture. */
+function LegendSwatch({ color, label, value }: { color: string; label: string; value?: number }) {
+  return (
+    <span className="inline-flex items-baseline gap-1.5 whitespace-nowrap text-xs">
+      <span
+        className="inline-block h-2 w-2 shrink-0 translate-y-[-1px] rounded-full"
+        style={{ background: color }}
+        aria-hidden="true"
+      />
+      <span className="text-muted-foreground">{label}</span>
+      {value != null && <span className="font-semibold tabular-nums text-foreground">{value}</span>}
+    </span>
+  );
+}
 
 /** Shared shell for the custom tooltips, so all three read identically. */
 function TooltipShell({ title, rows }: { title: string; rows: React.ReactNode }) {
   return (
-    <div className="min-w-[168px] rounded-lg border border-border bg-popover px-3 py-2.5 shadow-lg">
+    <div className="min-w-[172px] rounded-lg border border-border bg-popover px-3 py-2.5 shadow-lg">
       <div className="mb-2 text-xs font-semibold text-foreground">{title}</div>
       <div className="space-y-1.5">{rows}</div>
     </div>
@@ -79,7 +129,7 @@ function TooltipRow({
 }
 
 /**
- * Inbound / outbound / total, for both of the stacked volume charts.
+ * Inbound / outbound / total, for both of the volume charts.
  *
  * Reads as the queue panel does — one line per direction, then the total under
  * a rule:
@@ -116,39 +166,6 @@ function VolumeTooltip({ active, payload, label, formatTitle }: any) {
 }
 
 /**
- * The value of one stacked segment, drawn inside it.
- *
- * White text with a dark halo (`paint-order: stroke`), because there is no one
- * fill that works across both series in both themes: inbound sits at L≈0.72-0.78
- * and outbound at L≈0.40-0.62, so a fixed light or dark fill is illegible on one
- * of them. The halo is the map-label trick and survives any bar colour.
- *
- * Segments too small to hold a number are skipped rather than crowded — that is
- * what the tooltip is for.
- */
-function SegmentValueLabel(props: any) {
-  const { x, y, width, height, value } = props;
-  const n = Number(value ?? 0);
-  if (!n || height < 16 || width < 24) return null;
-  return (
-    <text
-      x={x + width / 2}
-      y={y + height / 2}
-      textAnchor="middle"
-      dominantBaseline="central"
-      fill="#fff"
-      stroke="rgba(0,0,0,0.45)"
-      strokeWidth={3}
-      strokeLinejoin="round"
-      paintOrder="stroke"
-      style={{ fontSize: 11, fontWeight: 600, pointerEvents: "none" }}
-    >
-      {n}
-    </text>
-  );
-}
-
-/**
  * Daily volume and answer rate.
  *
  * Purely presentational — every number arrives pre-computed by the Metrics
@@ -159,12 +176,29 @@ function SegmentValueLabel(props: any) {
  *
  * Both arrays are memoised upstream, which matters: Recharts replays its enter
  * animation whenever a `data` prop is a new reference, and rebuilding these per
- * render is what made the charts visibly redraw.
+ * render is what made the charts visibly redraw. `memo` on the export closes the
+ * other half of that: a filter change elsewhere on the page no longer re-renders
+ * either chart.
+ *
+ * ---------------------------------------------------------------------------
+ * Why the direction chart is grouped rather than stacked
+ * ---------------------------------------------------------------------------
+ * It was a stacked bar with the segment value printed inside it in white with a
+ * dark halo, because no single fill was legible across both series in both
+ * themes. That is a workaround for the wrong chart: stacking answers "how many
+ * calls that day", which the total label already answers, while the question the
+ * card is titled after — inbound against outbound — is exactly the comparison
+ * stacking makes hardest. Side-by-side bars put both series on the same
+ * baseline, which is the only arrangement where two lengths can honestly be
+ * compared, and it moves the labels out into the margin where ordinary
+ * muted-foreground text is readable in either theme.
  */
-export function CallTrendCharts({
+export const CallTrendCharts = memo(function CallTrendCharts({
   byDay,
   answerRate,
   averageRate,
+  totalInbound,
+  totalOutbound,
   hasData,
   loading,
 }: {
@@ -172,67 +206,101 @@ export function CallTrendCharts({
   answerRate: RatePoint[];
   /** The window's overall answer rate, drawn as the comparison line. */
   averageRate: number;
+  /** Window totals for the header legend. From the engine — not summed here. */
+  totalInbound: number;
+  totalOutbound: number;
   hasData: boolean;
   loading: boolean;
 }) {
   // Value labels only survive on a short window; past that they collide and the
-  // tooltip is the better answer.
-  const showLabels = byDay.length <= 14;
+  // tooltip is the better answer. Grouped bars halve the room each label has, so
+  // the threshold is lower than the stacked version's.
+  const showLabels = byDay.length <= 10;
+
+  // Bar geometry has to follow the window or the chart looks wrong at one end of
+  // the range: a week's worth of bars at month spacing reads as scattered
+  // ticks, and a month's worth at week spacing comes out about four pixels wide.
+  // Measured in the preview harness at the half-width the card actually gets.
+  const dense = byDay.length > 10;
+  const barGap = dense ? 1 : 3;
+  const barCategoryGap = dense ? "6%" : "26%";
+  const maxBarSize = dense ? 14 : 28;
 
   return (
     <div className="grid gap-3 lg:grid-cols-2">
       <ChartCard
         title="Inbound vs outbound"
-        subtitle="Calls per day, stacked by direction. Totals sit above each bar; hover for any segment too small to label."
+        subtitle="Calls per day, side by side. Equal baselines, so the two are directly comparable."
         loading={loading}
         hasData={hasData}
-        bodyClassName="h-72"
+        bodyClassName="h-[19rem]"
+        actions={
+          <div className="flex items-center gap-3">
+            <LegendSwatch color={INBOUND} label="Inbound" value={totalInbound} />
+            <LegendSwatch color={OUTBOUND} label="Outbound" value={totalOutbound} />
+          </div>
+        }
       >
-        <ResponsiveContainer>
-          <BarChart data={byDay} margin={{ top: 20, right: 12, left: 0, bottom: 0 }}>
-            <CartesianGrid vertical={false} strokeDasharray="3 3" stroke={gridStroke} />
+        <ResponsiveContainer debounce={80}>
+          <BarChart
+            data={byDay}
+            margin={{ top: 18, right: 8, left: 0, bottom: 4 }}
+            barGap={barGap}
+            barCategoryGap={barCategoryGap}
+            maxBarSize={maxBarSize}
+          >
+            <defs>
+              <linearGradient id="ccInboundBar" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={INBOUND} stopOpacity={1} />
+                <stop offset="100%" stopColor={INBOUND} stopOpacity={0.65} />
+              </linearGradient>
+              <linearGradient id="ccOutboundBar" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={OUTBOUND} stopOpacity={1} />
+                <stop offset="100%" stopColor={OUTBOUND} stopOpacity={0.65} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid vertical={false} strokeDasharray="2 5" stroke={gridStroke} />
             <XAxis
               dataKey="date"
               tick={axisTick}
               tickFormatter={shortDate}
               tickLine={false}
               axisLine={false}
-              minTickGap={8}
+              tickMargin={8}
+              minTickGap={12}
             />
             <YAxis
               tick={axisTick}
               allowDecimals={false}
               tickLine={false}
               axisLine={false}
-              width={36}
+              width={34}
+              tickMargin={4}
             />
             <Tooltip
               content={<VolumeTooltip formatTitle={shortDate} />}
-              cursor={{ fill: "var(--color-muted)", opacity: 0.4 }}
+              cursor={{ fill: "var(--color-muted)", opacity: 0.35 }}
             />
-            <Legend
-              wrapperStyle={{ fontSize: 12, paddingTop: 10 }}
-              iconType="circle"
-              iconSize={8}
-            />
-            <Bar dataKey="inbound" name="Inbound" fill="var(--color-chart-1)" stackId="a">
-              <LabelList dataKey="inbound" content={SegmentValueLabel} />
+            <Bar
+              dataKey="inbound"
+              name="Inbound"
+              fill="url(#ccInboundBar)"
+              radius={[4, 4, 0, 0]}
+              isAnimationActive={CHART_ANIMATION}
+            >
+              {showLabels && (
+                <LabelList dataKey="inbound" position="top" offset={5} style={valueLabelStyle} />
+              )}
             </Bar>
             <Bar
               dataKey="outbound"
               name="Outbound"
-              fill="var(--color-chart-3)"
-              radius={[6, 6, 0, 0]}
-              stackId="a"
+              fill="url(#ccOutboundBar)"
+              radius={[4, 4, 0, 0]}
+              isAnimationActive={CHART_ANIMATION}
             >
-              <LabelList dataKey="outbound" content={SegmentValueLabel} />
               {showLabels && (
-                <LabelList
-                  dataKey="total"
-                  position="top"
-                  offset={6}
-                  style={{ fontSize: 11, fontWeight: 600, fill: "var(--color-muted-foreground)" }}
-                />
+                <LabelList dataKey="outbound" position="top" offset={5} style={valueLabelStyle} />
               )}
             </Bar>
           </BarChart>
@@ -241,28 +309,37 @@ export function CallTrendCharts({
 
       <ChartCard
         title="Answer rate trend"
-        subtitle={`Answered ÷ total calls, by day. Dashed line is the window average (${averageRate.toFixed(1)}%).`}
+        subtitle="Answered ÷ total calls, by day. The dashed line is the window average."
         loading={loading}
         hasData={hasData}
-        bodyClassName="h-72"
+        bodyClassName="h-[19rem]"
+        actions={
+          <span className="inline-flex items-baseline gap-1.5 whitespace-nowrap rounded-full border border-border/60 bg-muted/40 px-2.5 py-1 text-xs">
+            <span className="text-muted-foreground">Window average</span>
+            <span className="font-semibold tabular-nums text-foreground">
+              {averageRate.toFixed(1)}%
+            </span>
+          </span>
+        }
       >
-        <ResponsiveContainer>
+        <ResponsiveContainer debounce={80}>
           {/* Right margin leaves room for the reference line's own label. */}
-          <AreaChart data={answerRate} margin={{ top: 22, right: 16, left: 0, bottom: 0 }}>
+          <AreaChart data={answerRate} margin={{ top: 22, right: 16, left: 0, bottom: 4 }}>
             <defs>
               <linearGradient id="answerRateFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="var(--color-chart-1)" stopOpacity={0.28} />
-                <stop offset="100%" stopColor="var(--color-chart-1)" stopOpacity={0.02} />
+                <stop offset="0%" stopColor={INBOUND} stopOpacity={0.28} />
+                <stop offset="100%" stopColor={INBOUND} stopOpacity={0.02} />
               </linearGradient>
             </defs>
-            <CartesianGrid vertical={false} strokeDasharray="3 3" stroke={gridStroke} />
+            <CartesianGrid vertical={false} strokeDasharray="2 5" stroke={gridStroke} />
             <XAxis
               dataKey="date"
               tick={axisTick}
               tickFormatter={shortDate}
               tickLine={false}
               axisLine={false}
-              minTickGap={8}
+              tickMargin={8}
+              minTickGap={12}
             />
             <YAxis
               tick={axisTick}
@@ -282,7 +359,7 @@ export function CallTrendCharts({
                     rows={
                       <>
                         <TooltipRow
-                          swatch="var(--color-chart-1)"
+                          swatch={INBOUND}
                           label="Answer rate"
                           value={`${Number(payload[0].value ?? 0).toFixed(1)}%`}
                           strong
@@ -319,11 +396,12 @@ export function CallTrendCharts({
               type="monotone"
               dataKey="rate"
               name="Answer rate"
-              stroke="var(--color-chart-1)"
+              stroke={INBOUND}
               strokeWidth={2.5}
               fill="url(#answerRateFill)"
-              dot={{ r: 3, fill: "var(--color-chart-1)", strokeWidth: 0 }}
+              dot={byDay.length <= 31 ? { r: 3, fill: INBOUND, strokeWidth: 0 } : false}
               activeDot={{ r: 5 }}
+              isAnimationActive={CHART_ANIMATION}
             >
               {showLabels && (
                 <LabelList
@@ -331,7 +409,7 @@ export function CallTrendCharts({
                   position="top"
                   offset={10}
                   formatter={(v: any) => `${Number(v).toFixed(0)}%`}
-                  style={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
+                  style={valueLabelStyle}
                 />
               )}
             </Area>
@@ -340,61 +418,136 @@ export function CallTrendCharts({
       </ChartCard>
     </div>
   );
-}
+});
 
-/** Calls by hour of day, so a supervisor can see when the queue gets busy. */
-export function HourlyDistributionChart({
+/**
+ * Calls by hour of day — the page's headline analytic.
+ *
+ * Twenty-four fixed buckets, which is what lets this be an area chart rather
+ * than bars: the x-axis is a continuous day, every bucket is present even when
+ * empty, and the shape of the curve is the answer to the question the card
+ * asks — when does the queue get busy. Stacked so the inbound and outbound
+ * contributions to a peak stay visible, filled so the eye follows the envelope
+ * rather than twenty-four separate tops.
+ *
+ * The peak is annotated instead of left to be found: it is the one hour anybody
+ * reads this chart to identify. `peakHour` comes from the Metrics Engine — this
+ * component does not scan the series for a maximum, because that is a
+ * derivation and derivations live in one place.
+ */
+export const HourlyDistributionChart = memo(function HourlyDistributionChart({
   hourly12,
+  peakHour,
   loading,
   hasData,
 }: {
   hourly12: Array<{ label: string; total: number; inbound: number; outbound: number }>;
+  /** Busiest hour in the window, or null when nothing was handled. */
+  peakHour: PeakHour | null;
   loading: boolean;
   hasData: boolean;
 }) {
   return (
     <ChartCard
       title="Calls by hour"
-      subtitle="Every hour of the day, stacked by direction. Hover for exact counts."
+      subtitle="Every hour of the day, stacked by direction. The marked hour is the window's busiest."
       loading={loading}
       hasData={hasData}
-      bodyClassName="h-72"
+      bodyClassName="h-[22rem] sm:h-[24rem]"
+      actions={
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <LegendSwatch color={INBOUND} label="Inbound" />
+          <LegendSwatch color={OUTBOUND} label="Outbound" />
+          {peakHour && (
+            <span className="inline-flex items-baseline gap-1.5 whitespace-nowrap rounded-full border border-border/60 bg-muted/40 px-2.5 py-1 text-xs">
+              <span className="text-muted-foreground">Peak</span>
+              <span className="font-semibold text-foreground">{peakHour.label}</span>
+              <span className="tabular-nums text-muted-foreground">
+                · {peakHour.total} call{peakHour.total === 1 ? "" : "s"}
+              </span>
+            </span>
+          )}
+        </div>
+      }
     >
-      <ResponsiveContainer>
-        <BarChart data={hourly12} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-          <CartesianGrid vertical={false} strokeDasharray="3 3" stroke={gridStroke} />
+      <ResponsiveContainer debounce={80}>
+        <AreaChart data={hourly12} margin={{ top: 24, right: 12, left: 0, bottom: 4 }}>
+          <defs>
+            <linearGradient id="ccHourInbound" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={INBOUND} stopOpacity={0.45} />
+              <stop offset="100%" stopColor={INBOUND} stopOpacity={0.06} />
+            </linearGradient>
+            <linearGradient id="ccHourOutbound" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={OUTBOUND} stopOpacity={0.4} />
+              <stop offset="100%" stopColor={OUTBOUND} stopOpacity={0.05} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid vertical={false} strokeDasharray="2 5" stroke={gridStroke} />
           <XAxis
             dataKey="label"
             tick={axisTick}
-            // Every other hour: all 24 labels collide at this type size, and the
-            // tooltip carries the exact hour anyway.
-            interval={1}
+            tickFormatter={compactHour}
+            // Every third hour, abbreviated. A numeric interval rather than
+            // `minTickGap`: on a category axis Recharts resolves the gap from
+            // its own label measurement, which on this axis leaves all 24 in
+            // place at every width. Eight short labels fit a phone and still
+            // read as a clock at full width.
+            interval={2}
             tickLine={false}
             axisLine={false}
-            tickMargin={6}
+            tickMargin={8}
           />
           <YAxis
             tick={axisTick}
             allowDecimals={false}
             tickLine={false}
             axisLine={false}
-            width={36}
+            width={34}
+            tickMargin={4}
           />
           <Tooltip
             content={<VolumeTooltip />}
-            cursor={{ fill: "var(--color-muted)", opacity: 0.4 }}
+            cursor={{ stroke: "var(--color-border)", strokeWidth: 1 }}
           />
-          <Legend wrapperStyle={{ fontSize: 12, paddingTop: 10 }} iconType="circle" iconSize={8} />
-          <Bar dataKey="inbound" name="Inbound" fill="var(--color-chart-1)" stackId="h" />
-          <Bar
+          {peakHour && (
+            <ReferenceLine
+              x={peakHour.label}
+              stroke="var(--color-muted-foreground)"
+              strokeDasharray="4 4"
+              strokeOpacity={0.55}
+              label={{
+                value: `Peak · ${peakHour.total}`,
+                position: "top",
+                fill: "var(--color-muted-foreground)",
+                fontSize: 11,
+                fontWeight: 600,
+              }}
+            />
+          )}
+          <Area
+            type="monotone"
+            dataKey="inbound"
+            name="Inbound"
+            stackId="h"
+            stroke={INBOUND}
+            strokeWidth={2}
+            fill="url(#ccHourInbound)"
+            activeDot={{ r: 4 }}
+            isAnimationActive={CHART_ANIMATION}
+          />
+          <Area
+            type="monotone"
             dataKey="outbound"
             name="Outbound"
-            fill="var(--color-chart-3)"
-            radius={[4, 4, 0, 0]}
             stackId="h"
+            stroke={OUTBOUND}
+            strokeWidth={2}
+            fill="url(#ccHourOutbound)"
+            activeDot={{ r: 4 }}
+            isAnimationActive={CHART_ANIMATION}
           />
-        </BarChart>
+        </AreaChart>
       </ResponsiveContainer>
     </ChartCard>
   );
-}
+});
