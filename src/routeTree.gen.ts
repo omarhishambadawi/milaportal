@@ -42,6 +42,7 @@ import { Route as AppAdminUsersRouteImport } from './routes/_app.admin.users'
 import { Route as AppAdminBranchesRouteImport } from './routes/_app.admin.branches'
 import { Route as Char91DotmcpChar93InvokeToolToolRouteImport } from './routes/[.mcp]/invoke-tool/$tool'
 import { Route as DotlovableOauthConsentRouteImport } from './routes/[.]lovable.oauth.consent'
+import { Route as LovableEmailQueueProcessRouteImport } from './routes/lovable/email/queue/process'
 import { Route as ApiPublicCdrProgressJobIdRouteImport } from './routes/api/public/cdr-progress.$jobId'
 
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
@@ -212,6 +213,12 @@ const DotlovableOauthConsentRoute = DotlovableOauthConsentRouteImport.update({
   path: '/.lovable/oauth/consent',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LovableEmailQueueProcessRoute =
+  LovableEmailQueueProcessRouteImport.update({
+    id: '/lovable/email/queue/process',
+    path: '/lovable/email/queue/process',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicCdrProgressJobIdRoute =
   ApiPublicCdrProgressJobIdRouteImport.update({
     id: '/api/public/cdr-progress/$jobId',
@@ -253,6 +260,7 @@ export interface FileRoutesByFullPath {
   '/complaints/': typeof AppComplaintsIndexRoute
   '/orders/': typeof AppOrdersIndexRoute
   '/api/public/cdr-progress/$jobId': typeof ApiPublicCdrProgressJobIdRoute
+  '/lovable/email/queue/process': typeof LovableEmailQueueProcessRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -288,6 +296,7 @@ export interface FileRoutesByTo {
   '/complaints': typeof AppComplaintsIndexRoute
   '/orders': typeof AppOrdersIndexRoute
   '/api/public/cdr-progress/$jobId': typeof ApiPublicCdrProgressJobIdRoute
+  '/lovable/email/queue/process': typeof LovableEmailQueueProcessRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -325,6 +334,7 @@ export interface FileRoutesById {
   '/_app/complaints/': typeof AppComplaintsIndexRoute
   '/_app/orders/': typeof AppOrdersIndexRoute
   '/api/public/cdr-progress/$jobId': typeof ApiPublicCdrProgressJobIdRoute
+  '/lovable/email/queue/process': typeof LovableEmailQueueProcessRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -362,6 +372,7 @@ export interface FileRouteTypes {
     | '/complaints/'
     | '/orders/'
     | '/api/public/cdr-progress/$jobId'
+    | '/lovable/email/queue/process'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -397,6 +408,7 @@ export interface FileRouteTypes {
     | '/complaints'
     | '/orders'
     | '/api/public/cdr-progress/$jobId'
+    | '/lovable/email/queue/process'
   id:
     | '__root__'
     | '/'
@@ -433,6 +445,7 @@ export interface FileRouteTypes {
     | '/_app/complaints/'
     | '/_app/orders/'
     | '/api/public/cdr-progress/$jobId'
+    | '/lovable/email/queue/process'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -447,6 +460,7 @@ export interface RootRouteChildren {
   DotlovableOauthConsentRoute: typeof DotlovableOauthConsentRoute
   Char91DotmcpChar93InvokeToolToolRoute: typeof Char91DotmcpChar93InvokeToolToolRoute
   ApiPublicCdrProgressJobIdRoute: typeof ApiPublicCdrProgressJobIdRoute
+  LovableEmailQueueProcessRoute: typeof LovableEmailQueueProcessRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -682,6 +696,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DotlovableOauthConsentRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/lovable/email/queue/process': {
+      id: '/lovable/email/queue/process'
+      path: '/lovable/email/queue/process'
+      fullPath: '/lovable/email/queue/process'
+      preLoaderRoute: typeof LovableEmailQueueProcessRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/cdr-progress/$jobId': {
       id: '/api/public/cdr-progress/$jobId'
       path: '/api/public/cdr-progress/$jobId'
@@ -759,6 +780,7 @@ const rootRouteChildren: RootRouteChildren = {
   DotlovableOauthConsentRoute: DotlovableOauthConsentRoute,
   Char91DotmcpChar93InvokeToolToolRoute: Char91DotmcpChar93InvokeToolToolRoute,
   ApiPublicCdrProgressJobIdRoute: ApiPublicCdrProgressJobIdRoute,
+  LovableEmailQueueProcessRoute: LovableEmailQueueProcessRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
