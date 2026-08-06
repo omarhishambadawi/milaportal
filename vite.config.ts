@@ -7,8 +7,10 @@
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 import { mcpPlugin } from "@lovable.dev/mcp-js/stacks/tanstack/vite";
 import { VitePWA } from "vite-plugin-pwa";
-import { sep, resolve } from "node:path";
+import { sep, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+
+const rootDir = dirname(fileURLToPath(import.meta.url));
 
 import { loadEnv, type Plugin } from "vite";
 
@@ -116,9 +118,9 @@ export default defineConfig({
       alias: {
         // React Email's htmlparser2 path needs entities v4.5.0 (v5+ dropped
         // ./lib/decode.js). Pin every import to the hoisted v4.5.0 copy.
-        "entities/lib/decode.js": resolve(__dirname, "node_modules/entities/lib/decode.js"),
-        "entities/lib/encode.js": resolve(__dirname, "node_modules/entities/lib/encode.js"),
-        entities: resolve(__dirname, "node_modules/entities"),
+        "entities/lib/decode.js": resolve(rootDir, "node_modules/entities/lib/decode.js"),
+        "entities/lib/encode.js": resolve(rootDir, "node_modules/entities/lib/encode.js"),
+        entities: resolve(rootDir, "node_modules/entities"),
       },
     },
     plugins: [
