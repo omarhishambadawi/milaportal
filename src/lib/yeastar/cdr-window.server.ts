@@ -46,14 +46,34 @@
  *
  * Missing days are fetched as CONTIGUOUS RANGES rather than one request each, so
  * a cold month is still a single sweep and never thirty round-trips.
+ *
+ * ---------------------------------------------------------------------------
+ * Three tiers, cheapest first
+ * ---------------------------------------------------------------------------
+ * Since the CDR synchronization layer landed there is a tier between memory and
+ * the PBX:
+ *
+ *   1. **This isolate's day cache** — free, and the only tier that can hand back
+ *      the SAME array instance (which is what keeps the normalization cache
+ *      upstream valid).
+ *   2. **The Supabase mirror** (`cdr-store.server`) — one indexed query, shared
+ *      by every isolate and surviving cold starts. Populated by the background
+ *      sync, and by tier 3 below.
+ *   3. **A live PBX sweep** — unchanged, and still the source of truth. What it
+ *      fetches is written back to the mirror, so a window is only ever swept
+ *      once across the whole deployment.
+ *
+ * A day is servable from the mirror when it has ENDED (immutable, so any age
+ * will do) or when it is today and the mirror was refreshed within the live TTL
+ * — the same freshness contract tier 1 already applies to its own entries.
  */
 import { fetchCdrRange, type CdrRecord, type FetchCdrResult } from "./cdr.server";
-import { BUSINESS_UTC_OFFSET_MINUTES } from "@/lib/timezone";
+import { businessDayOf, contiguousRanges, enumerateDays, tzOffsetMinutes } from "./cdr-days";
 
-function tzOffsetMinutes(): number {
-  const raw = Number(process.env.YEASTAR_UTC_OFFSET_MINUTES);
-  return Number.isFinite(raw) ? raw : BUSINESS_UTC_OFFSET_MINUTES;
-}
+// Re-exported: these were defined here before the day math was extracted for the
+// mirror and the background sync to share, and callers (and tests) import them
+// from this module.
+export { businessDayOf, contiguousRanges, enumerateDays };
 
 /**
  * A day that has ended cannot gain a call, so it is held long enough to survive
@@ -96,29 +116,10 @@ const dayCache = new Map<string, DayEntry>();
  */
 const windowCache = new Map<string, { stamp: string; records: CdrRecord[] }>();
 
-/** `YYYY-MM-DD` for an epoch-ms instant, in the business timezone. */
-export function businessDayOf(atMs: number, offsetMin = tzOffsetMinutes()): string {
-  return new Date(atMs + offsetMin * 60_000).toISOString().slice(0, 10);
-}
-
 /** `YYYY-MM-DD` for a CDR row's epoch-seconds timestamp. */
 function dayOfRow(r: CdrRecord, offsetMin: number): string | null {
   if (typeof r.timestamp !== "number") return null;
   return businessDayOf(r.timestamp * 1000, offsetMin);
-}
-
-/** Every day in `[from, to]`, inclusive. */
-export function enumerateDays(from: string, to: string): string[] {
-  const out: string[] = [];
-  let t = Date.parse(`${from}T00:00:00Z`);
-  const end = Date.parse(`${to}T00:00:00Z`);
-  if (!Number.isFinite(t) || !Number.isFinite(end) || end < t) return out;
-  // A month is 31 iterations; the guard is only to stop a malformed range from
-  // spinning forever.
-  for (let i = 0; t <= end && i < 400; i++, t += 86_400_000) {
-    out.push(new Date(t).toISOString().slice(0, 10));
-  }
-  return out;
 }
 
 function isFresh(entry: DayEntry, now: number): boolean {
@@ -136,30 +137,47 @@ function evict(now: number) {
   if (windowCache.size > 40) windowCache.clear();
 }
 
-/** Collapse a sorted day list into contiguous `[from,to]` ranges. */
-export function contiguousRanges(days: string[]): Array<{ from: string; to: string }> {
-  const out: Array<{ from: string; to: string }> = [];
-  for (const day of days) {
-    const last = out[out.length - 1];
-    if (
-      last &&
-      Date.parse(`${day}T00:00:00Z`) - Date.parse(`${last.to}T00:00:00Z`) === 86_400_000
-    ) {
-      last.to = day;
-    } else {
-      out.push({ from: day, to: day });
-    }
-  }
-  return out;
-}
-
 export interface CdrWindow extends Omit<FetchCdrResult, "fetchedRows" | "droppedOutOfWindow"> {
-  /** Days answered from the day cache without touching the PBX. */
+  /** Days answered from this isolate's day cache without touching the PBX. */
   daysFromCache: number;
-  /** Days that had to be fetched. */
+  /** Days answered from the Supabase mirror instead of a live PBX sweep. */
+  daysFromStore: number;
+  /** Days that had to be fetched from the PBX. */
   daysFetched: number;
   /** How many PBX sweeps this window cost. Zero on a full cache hit. */
   sweeps: number;
+}
+
+/**
+ * Fill the day cache from the Supabase mirror, returning the days it answered.
+ *
+ * Best-effort in every direction: if the mirror is unreachable, unconfigured or
+ * incomplete, the days it could not answer simply stay on the missing list and
+ * are swept from the PBX exactly as before. The mirror is an accelerator, never
+ * a dependency — and never an authority, since it only ever holds rows the PBX
+ * emitted.
+ */
+async function fillFromStore(missing: string[], now: number, today: string): Promise<Set<string>> {
+  const served = new Set<string>();
+  if (missing.length === 0) return served;
+  try {
+    const store = await import("./cdr-store.server");
+    if (!store.isStoreConfigured()) return served;
+    const synced = await store.readSyncedDays(missing);
+    const usable = missing.filter((d) =>
+      store.isSyncedDayUsable(d, synced.get(d), now, today, LIVE_DAY_TTL_MS),
+    );
+    if (usable.length === 0) return served;
+
+    const rowsByDay = await store.readCdrDays(usable);
+    for (const day of usable) {
+      dayCache.set(day, { at: now, live: day >= today, rows: rowsByDay.get(day) ?? [] });
+      served.add(day);
+    }
+  } catch (e) {
+    console.warn(`[yeastar cdr] mirror read failed: ${e instanceof Error ? e.message : e}`);
+  }
+  return served;
 }
 
 /**
@@ -176,10 +194,16 @@ export async function getCdrWindow(from: string, to: string, jobId?: string): Pr
 
   const today = businessDayOf(now, offsetMin);
   const days = enumerateDays(from, to);
-  const missing = days.filter((d) => {
+  const notInMemory = days.filter((d) => {
     const hit = dayCache.get(d);
     return !hit || !isFresh(hit, now);
   });
+
+  // Tier 2. Anything the mirror can answer never reaches the PBX, which is the
+  // whole point of the synchronization layer: a cold isolate serving a month
+  // that the background sync already covers issues zero PBX requests.
+  const fromStore = await fillFromStore(notInMemory, now, today);
+  const missing = notInMemory.filter((d) => !fromStore.has(d));
 
   let totalReported: number | null = null;
   let truncated = false;
@@ -244,6 +268,19 @@ export async function getCdrWindow(from: string, to: string, jobId?: string): Pr
         });
       }
     }
+
+    // Write what was just swept back to the mirror, so the next reader — a
+    // different isolate, a different page, a different user — gets it from
+    // Postgres instead of paying for the same sweep again. These rows have
+    // already crossed the wire, which makes the read path the cheapest backfill
+    // available and means a window a human actually looks at is only ever swept
+    // once. Awaited so the write cannot be cut short when the isolate is
+    // recycled after the response, and best-effort inside `persistSweptDays`:
+    // a mirror write must never fail a dashboard that already has its answer.
+    const swept: CdrRecord[] = [];
+    for (const res of results) for (const row of res.records) swept.push(row);
+    const { persistSweptDays } = await import("./cdr-sync.server");
+    await persistSweptDays(swept, missing);
   }
 
   // Compose. The stamp is the identity of the constituent days, so an unchanged
@@ -276,7 +313,8 @@ export async function getCdrWindow(from: string, to: string, jobId?: string): Pr
     endEpoch: 0,
     elapsedMs: Date.now() - started,
     truncated,
-    daysFromCache: days.length - missing.length,
+    daysFromCache: days.length - notInMemory.length,
+    daysFromStore: fromStore.size,
     daysFetched: missing.length,
     sweeps,
   };

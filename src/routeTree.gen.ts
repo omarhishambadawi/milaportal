@@ -15,6 +15,7 @@ import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiCspReportRouteImport } from './routes/api/csp-report'
+import { Route as ApiCdrSyncRouteImport } from './routes/api/cdr-sync'
 import { Route as AppProfileRouteImport } from './routes/_app.profile'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
 import { Route as AppCallCenterRouteImport } from './routes/_app.call-center'
@@ -74,6 +75,11 @@ const IndexRoute = IndexRouteImport.update({
 const ApiCspReportRoute = ApiCspReportRouteImport.update({
   id: '/api/csp-report',
   path: '/api/csp-report',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiCdrSyncRoute = ApiCdrSyncRouteImport.update({
+  id: '/api/cdr-sync',
+  path: '/api/cdr-sync',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppProfileRoute = AppProfileRouteImport.update({
@@ -248,6 +254,7 @@ export interface FileRoutesByFullPath {
   '/call-center': typeof AppCallCenterRoute
   '/dashboard': typeof AppDashboardRoute
   '/profile': typeof AppProfileRoute
+  '/api/cdr-sync': typeof ApiCdrSyncRoute
   '/api/csp-report': typeof ApiCspReportRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
@@ -286,6 +293,7 @@ export interface FileRoutesByTo {
   '/call-center': typeof AppCallCenterRoute
   '/dashboard': typeof AppDashboardRoute
   '/profile': typeof AppProfileRoute
+  '/api/cdr-sync': typeof ApiCdrSyncRoute
   '/api/csp-report': typeof ApiCspReportRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
@@ -326,6 +334,7 @@ export interface FileRoutesById {
   '/_app/call-center': typeof AppCallCenterRoute
   '/_app/dashboard': typeof AppDashboardRoute
   '/_app/profile': typeof AppProfileRoute
+  '/api/cdr-sync': typeof ApiCdrSyncRoute
   '/api/csp-report': typeof ApiCspReportRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
@@ -366,6 +375,7 @@ export interface FileRouteTypes {
     | '/call-center'
     | '/dashboard'
     | '/profile'
+    | '/api/cdr-sync'
     | '/api/csp-report'
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
@@ -404,6 +414,7 @@ export interface FileRouteTypes {
     | '/call-center'
     | '/dashboard'
     | '/profile'
+    | '/api/cdr-sync'
     | '/api/csp-report'
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
@@ -443,6 +454,7 @@ export interface FileRouteTypes {
     | '/_app/call-center'
     | '/_app/dashboard'
     | '/_app/profile'
+    | '/api/cdr-sync'
     | '/api/csp-report'
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
@@ -480,6 +492,7 @@ export interface RootRouteChildren {
   ResetPasswordRoute: typeof ResetPasswordRoute
   Char91DotmcpChar93ListToolsRoute: typeof Char91DotmcpChar93ListToolsRoute
   Char91DotwellKnownChar93OauthProtectedResourceRoute: typeof Char91DotwellKnownChar93OauthProtectedResourceRoute
+  ApiCdrSyncRoute: typeof ApiCdrSyncRoute
   ApiCspReportRoute: typeof ApiCspReportRoute
   DotlovableOauthConsentRoute: typeof DotlovableOauthConsentRoute
   Char91DotmcpChar93InvokeToolToolRoute: typeof Char91DotmcpChar93InvokeToolToolRoute
@@ -531,6 +544,13 @@ declare module '@tanstack/react-router' {
       path: '/api/csp-report'
       fullPath: '/api/csp-report'
       preLoaderRoute: typeof ApiCspReportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/cdr-sync': {
+      id: '/api/cdr-sync'
+      path: '/api/cdr-sync'
+      fullPath: '/api/cdr-sync'
+      preLoaderRoute: typeof ApiCdrSyncRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app/profile': {
@@ -816,6 +836,7 @@ const rootRouteChildren: RootRouteChildren = {
   Char91DotmcpChar93ListToolsRoute: Char91DotmcpChar93ListToolsRoute,
   Char91DotwellKnownChar93OauthProtectedResourceRoute:
     Char91DotwellKnownChar93OauthProtectedResourceRoute,
+  ApiCdrSyncRoute: ApiCdrSyncRoute,
   ApiCspReportRoute: ApiCspReportRoute,
   DotlovableOauthConsentRoute: DotlovableOauthConsentRoute,
   Char91DotmcpChar93InvokeToolToolRoute: Char91DotmcpChar93InvokeToolToolRoute,

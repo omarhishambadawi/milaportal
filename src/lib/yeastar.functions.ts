@@ -89,6 +89,10 @@ async function assertOwner(ctx: { userId: string }) {
 // editor would either be a lie or would need a settings store this phase is not
 // allowed to add. Secret VALUES are never returned — only whether they loaded.
 
+/** Trailing window the configuration page reports mirror coverage over — one
+ *  month, the widest range the dashboards' own presets offer. */
+const SYNC_COVERAGE_DAYS = 30;
+
 export interface CallsConfigSetting {
   key: string;
   label: string;
@@ -159,6 +163,37 @@ export const callsConfiguration = createServerFn({ method: "POST" })
       const cacheStats = cdrCacheStats();
       const lastSyncAgeMs = cacheStats.newestAgeMs;
       const warmWindows = cacheStats.freshDays;
+
+      // Background synchronization state. Reported here rather than on a new
+      // page: this is exactly what this screen is for — what the pipeline is
+      // running on and where each value comes from. Never throws: the mirror is
+      // an accelerator, and a configuration page that fails because an
+      // accelerator is unreachable is worse than one that says so.
+      const { isStoreConfigured, readSyncState, cdrStoreStats } =
+        await import("@/lib/yeastar/cdr-store.server");
+      let syncStatusValue = "not configured";
+      let syncCoverageValue = "—";
+      if (isStoreConfigured()) {
+        try {
+          const nowMs = Date.now();
+          const [state, coverage] = await Promise.all([
+            readSyncState(),
+            cdrStoreStats(
+              businessDay(nowMs - (SYNC_COVERAGE_DAYS - 1) * 86_400_000),
+              businessDay(nowMs),
+            ),
+          ]);
+          const ageMin =
+            state.lastRunAt == null ? null : Math.round((Date.now() - state.lastRunAt) / 60_000);
+          syncStatusValue =
+            state.lastRunAt == null
+              ? "never run"
+              : `${state.lastStatus} · ${ageMin}m ago · ${state.lastRows.toLocaleString()} row(s)`;
+          syncCoverageValue = `${coverage.daysSynced} of ${coverage.days} day(s) · ${coverage.rows.toLocaleString()} row(s)`;
+        } catch {
+          syncStatusValue = "unavailable";
+        }
+      }
 
       const agents = await loadAgents((context as any).supabase);
       const cc = agents.filter((a) => a.team === "customer_care");
@@ -293,6 +328,20 @@ export const callsConfiguration = createServerFn({ method: "POST" })
                 label: "Roster cache",
                 value: `${ROSTER_TTL_MS / 60_000} minutes`,
                 source: "application",
+              },
+              {
+                key: "cdrSyncStatus",
+                label: "CDR synchronization",
+                value: syncStatusValue,
+                source: "application",
+                note: "Background sync of PBX call records into Supabase. Yeastar stays the source of truth; the mirror only spares the dashboards a live sweep.",
+              },
+              {
+                key: "cdrSyncCoverage",
+                label: "Synchronized days",
+                value: syncCoverageValue,
+                source: "application",
+                note: `Business days covered over the last ${SYNC_COVERAGE_DAYS} days. Days still missing are fetched live and written back on first view.`,
               },
             ],
           },
@@ -2350,12 +2399,12 @@ export interface CallLookupRow {
 }
 
 /**
- * Which of the three retrieval paths answered. Diagnostic only — the rows are
+ * Which of the retrieval paths answered. Diagnostic only — the rows are
  * identical whichever one ran — but it is the difference between a lookup that
  * cost nothing and one that swept a month of CDR, so it is worth being able to
  * see from the outside.
  */
-export type CallLookupSource = "cache" | "targeted" | "swept";
+export type CallLookupSource = "cache" | "synced" | "targeted" | "swept";
 
 export interface CallLookupResult {
   ok: boolean;
@@ -2418,6 +2467,36 @@ function toLookupRow(
     talkSeconds: c.talkSeconds,
     waitSeconds: c.queueWaitSeconds,
   };
+}
+
+/**
+ * One subscriber's calls, from the synchronized Supabase mirror.
+ *
+ * The mirror is asked only when it covers the ENTIRE window (see
+ * `storeCoversWindow`): a partially covered window would answer from the days it
+ * holds and quietly omit the rest, and "nobody has spoken to them" is the one
+ * wrong answer this page must not give. Returns null — never a partial result —
+ * so the caller falls through to the PBX paths untouched.
+ *
+ * The rows are the raw CDR rows the PBX emitted, so `classifyRecords` produces
+ * exactly what it would have from a live fetch. Number matching here is only a
+ * pre-filter, as on the PBX path; the caller's suffix match stays authoritative.
+ */
+async function mirroredClassifiedByNumber(
+  from: string,
+  to: string,
+  typedNumber: string,
+  ctx: NormalizationContext,
+): Promise<ClassifiedRecordsT | null> {
+  try {
+    const store = await import("@/lib/yeastar/cdr-store.server");
+    if (!(await store.storeCoversWindow(from, to, CDR_WINDOW_TTLS.LIVE_DAY_TTL_MS))) return null;
+    const rows = await store.readCdrByNumber(from, to, numberVariants(typedNumber));
+    const { classifyRecords } = await import("@/lib/yeastar/stats.server");
+    return classifyRecords(rows as any[], ctx);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -2491,9 +2570,12 @@ export const lookupCallsByNumber = createServerFn({ method: "POST" })
     // ---- Pick the cheapest source that can answer -------------------------
     //
     // 1. A window already normalized in memory — free, and exact.
-    // 2. A targeted `/cdr/search` for this number alone — a few hundred rows
+    // 2. The synchronized Supabase mirror, queried by number — one indexed
+    //    query, no PBX request at all, and available to a cold isolate that has
+    //    nothing in memory. Only used when the mirror covers the whole window.
+    // 3. A targeted `/cdr/search` for this number alone — a few hundred rows
     //    instead of the whole window.
-    // 3. The full window sweep — what this page used to do unconditionally,
+    // 4. The full window sweep — what this page used to do unconditionally,
     //    now only reached when the targeted path found nothing and a spelling
     //    we did not try could still be hiding history.
     // Null until a path commits to an answer. It must NOT start at "cache":
@@ -2503,6 +2585,11 @@ export const lookupCallsByNumber = createServerFn({ method: "POST" })
     let source: CallLookupSource | null = null;
     let classified = await peekClassifiedWindow(from, to, ctx);
     if (classified) source = "cache";
+
+    if (!classified) {
+      classified = await mirroredClassifiedByNumber(from, to, data.number, ctx);
+      if (classified) source = "synced";
+    }
 
     if (!classified) {
       const { fetchCdrByNumber } = await import("@/lib/yeastar/cdr.server");
