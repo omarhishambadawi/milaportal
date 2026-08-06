@@ -72,7 +72,13 @@ function supabasePublicEnvFallback(): Plugin {
     // emitted only when neither the process env nor any .env file has the key.
     config(_config, { mode }) {
       const fileEnv = loadEnv(mode, process.cwd(), "");
+      // Server-only vars (e.g. SUPABASE_SERVICE_ROLE_KEY) must reach process.env for
+      // server routes such as the email queue/auth webhook. Never added to `define`.
+      for (const [key, value] of Object.entries(fileEnv)) {
+        if (process.env[key] === undefined) process.env[key] = value;
+      }
       const has = (key: string) => Boolean(process.env[key] || fileEnv[key]);
+
       const define: Record<string, string> = {};
 
       for (const [key, fallback] of Object.entries(PUBLIC_SUPABASE_FALLBACKS)) {
