@@ -7,7 +7,9 @@
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 import { mcpPlugin } from "@lovable.dev/mcp-js/stacks/tanstack/vite";
 import { VitePWA } from "vite-plugin-pwa";
-import { sep } from "node:path";
+import { sep, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { loadEnv, type Plugin } from "vite";
 
 // Workaround for an upstream Windows-only bug in @lovable.dev/mcp-js (present in
