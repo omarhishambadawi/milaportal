@@ -110,7 +110,17 @@ export default defineConfig({
     server: { entry: "server" },
   },
   vite: {
+    resolve: {
+      alias: {
+        // React Email's htmlparser2 path needs entities v4.5.0 (v5+ dropped
+        // ./lib/decode.js). Pin every import to the hoisted v4.5.0 copy.
+        "entities/lib/decode.js": resolve(__dirname, "node_modules/entities/lib/decode.js"),
+        "entities/lib/encode.js": resolve(__dirname, "node_modules/entities/lib/encode.js"),
+        entities: resolve(__dirname, "node_modules/entities"),
+      },
+    },
     plugins: [
+
       supabasePublicEnvFallback(),
       withNativeSepRoot(mcpPlugin()),
       VitePWA({
