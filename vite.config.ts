@@ -124,7 +124,6 @@ export default defineConfig({
       },
     },
     plugins: [
-
       supabasePublicEnvFallback(),
       withNativeSepRoot(mcpPlugin()),
       VitePWA({
