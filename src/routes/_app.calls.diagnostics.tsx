@@ -11,8 +11,8 @@
  * operator nothing until clicked. The probes are still here, as secondary
  * actions beneath the state they refine.
  *
- * Configuration moved to /calls/configuration; KPI validation to
- * /calls/analytics. Each page has one responsibility.
+ * Configuration moved to /calls/configuration. Each page has one
+ * responsibility.
  */
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";

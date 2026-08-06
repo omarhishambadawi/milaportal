@@ -8,7 +8,6 @@ const ALL_PAGES: CallsPage[] = [
   "customer_care",
   "telesales",
   "lookup",
-  "analytics",
   "diagnostics",
   "configuration",
 ];
@@ -59,9 +58,8 @@ describe("callsPageAllowedForRole", () => {
     }
   });
 
-  it("keeps analytics, diagnostics and configuration away from team agents", () => {
+  it("keeps diagnostics and configuration away from team agents", () => {
     for (const role of TEAM_ROLES) {
-      expect(callsPageAllowedForRole(role, "analytics")).toBe(false);
       expect(callsPageAllowedForRole(role, "diagnostics")).toBe(false);
       expect(callsPageAllowedForRole(role, "configuration")).toBe(false);
     }

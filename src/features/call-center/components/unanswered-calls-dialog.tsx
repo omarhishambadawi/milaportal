@@ -6,9 +6,10 @@
  * ---------------------------------------------------------------------------
  * A supervisor reading "37 abandoned" has one follow-up question — which 37,
  * and did anyone call them back — and this dialog answers exactly that. It
- * derives no metric: `total` and `handled` are counted server-side over the same
- * calls the KPI counted, and every cell is read off a row. The cards keep their
- * own numbers whatever happens here.
+ * derives no metric and it classifies nothing: `total` and `handled` are counted
+ * server-side over the same calls the KPI counted, labelled by the same shared
+ * classifier the KPI used (`lib/yeastar/call-classification`), and every cell is
+ * read off a row.
  *
  * The two lists are one component because they are the same table over a
  * different outcome: same columns, same follow-up rule, same filters. The only
@@ -106,7 +107,6 @@ export function UnansweredCallsDialog({
   kind,
   filters,
   kpiValue,
-  yeastarSplit,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -114,8 +114,6 @@ export function UnansweredCallsDialog({
   filters: UnansweredDialogFilters;
   /** What the card shows, so a divergence can be explained rather than hidden. */
   kpiValue?: number;
-  /** True when that card follows Yeastar's Missed/Abandoned split, not CDR's. */
-  yeastarSplit?: boolean;
 }) {
   const fetchRows = useServerFn(getUnansweredCalls);
   const copy = COPY[kind];
@@ -201,9 +199,11 @@ export function UnansweredCallsDialog({
           : "Call data is not configured yet."
         : null;
 
-  // The card and this list can legitimately disagree — see the banner copy.
-  const divergent =
-    result?.ok === true && kpiValue != null && kpiValue !== result.total && !!yeastarSplit;
+  // The card and this list now share one classifier, so they agree by
+  // construction. What can still differ is the SIZE of the unanswered
+  // population: the PBX may have counted calls this CDR window does not
+  // contain. That is the only case this banner covers.
+  const divergent = result?.ok === true && kpiValue != null && kpiValue !== result.total;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -295,14 +295,14 @@ export function UnansweredCallsDialog({
                 <div className="px-4 pt-3 sm:px-5">
                   {divergent && (
                     <InfoBanner
-                      summary={`The card reads ${kpiValue} — the PBX labels these calls slightly differently.`}
+                      summary={`The card reads ${kpiValue} — the PBX counted more unanswered calls than this window holds.`}
                     >
-                      The Missed and Abandoned cards follow Yeastar's split, which sorts unanswered
-                      queue calls by <strong>who ended the call</strong>. This list is built from
-                      our own call records, which can only sort them by{" "}
-                      <strong>how long the caller waited</strong>. Both describe the same unanswered
-                      callers; only the line between the two labels moves, so a caller missing here
-                      will be in the other list.
+                      Both the card and this list label calls by Yeastar's rule, so they cannot
+                      disagree on <strong>which</strong> calls are {kind}. They can disagree on{" "}
+                      <strong>how many exist</strong>: the PBX's queue report and our own call
+                      records are separate feeds, and a call present in one but not the other
+                      usually means the window or the queue filter does not line up between them.
+                      Every call we hold is listed here.
                     </InfoBanner>
                   )}
                   {result.truncated && (

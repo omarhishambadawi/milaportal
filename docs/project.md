@@ -15,14 +15,14 @@ MilaServ Portal is an internal operations portal for a Saudi Arabian pharmacy
 chain ("Shams" branch network, SAR pricing, ~145 branches). It unifies five
 operational surfaces behind one authenticated application:
 
-| Surface        | What it does                                                                                                                                      |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Dashboard**  | Sales, delivery, verification and complaint analytics over a date window, computed by server-side Postgres RPCs.                                  |
-| **Orders**     | The shared order book — create, edit, verify invoices, export.                                                                                    |
-| **Complaints** | A parallel record with its own status/resolution workflow.                                                                                        |
-| **Calls**      | Call-centre analytics computed from a Yeastar P-Series PBX (Customer Care, Telesales, Call Lookup, Analytics Center, Diagnostics, Configuration). |
-| **Branches**   | An operational branch directory with search, a spatial "nearest branch" locator, and a workbook importer with snapshot rollback.                  |
-| **Users**      | Role/permission administration with an append-only audit trail.                                                                                   |
+| Surface        | What it does                                                                                                                              |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| **Dashboard**  | Sales, delivery, verification and complaint analytics over a date window, computed by server-side Postgres RPCs.                          |
+| **Orders**     | The shared order book — create, edit, verify invoices, export.                                                                            |
+| **Complaints** | A parallel record with its own status/resolution workflow.                                                                                |
+| **Calls**      | Call-centre analytics computed from a Yeastar P-Series PBX (Overview, Customer Care, Telesales, Call Lookup, Diagnostics, Configuration). |
+| **Branches**   | An operational branch directory with search, a spatial "nearest branch" locator, and a workbook importer with snapshot rollback.          |
+| **Users**      | Role/permission administration with an append-only audit trail.                                                                           |
 
 Cross-cutting characteristics visible in the code:
 
@@ -261,7 +261,6 @@ Conventions are documented in `src/routes/README.md` (`$id` dynamic, `$` splat,
 | `/calls/customer-care`                              | `canViewCallsPage(…, "customer_care")`                                 |
 | `/calls/telesales`                                  | `canViewCallsPage(…, "telesales")`                                     |
 | `/calls/lookup`                                     | `canViewCallsPage(…, "lookup")` — deliberately unconfined              |
-| `/calls/analytics`                                  | `isAdministrator(role)`                                                |
 | `/calls/diagnostics`                                | `isAdministrator(role)`                                                |
 | `/calls/configuration`                              | `isOwnerRole(role)`                                                    |
 | `/branches`, `/branches/import`                     | `view_branches` / `admin_access`                                       |
@@ -271,9 +270,13 @@ Conventions are documented in `src/routes/README.md` (`$id` dynamic, `$` splat,
 ### Retired routes kept as redirects
 
 `/admin/branches` → `/branches` · `/admin/yeastar` → `/calls/diagnostics` ·
-`/admin/yeastar-diagnostics` → `/calls/analytics` · `/call-center` →
+`/admin/yeastar-diagnostics` → `/calls/diagnostics` · `/call-center` →
 `/calls/customer-care`. Each throws `redirect({ …, replace: true })` in
 `beforeLoad` so bookmarks resolve instead of 404ing.
+
+`/calls/analytics` (the Analytics Center) was **removed**, not redirected: it was
+an administrator-only KPI-validation surface whose figures had to be typed in by
+hand, and nothing else in the app linked to it.
 
 ### Server routes
 
@@ -1165,7 +1168,7 @@ without a single row on screen changing colour.
 ## Call Center Module
 
 **Routes:** `/calls` (overview), `/calls/overview`, `/calls/customer-care`,
-`/calls/telesales`, `/calls/lookup`, `/calls/analytics`, `/calls/diagnostics`,
+`/calls/telesales`, `/calls/lookup`, `/calls/diagnostics`,
 `/calls/configuration`
 
 The PBX vendor is **deliberately not named in the navigation** — "Calls" is the
@@ -1176,6 +1179,57 @@ provider would not change a menu entry.
 
 A health check, not a report: is call data healthy right now, and which page owns
 each answer. Team agents are redirected straight to their own dashboard.
+
+### Missed vs. Abandoned — one classifier, every surface
+
+`src/lib/yeastar/call-classification.ts` is the **single source of truth** for
+the Missed / Abandoned distinction. Nothing else in the codebase may decide it —
+not a KPI card, a chart, a table, a drill-down or an export.
+
+It exports three things and they are used in this order:
+
+| Function                  | Answers                                                           |
+| ------------------------- | ----------------------------------------------------------------- |
+| `isQueueSplitApplicable`  | Does Yeastar's queue split describe THIS view?                    |
+| `resolveQueueOutcomes`    | Which system's counts do we render, and what are the rates on it? |
+| `classifyUnansweredCalls` | Which individual calls carry each label?                          |
+
+**Why the third one exists.** Yeastar publishes queue COUNTS, not calls. The KPI
+cards followed the PBX (O1, Sprint 3.5) while every surface listing individual
+calls read CDR's per-call `outcome`, so a card reading "Missed 0" opened onto the
+two calls CDR labels missed and the PBX labels abandoned.
+`classifyUnansweredCalls` closes that by re-cutting the population at the PBX's
+boundary: same calls, ordered by queue wait ascending, cut where the PBX put the
+line. A call the queue RELEASES has by definition waited out the queue's timeout,
+so the longest waits are the releases (missed) and everything below the cut is
+the caller's own hang-up (abandoned) — the same direction CDR's 5-second
+threshold already sorts them in. No call is added, dropped or duplicated; only
+the line moves. With no PBX opinion the cut lands on CDR's threshold and nothing
+moves at all.
+
+**Applicability is stricter for the split than for the missed column.** Call
+Report's queue figures are inbound, queue-scoped and queue-WIDE, so the split is
+refused on an Outbound-filtered view **and** on a single-agent view (which would
+render a queue-wide number over one agent's calls). `isCallReportApplicable` —
+which governs the per-agent missed COLUMN, and which the report really does carry
+per agent — remains the looser rule.
+
+Consumers: `buildCustomerCareMetrics` (Customer Care cards, charts, agent table),
+`/calls/overview` (Missed, Abandoned, Missed rate, the distribution donut), and
+`getUnansweredCalls` → `selectUnansweredCalls` (both drill-down dialogs). The
+drill-down loads the same cached Call Report snapshot the cards were built from,
+via the shared `loadCallReportSnapshot`, so a card's number and the rows behind
+it cannot diverge. The remaining honest case is the two feeds disagreeing on the
+SIZE of the unanswered population; the dialog says so rather than silently
+listing a different count.
+
+### `/calls/overview`
+
+Both teams on one screen — a monitoring surface: one window, no per-agent filter,
+one PDF export. Missed and Abandoned resolve through the shared classifier above,
+so they state the same thing Customer Care's cards do; Missed rate is derived
+from the rendered Missed, not from CDR's, so a card and its rate can never
+describe different calls.
 
 ### `/calls/customer-care`
 
@@ -1189,6 +1243,15 @@ Failure behaviour is asymmetric on purpose: a CDR failure is a page failure; a
 Call Report failure degrades one column and is reported through
 `metrics.callReport` rather than thrown.
 
+### Exports — PDF only
+
+Overview, Customer Care and Telesales each expose exactly one export: **Export
+PDF**, which is `window.print()` against the page's own `print:` utilities, so
+what is exported is what is on screen. The XLSX export (`features/call-center/
+export.ts`, and Telesales' Excel button) was removed along with the module. The
+`xlsx` dependency stays — Dashboard, Orders, Complaints and Branches still use
+it.
+
 ### `/calls/telesales`
 
 Extension-driven, outbound-oriented, with a conversion join against `orders`.
@@ -1201,8 +1264,6 @@ were looking at.
 A point query for one customer number over a trailing window
 (`LOOKUP_MAX_DAYS = 90`, `LOOKUP_MAX_ROWS = 200`). Open to every holder of the
 Calls view permission, team agents included.
-
-### `/calls/analytics` (administrator) — KPI validation against the PBX's own report.
 
 ### `/calls/diagnostics` (administrator) — config/auth/CDR/queue/endpoint probes.
 
@@ -1735,13 +1796,18 @@ project history.
 
 ## Known Issues
 
-1. **O1 — Missed vs. Abandoned disagrees with Yeastar, deliberately.** On the
-   verified window (2026‑07‑29, queue 6400) every KPI matched exactly except the
-   split: the dashboard reported 8 missed / 0 abandoned where Yeastar reported
-   0 / 8. Totals agree (8 unanswered either way). It is surfaced in three places
-   — a dashboard notice, an XLSX sheet, and the `unansweredSplit`
-   (`UnansweredSplitComparison`) field on `CustomerCareMetrics` — and is blocked
-   on confirming Yeastar's own definitions from the PBX Web UI.
+1. **O1 — Missed vs. Abandoned follows Yeastar, and now does so everywhere.** On
+   the verified window (2026‑07‑29, queue 6400) every KPI matched exactly except
+   the split: CDR read 8 missed / 0 abandoned where Yeastar read 0 / 8. Totals
+   agree (8 unanswered either way). The dashboard reports Yeastar's split, and
+   since the classification module every surface that shows those calls — cards,
+   charts, drill-downs, exports — resolves it through
+   `call-classification.ts`, so a card and its list can no longer disagree. The
+   CDR split is still published for comparison on `unansweredSplit`
+   (`UnansweredSplitComparison`) and surfaced by the dashboard notice. What is
+   still outstanding is confirming Yeastar's own definitions from the PBX Web UI;
+   until then the per-call re-cut is a wait-ordered reconstruction of the PBX's
+   boundary, not a field read from the CDR.
 2. **Per-agent missed calls are a firmware blind spot.** Unanswered agent rings
    leave no CDR trace at all, so the column reads "—" unless Call Report is
    available.
@@ -1937,7 +2003,10 @@ Drawn from what the code itself marks as deferred, incomplete, or blocked.
 ### Correctness and integrity
 
 1. **Close O1.** Confirm Yeastar's own Missed/Abandoned definitions from the PBX
-   Web UI, then align `resolveQueueOutcomeSplit` and retire the three notices.
+   Web UI, then retire the remaining notices. If the PBX ever exposes a per-call
+   "who ended the call" field, `classifyUnansweredCalls` should read it instead
+   of reconstructing the boundary from queue wait — that is the one assumption
+   in the module and it is deliberately isolated to a single function.
 2. **Verify the Customer Care refactor in a browser** against live PBX responses
    — specifically the O1 notice card and the "—" missed column.
 3. **Reconcile the Supabase project reference.** Decide whether

@@ -8,9 +8,14 @@
  * one follow-up question: *which* 37, and did anybody ever call them back. This
  * module answers that and nothing else. It aggregates nothing, derives no KPI,
  * and every field on a row is read straight off a `NormalizedCall` that the
- * existing pipeline already produced. The KPI cards keep their own numbers —
- * see the note on `selectUnansweredCalls` about when the two can differ and why
- * that is honest rather than a bug.
+ * existing pipeline already produced.
+ *
+ * Which of those calls is "abandoned" is NOT decided here. It comes from
+ * `./call-classification`, the one place in the module that turns the active
+ * split into per-call labels — the same call the KPI cards make. This module
+ * used to read `call.outcome` directly, which is why a card reading "Missed 0"
+ * could open onto two rows: the card followed the PBX and the list followed
+ * CDR.
  *
  * ---------------------------------------------------------------------------
  * "Handled later" is derived, not recorded
@@ -38,10 +43,12 @@
  * dialog says so rather than claiming the customer was never reached.
  */
 import { matchKey } from "./lookup-match";
+import { classifyUnansweredCalls } from "./call-classification";
+import type { QueueOutcomeSplit, UnansweredKind } from "./call-classification";
 import type { NormalizedCall } from "./normalize";
 
-/** The two unanswered outcomes this drill-down covers. */
-export type UnansweredKind = "abandoned" | "missed";
+/** Re-exported so a caller listing calls needs one import, not two. */
+export type { UnansweredKind };
 
 export type CallTeam = "customer_care" | "telesales";
 
@@ -179,6 +186,12 @@ export interface SelectUnansweredArgs {
    */
   followUps?: FollowUpIndex;
   kind: UnansweredKind;
+  /**
+   * The active Missed / Abandoned split — the SAME one the KPI card renders.
+   * It decides which of the unanswered calls carry `kind`, so the list and the
+   * card can only ever describe one population under one definition.
+   */
+  split: Pick<QueueOutcomeSplit, "abandoned" | "source">;
   /** Roster, for naming the agent who took the follow-up. */
   agentByExt: ReadonlyMap<string, { name: string; team: CallTeam }>;
   /** Hard cap on returned rows. `total` still reports the full count. */
@@ -193,25 +206,26 @@ export interface SelectUnansweredArgs {
  * applied by the same predicates `aggregateClassified` uses — that is what keeps
  * this list and the KPI card describing the same population.
  *
- * The one case where the row count and the KPI legitimately differ: when
- * Yeastar's Call Report is supplying the Missed/Abandoned SPLIT (see
- * `resolveQueueOutcomeSplit`), the card shows the PBX's labelling of the
- * unanswered population and these rows show CDR's. Both describe the same calls;
- * only the boundary between the two labels moves. The dialog states this rather
- * than quietly showing a different number.
+ * The row count now matches the card by construction: both take their labels
+ * from `classifyUnansweredCalls` under the same split. The one case where they
+ * can still differ is when the PBX and CDR disagree on the SIZE of the
+ * unanswered population, not on how to label it — the list can only show calls
+ * that exist in the CDR window. The dialog states that rather than quietly
+ * showing a different number.
  *
  * Rows come back newest first — the most recent failure is the one somebody is
  * about to act on.
  */
 export function selectUnansweredCalls(args: SelectUnansweredArgs): UnansweredSelection {
-  const { calls, kind, agentByExt, limit } = args;
+  const { calls, kind, split, agentByExt, limit } = args;
   const index = args.followUps ?? buildFollowUpIndex(args.followUpSource ?? calls);
+  const labels = classifyUnansweredCalls(calls, split);
 
   const rows: UnansweredCallRow[] = [];
   let handled = 0;
 
   for (const c of calls) {
-    if (c.outcome !== kind) continue;
+    if (labels.get(c.callId) !== kind) continue;
     const customerNumber = c.callerNumber;
     const follow =
       c.startedAt == null ? null : findFirstFollowUp(index, customerNumber, c.startedAt);

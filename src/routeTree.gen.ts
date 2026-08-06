@@ -35,7 +35,6 @@ import { Route as AppCallsLookupRouteImport } from './routes/_app.calls.lookup'
 import { Route as AppCallsDiagnosticsRouteImport } from './routes/_app.calls.diagnostics'
 import { Route as AppCallsCustomerCareRouteImport } from './routes/_app.calls.customer-care'
 import { Route as AppCallsConfigurationRouteImport } from './routes/_app.calls.configuration'
-import { Route as AppCallsAnalyticsRouteImport } from './routes/_app.calls.analytics'
 import { Route as AppBranchesImportRouteImport } from './routes/_app.branches.import'
 import { Route as AppAdminYeastarDiagnosticsRouteImport } from './routes/_app.admin.yeastar-diagnostics'
 import { Route as AppAdminYeastarRouteImport } from './routes/_app.admin.yeastar'
@@ -179,11 +178,6 @@ const AppCallsConfigurationRoute = AppCallsConfigurationRouteImport.update({
   path: '/calls/configuration',
   getParentRoute: () => AppRoute,
 } as any)
-const AppCallsAnalyticsRoute = AppCallsAnalyticsRouteImport.update({
-  id: '/calls/analytics',
-  path: '/calls/analytics',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppBranchesImportRoute = AppBranchesImportRouteImport.update({
   id: '/branches/import',
   path: '/branches/import',
@@ -263,7 +257,6 @@ export interface FileRoutesByFullPath {
   '/admin/yeastar': typeof AppAdminYeastarRoute
   '/admin/yeastar-diagnostics': typeof AppAdminYeastarDiagnosticsRoute
   '/branches/import': typeof AppBranchesImportRoute
-  '/calls/analytics': typeof AppCallsAnalyticsRoute
   '/calls/configuration': typeof AppCallsConfigurationRoute
   '/calls/customer-care': typeof AppCallsCustomerCareRoute
   '/calls/diagnostics': typeof AppCallsDiagnosticsRoute
@@ -302,7 +295,6 @@ export interface FileRoutesByTo {
   '/admin/yeastar': typeof AppAdminYeastarRoute
   '/admin/yeastar-diagnostics': typeof AppAdminYeastarDiagnosticsRoute
   '/branches/import': typeof AppBranchesImportRoute
-  '/calls/analytics': typeof AppCallsAnalyticsRoute
   '/calls/configuration': typeof AppCallsConfigurationRoute
   '/calls/customer-care': typeof AppCallsCustomerCareRoute
   '/calls/diagnostics': typeof AppCallsDiagnosticsRoute
@@ -343,7 +335,6 @@ export interface FileRoutesById {
   '/_app/admin/yeastar': typeof AppAdminYeastarRoute
   '/_app/admin/yeastar-diagnostics': typeof AppAdminYeastarDiagnosticsRoute
   '/_app/branches/import': typeof AppBranchesImportRoute
-  '/_app/calls/analytics': typeof AppCallsAnalyticsRoute
   '/_app/calls/configuration': typeof AppCallsConfigurationRoute
   '/_app/calls/customer-care': typeof AppCallsCustomerCareRoute
   '/_app/calls/diagnostics': typeof AppCallsDiagnosticsRoute
@@ -384,7 +375,6 @@ export interface FileRouteTypes {
     | '/admin/yeastar'
     | '/admin/yeastar-diagnostics'
     | '/branches/import'
-    | '/calls/analytics'
     | '/calls/configuration'
     | '/calls/customer-care'
     | '/calls/diagnostics'
@@ -423,7 +413,6 @@ export interface FileRouteTypes {
     | '/admin/yeastar'
     | '/admin/yeastar-diagnostics'
     | '/branches/import'
-    | '/calls/analytics'
     | '/calls/configuration'
     | '/calls/customer-care'
     | '/calls/diagnostics'
@@ -463,7 +452,6 @@ export interface FileRouteTypes {
     | '/_app/admin/yeastar'
     | '/_app/admin/yeastar-diagnostics'
     | '/_app/branches/import'
-    | '/_app/calls/analytics'
     | '/_app/calls/configuration'
     | '/_app/calls/customer-care'
     | '/_app/calls/diagnostics'
@@ -686,13 +674,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppCallsConfigurationRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/calls/analytics': {
-      id: '/_app/calls/analytics'
-      path: '/calls/analytics'
-      fullPath: '/calls/analytics'
-      preLoaderRoute: typeof AppCallsAnalyticsRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/branches/import': {
       id: '/_app/branches/import'
       path: '/branches/import'
@@ -782,7 +763,6 @@ interface AppRouteChildren {
   AppAdminYeastarRoute: typeof AppAdminYeastarRoute
   AppAdminYeastarDiagnosticsRoute: typeof AppAdminYeastarDiagnosticsRoute
   AppBranchesImportRoute: typeof AppBranchesImportRoute
-  AppCallsAnalyticsRoute: typeof AppCallsAnalyticsRoute
   AppCallsConfigurationRoute: typeof AppCallsConfigurationRoute
   AppCallsCustomerCareRoute: typeof AppCallsCustomerCareRoute
   AppCallsDiagnosticsRoute: typeof AppCallsDiagnosticsRoute
@@ -808,7 +788,6 @@ const AppRouteChildren: AppRouteChildren = {
   AppAdminYeastarRoute: AppAdminYeastarRoute,
   AppAdminYeastarDiagnosticsRoute: AppAdminYeastarDiagnosticsRoute,
   AppBranchesImportRoute: AppBranchesImportRoute,
-  AppCallsAnalyticsRoute: AppCallsAnalyticsRoute,
   AppCallsConfigurationRoute: AppCallsConfigurationRoute,
   AppCallsCustomerCareRoute: AppCallsCustomerCareRoute,
   AppCallsDiagnosticsRoute: AppCallsDiagnosticsRoute,

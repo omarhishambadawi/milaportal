@@ -22,6 +22,13 @@ const AGENTS = new Map([
   ["1000", { name: "Ahmed Mousad", team: "telesales" as const }],
 ]);
 
+/**
+ * CDR's own split — the pass-through case, where each call keeps the label the
+ * normalizer gave it. The PBX-driven case is a property of the shared
+ * classifier and is pinned in `call-classification.test.ts`.
+ */
+const CDR_SPLIT = { abandoned: 0, source: "cdr" } as const;
+
 /** A normalized call with only the fields a drill-down row reads set. */
 function call(partial: Partial<NormalizedCall> & { callId: string }): NormalizedCall {
   return {
@@ -134,6 +141,7 @@ describe("selectUnansweredCalls", () => {
     const out = selectUnansweredCalls({
       calls,
       kind: "abandoned",
+      split: CDR_SPLIT,
       agentByExt: AGENTS,
       limit: 100,
     });
@@ -155,7 +163,13 @@ describe("selectUnansweredCalls", () => {
   });
 
   it("reads the missed population off the same window", () => {
-    const out = selectUnansweredCalls({ calls, kind: "missed", agentByExt: AGENTS, limit: 100 });
+    const out = selectUnansweredCalls({
+      calls,
+      kind: "missed",
+      split: CDR_SPLIT,
+      agentByExt: AGENTS,
+      limit: 100,
+    });
     expect(out.rows.map((r) => r.callId)).toEqual(["m1"]);
     expect(out.rows[0].outcome).toBe("missed");
     expect(out.rows[0].waitSeconds).toBe(3);
@@ -166,6 +180,7 @@ describe("selectUnansweredCalls", () => {
     const out = selectUnansweredCalls({
       calls: many,
       kind: "abandoned",
+      split: CDR_SPLIT,
       agentByExt: AGENTS,
       limit: 2,
     });
@@ -180,6 +195,7 @@ describe("selectUnansweredCalls", () => {
     const out = selectUnansweredCalls({
       calls: [abandoned("a1", 1_000), answeredOutbound("cb", 2_000, "0501234567", "9999")],
       kind: "abandoned",
+      split: CDR_SPLIT,
       agentByExt: AGENTS,
       limit: 10,
     });
@@ -198,10 +214,47 @@ describe("selectUnansweredCalls", () => {
       calls: [abandoned("a1", 1_000)],
       followUpSource: [abandoned("a1", 1_000), excluded],
       kind: "abandoned",
+      split: CDR_SPLIT,
       agentByExt: AGENTS,
       limit: 10,
     });
     expect(out.rows[0].handled?.callId).toBe("late");
     expect(out.handled).toBe(1);
+  });
+
+  /**
+   * The defect this drill-down shipped with: the card counted the PBX's split
+   * and the list read CDR's `outcome`, so "Missed 0" opened onto two rows. The
+   * list must return exactly as many rows as the card promised.
+   */
+  it("lists the calls the PBX's split labelled, not CDR's", () => {
+    // CDR calls both of these missed — each waited past the 5s threshold. The
+    // PBX says the callers hung up, so both are abandoned.
+    const window = [
+      call({ callId: "u1", startedAt: 1_000, outcome: "missed", queueWaitSeconds: 30 }),
+      call({ callId: "u2", startedAt: 2_000, outcome: "missed", queueWaitSeconds: 40 }),
+    ];
+    const pbx = { abandoned: 2, source: "call_report" } as const;
+
+    const missed = selectUnansweredCalls({
+      calls: window,
+      kind: "missed",
+      split: pbx,
+      agentByExt: AGENTS,
+      limit: 10,
+    });
+    expect(missed.total).toBe(0);
+    expect(missed.rows).toEqual([]);
+
+    const abandonedRows = selectUnansweredCalls({
+      calls: window,
+      kind: "abandoned",
+      split: pbx,
+      agentByExt: AGENTS,
+      limit: 10,
+    });
+    expect(abandonedRows.total).toBe(2);
+    // The row reports the label the dashboard is showing, not the raw outcome.
+    expect(abandonedRows.rows.map((r) => r.outcome)).toEqual(["abandoned", "abandoned"]);
   });
 });

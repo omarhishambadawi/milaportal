@@ -496,11 +496,12 @@ function CustomerCarePage() {
             className="mt-3"
             summary="Yeastar's missed/abandoned split is unavailable for this filter — showing our own."
           >
-            Yeastar's queue report is inbound and queue-scoped, so it cannot describe an
-            outbound-filtered view, and it is skipped when the PBX report could not be read. Missed
-            and abandoned above are split by how long the caller waited (a 5-second threshold)
-            rather than by who hung up, so they will not tie out against the PBX's Queue panel until
-            this view is unfiltered again.
+            Yeastar's queue report is inbound, queue-scoped and queue-WIDE, so it cannot describe an
+            outbound-filtered view or a single agent's calls, and it is skipped when the PBX report
+            could not be read. Missed and abandoned above are split by how long the caller waited (a
+            5-second threshold) rather than by who hung up, so they will not tie out against the
+            PBX's Queue panel until this view is unfiltered again. The drill-down lists follow the
+            same split, so a card and its list still agree.
             {metrics.callReport.error && (
               <>
                 {" "}
@@ -687,7 +688,6 @@ function CustomerCarePage() {
         kind={drillKind ?? "abandoned"}
         filters={drillFilters}
         kpiValue={drillKind === "missed" ? queue.missed : queue.abandoned}
-        yeastarSplit={yeastarSplit}
       />
     </div>
   );

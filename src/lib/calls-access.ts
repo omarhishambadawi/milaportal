@@ -3,9 +3,8 @@
  *
  * Team agents are confined to their own team's dashboard: a Telesales agent may
  * only open /calls/telesales, a Customer Care agent only /calls/customer-care.
- * Everything else in the module (the overview, Analytics Center, Diagnostics,
- * Configuration) stays closed to them, in the navigation and on direct URL
- * access alike.
+ * Everything else in the module (the overview, Diagnostics, Configuration)
+ * stays closed to them, in the navigation and on direct URL access alike.
  *
  * This module has no imports on purpose so the server functions can read the
  * same rules without pulling client-only code into the server bundle.
@@ -17,7 +16,6 @@ export type CallsPage =
   | "customer_care"
   | "telesales"
   | "lookup"
-  | "analytics"
   | "diagnostics"
   | "configuration";
 

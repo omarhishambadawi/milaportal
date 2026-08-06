@@ -44,15 +44,16 @@
  */
 import type { AgentCallStats, CallTotals, DayBucket, HourBucket } from "./stats.server";
 import type { CallReportSnapshot } from "./call-report.server";
+import { isQueueSplitApplicable, resolveQueueOutcomes } from "./call-classification";
+import type { MetricSource } from "./call-classification";
 
-/** Where a rendered metric actually came from. */
-export type MetricSource =
-  /** Derived from CDR by the normalization pipeline. */
-  | "cdr"
-  /** Read from Yeastar's own Call Report API (openapi/v2.0). */
-  | "call_report"
-  /** The source was reachable but produced nothing for this window. */
-  | "unavailable";
+/**
+ * Where a rendered metric actually came from.
+ *
+ * Defined in `./call-classification` alongside the split it describes, and
+ * re-exported here because `CustomerCareMetrics` is what components read.
+ */
+export type { MetricSource };
 
 /** `12 AM`, `9 AM`, `12 PM`, `5 PM` — the x-axis label for an hour bucket. */
 export function hourLabel(h: number): string {
@@ -383,8 +384,10 @@ const EMPTY_TOTALS: CallTotals = {
  * population and merging it would be a category error — better to show no
  * missed column than a wrong one.
  *
- * A per-agent filter is fine: the report carries per-agent detail, and the
- * engine matches on extension.
+ * A per-agent filter is fine HERE: the report carries per-agent detail and the
+ * engine matches on extension, so the missed COLUMN stays meaningful. The
+ * queue-level Missed/Abandoned split is stricter and has its own rule — see
+ * `isQueueSplitApplicable`.
  */
 export function isCallReportApplicable(
   filters: MetricsEngineInput["filters"],
@@ -393,41 +396,6 @@ export function isCallReportApplicable(
   if (!snapshot?.available) return false;
   if (filters.direction === "Outbound") return false;
   return true;
-}
-
-/**
- * Decide which system's Missed / Abandoned definition the dashboard reports.
- *
- * O1, resolved (Sprint 3.5). Both systems count the same unanswered queue calls
- * and disagree only on how to label them:
- *
- *   Yeastar  — abandoned = the CALLER hung up while waiting;
- *              missed    = the QUEUE released the call to its failover.
- *   CDR      — abandoned = hung up inside 5 seconds; missed = waited longer.
- *
- * The wait threshold is a proxy for "the caller gave up", and on live data it is
- * a poor one: it labels a 30-second wait that the caller ended as "missed". The
- * PBX knows who hung up; CDR only knows how long they waited. So Yeastar's split
- * wins whenever it is available.
- *
- * When Call Report is unavailable or inapplicable (an Outbound-filtered view,
- * for instance) the CDR split stands in — it is the same population, labelled by
- * the weaker rule — and `source` says so, so the UI never presents a fallback as
- * a PBX-confirmed figure.
- */
-export function resolveQueueOutcomeSplit(
-  totals: Pick<CallTotals, "missed" | "abandoned">,
-  reportQueue: { missedCalls: number; abandonedCalls: number } | null,
-  cdrSource: MetricSource,
-): { missed: number; abandoned: number; source: MetricSource } {
-  if (reportQueue) {
-    return {
-      missed: reportQueue.missedCalls,
-      abandoned: reportQueue.abandonedCalls,
-      source: "call_report",
-    };
-  }
-  return { missed: totals.missed, abandoned: totals.abandoned, source: cdrSource };
 }
 
 /**
@@ -544,11 +512,16 @@ export function buildCustomerCareMetrics(input: MetricsEngineInput): CustomerCar
     : rows;
 
   // --- O1: Yeastar's split rendered, CDR's kept alongside -------------------
-  const reportQueue = applicable ? (snapshot?.queue ?? null) : null;
-  const cdrUnanswered = totals.missed + totals.abandoned;
+  // Resolved through the shared classifier, which is the same call the
+  // drill-down makes server-side — that is what keeps a card's number and the
+  // rows behind it describing one population under one definition.
+  const reportQueue = isQueueSplitApplicable(input.filters, snapshot?.available === true)
+    ? (snapshot?.queue ?? null)
+    : null;
   const reportUnanswered =
     reportQueue != null ? reportQueue.missedCalls + reportQueue.abandonedCalls : null;
-  const split = resolveQueueOutcomeSplit(totals, reportQueue, cdrSource);
+  const split = resolveQueueOutcomes(totals, reportQueue, cdrSource);
+  const cdrUnanswered = split.unansweredTotal;
 
   const unansweredSplit: UnansweredSplitComparison = {
     cdrMissed: totals.missed,
@@ -595,7 +568,7 @@ export function buildCustomerCareMetrics(input: MetricsEngineInput): CustomerCar
       answered: totals.inboundAnswered,
       missed: split.missed,
       abandoned: split.abandoned,
-      unansweredTotal: cdrUnanswered,
+      unansweredTotal: split.unansweredTotal,
       queueAnswerRate: totals.queueAnswerRate,
     },
     direction: {

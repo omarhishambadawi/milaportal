@@ -12,9 +12,14 @@
  * answer rate, timing), shows the queue's own numbers as their own band, and
  * puts the two teams side by side rather than merged.
  *
- * It is a MONITORING surface: one window, no per-agent filter, no export. Every
- * number here has a page that owns it in more detail, and the section headers
- * say which.
+ * It is a MONITORING surface: one window, no per-agent filter, and a single PDF
+ * export of what is on screen. Every number here has a page that owns it in
+ * more detail, and the section headers say which.
+ *
+ * Missed and Abandoned are resolved through `lib/yeastar/call-classification`,
+ * exactly as Customer Care resolves them. They are the same two words about the
+ * same queue, and a monitoring screen that labelled them by a different rule
+ * than the page that owns them would be worse than not showing them.
  *
  * ---------------------------------------------------------------------------
  * Access
@@ -47,6 +52,7 @@ import {
   PhoneMissed,
   PhoneOff,
   PhoneOutgoing,
+  Printer,
   RefreshCw,
   ShieldAlert,
   Target,
@@ -75,6 +81,8 @@ import {
 import { OUTBOUND } from "@/features/call-center/components/chart-primitives";
 import { useCallCenterFilters } from "@/features/call-center/hooks/use-call-center-filters";
 import { useCallCenterAnalytics } from "@/features/call-center/hooks/use-call-center-analytics";
+import { useCallReportQuery } from "@/features/call-center/hooks/use-call-report";
+import { isQueueSplitApplicable, resolveQueueOutcomes } from "@/lib/yeastar/call-classification";
 
 // Cadence for a LIVE window. The overview watches both teams, one of which is a
 // live queue, so it follows Customer Care's 20s rather than Telesales' 60s.
@@ -128,6 +136,36 @@ function CallsOverviewPage() {
     peakHour,
   } = a;
 
+  // The queue report behind Missed / Abandoned. Same query, same cache entry
+  // and same resolution as Customer Care — the overview is unfiltered by
+  // direction and by agent, so Yeastar's split always applies here.
+  const callReport = useCallReportQuery({
+    from: f.from,
+    to: f.to,
+    queue: "all",
+    enabled: !f.authLoading && canViewOverview,
+    policy: refreshPolicy,
+  });
+
+  const queueOutcome = useMemo(
+    () =>
+      resolveQueueOutcomes(
+        {
+          missed: totals?.missed ?? 0,
+          abandoned: totals?.abandoned ?? 0,
+          inbound: totals?.inbound ?? 0,
+        },
+        isQueueSplitApplicable(
+          { direction: "all", agentId: "all" },
+          callReport.data?.available === true,
+        )
+          ? (callReport.data?.queue ?? null)
+          : null,
+        totals ? "cdr" : "unavailable",
+      ),
+    [totals, callReport.data],
+  );
+
   // Ranking is a derivation, so it happens once here rather than inside the
   // leaderboard. Ties break on answer rate then talk time, with `agentId` last
   // so the order is stable across refreshes.
@@ -163,13 +201,13 @@ function CallsOverviewPage() {
       },
       {
         label: "Missed",
-        value: totals?.missed ?? 0,
+        value: queueOutcome.missed,
         color: "var(--color-destructive)",
         hint: "Queue released the call",
       },
       {
         label: "Abandoned",
-        value: totals?.abandoned ?? 0,
+        value: queueOutcome.abandoned,
         color: "var(--color-warning)",
         hint: "Caller hung up waiting",
       },
@@ -182,7 +220,7 @@ function CallsOverviewPage() {
       { label: "Busy", value: totals?.busy ?? 0, color: "var(--color-chart-5)" },
       { label: "Failed", value: totals?.failed ?? 0, color: "var(--color-muted-foreground)" },
     ],
-    [totals],
+    [totals, queueOutcome],
   );
 
   // Hooks first, then the permission guard — an early return above them would
@@ -218,12 +256,32 @@ function CallsOverviewPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => refresh()}
+            onClick={() => {
+              refresh();
+              void callReport.refetch();
+            }}
             disabled={isRefreshing}
             aria-label="Refresh analytics"
           >
             <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
           </Button>
+          {/*
+            The page's only export. Print is the export: the browser's own
+            PDF writer renders exactly what is on screen, and the `print:`
+            utilities throughout the page drop the controls from it.
+          */}
+          {f.canExport && (
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => window.print()}
+              disabled={isLoading}
+              className="ml-1"
+            >
+              <Printer className="mr-2 h-4 w-4" />
+              Export PDF
+            </Button>
+          )}
         </div>
       </div>
 
@@ -294,7 +352,7 @@ function CallsOverviewPage() {
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Kpi
             label="Queue missed"
-            value={totals?.missed ?? 0}
+            value={queueOutcome.missed}
             tone="destructive"
             accent="destructive"
             icon={PhoneMissed}
@@ -303,7 +361,7 @@ function CallsOverviewPage() {
           />
           <Kpi
             label="Abandoned"
-            value={totals?.abandoned ?? 0}
+            value={queueOutcome.abandoned}
             tone="warning"
             accent="destructive"
             icon={PhoneOff}
@@ -319,11 +377,11 @@ function CallsOverviewPage() {
           />
           <Kpi
             label="Missed rate"
-            value={pct(totals?.missedRate)}
+            value={pct(queueOutcome.missedRate)}
             tone="destructive"
             accent="destructive"
             loading={isLoading}
-            hint="Missed ÷ total calls"
+            hint="Missed ÷ inbound calls"
           />
         </div>
       </DashboardSection>

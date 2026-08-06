@@ -14,7 +14,6 @@ import {
   PhoneOutgoing,
   Stethoscope,
   Phone,
-  ChartNoAxesCombined,
   Settings2,
   LayoutList,
   Search,
@@ -98,8 +97,8 @@ function AppLayout() {
       // provider would not change a single menu entry.
       //
       // Access narrows down the list: the two operational dashboards follow the
-      // call-centre permission, the analytics and diagnostics surfaces are
-      // administrator-only, and configuration is owner-only.
+      // call-centre permission, diagnostics is administrator-only, and
+      // configuration is owner-only.
       ...(canCallCenter
         ? [
             {
@@ -132,12 +131,11 @@ function AppLayout() {
                 ...(isAdministrator(role)
                   ? [
                       {
-                        to: "/calls/analytics",
-                        label: "Analytics Center",
-                        icon: ChartNoAxesCombined,
+                        to: "/calls/diagnostics",
+                        label: "Diagnostics",
+                        icon: Stethoscope,
                         separatorBefore: true,
                       },
-                      { to: "/calls/diagnostics", label: "Diagnostics", icon: Stethoscope },
                     ]
                   : []),
                 ...(isOwnerRole(role)

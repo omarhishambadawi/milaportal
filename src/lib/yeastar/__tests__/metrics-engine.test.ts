@@ -19,7 +19,6 @@ import {
   hourLabel,
   isCallReportApplicable,
   rankAgents,
-  resolveQueueOutcomeSplit,
   type CustomerCareAgentRow,
   type MetricsEngineInput,
 } from "../metrics-engine";
@@ -406,35 +405,6 @@ describe("O1 — missed vs abandoned (resolved, Sprint 3.5)", () => {
   it("claims no source at all when nothing has loaded", () => {
     const m = build({ analytics: null, callReport: null });
     expect(m.sources.queueOutcome).toBe("unavailable");
-  });
-});
-
-describe("resolveQueueOutcomeSplit", () => {
-  const cdr = { missed: 95, abandoned: 2 };
-
-  it("prefers the PBX whenever it has an opinion", () => {
-    expect(resolveQueueOutcomeSplit(cdr, { missedCalls: 1, abandonedCalls: 96 }, "cdr")).toEqual({
-      missed: 1,
-      abandoned: 96,
-      source: "call_report",
-    });
-  });
-
-  it("passes CDR through, carrying CDR's own availability", () => {
-    expect(resolveQueueOutcomeSplit(cdr, null, "cdr")).toEqual({
-      missed: 95,
-      abandoned: 2,
-      source: "cdr",
-    });
-    expect(resolveQueueOutcomeSplit(cdr, null, "unavailable").source).toBe("unavailable");
-  });
-
-  it("takes an all-zero report at face value — a quiet queue is a real answer", () => {
-    expect(resolveQueueOutcomeSplit(cdr, { missedCalls: 0, abandonedCalls: 0 }, "cdr")).toEqual({
-      missed: 0,
-      abandoned: 0,
-      source: "call_report",
-    });
   });
 });
 

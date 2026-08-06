@@ -28,7 +28,6 @@ import {
   Activity,
   AlertTriangle,
   Clock,
-  Download,
   Gauge,
   PhoneIncoming,
   PhoneOff,
@@ -54,7 +53,6 @@ import { DateRangePicker } from "@/components/date-range-picker";
 import { fmtSAR } from "@/lib/branches";
 import type { Direction } from "@/features/call-center/types";
 import { pct, hhmmss } from "@/features/call-center/utils";
-import { exportCallCenter } from "@/features/call-center/export";
 import { RefreshIndicator } from "@/features/call-center/components/fetch-progress";
 import { DashboardSection } from "@/features/call-center/components/dashboard-section";
 import { EmptyWindowNotice } from "@/features/call-center/components/empty-window-notice";
@@ -104,7 +102,6 @@ function TelesalesPage() {
     refreshPolicy,
     refresh,
     totals,
-    rows,
     byDay,
     conv,
     hourly12,
@@ -129,19 +126,6 @@ function TelesalesPage() {
       </div>
     );
   }
-
-  const doExport = () =>
-    exportCallCenter({
-      ok,
-      totals,
-      conv,
-      rows,
-      byDay,
-      hourly12,
-      from: f.from,
-      to: f.to,
-      fileLabel: "telesales",
-    });
 
   return (
     <div className="space-y-5 print:space-y-3">
@@ -200,21 +184,10 @@ function TelesalesPage() {
             </SelectContent>
           </Select>
           {f.canExport && (
-            <>
-              {/*
-                Telesales keeps its Excel export where Customer Care dropped
-                one: the workbook carries the conversion and revenue sheets,
-                and a printed page has no equivalent for those.
-              */}
-              <Button variant="outline" size="sm" onClick={doExport} disabled={!ok}>
-                <Download className="mr-2 h-4 w-4" />
-                Excel
-              </Button>
-              <Button variant="default" size="sm" onClick={() => window.print()} disabled={!ok}>
-                <Printer className="mr-2 h-4 w-4" />
-                Export PDF
-              </Button>
-            </>
+            <Button variant="default" size="sm" onClick={() => window.print()} disabled={!ok}>
+              <Printer className="mr-2 h-4 w-4" />
+              Export PDF
+            </Button>
           )}
         </div>
       </div>

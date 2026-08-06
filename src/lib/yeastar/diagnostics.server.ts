@@ -295,9 +295,10 @@ export async function runDiagnostics(windowDays = 7): Promise<DiagnosticsReport>
     occurrences: counts.get(field) ?? 0,
   }));
 
-  // KPI validation deliberately lives in `kpi-validation.server.ts`, not here:
-  // it is production-safe (aggregates only) and must run in the deployed
-  // environment, whereas this module returns raw PBX bodies and is dev-only.
+  // This module returns raw PBX bodies and is dev-only. The KPI-validation
+  // surface that used to sit beside it was removed with the Analytics Center;
+  // parity is now asserted by `validate.ts` in the test suite instead, which is
+  // where a rule that must hold on every change belongs.
   return {
     at: new Date().toISOString(),
     baseUrlConfigured: true,

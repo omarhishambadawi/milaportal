@@ -17,7 +17,6 @@ import { z } from "zod";
 // Type-only: erased at compile time, so the server-only diagnostics module is
 // never pulled into a client bundle.
 import type { DiagnosticsReport as YeastarDiagnosticsReport } from "@/lib/yeastar/diagnostics.server";
-import type { KpiValidationReport } from "@/lib/yeastar/kpi-validation.server";
 import type { NormalizationContext } from "@/lib/yeastar/normalize";
 import type { CallReportSnapshot } from "@/lib/yeastar/call-report.server";
 
@@ -285,7 +284,7 @@ export const callsConfiguration = createServerFn({ method: "POST" })
                     ? `${ringTimeout}s`
                     : `${DEFAULT_OUTBOUND_RING_TIMEOUT_SEC}s (default)`,
                 source: "environment",
-                note: "Separates a genuine No Answer from an agent hanging up early. Confirm it against the ring histogram in the Analytics Center.",
+                note: "Separates a genuine No Answer from an agent hanging up early. Confirm it against the ring-duration histogram on /calls/diagnostics.",
               },
               {
                 key: "abandonThreshold",
@@ -1040,101 +1039,11 @@ export const yeastarDevDiagnostics = createServerFn({ method: "POST" })
     }
   });
 
-// ---- Live KPI validation (admin, production-safe) --------------------------
-//
-// Runs the real analytics pipeline over live CDR and re-derives every KPI
-// independently, so the numbers on the Call Center page can be validated
-// against the PBX in the environment where the Yeastar credentials actually
-// exist. Unlike `yeastarDevDiagnostics` this does NOT return raw response
-// bodies or any per-call data — only aggregates and pass/fail checks — which is
-// what makes it safe outside development. Administrator only; nothing is
-// persisted; every request is a read.
-
-const kpiValidationInput = z.object({
-  from: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .optional(),
-  to: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .optional(),
-  /** Used only when `from`/`to` are omitted. */
-  windowDays: z.number().int().min(1).max(30).default(7),
-  /**
-   * Which workflow to validate. Telesales is compared against Yeastar Reports ›
-   * Extension Call Statistics; Customer Care must NOT use that report, and is
-   * validated on queue analytics instead.
-   */
-  team: z.enum(["all", "customer_care", "telesales"]).default("all"),
-});
-
-export type KpiValidationResult =
-  | { ok: false; configured: false }
-  | { ok: false; configured: true; error: string }
-  | { ok: true; configured: true; report: KpiValidationReport };
-
 /** `YYYY-MM-DD` for an epoch-ms instant in the business timezone. */
 function businessDay(atMs: number): string {
   const off = Number(process.env.YEASTAR_UTC_OFFSET_MINUTES ?? BUSINESS_UTC_OFFSET_MINUTES);
   return new Date(atMs + off * 60_000).toISOString().slice(0, 10);
 }
-
-export const yeastarKpiValidation = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
-  .inputValidator((d) => kpiValidationInput.parse(d ?? {}))
-  .handler(async ({ context, data }): Promise<KpiValidationResult> => {
-    await assertAdmin(context as any);
-    const { isConfigured } = await import("@/lib/yeastar/client.server");
-    if (!isConfigured()) return { ok: false, configured: false };
-    try {
-      const now = Date.now();
-      const to = data.to ?? businessDay(now);
-      const from = data.from ?? businessDay(now - (data.windowDays - 1) * 86_400_000);
-
-      // Same roster path analytics uses, including the DB fallback, so the
-      // validation exercises the exact context the KPIs were computed under.
-      const agents = await loadAgents((context as any).supabase);
-      const ctx = await buildNormalizationContext(agents.map((a) => a.ext));
-
-      const teamExtensions =
-        data.team === "all"
-          ? null
-          : new Set(agents.filter((a) => a.team === data.team).map((a) => String(a.ext).trim()));
-
-      // Observe the production CDR cache WITHOUT touching it. Validation always
-      // fetches its own copy, so running diagnostics can neither warm nor evict
-      // the cache the dashboards depend on. A partially cached window reports as
-      // cold: the report means "were these numbers served from memory", and a
-      // window missing any day was not.
-      const { windowCacheState } = await import("@/lib/yeastar/cdr-window.server");
-      const warmth = windowCacheState(from, to);
-      const cdrCacheState: { status: "warm" | "cold"; ageMs: number | null } =
-        warmth.status === "warm"
-          ? { status: "warm", ageMs: warmth.ageMs }
-          : { status: "cold", ageMs: null };
-
-      const { runKpiValidation } = await import("@/lib/yeastar/kpi-validation.server");
-      const scopedAgents =
-        data.team === "all" ? agents : agents.filter((a) => a.team === data.team);
-      const agentsByExtension = new Map(
-        scopedAgents.filter((a) => a.ext).map((a) => [String(a.ext).trim(), a.name]),
-      );
-
-      const report = await runKpiValidation(from, to, ctx, {
-        teamExtensions,
-        agentsByExtension,
-        cdrCache: cdrCacheState,
-      });
-      return { ok: true, configured: true, report };
-    } catch (err) {
-      return {
-        ok: false,
-        configured: true,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-  });
 
 // ---- Agent mapping diagnostic (admin) --------------------------------------
 
@@ -1820,9 +1729,11 @@ export const getCallCenterAnalytics = createServerFn({ method: "POST" })
 // ---- Abandoned / Missed drill-down -----------------------------------------
 //
 // The call list behind two KPI cards. Read-only, aggregates nothing, and shares
-// every filter and permission decision with the analytics request above through
-// `resolveCallCenterScope` and `selectDashboardCalls` — a drill-down that
-// resolved either differently would list calls the card did not count.
+// every filter, permission and classification decision with the cards above it:
+// `resolveCallCenterScope` and `selectDashboardCalls` decide WHICH calls the
+// view is about, and `call-classification` decides which of them are missed and
+// which abandoned. A drill-down that resolved any of the three differently
+// would list calls the card did not count.
 //
 // It is deliberately cheap: the window it reads is the SAME classified window
 // the dashboard already built, so opening the dialog on a page that has already
@@ -1891,6 +1802,12 @@ export interface UnansweredCallsResult {
   /** How many of `total` were reached on a later answered call. */
   handled: number;
   truncated: boolean;
+  /**
+   * Whose Missed / Abandoned definition selected these rows. The same value
+   * the KPI card reports as `sources.queueOutcome`, so the dialog can state the
+   * definition rather than leaving a divergence unexplained.
+   */
+  source: import("@/lib/yeastar/call-classification").MetricSource;
   /** Server-side wall time, in ms. */
   elapsedMs: number;
   /** Days answered from the CDR day store against days fetched from the PBX. */
@@ -1922,18 +1839,27 @@ export const getUnansweredCalls = createServerFn({ method: "POST" })
         total: 0,
         handled: 0,
         truncated: false,
+        source: "unavailable",
         elapsedMs: 0,
         cdr: { daysFromCache: 0, daysFetched: 0 },
       };
     }
 
     const started = Date.now();
-    const { team, allAgents, scope } = await resolveCallCenterScope(supabase, userId, data);
+    const { team, allAgents, scope, effectiveAgentId } = await resolveCallCenterScope(
+      supabase,
+      userId,
+      data,
+    );
 
-    const [cdr, ctx, statsModule] = await Promise.all([
+    const [cdr, ctx, statsModule, callReport] = await Promise.all([
       getCdrCached(data.from, data.to),
       buildNormalizationContext(allAgents.map((a) => a.ext)),
       import("@/lib/yeastar/stats.server"),
+      // The dashboard's cards were built from this same cached snapshot; the
+      // list has to read it too, or it would label the calls by a different
+      // rule than the card that opened it.
+      loadCallReportSnapshot(data.from, data.to, data.queue),
     ]);
 
     const classified = getClassifiedCached(
@@ -1953,10 +1879,31 @@ export const getUnansweredCalls = createServerFn({ method: "POST" })
       scope,
     });
 
-    const [{ selectUnansweredCalls }, followUps] = await Promise.all([
+    const [{ selectUnansweredCalls }, classification, followUps] = await Promise.all([
       import("@/lib/yeastar/unanswered"),
+      import("@/lib/yeastar/call-classification"),
       getFollowUpIndex(classified),
     ]);
+
+    // The same resolution the Metrics Engine performs for the cards, over the
+    // same snapshot and the same filters. `agentId` matters: Call Report counts
+    // the WHOLE queue's unanswered calls, so an agent-filtered view falls back
+    // to the CDR split on both surfaces rather than on neither.
+    const cdrTotals = { missed: 0, abandoned: 0, inbound: 0 };
+    for (const c of calls) {
+      if (c.direction === "Inbound") cdrTotals.inbound++;
+      if (c.outcome === "missed") cdrTotals.missed++;
+      else if (c.outcome === "abandoned") cdrTotals.abandoned++;
+    }
+    const splitApplies = classification.isQueueSplitApplicable(
+      { direction: data.direction, agentId: effectiveAgentId ?? "all" },
+      callReport.available,
+    );
+    const split = classification.resolveQueueOutcomeSplit(
+      cdrTotals,
+      splitApplies ? callReport.queue : null,
+      "cdr",
+    );
 
     // Built from the FULL roster, not the scoped one: a callback taken by a
     // Telesales agent is still the answer to "was this customer reached", and
@@ -1970,6 +1917,7 @@ export const getUnansweredCalls = createServerFn({ method: "POST" })
     const selection = selectUnansweredCalls({
       calls,
       kind: data.kind,
+      split,
       agentByExt,
       followUps,
       limit: UNANSWERED_MAX_ROWS,
@@ -1984,6 +1932,7 @@ export const getUnansweredCalls = createServerFn({ method: "POST" })
       total: selection.total,
       handled: selection.handled,
       truncated: selection.truncated,
+      source: split.source,
       elapsedMs: Date.now() - started,
       cdr: { daysFromCache: cdr.daysFromCache, daysFetched: cdr.daysFetched },
     };
@@ -2094,6 +2043,58 @@ function getCallReportCached(
   return promise;
 }
 
+/**
+ * Yeastar's queue report for a window, cached and best-effort.
+ *
+ * Extracted from the server function below because the Abandoned / Missed
+ * drill-down needs the SAME snapshot the dashboard's cards were built from: it
+ * is what decides which of the unanswered calls are abandoned. Going through
+ * one loader means both share the cache entry too, so opening the dialog on a
+ * loaded page costs no extra PBX request.
+ *
+ * Never throws. A failure is an `available: false` snapshot carrying the
+ * reason, so a Call Report outage degrades a definition rather than a page.
+ */
+async function loadCallReportSnapshot(
+  from: string,
+  to: string,
+  queue?: string | null,
+): Promise<CallReportSnapshot> {
+  const { callReportWindow, fetchCallReportSnapshot } =
+    await import("@/lib/yeastar/call-report.server");
+  const unavailable = (error: string): CallReportSnapshot => {
+    const w = callReportWindow(from, to);
+    return {
+      available: false,
+      error,
+      window: { start: w.start, end: w.end },
+      queue: null,
+      agents: [],
+      elapsedMs: 0,
+    };
+  };
+
+  const { isConfigured } = await import("@/lib/yeastar/client.server");
+  if (!isConfigured()) return unavailable("Yeastar is not configured.");
+
+  // Call Report addresses queues by internal numeric id, never by the
+  // dialable number — resolve it from the roster we already cache.
+  const wanted = (queue ?? CUSTOMER_CARE_QUEUE_NUMBER).trim();
+  const { queues } = await fetchPbxRoster();
+  const match = queues.find((q) => q.number === wanted);
+  if (!match || match.id == null) {
+    return unavailable(`Queue ${wanted} has no PBX id; Call Report cannot be addressed.`);
+  }
+
+  // Keyed by window + resolved queue id, NOT by the client's `queue` string:
+  // "all" and "6400" resolve to the same report on this PBX and must share
+  // one cache entry rather than each paying for their own PBX round-trip.
+  const queueId = match.id;
+  return getCallReportCached(`${from}|${to}|${queueId}`, callReportTtl(to), () =>
+    fetchCallReportSnapshot({ from, to, queueId, queueNumber: match.number }),
+  );
+}
+
 export const yeastarCallReport = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => callReportInput.parse(d))
@@ -2101,45 +2102,7 @@ export const yeastarCallReport = createServerFn({ method: "POST" })
     const { supabase, userId } = context as { supabase: any; userId: string };
     const { canView } = await callCenterAccess(supabase, userId);
     if (!canView) throw new Error("Forbidden: call analytics access required");
-
-    const { callReportWindow, fetchCallReportSnapshot } =
-      await import("@/lib/yeastar/call-report.server");
-    const unavailable = (error: string): CallReportSnapshot => {
-      const w = callReportWindow(data.from, data.to);
-      return {
-        available: false,
-        error,
-        window: { start: w.start, end: w.end },
-        queue: null,
-        agents: [],
-        elapsedMs: 0,
-      };
-    };
-
-    const { isConfigured } = await import("@/lib/yeastar/client.server");
-    if (!isConfigured()) return unavailable("Yeastar is not configured.");
-
-    // Call Report addresses queues by internal numeric id, never by the
-    // dialable number — resolve it from the roster we already cache.
-    const wanted = (data.queue ?? CUSTOMER_CARE_QUEUE_NUMBER).trim();
-    const { queues } = await fetchPbxRoster();
-    const match = queues.find((q) => q.number === wanted);
-    if (!match || match.id == null) {
-      return unavailable(`Queue ${wanted} has no PBX id; Call Report cannot be addressed.`);
-    }
-
-    // Keyed by window + resolved queue id, NOT by the client's `queue` string:
-    // "all" and "6400" resolve to the same report on this PBX and must share
-    // one cache entry rather than each paying for their own PBX round-trip.
-    const queueId = match.id;
-    return getCallReportCached(`${data.from}|${data.to}|${queueId}`, callReportTtl(data.to), () =>
-      fetchCallReportSnapshot({
-        from: data.from,
-        to: data.to,
-        queueId,
-        queueNumber: match.number,
-      }),
-    );
+    return loadCallReportSnapshot(data.from, data.to, data.queue);
   });
 
 // ---- Realtime queue widgets ------------------------------------------------

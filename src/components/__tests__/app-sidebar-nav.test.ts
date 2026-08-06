@@ -16,7 +16,7 @@ const calls: NavItemData = {
   children: [
     { to: "/calls/customer-care", label: "Customer Care", icon },
     { to: "/calls/telesales", label: "Telesales", icon },
-    { to: "/calls/analytics", label: "Analytics Center", icon, separatorBefore: true },
+    { to: "/calls/lookup", label: "Call Lookup", icon, separatorBefore: true },
     { to: "/calls/diagnostics", label: "Diagnostics", icon },
   ],
 };
@@ -26,7 +26,7 @@ describe("isBranchActive", () => {
     // The defect: exact matching left the whole Calls branch looking inactive
     // at the one moment it most needs to look active.
     expect(isBranchActive(calls, "/calls/telesales")).toBe(true);
-    expect(isBranchActive(calls, "/calls/analytics")).toBe(true);
+    expect(isBranchActive(calls, "/calls/lookup")).toBe(true);
   });
 
   it("marks the parent active on its own page", () => {
@@ -62,7 +62,7 @@ describe("resolveActivePath", () => {
     // isBranchActive's child arm never ran in production, and why the flyout
     // stayed open when moving between two siblings.
     expect(resolveActivePath(nav, "/calls/telesales")).toBe("/calls/telesales");
-    expect(resolveActivePath(nav, "/calls/analytics")).toBe("/calls/analytics");
+    expect(resolveActivePath(nav, "/calls/lookup")).toBe("/calls/lookup");
   });
 
   it("still resolves a detail route up to its top-level item", () => {

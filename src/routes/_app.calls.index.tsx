@@ -132,15 +132,7 @@ function CallsOverview() {
           tone={analytics ? "ok" : "idle"}
           icon={Activity}
           loading={loading}
-          detail={
-            isAdmin ? (
-              <Link to="/calls/analytics" className="underline underline-offset-2">
-                Validate against the PBX report
-              </Link>
-            ) : (
-              "Validated by administrators"
-            )
-          }
+          detail={analytics ? "KPIs are being derived from call data" : undefined}
         />
         <StatusCard
           label="Today's calls"
@@ -226,20 +218,12 @@ function CallsOverview() {
             body="Outbound sales activity, lead contact rate, conversion and revenue."
           />
           {isAdmin && (
-            <>
-              <Destination
-                to="/calls/analytics"
-                icon={ChartNoAxesCombined}
-                title="Analytics Center"
-                body="Validate every KPI against the official PBX report and inspect mismatches."
-              />
-              <Destination
-                to="/calls/diagnostics"
-                icon={Stethoscope}
-                title="Diagnostics"
-                body="Developer tools: authentication, endpoint probes, CDR and call tracing."
-              />
-            </>
+            <Destination
+              to="/calls/diagnostics"
+              icon={Stethoscope}
+              title="Diagnostics"
+              body="Developer tools: authentication, endpoint probes, CDR and call tracing."
+            />
           )}
         </CardContent>
       </Card>

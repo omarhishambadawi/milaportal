@@ -34,10 +34,11 @@
 import { useDeferredValue, useMemo } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { getCallCenterAnalytics, yeastarCallReport } from "@/lib/yeastar.functions";
+import { getCallCenterAnalytics } from "@/lib/yeastar.functions";
 import { queryKeys } from "@/lib/query-keys";
 import { buildCustomerCareMetrics, type CustomerCareMetrics } from "@/lib/yeastar/metrics-engine";
 import { resolveRefreshPolicy, type RefreshPolicy } from "../refresh-policy";
+import { useCallReportQuery } from "./use-call-report";
 import type { Direction } from "../types";
 
 export type { RefreshPolicy };
@@ -86,7 +87,6 @@ export function useCustomerCareMetrics({
   refreshMs,
 }: UseCustomerCareMetricsArgs): UseCustomerCareMetricsResult {
   const analyticsFn = useServerFn(getCallCenterAnalytics);
-  const callReportFn = useServerFn(yeastarCallReport);
 
   // Recomputed per render, but only from three strings — and `today` is read
   // once per render rather than per query so both queries agree on the policy.
@@ -130,29 +130,15 @@ export function useCustomerCareMetrics({
     refetchOnReconnect: true,
   });
 
-  // Deliberately a SEPARATE query, not folded into the analytics server fn.
-  // Call Report is queue-scoped and inbound by construction, so its response is
-  // identical across the direction and agent filters — giving it its own key
-  // means toggling those filters re-renders from cache instead of re-querying
-  // the PBX. It also keeps a Call Report outage off the analytics path.
-  const callReportQuery = useQuery({
-    queryKey: queryKeys.callCenter.callReport({ from, to, queue }),
-    queryFn: () =>
-      callReportFn({ data: { from, to, ...(queue && queue !== "all" ? { queue } : {}) } }),
+  // Shared with the Calls Overview through `useCallReportQuery`, so both pages
+  // read one snapshot under one cache entry and their Missed / Abandoned cards
+  // cannot follow different definitions.
+  const callReportQuery = useCallReportQuery({
+    from,
+    to,
+    queue,
     enabled: !authLoading && canView,
-    staleTime: policy.staleMs,
-    placeholderData: keepPreviousData,
-    // Two live PBX requests per miss, against a box that rate-limits its token
-    // endpoint hard. It follows the same policy as the analytics query for the
-    // same reason, and more strictly: it has no cheap path at all.
-    refetchInterval: policy.intervalMs,
-    refetchIntervalInBackground: false,
-    refetchOnWindowFocus: false,
-    refetchOnMount: false,
-    // A missing missed-calls column must never surface as a page error, so this
-    // query fails quietly and the engine reports it as an unavailable source.
-    retry: 1,
-    throwOnError: false,
+    policy,
   });
 
   const data = analyticsQuery.data;
