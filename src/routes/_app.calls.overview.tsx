@@ -147,6 +147,13 @@ function CallsOverviewPage() {
     policy: refreshPolicy,
   });
 
+  // Keyed on the two fields the split actually reads, not on the whole snapshot.
+  // The envelope carries `elapsedMs`, which changes on every poll — depending on
+  // it would rebuild the distribution series three times a minute for numbers
+  // that had not moved, and Recharts replays its animation on a new array.
+  const reportAvailable = callReport.data?.available === true;
+  const reportQueue = callReport.data?.queue ?? null;
+
   const queueOutcome = useMemo(
     () =>
       resolveQueueOutcomes(
@@ -155,15 +162,12 @@ function CallsOverviewPage() {
           abandoned: totals?.abandoned ?? 0,
           inbound: totals?.inbound ?? 0,
         },
-        isQueueSplitApplicable(
-          { direction: "all", agentId: "all" },
-          callReport.data?.available === true,
-        )
-          ? (callReport.data?.queue ?? null)
+        isQueueSplitApplicable({ direction: "all", agentId: "all" }, reportAvailable)
+          ? reportQueue
           : null,
         totals ? "cdr" : "unavailable",
       ),
-    [totals, callReport.data],
+    [totals, reportAvailable, reportQueue],
   );
 
   // Ranking is a derivation, so it happens once here rather than inside the

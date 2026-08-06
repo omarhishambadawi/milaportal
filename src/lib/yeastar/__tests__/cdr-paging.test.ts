@@ -135,4 +135,87 @@ describe("fetchCdrRange paging", () => {
     });
     await expect(fetchCdrRange({ ...WINDOW, pageSize: 1_000 })).rejects.toThrow(/500/);
   });
+
+  it("re-tries a page that failed in transport, instead of losing the window", async () => {
+    // One slow page on a busy appliance is transient. It used to be fatal.
+    paged(3_000, 1_000);
+    const good = yeastarFetch.getMockImplementation()!;
+    let failuresLeft = 1;
+    yeastarFetch.mockImplementation(async (p: string, q: Record<string, number>) => {
+      if (q.page === 2 && failuresLeft > 0) {
+        failuresLeft--;
+        throw Object.assign(new Error("The operation was aborted."), { name: "AbortError" });
+      }
+      return good(p, q);
+    });
+    const res = await fetchCdrRange({ ...WINDOW, pageSize: 1_000 });
+    expect(res.records).toHaveLength(3_000);
+    expect(res.path).toBe("search");
+  });
+});
+
+/**
+ * The `/cdr/list` fallback sweeps the PBX's ENTIRE retained history — it has no
+ * date filter at all. On this deployment that is 70,052 rows against a month's
+ * 14,294, so reaching for it is five times the work of the request that just
+ * failed, and it used to be reached for whenever ANY page timed out. That is
+ * what stopped month-wide filtering from loading: one slow page escalated into a
+ * bigger sweep, which timed out in turn and took the dashboard with it.
+ */
+describe("fetchCdrRange /cdr/list fallback", () => {
+  const pathsCalled = () => yeastarFetch.mock.calls.map((c) => c[0] as string);
+
+  it("does NOT fall back when a page after the first fails", async () => {
+    paged(3_000, 1_000);
+    const good = yeastarFetch.getMockImplementation()!;
+    yeastarFetch.mockImplementation(async (p: string, q: Record<string, number>) => {
+      if (q.page === 3) return { httpStatus: 500, json: null, body: "boom" };
+      return good(p, q);
+    });
+    await expect(fetchCdrRange({ ...WINDOW, pageSize: 1_000 })).rejects.toThrow(/500/);
+    // Page 1 already proved /cdr/search works for this window.
+    expect(pathsCalled().some((p) => p.includes("/cdr/list"))).toBe(false);
+  });
+
+  it("DOES fall back when page 1 itself fails — the endpoint is unusable", async () => {
+    // H2: some firmwares reject the epoch form outright.
+    paged(2_000, 1_000);
+    const good = yeastarFetch.getMockImplementation()!;
+    yeastarFetch.mockImplementation(async (p: string, q: Record<string, number>) => {
+      if (p.includes("/cdr/search")) return { httpStatus: 400, json: null, body: "nope" };
+      return good(p, q);
+    });
+    const res = await fetchCdrRange({ ...WINDOW, pageSize: 1_000 });
+    expect(res.path).toBe("list-fallback");
+    expect(pathsCalled().some((p) => p.includes("/cdr/list"))).toBe(true);
+  });
+
+  it("DOES fall back when the window comes back empty", async () => {
+    // H2 again, in its silent form: 0 rows rather than an error.
+    let searched = false;
+    yeastarFetch.mockImplementation(async (p: string, q: Record<string, number>) => {
+      if (p.includes("/cdr/search")) {
+        searched = true;
+        return {
+          httpStatus: 200,
+          json: { errcode: 0, errmsg: "", total_number: 0, data: [] },
+          body: "",
+        };
+      }
+      return {
+        httpStatus: 200,
+        json: {
+          errcode: 0,
+          errmsg: "",
+          total_number: 1,
+          data: [{ new_id: "r1", call_id: "c1", timestamp: BASE, call_type: "Inbound" }],
+        },
+        body: "",
+      };
+    });
+    const res = await fetchCdrRange({ ...WINDOW, pageSize: 1_000 });
+    expect(searched).toBe(true);
+    expect(res.path).toBe("search-empty-list-fallback");
+    expect(res.records).toHaveLength(1);
+  });
 });

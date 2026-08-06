@@ -36,6 +36,61 @@ const UPSERT_CHUNK = 500;
 const DAY_FILTER_CHUNK = 45;
 
 /**
+ * How many days one mirror READ covers, and therefore how the work is split.
+ *
+ * PostgREST caps a response at 1,000 rows, so a month (~14,000 mirrored rows)
+ * is fifteen `.range()` requests — and walking them one after another is
+ * fifteen serial round-trips on the critical path of every cold isolate. Days
+ * partition the rows exactly, so splitting the window by day lets those groups
+ * run concurrently while each still pages itself correctly.
+ *
+ * Eight days is roughly four pages per group on this deployment's volume: small
+ * enough that a month becomes four short walks instead of one long one, large
+ * enough not to turn a quiet week into a burst of near-empty queries.
+ */
+const READ_DAY_GROUP = 8;
+
+/** How many mirror requests to have in flight at once, read or write. */
+const STORE_CONCURRENCY = 4;
+
+/**
+ * Run `items` through `run` with at most `limit` in flight.
+ *
+ * The first failure stops the pool taking new work and is re-thrown once every
+ * worker already in flight has settled. Letting `Promise.all` reject on the
+ * spot would leave the other workers running unobserved, and a later rejection
+ * from one of them would surface as an unhandled rejection long after the
+ * caller had already handled the first.
+ */
+async function pooled<T>(items: readonly T[], limit: number, run: (item: T) => Promise<void>) {
+  let next = 0;
+  let failure: unknown;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      for (;;) {
+        if (failure !== undefined) return;
+        const i = next++;
+        if (i >= items.length) return;
+        try {
+          await run(items[i]!);
+        } catch (e) {
+          failure ??= e ?? new Error("unknown failure");
+          return;
+        }
+      }
+    }),
+  );
+  if (failure !== undefined) throw failure;
+}
+
+/** Split `items` into consecutive groups of at most `size`. */
+function chunk<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+/**
  * Whether the mirror can be reached at all.
  *
  * The mirror is service-role only, so without those two variables every call
@@ -170,8 +225,11 @@ export async function readCdrDays(days: string[]): Promise<Map<string, CdrRecord
   if (days.length === 0) return byDay;
 
   const db = await admin();
-  for (let i = 0; i < days.length; i += DAY_FILTER_CHUNK) {
-    const slice = days.slice(i, i + DAY_FILTER_CHUNK);
+  // Groups are read concurrently; each still pages itself with `.range()`. Rows
+  // are bucketed by their own `business_day`, so the groups are disjoint by
+  // construction and the concurrency cannot duplicate or drop a row.
+  const groups = chunk(days, Math.min(READ_DAY_GROUP, DAY_FILTER_CHUNK));
+  await pooled(groups, STORE_CONCURRENCY, async (slice) => {
     // Ordered by the primary key: `fetchAllPaginated` walks with `.range()`, and
     // an unordered scan can repeat or skip rows between pages.
     const rows = await fetchAllPaginated<any>(() =>
@@ -185,7 +243,7 @@ export async function readCdrDays(days: string[]): Promise<Map<string, CdrRecord
       const bucket = byDay.get(day);
       if (bucket) bucket.push(row.raw as CdrRecord);
     }
-  }
+  });
   return byDay;
 }
 
@@ -225,12 +283,16 @@ export async function persistCdrRows(rows: CdrRecord[], days: string[]): Promise
     });
   }
 
-  for (let i = 0; i < payload.length; i += UPSERT_CHUNK) {
-    const { error } = await table(db, "cdr_records").upsert(payload.slice(i, i + UPSERT_CHUNK), {
-      onConflict: "row_id",
-    });
+  // Concurrent, because this runs on the critical path of the request that just
+  // swept the window: a month is ~14,000 rows, and twenty-nine upserts one after
+  // another added several seconds to a dashboard that already had its answer.
+  // The chunks are disjoint by `row_id` — `seen` above guarantees a key appears
+  // once across the whole payload — so no two of them can conflict on the same
+  // row, which is what makes running them together safe rather than merely fast.
+  await pooled(chunk(payload, UPSERT_CHUNK), STORE_CONCURRENCY, async (slice) => {
+    const { error } = await table(db, "cdr_records").upsert(slice, { onConflict: "row_id" });
     if (error) throw error;
-  }
+  });
 
   const dayRows = [...perDay.entries()].map(([business_day, row_count]) => ({
     business_day,

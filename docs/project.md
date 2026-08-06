@@ -1292,6 +1292,34 @@ the answer comes from. What it does change is what a refresh _costs_: a window
 the mirror covers is answered from Postgres, so the poll no longer implies a PBX
 sweep once the isolate goes cold.
 
+### What a poll must NOT rebuild
+
+Both dashboard query envelopes carry a per-fetch diagnostic — `cdr.elapsedMs` on
+analytics, `elapsedMs` on the Call Report — so **the envelope's identity changes
+on every poll even when no number moved**. React Query's structural sharing
+preserves the identity of the parts that did not change, so a memo must depend on
+those parts and never on the envelope. Depending on the envelope rebuilds every
+metric and chart series three times a minute on a live window, and Recharts
+replays its enter animation whenever its `data` prop is a new reference.
+
+The analytics path already did this. The Call Report path did not, and now does:
+`useCustomerCareMetrics` rebuilds the snapshot from the fields the engine reads
+(`available`, `error`, `window`, `queue`, `agents`) and drops `elapsedMs`, which
+is a diagnostic on the envelope rather than an input to any metric. The Calls
+Overview does the same for its queue split, depending on `available` and `queue`
+rather than the whole snapshot.
+
+### One roster fetch, not one per query
+
+Every Calls page starts at least two requests that need the PBX roster at the
+same instant (analytics and Call Report; three once a drill-down opens), and on a
+cold isolate the roster's TTL cache cannot help any of them because none has
+populated it yet. Each therefore issued its own `/queue/list` plus up to ten
+`/extension/list` pages, against an appliance whose token endpoint rate-limits
+hard enough to lock the whole integration out (`errcode 60002`). `fetchPbxRoster`
+now coalesces concurrent callers onto one in-flight fetch — the same thing
+`getCdrCached` does for windows, for the same reason.
+
 ---
 
 ## Yeastar Integration
@@ -1368,14 +1396,40 @@ Fields confirmed **absent** on this firmware and removed from the parser:
 ### Fetch layer
 
 - `cdr.server.ts` — pre-filters with `/cdr/search` (epoch-second
-  `start_time`/`end_time`), authoritatively post-filters every row by its epoch
-  `timestamp`, and falls back to a full `/cdr/list` sweep if search fails or
-  returns nothing. Page 1 is a **blocking probe** whose `total_number` sizes the
-  job; remaining pages are fetched with `PAGE_CONCURRENCY` (default 6).
+  `start_time`/`end_time`) and authoritatively post-filters every row by its
+  epoch `timestamp`. Page 1 is a **blocking probe** whose `total_number` sizes
+  the job; remaining pages are fetched with `PAGE_CONCURRENCY` (default **3**).
   `DEFAULT_PAGE_SIZE` is **2,000, not the API maximum of 10,000** — at 10,000 the
   blocking probe alone carries three quarters of a month's rows, making the
   window effectively serial. The modelled table for a 14,000-row month is in the
   source.
+
+  **The `/cdr/list` fallback is reachable in exactly two cases**, and both are
+  statements about the endpoint rather than about one request: page 1 itself
+  failed (`CdrProbeError` — the epoch form was rejected), or page 1 succeeded and
+  the window came back empty (H2, the silent zero-data blackout). A LATER page
+  failing is neither, and is now propagated as the honest failure it is.
+
+  That distinction is load-bearing. `/cdr/list` has no date filter, so it sweeps
+  the PBX's entire retained history — measured live at **70,052 rows against a
+  month's 14,294**. Escalating to it on any page failure is what stopped
+  month-wide filtering from loading at all: at concurrency 6 every page took
+  26-28 s against the client's 25 s timeout, the aborted page triggered the
+  unfiltered sweep, that sweep was five times the work and timed out in turn, and
+  the request died with nothing to show. Measured on the live PBX over July 2026:
+
+  | concurrency | per page | total wall |
+  | ----------- | -------- | ---------- |
+  | 6           | 26-28 s  | 34.8 s     |
+  | 3           | ~14.6 s  | 37.7 s     |
+
+  The appliance is throughput-bound — it serializes the work either way, so extra
+  concurrency buys only a longer queue in front of each request. Hence
+  concurrency 3, a CDR-specific `PAGE_TIMEOUT_MS` of 60 s (the client's 25 s
+  default is sized for the small roster calls, not a 2,000-row page), and
+  `PAGE_RETRIES = 2` so one slow page on a busy box costs a retry rather than the
+  dashboard.
+
 - `cdr-window.server.ts` — **day-partitioned window store**. A business day is
   the right cache unit: once a day has ended its CDR is immutable, so closed days
   hold for `CLOSED_DAY_TTL_MS = 12 h` and only today uses
@@ -1445,6 +1499,24 @@ actually looks at is only ever swept once across the whole deployment. It is
 awaited (a floating promise can be cut short when a Worker isolate is recycled)
 and best-effort (a mirror write must never fail a dashboard that already has its
 answer).
+
+**Mirror I/O runs concurrently, bounded at `STORE_CONCURRENCY = 4`.** Both halves
+were fully serial and both sit on the critical path of a user request:
+
+- _Write._ A month is ~14,000 rows at `UPSERT_CHUNK = 500` — twenty-nine
+  round-trips one after another, on the request that had already finished its
+  sweep. The chunks are disjoint by `row_id` (the `seen` set guarantees a key
+  appears once across the payload), so no two can conflict on the same row, which
+  is what makes running them together safe rather than merely faster.
+- _Read._ PostgREST caps a response at 1,000 rows, so the same month is fifteen
+  sequential `.range()` walks on every cold isolate. Days partition the rows
+  exactly, so `readCdrDays` splits the window into `READ_DAY_GROUP = 8`-day
+  groups and reads them concurrently; each still pages itself, and the groups are
+  disjoint by construction.
+
+`pooled` stops taking new work on the first failure and re-throws it once the
+workers already in flight have settled — rejecting on the spot would leave the
+others running unobserved and surface a later rejection as an unhandled one.
 
 **Triggering.** `POST /api/cdr-sync` from any scheduler. With no scheduler
 configured the layer still works — it is then driven entirely by the read path
@@ -1644,7 +1716,8 @@ service-role key is not among them and must never be.
 | `YEASTAR_BUSINESS_HOURS`                                         | `"<days> <HH:MM>-<HH:MM>"`, e.g. `"sun-thu 08:00-17:00"`. **Leave empty to apply no after-hours rule.** The PBX cannot supply it (queue 6400 reports `enable_time_condition: 0`), and guessing silently moves every KPI.                                                                                     |
 | `YEASTAR_OUTBOUND_RING_TIMEOUT_SEC`                              | Default `60`. The only discriminator between a genuine No Answer and an Agent Cancelled call — both carry disposition `NO ANSWER`. Read the true value off the ring histogram on the diagnostics page.                                                                                                       |
 | `YEASTAR_CDR_PAGE_SIZE`                                          | Default 2,000 (clamped 100–10,000).                                                                                                                                                                                                                                                                          |
-| `YEASTAR_CDR_PAGE_CONCURRENCY`                                   | Default 6.                                                                                                                                                                                                                                                                                                   |
+| `YEASTAR_CDR_PAGE_CONCURRENCY`                                   | Default 3. Higher does not make a window faster — the appliance serializes — it only queues each request closer to its timeout.                                                                                                                                                                              |
+| `YEASTAR_CDR_PAGE_TIMEOUT_MS`                                    | Default 60,000 (floor 10,000). Per-page request timeout, separate from the client's 25 s default for control-plane calls.                                                                                                                                                                                    |
 
 ### CDR synchronization
 

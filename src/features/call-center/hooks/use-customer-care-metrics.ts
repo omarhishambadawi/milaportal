@@ -37,6 +37,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { getCallCenterAnalytics } from "@/lib/yeastar.functions";
 import { queryKeys } from "@/lib/query-keys";
 import { buildCustomerCareMetrics, type CustomerCareMetrics } from "@/lib/yeastar/metrics-engine";
+import type { CallReportSnapshot } from "@/lib/yeastar/call-report.server";
 import { resolveRefreshPolicy, type RefreshPolicy } from "../refresh-policy";
 import { useCallReportQuery } from "./use-call-report";
 import type { Direction } from "../types";
@@ -185,16 +186,49 @@ export function useCustomerCareMetrics({
     [totals, agentStats, byDay, byHour],
   );
 
+  // The Call Report envelope has the SAME flaw the analytics one has, and it was
+  // never addressed: it carries `elapsedMs`, which differs on every fetch. On a
+  // live window that polls every 20 seconds, depending on the whole snapshot
+  // handed the engine a new object three times a minute and rebuilt every metric
+  // and every chart series below it — including the day and hour arrays, which
+  // makes Recharts replay its enter animation — for numbers that had not moved.
+  //
+  // Rebuilt from the parts the engine actually reads instead. React Query's
+  // structural sharing keeps those identities stable across a poll that returned
+  // the same report, so the memo holds. `elapsedMs` is a diagnostic on the
+  // envelope, not an input to any metric, so it is not carried through.
+  const report = callReportQuery.data ?? null;
+  const reportAvailable = report?.available ?? null;
+  const reportError = report?.error ?? null;
+  const reportWindow = report?.window;
+  const reportQueue = report?.queue;
+  const reportAgents = report?.agents;
+
+  const callReport = useMemo<CallReportSnapshot | null>(
+    () =>
+      reportAvailable == null || reportWindow == null || reportAgents == null
+        ? null
+        : {
+            available: reportAvailable,
+            error: reportError,
+            window: reportWindow,
+            queue: reportQueue ?? null,
+            agents: reportAgents,
+            elapsedMs: 0,
+          },
+    [reportAvailable, reportError, reportWindow, reportQueue, reportAgents],
+  );
+
   const metrics = useMemo(
     () =>
       buildCustomerCareMetrics({
         analytics,
         // An errored Call Report query yields no snapshot at all, which the
         // engine reports as `attempted: false` rather than inventing zeros.
-        callReport: callReportQuery.data ?? null,
+        callReport,
         filters: { direction, queue, agentId, search: deferredSearch },
       }),
-    [analytics, callReportQuery.data, direction, queue, agentId, deferredSearch],
+    [analytics, callReport, direction, queue, agentId, deferredSearch],
   );
 
   return {

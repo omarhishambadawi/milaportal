@@ -1256,6 +1256,20 @@ interface PbxRoster {
 }
 
 let rosterCache: { at: number; roster: PbxRoster } | null = null;
+/**
+ * The roster fetch currently in flight, if any.
+ *
+ * Every Calls page starts at least two requests that need the roster at the
+ * same instant — analytics and Call Report on Customer Care, plus the
+ * drill-down when it opens — and on a cold isolate the TTL cache above cannot
+ * help any of them, because none has populated it yet. Each therefore issued
+ * its own `/queue/list` plus up to ten `/extension/list` pages against an
+ * appliance whose token endpoint rate-limits hard enough to lock the whole
+ * integration out (`errcode 60002`). Coalescing makes concurrent callers share
+ * one fetch, which is the same thing `getCdrCached` does and for the same
+ * reason.
+ */
+let rosterInFlight: Promise<PbxRoster> | null = null;
 
 /**
  * Pull the two authoritative rosters from the PBX.
@@ -1265,10 +1279,19 @@ let rosterCache: { at: number; roster: PbxRoster } | null = null;
  * cannot be told apart from an IVR stage, which is exactly the ambiguity that
  * produced the old KPI errors — so this is fetched, not guessed.
  */
-async function fetchPbxRoster(): Promise<PbxRoster> {
+function fetchPbxRoster(): Promise<PbxRoster> {
   const now = Date.now();
-  if (rosterCache && now - rosterCache.at < ROSTER_TTL_MS) return rosterCache.roster;
+  if (rosterCache && now - rosterCache.at < ROSTER_TTL_MS) {
+    return Promise.resolve(rosterCache.roster);
+  }
+  if (rosterInFlight) return rosterInFlight;
+  rosterInFlight = loadPbxRoster(now).finally(() => {
+    rosterInFlight = null;
+  });
+  return rosterInFlight;
+}
 
+async function loadPbxRoster(now: number): Promise<PbxRoster> {
   const ccExts = new Map<string, string>();
   const queueNumbers = new Set<string>();
   const extensionNumbers = new Set<string>();

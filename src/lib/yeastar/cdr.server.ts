@@ -29,12 +29,37 @@ const TZ_OFFSET_MIN = Number(process.env.YEASTAR_UTC_OFFSET_MINUTES ?? BUSINESS_
 /**
  * How many CDR pages to have in flight at once.
  *
- * The PBX is an appliance, not a cluster — this is enough to remove the serial
- * stall on a multi-page window without turning a dashboard load into a burst
- * the box has to queue. Tunable, because the right value depends on hardware
- * this code cannot measure from here.
+ * Measured against the live PBX over July 2026 (14,294 rows, 8 pages of 2,000):
+ *
+ *   concurrency 6 → every page 26-28s, total wall 34.8s
+ *   concurrency 3 → every page ~14.6s, total wall 37.7s
+ *
+ * The appliance is throughput-bound: it serializes the work whatever we do, so
+ * the total is the same either way and the only thing extra concurrency buys is
+ * a longer queue in front of each individual request. At 6 that queue pushed
+ * every page past the client's 25s request timeout, and an aborted page used to
+ * escalate into a full unfiltered `/cdr/list` sweep of the entire CDR history —
+ * which is how a month-wide filter stopped loading at all.
+ *
+ * So 3: the same wall time, with each request finishing in well under half the
+ * timeout, and enough headroom left that two users on a month do not put each
+ * other over it. Tunable, because the right value depends on hardware this code
+ * cannot measure from here.
  */
-const PAGE_CONCURRENCY = Math.max(1, Number(process.env.YEASTAR_CDR_PAGE_CONCURRENCY) || 6);
+const PAGE_CONCURRENCY = Math.max(1, Number(process.env.YEASTAR_CDR_PAGE_CONCURRENCY) || 3);
+
+/**
+ * Per-request timeout for a CDR page.
+ *
+ * The client's 25s default is sized for the small control-plane calls (roster,
+ * queue list). A 2,000-row CDR page legitimately takes ~15s on this appliance
+ * even unqueued, so 25s left almost no margin and turned a slow page into a
+ * failed window. Tunable alongside the concurrency above.
+ */
+const PAGE_TIMEOUT_MS = Math.max(10_000, Number(process.env.YEASTAR_CDR_PAGE_TIMEOUT_MS) || 60_000);
+
+/** How many times to re-try a page that failed in transport before giving up. */
+const PAGE_RETRIES = 2;
 
 /**
  * Rows per CDR page.
@@ -126,6 +151,21 @@ function dayBounds(from: string, to: string): { startEpoch: number; endEpoch: nu
   return { startEpoch, endEpoch };
 }
 
+/**
+ * Page 1 of a sweep failed, so the ENDPOINT itself could not be used.
+ *
+ * Distinguished from a later page failing, because only this one justifies
+ * switching endpoints. See the fallback logic in `fetchCdrRange`.
+ */
+class CdrProbeError extends Error {
+  constructor(readonly reason: unknown) {
+    super(reason instanceof Error ? reason.message : String(reason));
+    this.name = "CdrProbeError";
+  }
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 async function fetchAllPages(
   endpoint: string,
   baseQuery: Record<string, string | number | undefined>,
@@ -144,22 +184,44 @@ async function fetchAllPages(
   let page = 1;
   const progress = jobId ? await import("./progress.server") : null;
 
-  /** One page. Throws on any transport or errcode failure. */
+  /**
+   * One page, re-tried on a transport failure.
+   *
+   * A timed-out page is a transient condition on a busy appliance, not evidence
+   * that the window or the endpoint is wrong — and it used to be fatal to the
+   * whole sweep. Re-trying it costs one request; not re-trying it cost the user
+   * their dashboard. The caller's own abort signal is never re-tried, because
+   * that means the request was cancelled deliberately.
+   */
   const getPage = async (p: number): Promise<CdrRecord[]> => {
-    const { httpStatus, json, body } = await yeastarFetch<CdrPageResponse>(
-      endpoint,
-      { ...baseQuery, page: p, page_size: pageSize, sort_by: "time", order_by: "asc" },
-      { signal },
-    );
-    if (httpStatus !== 200)
-      throw new Error(`Yeastar CDR HTTP ${httpStatus}: ${body.slice(0, 200)}`);
-    if (!json || json.errcode !== 0) {
-      throw new Error(
-        `Yeastar CDR errcode ${json?.errcode ?? "n/a"}: ${json?.errmsg ?? "unknown"}`,
-      );
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= PAGE_RETRIES; attempt++) {
+      if (attempt > 0) {
+        console.warn(`[yeastar cdr] ${endpoint} page=${p} retry ${attempt}/${PAGE_RETRIES}`);
+        await sleep(500 * attempt);
+      }
+      if (signal?.aborted) throw new Error("CDR fetch aborted by caller");
+      try {
+        const { httpStatus, json, body } = await yeastarFetch<CdrPageResponse>(
+          endpoint,
+          { ...baseQuery, page: p, page_size: pageSize, sort_by: "time", order_by: "asc" },
+          { signal, timeoutMs: PAGE_TIMEOUT_MS },
+        );
+        if (httpStatus !== 200)
+          throw new Error(`Yeastar CDR HTTP ${httpStatus}: ${body.slice(0, 200)}`);
+        if (!json || json.errcode !== 0) {
+          throw new Error(
+            `Yeastar CDR errcode ${json?.errcode ?? "n/a"}: ${json?.errmsg ?? "unknown"}`,
+          );
+        }
+        if (typeof json.total_number === "number") totalReported = json.total_number;
+        return json.data ?? []; // CORRECT field
+      } catch (e) {
+        lastError = e;
+        if (signal?.aborted) throw e;
+      }
     }
-    if (typeof json.total_number === "number") totalReported = json.total_number;
-    return json.data ?? []; // CORRECT field
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   };
 
   // Append element-by-element rather than `records.push(...list)`: with
@@ -172,7 +234,14 @@ async function fetchAllPages(
 
   // Page 1 is the probe: it is the only one whose page count is unknown in
   // advance, and its `total_number` tells us exactly how many more there are.
-  const first = await getPage(1);
+  // It is also the only page whose failure says anything about the ENDPOINT, so
+  // it is tagged — see `CdrProbeError`.
+  let first: CdrRecord[];
+  try {
+    first = await getPage(1);
+  } catch (e) {
+    throw new CdrProbeError(e);
+  }
   append(first);
   const report = (p: number, totalPages: number | null, got: number) => {
     console.log(
@@ -394,15 +463,46 @@ export async function fetchCdrRange(opts: FetchCdrOptions): Promise<FetchCdrResu
   console.log(`[yeastar cdr] window epoch ${startEpoch}..${endEpoch} (tz+${TZ_OFFSET_MIN}m)`);
 
   // /cdr/search accepts start_time/end_time as Unix timestamps (seconds).
-  // Falls back to /cdr/list (no server-side date filter) if search errors
-  // OR returns zero records for a non-trivial window (H2 — silent zero-data
-  // blackout: some PBX firmwares reject the epoch form and return 0 rows
-  // instead of an error).
+  //
+  // It falls back to /cdr/list — which has NO server-side date filter and
+  // therefore sweeps the PBX's entire retained history — in exactly two cases,
+  // and both of them are statements about the ENDPOINT rather than about one
+  // request:
+  //
+  //   1. Page 1 itself failed (`CdrProbeError`). The epoch form was rejected,
+  //      so /cdr/search cannot answer this window at all.
+  //   2. Page 1 succeeded but the window came back empty (H2 — silent zero-data
+  //      blackout: some firmwares answer 0 rows instead of erroring).
+  //
+  // A LATER page failing is neither. By then page 1 has already come back with
+  // rows and a plausible `total_number`, which is proof that /cdr/search works;
+  // the failure is transport, and `getPage` has already re-tried it. Escalating
+  // it to the unfiltered sweep is what broke month-wide filtering: on this PBX
+  // the window is 14,294 rows and the unfiltered history is 70,052, so a single
+  // slow page turned into five times the work, timed out in turn, and took the
+  // whole dashboard down with it. It now propagates as the honest failure it is.
   let path: FetchCdrResult["path"] = "search";
   let records: CdrRecord[] = [];
   let totalReported: number | null = null;
   let pages = 0;
   let truncated = false;
+
+  const listFallback = async (why: string) => {
+    console.warn(`[yeastar cdr] ${why} — falling back to the unfiltered /cdr/list sweep.`);
+    const full = await fetchAllPages(
+      "/openapi/v1.0/cdr/list",
+      {},
+      pageSize,
+      maxPages,
+      opts.signal,
+      opts.jobId,
+    );
+    records = full.records;
+    totalReported = full.totalReported;
+    pages = full.pages;
+    truncated = full.truncated;
+  };
+
   try {
     const r = await fetchAllPages(
       "/openapi/v1.0/cdr/search",
@@ -417,40 +517,13 @@ export async function fetchCdrRange(opts: FetchCdrOptions): Promise<FetchCdrResu
     pages = r.pages;
     truncated = r.truncated;
     if (records.length === 0) {
-      console.warn(
-        "[yeastar cdr] /cdr/search returned 0 records — falling back to /cdr/list (H2 empty-fallback).",
-      );
       path = "search-empty-list-fallback";
-      const full = await fetchAllPages(
-        "/openapi/v1.0/cdr/list",
-        {},
-        pageSize,
-        maxPages,
-        opts.signal,
-        opts.jobId,
-      );
-      records = full.records;
-      totalReported = full.totalReported;
-      pages = full.pages;
-      truncated = full.truncated;
+      await listFallback("/cdr/search returned 0 records (H2 empty-fallback)");
     }
   } catch (e: any) {
-    console.warn(
-      `[yeastar cdr] /cdr/search failed (${e?.message ?? e}) — falling back to /cdr/list.`,
-    );
+    if (!(e instanceof CdrProbeError)) throw e;
     path = "list-fallback";
-    const full = await fetchAllPages(
-      "/openapi/v1.0/cdr/list",
-      {},
-      pageSize,
-      maxPages,
-      opts.signal,
-      opts.jobId,
-    );
-    records = full.records;
-    totalReported = full.totalReported;
-    pages = full.pages;
-    truncated = full.truncated;
+    await listFallback(`/cdr/search page 1 failed (${e.message})`);
   }
 
   // Authoritative timezone-correct filter by epoch timestamp.
