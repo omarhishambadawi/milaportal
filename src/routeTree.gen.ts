@@ -43,6 +43,8 @@ import { Route as AppAdminBranchesRouteImport } from './routes/_app.admin.branch
 import { Route as Char91DotmcpChar93InvokeToolToolRouteImport } from './routes/[.mcp]/invoke-tool/$tool'
 import { Route as DotlovableOauthConsentRouteImport } from './routes/[.]lovable.oauth.consent'
 import { Route as LovableEmailQueueProcessRouteImport } from './routes/lovable/email/queue/process'
+import { Route as LovableEmailAuthWebhookRouteImport } from './routes/lovable/email/auth/webhook'
+import { Route as LovableEmailAuthPreviewRouteImport } from './routes/lovable/email/auth/preview'
 import { Route as ApiPublicCdrProgressJobIdRouteImport } from './routes/api/public/cdr-progress.$jobId'
 
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
@@ -219,6 +221,16 @@ const LovableEmailQueueProcessRoute =
     path: '/lovable/email/queue/process',
     getParentRoute: () => rootRouteImport,
   } as any)
+const LovableEmailAuthWebhookRoute = LovableEmailAuthWebhookRouteImport.update({
+  id: '/lovable/email/auth/webhook',
+  path: '/lovable/email/auth/webhook',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LovableEmailAuthPreviewRoute = LovableEmailAuthPreviewRouteImport.update({
+  id: '/lovable/email/auth/preview',
+  path: '/lovable/email/auth/preview',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicCdrProgressJobIdRoute =
   ApiPublicCdrProgressJobIdRouteImport.update({
     id: '/api/public/cdr-progress/$jobId',
@@ -260,6 +272,8 @@ export interface FileRoutesByFullPath {
   '/complaints/': typeof AppComplaintsIndexRoute
   '/orders/': typeof AppOrdersIndexRoute
   '/api/public/cdr-progress/$jobId': typeof ApiPublicCdrProgressJobIdRoute
+  '/lovable/email/auth/preview': typeof LovableEmailAuthPreviewRoute
+  '/lovable/email/auth/webhook': typeof LovableEmailAuthWebhookRoute
   '/lovable/email/queue/process': typeof LovableEmailQueueProcessRoute
 }
 export interface FileRoutesByTo {
@@ -296,6 +310,8 @@ export interface FileRoutesByTo {
   '/complaints': typeof AppComplaintsIndexRoute
   '/orders': typeof AppOrdersIndexRoute
   '/api/public/cdr-progress/$jobId': typeof ApiPublicCdrProgressJobIdRoute
+  '/lovable/email/auth/preview': typeof LovableEmailAuthPreviewRoute
+  '/lovable/email/auth/webhook': typeof LovableEmailAuthWebhookRoute
   '/lovable/email/queue/process': typeof LovableEmailQueueProcessRoute
 }
 export interface FileRoutesById {
@@ -334,6 +350,8 @@ export interface FileRoutesById {
   '/_app/complaints/': typeof AppComplaintsIndexRoute
   '/_app/orders/': typeof AppOrdersIndexRoute
   '/api/public/cdr-progress/$jobId': typeof ApiPublicCdrProgressJobIdRoute
+  '/lovable/email/auth/preview': typeof LovableEmailAuthPreviewRoute
+  '/lovable/email/auth/webhook': typeof LovableEmailAuthWebhookRoute
   '/lovable/email/queue/process': typeof LovableEmailQueueProcessRoute
 }
 export interface FileRouteTypes {
@@ -372,6 +390,8 @@ export interface FileRouteTypes {
     | '/complaints/'
     | '/orders/'
     | '/api/public/cdr-progress/$jobId'
+    | '/lovable/email/auth/preview'
+    | '/lovable/email/auth/webhook'
     | '/lovable/email/queue/process'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -408,6 +428,8 @@ export interface FileRouteTypes {
     | '/complaints'
     | '/orders'
     | '/api/public/cdr-progress/$jobId'
+    | '/lovable/email/auth/preview'
+    | '/lovable/email/auth/webhook'
     | '/lovable/email/queue/process'
   id:
     | '__root__'
@@ -445,6 +467,8 @@ export interface FileRouteTypes {
     | '/_app/complaints/'
     | '/_app/orders/'
     | '/api/public/cdr-progress/$jobId'
+    | '/lovable/email/auth/preview'
+    | '/lovable/email/auth/webhook'
     | '/lovable/email/queue/process'
   fileRoutesById: FileRoutesById
 }
@@ -460,6 +484,8 @@ export interface RootRouteChildren {
   DotlovableOauthConsentRoute: typeof DotlovableOauthConsentRoute
   Char91DotmcpChar93InvokeToolToolRoute: typeof Char91DotmcpChar93InvokeToolToolRoute
   ApiPublicCdrProgressJobIdRoute: typeof ApiPublicCdrProgressJobIdRoute
+  LovableEmailAuthPreviewRoute: typeof LovableEmailAuthPreviewRoute
+  LovableEmailAuthWebhookRoute: typeof LovableEmailAuthWebhookRoute
   LovableEmailQueueProcessRoute: typeof LovableEmailQueueProcessRoute
 }
 
@@ -703,6 +729,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LovableEmailQueueProcessRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/lovable/email/auth/webhook': {
+      id: '/lovable/email/auth/webhook'
+      path: '/lovable/email/auth/webhook'
+      fullPath: '/lovable/email/auth/webhook'
+      preLoaderRoute: typeof LovableEmailAuthWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/lovable/email/auth/preview': {
+      id: '/lovable/email/auth/preview'
+      path: '/lovable/email/auth/preview'
+      fullPath: '/lovable/email/auth/preview'
+      preLoaderRoute: typeof LovableEmailAuthPreviewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/cdr-progress/$jobId': {
       id: '/api/public/cdr-progress/$jobId'
       path: '/api/public/cdr-progress/$jobId'
@@ -780,6 +820,8 @@ const rootRouteChildren: RootRouteChildren = {
   DotlovableOauthConsentRoute: DotlovableOauthConsentRoute,
   Char91DotmcpChar93InvokeToolToolRoute: Char91DotmcpChar93InvokeToolToolRoute,
   ApiPublicCdrProgressJobIdRoute: ApiPublicCdrProgressJobIdRoute,
+  LovableEmailAuthPreviewRoute: LovableEmailAuthPreviewRoute,
+  LovableEmailAuthWebhookRoute: LovableEmailAuthWebhookRoute,
   LovableEmailQueueProcessRoute: LovableEmailQueueProcessRoute,
 }
 export const routeTree = rootRouteImport

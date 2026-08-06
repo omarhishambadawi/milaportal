@@ -7,7 +7,11 @@
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 import { mcpPlugin } from "@lovable.dev/mcp-js/stacks/tanstack/vite";
 import { VitePWA } from "vite-plugin-pwa";
-import { sep } from "node:path";
+import { sep, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const rootDir = dirname(fileURLToPath(import.meta.url));
+
 import { loadEnv, type Plugin } from "vite";
 
 // Workaround for an upstream Windows-only bug in @lovable.dev/mcp-js (present in
@@ -72,7 +76,13 @@ function supabasePublicEnvFallback(): Plugin {
     // emitted only when neither the process env nor any .env file has the key.
     config(_config, { mode }) {
       const fileEnv = loadEnv(mode, process.cwd(), "");
+      // Server-only vars (e.g. SUPABASE_SERVICE_ROLE_KEY) must reach process.env for
+      // server routes such as the email queue/auth webhook. Never added to `define`.
+      for (const [key, value] of Object.entries(fileEnv)) {
+        if (process.env[key] === undefined) process.env[key] = value;
+      }
       const has = (key: string) => Boolean(process.env[key] || fileEnv[key]);
+
       const define: Record<string, string> = {};
 
       for (const [key, fallback] of Object.entries(PUBLIC_SUPABASE_FALLBACKS)) {
@@ -104,6 +114,15 @@ export default defineConfig({
     server: { entry: "server" },
   },
   vite: {
+    resolve: {
+      alias: {
+        // React Email's htmlparser2 path needs entities v4.5.0 (v5+ dropped
+        // ./lib/decode.js). Pin every import to the hoisted v4.5.0 copy.
+        "entities/lib/decode.js": resolve(rootDir, "node_modules/entities/lib/decode.js"),
+        "entities/lib/encode.js": resolve(rootDir, "node_modules/entities/lib/encode.js"),
+        entities: resolve(rootDir, "node_modules/entities"),
+      },
+    },
     plugins: [
       supabasePublicEnvFallback(),
       withNativeSepRoot(mcpPlugin()),
