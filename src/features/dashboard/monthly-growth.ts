@@ -1,4 +1,5 @@
 import { format, parse } from "date-fns";
+import { formatGrowth } from "./format";
 
 /**
  * Month-over-month growth analytics, as a value.
@@ -498,49 +499,4 @@ export function buildInsights(rows: readonly MonthRow[]): Insight[] {
   }
 
   return insights.slice(0, 3);
-}
-
-/* -------------------------------------------------------------------------- */
-/* Display helpers                                                             */
-/* -------------------------------------------------------------------------- */
-
-/**
- * A growth rate as text: `+56.0%`, `−3.1%`, or an em dash when there is none.
- *
- * One decimal. A second decimal on a percentage nobody will act on to that
- * precision is two more characters in every cell of every growth column, and
- * this section has a lot of them. Full precision lives in the chart tooltips,
- * where there is room to be exact.
- */
-export function formatGrowth(value: number | null): string {
-  if (value == null) return "—";
-  return `${value >= 0 ? "+" : "−"}${Math.abs(value).toFixed(1)}%`;
-}
-
-/**
- * Money at a glance: `SAR 747.5K`, `SAR 1.2M`, `SAR 274`.
- *
- * The exact figure — `747,542.65 SAR`, via `fmtSAR` — is what a chart tooltip
- * shows, and what an export carries. On a card or in a scan-first table it is
- * eleven characters of precision to convey one fact of magnitude, and it is
- * what made the first cut of these tables read as a data dump.
- */
-export function formatCompactSAR(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-  const abs = Math.abs(value);
-  if (abs >= 1_000_000) return `SAR ${trimZero(value / 1_000_000)}M`;
-  if (abs >= 10_000) return `SAR ${trimZero(value / 1_000)}K`;
-  return `SAR ${Math.round(value).toLocaleString()}`;
-}
-
-/** `1.20` → `1.2`, `3.00` → `3`. One decimal, only when it carries meaning. */
-function trimZero(n: number): string {
-  const s = n.toFixed(1);
-  return s.endsWith(".0") ? s.slice(0, -2) : s;
-}
-
-/** An order count: grouped, never abbreviated. `2,727`, not `2.7K`. */
-export function formatCount(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-  return value.toLocaleString();
 }

@@ -3,9 +3,6 @@ import {
   HISTORICAL_MONTHLY,
   buildInsights,
   buildMonthlyGrowth,
-  formatCompactSAR,
-  formatCount,
-  formatGrowth,
   growthPct,
   monthWindow,
   monthsBetween,
@@ -366,30 +363,5 @@ describe("insights", () => {
     // February: no previous month, and no Telesales to compare against.
     const february = buildMonthlyGrowth(HISTORICAL_MONTHLY.filter((e) => e.month === "2026-02"));
     expect(buildInsights(february)).toEqual([]);
-  });
-});
-
-describe("display formatting", () => {
-  it("signs a growth rate to one decimal and dashes a missing one", () => {
-    expect(formatGrowth(55.9718)).toBe("+56.0%");
-    expect(formatGrowth(67.86)).toBe("+67.9%");
-    expect(formatGrowth(-3.14)).toBe("−3.1%");
-    expect(formatGrowth(0)).toBe("+0.0%");
-    expect(formatGrowth(null)).toBe("—");
-  });
-
-  it("abbreviates money above ten thousand and keeps small figures exact", () => {
-    expect(formatCompactSAR(747542.65)).toBe("SAR 747.5K");
-    expect(formatCompactSAR(113803.21)).toBe("SAR 113.8K");
-    expect(formatCompactSAR(1250000)).toBe("SAR 1.3M");
-    expect(formatCompactSAR(2000000)).toBe("SAR 2M");
-    expect(formatCompactSAR(274.13)).toBe("SAR 274");
-    expect(formatCompactSAR(null)).toBe("—");
-  });
-
-  it("groups order counts rather than abbreviating them", () => {
-    expect(formatCount(2727)).toBe("2,727");
-    expect(formatCount(87)).toBe("87");
-    expect(formatCount(null)).toBe("—");
   });
 });

@@ -308,6 +308,7 @@ export function useDashboardData({
           completedCount: Number(r.completed_count ?? 0),
           completedCash: Number(r.completed_cash_count ?? 0),
           completedWasfaty: Number(r.completed_wasfaty_count ?? 0),
+          completedSales: Number(r.completed_sales),
         })),
       ),
     [deliveryRows],

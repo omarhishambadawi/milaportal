@@ -1010,32 +1010,60 @@ ranking, the values and the chart layout stay exactly as they are.
 (`features/dashboard/export.ts`) writes a multi-sheet XLSX from a query with
 `enabled: false`, fetched only when the button is pressed.
 
-### Completed orders fulfillment mix
+### Delivery methods
 
-Delivery vs store pickup over **completed orders only**, with the Cash/Wasfaty
-composition of each. It answers the question the delivery section is opened for —
-of everything that actually completed, how much did we take to the customer and
-how much did they collect — and the per-method table underneath then says which
-courier carried the delivery half.
+**One question, answered once.** This was two tables that between them answered
+it twice: a five-column "fulfillment mix" whose rows were Delivery / Store Pickup
+/ Total, and a four-column "method performance" whose rows were the couriers — in
+which Store Pickup appeared _again_, now as one method among four. A reader had
+to hold the first in their head to make sense of the second.
 
-**It costs no query.** `orders_delivery` gained `completed_count`,
-`completed_cash_count` and `completed_wasfaty_count`; the panel is a fold over the
-four rows the Dashboard already fetches, using the same
+`components/delivery-methods-section.tsx` is one argument in three steps:
+
+1. **KPI strip** (3 tiles) — completed orders, then Delivery and Store Pickup,
+   each with its share and its completed sales.
+2. **Fulfillment mix** — a 100% split bar, then each side broken into Cash and
+   Wasfaty as labelled proportion bars, with that side's sales and average order
+   value underneath.
+3. **Method performance** — the couriers ranked by completed orders, volume set
+   at display size with sales, AOV and a completion-rate badge as supporting
+   figures, and a share bar per row.
+
+Then one **Key insight** card of at most two computed tiles, in the same
+figure-and-label shape the Monthly performance insights use.
+
+**The visualisation is CSS, not Recharts.** A 100% stacked bar of two segments is
+three divs and reads instantly at any width; routing it through the charting
+library would buy a tooltip and cost a lazy boundary. Recharts is untouched by
+this section.
+
+**It costs no query.** `orders_delivery` carries `completed_count`,
+`completed_cash_count`, `completed_wasfaty_count` and `completed_sales`; the whole
+section is a fold over the four rows the Dashboard already fetches, using the same
 `classifyFulfillment` every other surface reads. No second definition, no second
-round trip, no client-side pass over the orders table.
+round trip, no client-side pass over the orders table. `summarizeFulfillment` also
+sums `completedSales` per side, which is what the sales figures and the two
+average-order-value comparisons are derived from.
 
-Percentages are taken against **classified** orders rather than the grand total,
-which is what makes Delivery% + Pickup% come to exactly 100. An order whose
-method was never recorded cannot be assigned to either side without inventing the
-answer, so it gets its own "Not recorded" line — rendered only when the count is
-non-zero — and sits outside the denominator while still reconciling into the
-Total row.
+`delivery-analytics.ts` holds the derived half — `rankMethods`,
+`averageOrderValue`, `buildDeliveryInsights` — and is pure, so
+`__tests__/delivery-analytics.test.ts` pins it to the live figures the section was
+designed on (731 completed = 657 delivered + 74 collected; AlShrouq 611, Store
+Pickup 74, Branch Scooter 46).
 
-Two labels in the neighbouring "Delivery method performance" table were corrected
-at the same time: its first numeric column is headed "Completed orders" and was
-showing `order_count` (every order on that method, whatever its status), and
-"Share of sales" was rendering `completion_rate`, which is the proportion of that
-method's own orders that completed and is not a share of anything.
+Two things it deliberately does not render. Percentages are taken against
+**classified** orders rather than the grand total, which is what makes Delivery% +
+Pickup% come to exactly 100; an order whose method was never recorded sits outside
+the denominator and is stated as a footnote, only when the count is non-zero. And
+a method that completed nothing is dropped from the ranking rather than shown as a
+permanent zero — the same reasoning. A method whose `completed_count` is _absent_
+(pre-migration `null`) keeps that null to the cell rather than rendering as 0,
+which would read as a courier that delivered nothing.
+
+Both figures the old table got wrong stay corrected: completed orders come from
+`completed_count`, not `order_count` (every status), and the completion rate is
+labelled as the proportion of that method's own orders that completed rather than
+as a "share of sales".
 
 ### Monthly performance
 
@@ -1072,11 +1100,13 @@ is now a hierarchy, and the order is the argument:
 | `components/monthly-growth-section.tsx` | KPI strip, team performance, revenue drivers, trend table, insights.                              |
 | `components/monthly-growth-charts.tsx`  | The four Recharts panels, behind the section's own Suspense boundary.                             |
 
-**Number formatting is part of the design.** `formatCompactSAR` gives
-`SAR 747.5K` / `SAR 1.2M` / `SAR 274`; `formatGrowth` gives one decimal
-(`+67.9%`); `formatCount` never abbreviates an order count (`2,727`, not `2.7K`).
-Full precision belongs in the chart tooltips (`fmtSAR`) and the export, where
-there is room to be exact.
+**Number formatting is part of the design**, and lives in
+`features/dashboard/format.ts` because two sections share it. `formatCompactSAR`
+gives `SAR 747.5K` / `SAR 1.2M` / `SAR 274`; `formatGrowth` gives one signed
+decimal (`+67.9%`); `formatPercent` an unsigned one (`89.9%`); `formatCount` never
+abbreviates an order count (`2,727`, not `2.7K`). Full precision belongs in the
+chart tooltips (`fmtSAR`) and the export, where there is room to be exact.
+`components/kpi-tile.tsx` is the shared tile both strips are built from.
 
 **No migration, no new table, no second source of truth.** February–June 2026
 predates the orders table as an authority and is a typed constant

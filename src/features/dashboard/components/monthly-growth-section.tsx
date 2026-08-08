@@ -1,12 +1,9 @@
 import { Suspense, lazy, useState } from "react";
 import { Coins, Sparkles, Table2, TrendingUp, Users } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { formatCompactSAR, formatCount, formatGrowth } from "../format";
 import {
-  formatCompactSAR,
-  formatCount,
-  formatGrowth,
   latestCompleteMonth,
   previousCompleteMonth,
   revenueDriver,
@@ -16,6 +13,7 @@ import {
 } from "../monthly-growth";
 import { AnalyticsCard } from "./analytics-card";
 import { AnalyticsTable, EmptyRow, Tbody, Td, Th, Thead } from "./analytics-table";
+import { KpiTile } from "./kpi-tile";
 import { SectionTitle } from "./section-title";
 
 /**
@@ -79,46 +77,6 @@ function Growth({ value, className }: { value: number | null; className?: string
     <span className={cn("font-semibold tabular-nums", growthTone(value), className)}>
       {formatGrowth(value)}
     </span>
-  );
-}
-
-/**
- * One KPI in the strip.
- *
- * Deliberately the same type scale as `StatCard` — the tile the Complaints row
- * already uses — so the two strips on this page read as one component even
- * though this one carries a coloured second line that `StatCard` has no reason
- * to grow a prop for.
- */
-function KpiTile({
-  label,
-  value,
-  valueTone,
-  sub,
-  subTone = "text-muted-foreground",
-}: {
-  label: string;
-  value: string;
-  valueTone?: string;
-  sub?: string;
-  subTone?: string;
-}) {
-  return (
-    <Card className="border-border/60 shadow-sm">
-      <CardContent className="p-3 sm:p-4">
-        <div className="truncate text-[10px] uppercase tracking-wider text-muted-foreground sm:text-[11px]">
-          {label}
-        </div>
-        <div
-          className={cn("mt-1 truncate text-base font-semibold tabular-nums sm:text-xl", valueTone)}
-        >
-          {value}
-        </div>
-        {sub && (
-          <div className={cn("mt-0.5 truncate text-[11px] tabular-nums", subTone)}>{sub}</div>
-        )}
-      </CardContent>
-    </Card>
   );
 }
 

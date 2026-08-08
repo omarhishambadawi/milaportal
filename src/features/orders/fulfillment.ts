@@ -114,6 +114,12 @@ export interface MethodCompletedCounts {
   completedCount: number;
   completedCash: number;
   completedWasfaty: number;
+  /**
+   * That method's completed sales. Optional because the two counts above are
+   * what the mix was originally built for; a caller that only needs the split
+   * by volume need not carry the money through.
+   */
+  completedSales?: number;
 }
 
 export interface FulfillmentRow {
@@ -122,6 +128,8 @@ export interface FulfillmentRow {
   count: number;
   cash: number;
   wasfaty: number;
+  /** Completed sales on this side of the cut. */
+  sales: number;
   /** Share of classified completed orders, 0–100. */
   percent: number;
 }
@@ -138,7 +146,7 @@ export interface FulfillmentMix {
 }
 
 function emptyRow(key: FulfillmentRow["key"], label: string): FulfillmentRow {
-  return { key, label, count: 0, cash: 0, wasfaty: 0, percent: 0 };
+  return { key, label, count: 0, cash: 0, wasfaty: 0, sales: 0, percent: 0 };
 }
 
 /**
@@ -166,6 +174,7 @@ export function summarizeFulfillment(methods: readonly MethodCompletedCounts[]):
     row.count += method.completedCount;
     row.cash += method.completedCash;
     row.wasfaty += method.completedWasfaty;
+    row.sales += method.completedSales ?? 0;
   }
 
   const classified: FulfillmentRow = {
@@ -174,6 +183,7 @@ export function summarizeFulfillment(methods: readonly MethodCompletedCounts[]):
     count: delivery.count + pickup.count,
     cash: delivery.cash + pickup.cash,
     wasfaty: delivery.wasfaty + pickup.wasfaty,
+    sales: delivery.sales + pickup.sales,
     percent: 100,
   };
 
@@ -197,6 +207,7 @@ export function summarizeFulfillment(methods: readonly MethodCompletedCounts[]):
       count: classified.count + unknown.count,
       cash: classified.cash + unknown.cash,
       wasfaty: classified.wasfaty + unknown.wasfaty,
+      sales: classified.sales + unknown.sales,
       percent: classified.percent,
     },
   };
