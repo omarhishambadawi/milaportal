@@ -3,7 +3,6 @@ import { cn } from "@/lib/utils";
 import { fmtSAR } from "@/lib/branches";
 import type { FulfillmentMix, FulfillmentRow } from "@/features/orders/fulfillment";
 import {
-  averageOrderValue,
   buildDeliveryInsights,
   rankMethods,
   type DeliveryMethodRow,
@@ -24,9 +23,19 @@ import { SectionTitle } from "./section-title";
  * sense of the second — Store Pickup appears in both, once as half the split
  * and once as one method among four.
  *
- * It is now one argument in three steps: the split as a KPI strip and a single
- * 100% bar, the channel composition of each side, then the couriers ranked by
- * volume. Same chrome as Monthly performance — `KpiTile`, `AnalyticsCard`,
+ * It is now one argument in steps that do not overlap, and that is the whole
+ * organising rule — **each panel answers a question the one above it did not**:
+ *
+ *   - **KPI strip** — how many completed, and how they divide Delivery against
+ *     Store Pickup. The volume question, answered once and only here.
+ *   - **Order distribution** — the split as a single 100% bar, then how Cash and
+ *     Wasfaty divide *inside* each side. A first cut repeated the counts, the
+ *     shares, the sales and the average order values here in two bordered cards;
+ *     all of that is in the strip above, in bigger type.
+ *   - **Method performance** — the couriers themselves, ranked by volume.
+ *   - **Key insight** — what to notice.
+ *
+ * Same chrome as Monthly performance — `KpiTile`, `AnalyticsCard`,
  * `SectionTitle`, the shared formatters and the chart palette — so the two
  * sections read as one dashboard.
  *
@@ -88,39 +97,32 @@ function ChannelBar({
   );
 }
 
-/** One side of the cut: its volume, its share, and how Cash and Wasfaty split it. */
-function SideBreakdown({ row, color }: { row: FulfillmentRow; color: string }) {
+/**
+ * How Cash and Wasfaty divide one side of the cut.
+ *
+ * Only that. This was a bordered card carrying the side's order count, its share
+ * of the split, its sales and its average order value — every one of which the
+ * KPI strip states above it, in bigger type. What was left once the repetition
+ * went is the one thing this card is for, so it is no longer a card: a heading
+ * and two bars, sitting directly on the panel.
+ */
+function ChannelSplit({ row, color }: { row: FulfillmentRow; color: string }) {
+  const total = row.cash + row.wasfaty;
+
   return (
-    <div className="min-w-0 rounded-lg border border-border/60 bg-muted/25 p-3 sm:p-3.5">
+    <div className="min-w-0">
       <div className="flex items-center gap-2">
         <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
-        <span className="truncate text-xs font-medium text-muted-foreground">{row.label}</span>
+        <span className="truncate text-xs font-medium">{row.label}</span>
       </div>
-      <div className="mt-1.5 flex flex-wrap items-baseline gap-x-2">
-        <span className="text-lg font-semibold tabular-nums">{formatCount(row.count)}</span>
-        <span className="text-xs text-muted-foreground">orders</span>
-        <span className="text-xs font-medium tabular-nums text-muted-foreground">
-          · {formatPercent(row.percent)}
-        </span>
-      </div>
-      <div className="mt-2.5 space-y-2">
-        <ChannelBar
-          label="Cash"
-          color={CHANNEL_COLOR.cash}
-          count={row.cash}
-          total={row.cash + row.wasfaty}
-        />
+      <div className="mt-2 space-y-2">
+        <ChannelBar label="Cash" color={CHANNEL_COLOR.cash} count={row.cash} total={total} />
         <ChannelBar
           label="Wasfaty"
           color={CHANNEL_COLOR.wasfaty}
           count={row.wasfaty}
-          total={row.cash + row.wasfaty}
+          total={total}
         />
-      </div>
-      <div className="mt-2.5 border-t border-border/50 pt-1.5 text-[11px] text-muted-foreground tabular-nums">
-        <span title={fmtSAR(row.sales)}>{formatCompactSAR(row.sales)}</span>
-        {" · AOV "}
-        {formatCompactSAR(averageOrderValue(row.sales, row.count))}
       </div>
     </div>
   );
@@ -242,8 +244,8 @@ export function DeliveryMethodsSection({
 
       <div className="mt-3 grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
         <AnalyticsCard
-          title="Fulfillment mix"
-          subtitle="Delivered against collected, and how Cash and Wasfaty split each"
+          title="Order distribution"
+          subtitle="Delivery vs Store Pickup · Cash and Wasfaty distribution"
           icon={PackageCheck}
         >
           {empty ? (
@@ -275,9 +277,12 @@ export function DeliveryMethodsSection({
                 <span>Store Pickup {formatPercent(mix.pickup.percent)}</span>
               </div>
 
-              <div className="mt-3 grid gap-2 sm:grid-cols-2 sm:gap-3">
-                <SideBreakdown row={mix.delivery} color={SIDE_COLOR.delivery} />
-                <SideBreakdown row={mix.pickup} color={SIDE_COLOR.pickup} />
+              {/* Below the bar, the panel changes subject: not how many orders
+                  went each way — the strip above says that — but how Cash and
+                  Wasfaty divide inside each. */}
+              <div className="mt-4 grid gap-4 border-t border-border/50 pt-3.5 sm:grid-cols-2 sm:gap-5">
+                <ChannelSplit row={mix.delivery} color={SIDE_COLOR.delivery} />
+                <ChannelSplit row={mix.pickup} color={SIDE_COLOR.pickup} />
               </div>
 
               {mix.unknown.count > 0 && (
