@@ -5,6 +5,7 @@ import {
   normalizePlace,
   resolvePlace,
   searchLocations,
+  splitCityQualifier,
 } from "../location-index";
 import { resolveOrigin } from "../locator";
 import { decorate } from "../search";
@@ -397,5 +398,72 @@ describe("resolveOrigin over the index", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("splitCityQualifier", () => {
+  it("reads a city off the end of a dictated address", () => {
+    // The shape an agent types verbatim from a phone call.
+    expect(splitCityQualifier(INDEX, "حي الروضة، الرياض")).toEqual({
+      text: "الروضه",
+      city: "الرياض",
+    });
+  });
+
+  it("reads a city off the front, which is how the sheet writes addresses", () => {
+    expect(splitCityQualifier(INDEX, "الرياض/ حي الروضة")).toEqual({
+      text: "الروضه",
+      city: "الرياض",
+    });
+  });
+
+  it("reads a city from its English alias", () => {
+    expect(splitCityQualifier(INDEX, "Al Rawdah Riyadh")).toEqual({
+      text: "rawdah",
+      city: "الرياض",
+    });
+  });
+
+  it("leaves a query that is only a city alone", () => {
+    // The remainder would be empty, and "الرياض" has always meant the city.
+    expect(splitCityQualifier(INDEX, "الرياض")).toEqual({ text: "الرياض", city: null });
+  });
+
+  it("leaves a query naming no city alone", () => {
+    expect(splitCityQualifier(INDEX, "حي الحزم")).toEqual({ text: "الحزم", city: null });
+  });
+});
+
+describe("a city named inside the query", () => {
+  it("resolves a district that is ambiguous without it", () => {
+    // The regression this exists for. "الروضة" is a district in both Riyadh and
+    // Jeddah, so it asks; naming the city answers, and must not ask again.
+    const bare = resolvePlace(INDEX, "حي الروضة");
+    expect(bare.status).toBe("ambiguous");
+
+    const qualified = resolvePlace(INDEX, "حي الروضة، الرياض");
+    expect(qualified.status).toBe("found");
+    if (qualified.status === "found") expect(qualified.entry.city).toBe("الرياض");
+  });
+
+  it("filters the other city out rather than merely demoting it", () => {
+    // Stronger than the dropdown's behaviour, and deliberately so: a city typed
+    // into this query is this query's answer to "which one".
+    const scoped = searchLocations(INDEX, "الروضة الرياض", 8);
+    expect(scoped.length).toBeGreaterThan(0);
+    expect(scoped.every((match) => match.entry.city === "الرياض")).toBe(true);
+  });
+
+  it("still finds the place when the city is written in English", () => {
+    const scoped = searchLocations(INDEX, "الروضة riyadh", 8);
+    expect(scoped.length).toBeGreaterThan(0);
+    expect(scoped.every((match) => match.entry.city === "الرياض")).toBe(true);
+  });
+
+  it("beats the dropdown when the two disagree", () => {
+    // The agent left Jeddah selected and then typed Riyadh. The text is the more
+    // recent, more specific instruction.
+    const scoped = searchLocations(INDEX, "الروضة الرياض", 8, { city: "جدة" });
+    expect(scoped.every((match) => match.entry.city === "الرياض")).toBe(true);
   });
 });

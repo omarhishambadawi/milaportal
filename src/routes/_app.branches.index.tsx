@@ -299,11 +299,15 @@ function BranchDirectory() {
             suggestions={locator.suggestions}
             error={locator.error}
             searching={locator.searching}
+            branchQuery={locator.branchQuery}
+            branchFiltered={locator.branchFiltered}
+            rankedCount={locator.rankedCount}
             selected={selected}
             collapsed={locatorCollapsed}
             onQueryChange={locator.setQuery}
             onCityChange={locator.setCity}
             onSearch={locator.search}
+            onBranchQueryChange={locator.setBranchQuery}
             onChooseLocation={locator.chooseLocation}
             onSelect={handleLocatorSelect}
             onExpand={expandLocator}

@@ -70,6 +70,16 @@ export interface LocationIndex {
   byBigram: ReadonlyMap<string, readonly number[]>;
   /** First character → entry indices, for one-character queries. */
   byFirstChar: ReadonlyMap<string, readonly number[]>;
+  /**
+   * Every folded term that names a city → that city as the directory writes it.
+   *
+   * Built here rather than derived per query because `splitCityQualifier` runs on
+   * every keystroke and every submission, and scanning the entries for city kinds
+   * each time would undo the point of having postings lists at all. Includes the
+   * curated English aliases, so "riyadh" qualifies a query exactly as "الرياض"
+   * does.
+   */
+  cityByTerm: ReadonlyMap<string, string>;
 }
 
 /** Overlapping two-character windows: "riyadh" → ri, iy, ya, ad, dh. */
@@ -375,7 +385,19 @@ export function buildLocationIndex(branches: readonly BranchView[]): LocationInd
     }
   });
 
-  return { entries, byBigram, byFirstChar };
+  // City terms, for reading a city out of the middle of a typed query.
+  const cityByTerm = new Map<string, string>();
+  for (const entry of entries) {
+    if (entry.kind !== "city") continue;
+    for (const term of entry.terms) {
+      // First writer wins: two cities never share a term in practice, and if the
+      // dataset ever produced one, silently reassigning it per iteration order
+      // would make the split non-deterministic across rebuilds.
+      if (term && !cityByTerm.has(term)) cityByTerm.set(term, entry.name);
+    }
+  }
+
+  return { entries, byBigram, byFirstChar, cityByTerm };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -430,6 +452,82 @@ export interface SearchScope {
    * leave them re-typing a name that was correct all along.
    */
   city?: string | null;
+  /**
+   * Treat `city` as a filter rather than a preference.
+   *
+   * Set only when the city came from the **query text itself** — "حي النخيل،
+   * الرياض" — never from the dropdown. The two are different statements: the
+   * dropdown is a standing hint the agent set once and may have forgotten, so
+   * out-of-city matches stay visible underneath it; a city typed into this
+   * particular query is that query's answer to "which one", and showing the
+   * Buraydah النخيل underneath it would re-open the exact question the agent just
+   * closed.
+   */
+  strictCity?: boolean;
+}
+
+/**
+ * A place name and the city that qualified it, pulled apart.
+ *
+ * The single fix for the largest class of wrong answer this feature had. Every
+ * term in the gazetteer is *one* place — the district "النخيل", the city
+ * "الرياض" — but Saudi addresses are dictated as both at once, so "حي النخيل،
+ * الرياض" arrived as the seven-character-longer string `"النخيل الرياض"` and
+ * matched nothing: not the district (whose term is six characters shorter than
+ * the query, so even the fuzzy budget rejects it on length alone), not the city,
+ * not any branch. The search then fell through to OpenStreetMap, whose answer for
+ * a bare Arabic district name is the coin-flip that put a customer in النخيل
+ * 50 km from the branch that is actually 3 km away.
+ *
+ * Splitting first turns that into two facts the gazetteer already holds
+ * precisely, and it generalizes: any "<place> <city>" or "<city> <place>" a Saudi
+ * agent dictates resolves the same way, with no per-neighbourhood knowledge.
+ */
+export interface CityQualifiedQuery {
+  /** The place being searched for, folded, with the city name removed. */
+  text: string;
+  /** The city named inside the query, as the directory writes it. */
+  city: string | null;
+}
+
+/**
+ * Longest city name worth testing, in words.
+ *
+ * "مكة المكرمة" and "المدينة المنورة" are two; three is one word of headroom.
+ * Bounding it keeps the scan O(words) rather than O(words²) and, more usefully,
+ * stops a long address from having its first three-quarters tested as a city name.
+ */
+const MAX_CITY_WORDS = 3;
+
+/**
+ * Read a city out of a typed query, if one is in there.
+ *
+ * Both ends are tested because both are dictated: "حي النخيل، الرياض" puts the
+ * city last and "الرياض، حي النخيل" — the order the master sheet's own addresses
+ * use — puts it first. Longest run first, so "مكة المكرمة" is not truncated to
+ * "مكة" while a stray "المكرمة" stays in the place name.
+ *
+ * A query that is *only* a city is left alone: the remainder would be empty, and
+ * "الرياض" has always meant the city itself rather than a nameless place inside
+ * it.
+ */
+export function splitCityQualifier(index: LocationIndex, query: string): CityQualifiedQuery {
+  const normalized = normalizePlace(query);
+  const words = normalized.split(" ").filter(Boolean);
+  if (words.length < 2) return { text: normalized, city: null };
+
+  const longest = Math.min(words.length - 1, MAX_CITY_WORDS);
+  for (let run = longest; run >= 1; run -= 1) {
+    const tail = words.slice(words.length - run).join(" ");
+    const tailCity = index.cityByTerm.get(tail);
+    if (tailCity) return { text: words.slice(0, words.length - run).join(" "), city: tailCity };
+
+    const head = words.slice(0, run).join(" ");
+    const headCity = index.cityByTerm.get(head);
+    if (headCity) return { text: words.slice(run).join(" "), city: headCity };
+  }
+
+  return { text: normalized, city: null };
 }
 
 /** Which city an entry belongs to, folded. A city entry is its own city. */
@@ -520,10 +618,17 @@ export function searchLocations(
   limit = 8,
   scope?: SearchScope,
 ): LocationMatch[] {
-  const normalized = normalizePlace(query);
+  // A city typed into the query outranks the dropdown, and narrows harder: the
+  // agent named it for *this* search, which is a more specific instruction than a
+  // scope they set earlier and may not still be looking at.
+  const qualified = splitCityQualifier(index, query);
+  const normalized = qualified.text;
   if (!normalized) return [];
 
-  const scopeKey = scope?.city ? normalizePlace(scope.city) : null;
+  const city = qualified.city ?? scope?.city ?? null;
+  const strict = qualified.city != null || scope?.strictCity === true;
+
+  const scopeKey = city ? normalizePlace(city) : null;
   const budget = tolerance(normalized.length);
   const matches: LocationMatch[] = [];
 
@@ -532,7 +637,9 @@ export function searchLocations(
     if (!entry) continue;
     const score = scoreEntry(entry, normalized, budget);
     if (score == null) continue;
-    matches.push({ entry, score, inScope: scopeKey == null || cityKeyOf(entry) === scopeKey });
+    const inScope = scopeKey == null || cityKeyOf(entry) === scopeKey;
+    if (strict && !inScope) continue;
+    matches.push({ entry, score, inScope });
   }
 
   matches.sort((a, b) => {
@@ -570,6 +677,11 @@ export type PlaceResolution =
  * Ambiguity is only raised when the tie is a *good* match in more than one
  * city — two fuzzy near-misses are not a question worth asking, they are just
  * a weak result.
+ *
+ * A city named in the query settles it before the question is ever reached:
+ * `searchLocations` has already dropped every other city's candidates, so the
+ * surviving tie spans one city and resolves. "حي النخيل" asks; "حي النخيل،
+ * الرياض" answers — which is the difference the agent typed.
  */
 export function resolvePlace(
   index: LocationIndex,

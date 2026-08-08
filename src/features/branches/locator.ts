@@ -2,6 +2,7 @@ import {
   KSA_BOUNDS,
   directionsUrl,
   formatLatLng,
+  haversineMetres,
   isWithin,
   parseCoordinatePair,
   rankByDistance,
@@ -15,6 +16,7 @@ import {
   describeLocationSource,
   normalizePlace,
   resolvePlace,
+  splitCityQualifier,
   type LocationEntry,
   type LocationIndex,
   type SearchScope,
@@ -30,7 +32,26 @@ import type { BranchView } from "./types";
  */
 
 /** The nearest branches to show. */
-export const LOCATOR_LIMIT = 10;
+export const LOCATOR_LIMIT = 20;
+
+/**
+ * A row a customer can actually be sent to.
+ *
+ * The directory carries head office, the regional office and the warehouses
+ * alongside the pharmacies, because agents need their switchboards — but they are
+ * not branches, and a nearest-branch list is the one place where showing them is
+ * actively harmful: the list exists to be read out to a caller, and "your nearest
+ * branch is the warehouse" is a mistake an agent cannot un-make on the call.
+ *
+ * Keyed off `branch.reference`, which `referenceKind` already derives from the
+ * branch code, rather than off a list of names spelled here. That is what makes
+ * this hold for a facility nobody has added yet: any code that is not a numbered
+ * pharmacy is a reference location, so a new warehouse row is excluded the day it
+ * is imported without anyone remembering to come back here.
+ */
+export function isCustomerFacingBranch(branch: BranchView): boolean {
+  return branch.reference == null;
+}
 
 /**
  * How tightly an origin was pinned down.
@@ -283,7 +304,14 @@ function localityOfEntry(entry: LocationEntry): OriginLocality {
  *      lookup rather than two passes over the same index.
  *   3. **`geocode`** — OpenStreetMap today, Google tomorrow. Reached only when
  *      1 and 2 found nothing, which is what "never call OpenStreetMap if the
- *      location was already resolved locally" means in code.
+ *      location was already resolved locally" means in code. Its answer is
+ *      checked against the city the agent named before it is believed; see
+ *      `agreesWithCity`.
+ *   4. **The named city itself.** When every step above failed but the query
+ *      named a city the directory knows, that city's centroid is the answer. It
+ *      is coarse and the origin line says so, which is strictly better than the
+ *      "nothing matches that" this used to return for a real Saudi address whose
+ *      district happens to have no branch in it.
  *
  * An *ambiguous* local result also stops the cascade. The place was found; the
  * only open question is which city, and asking a geocoder would replace a
@@ -332,6 +360,12 @@ export async function resolveOrigin(
     return { origin: null, choices: place.choices, error: null };
   }
 
+  // The city the agent named, whether they typed it or chose it. Everything
+  // below is about not throwing that away: it is the strongest signal in the
+  // query, and the old cascade dropped it the moment the local index missed.
+  const namedCity = splitCityQualifier(index, trimmed).city ?? scope?.city ?? null;
+  const anchor = namedCity ? cityEntry(index, namedCity) : null;
+
   // Step 3. Only now, and only if a provider was supplied.
   if (geocode) {
     // The city goes into the query text rather than a parameter, because that is
@@ -340,7 +374,7 @@ export async function resolveOrigin(
     // prepended so the thing being searched for still leads the string.
     const query = scope?.city ? `${trimmed} ${scope.city}` : trimmed;
     const hit = asHit(await geocode(query));
-    if (hit && isWithin(hit.point, KSA_BOUNDS)) {
+    if (hit && isWithin(hit.point, KSA_BOUNDS) && agreesWithCity(hit, anchor)) {
       const named = [hit.district, hit.city].filter(Boolean).join(", ");
       return {
         origin: {
@@ -363,7 +397,53 @@ export async function resolveOrigin(
     }
   }
 
+  // The geocoder had nothing, or had something that contradicted the city the
+  // agent named. That city is still a real answer: coarser than the district they
+  // asked for, but in the right place — and a city centroid that says so on the
+  // origin line beats a confident pin in the wrong half of the country.
+  if (anchor) return { origin: originFromPlace(anchor), choices: [], error: null };
+
   return { origin: null, choices: [], error: UNPLACEABLE };
+}
+
+/** The gazetteer's entry for a city, by name as the directory writes it. */
+function cityEntry(index: LocationIndex, city: string): LocationEntry | null {
+  const key = normalizePlace(city);
+  if (!key) return null;
+  return index.entries.find((entry) => entry.kind === "city" && entry.key === key) ?? null;
+}
+
+/**
+ * How far a geocoded point may sit from the centre of the city it claims to be
+ * in before the claim is disbelieved.
+ *
+ * Generous on purpose. Riyadh is roughly 70 km across and the gazetteer's centre
+ * is the mean of the branches in it rather than the municipal centroid, so a
+ * legitimate outer-suburb district can be a long way from it. This is a sanity
+ * bound against an answer in the *wrong city* — the failure that actually
+ * happens, where a bare Arabic district name resolves to a same-named place a
+ * region away — not an attempt to police which suburb is plausible.
+ */
+const CITY_SANITY_RADIUS_M = 75_000;
+
+/**
+ * Does a geocoder's answer agree with the city the agent named?
+ *
+ * Duplicate neighbourhood names are the norm here rather than the exception, and
+ * a geocoder asked for one in Arabic answers with whichever it ranks highest —
+ * which is how "حي النخيل" with Riyadh on the query resolved to a النخيل
+ * elsewhere, and why the nearest branch came back 50 km away instead of 3.
+ *
+ * Two ways to agree, because the provider may or may not return names: the city
+ * it resolved matches the one asked for, or — when it named no city, or named one
+ * under a spelling the directory does not use — the point is at least in the
+ * right part of the country. Nothing to check against means nothing to disagree
+ * with, so an unqualified query passes untouched.
+ */
+function agreesWithCity(hit: GeocodeHit, anchor: LocationEntry | null): boolean {
+  if (!anchor) return true;
+  if (hit.city && sameName(hit.city, anchor.name)) return true;
+  return haversineMetres(hit.point, anchor.point) <= CITY_SANITY_RADIUS_M;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -463,7 +543,11 @@ export function rankNearestBranches(
 
   return rankByDistance(
     origin,
-    branches,
+    // Filtered before anything is measured, not after. Ranking the warehouses and
+    // then dropping them would leave the over-fetch below short by however many
+    // happened to be nearby, so a customer next door to head office would get a
+    // list one branch shorter than everyone else's.
+    branches.filter(isCustomerFacingBranch),
     (branch) =>
       branch.hasCoords ? { lat: branch.latitude as number, lng: branch.longitude as number } : null,
     { limit: limit * 2 + 10, provider: options.provider },

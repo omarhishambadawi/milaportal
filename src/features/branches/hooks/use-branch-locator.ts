@@ -3,12 +3,14 @@ import { geocodeWithOpenStreetMap } from "../geocode-nominatim";
 import { buildLocationIndex, searchLocations, type LocationEntry } from "../location-index";
 import {
   LOCATOR_LIMIT,
+  isCustomerFacingBranch,
   originFromPlace,
   rankNearestBranches,
   resolveOrigin,
   type LocatorResult,
   type ResolvedOrigin,
 } from "../locator";
+import { tokenize } from "../search";
 import type { BranchView } from "../types";
 
 /** Autocomplete rows offered under the input. */
@@ -48,13 +50,34 @@ export function useBranchLocator(branches: BranchView[]) {
    */
   const [city, setCity] = useState("");
   const [origin, setOrigin] = useState<ResolvedOrigin | null>(null);
-  const [results, setResults] = useState<LocatorResult[]>([]);
+  /**
+   * Every serviceable branch, ranked — not just the ones on screen.
+   *
+   * Held in full so the branch filter below can answer for a branch that did not
+   * make the top 20 without re-resolving the customer's location. Ranking the
+   * whole directory costs one Haversine per branch over ~150 rows, which is
+   * cheaper than the state update that renders the result.
+   */
+  const [ranked, setRanked] = useState<LocatorResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
   /** Non-empty when the typed name belongs to places in several cities. */
   const [choices, setChoices] = useState<LocationEntry[]>([]);
+  /** The in-results branch filter — "which branch", not "where is the customer". */
+  const [branchQuery, setBranchQuery] = useState("");
 
-  const index = useMemo(() => buildLocationIndex(branches), [branches]);
+  /**
+   * The rows the locator is allowed to talk about at all.
+   *
+   * Filtered once, here, and then used for *both* the gazetteer and the ranking —
+   * which is what makes the exclusion consistent by construction rather than by
+   * two call sites remembering to agree. A warehouse is therefore not merely
+   * absent from the results: it is not a place the locator can resolve to, and
+   * its city does not reach the dropdown unless a real branch also sits there.
+   */
+  const serviceable = useMemo(() => branches.filter(isCustomerFacingBranch), [branches]);
+
+  const index = useMemo(() => buildLocationIndex(serviceable), [serviceable]);
 
   /**
    * Cities that actually have a branch, for the dropdown.
@@ -92,8 +115,9 @@ export function useBranchLocator(branches: BranchView[]) {
   /** Rank the directory around a point that is already decided. */
   const rankAround = useCallback(
     async (next: ResolvedOrigin, mine: number) => {
-      const ranked = await rankNearestBranches(next.point, branches, {
-        limit: LOCATOR_LIMIT,
+      const measured = await rankNearestBranches(next.point, serviceable, {
+        // The whole directory, not the visible slice. See `ranked`.
+        limit: serviceable.length || LOCATOR_LIMIT,
         // Passed, not dropped: without it every result is ranked and banded on
         // kilometres alone, which is the whole point of having resolved a
         // neighbourhood in the first place.
@@ -101,14 +125,15 @@ export function useBranchLocator(branches: BranchView[]) {
       });
       if (mine !== token.current) return;
       setOrigin(next);
-      setResults(ranked);
+      setRanked(measured);
+      setBranchQuery("");
       setChoices([]);
       // A resolved origin with nothing near it is not an error — it is the
       // honest answer for a point in the Empty Quarter, and the panel says so.
       setError(null);
       setSearching(false);
     },
-    [branches],
+    [serviceable],
   );
 
   const search = useCallback(
@@ -118,7 +143,7 @@ export function useBranchLocator(branches: BranchView[]) {
 
       if (!trimmed) {
         setOrigin(null);
-        setResults([]);
+        setRanked([]);
         setChoices([]);
         setError(null);
         setSearching(false);
@@ -133,7 +158,7 @@ export function useBranchLocator(branches: BranchView[]) {
 
       if (resolution.choices.length > 0) {
         setOrigin(null);
-        setResults([]);
+        setRanked([]);
         setChoices(resolution.choices);
         setError(null);
         setSearching(false);
@@ -142,7 +167,7 @@ export function useBranchLocator(branches: BranchView[]) {
 
       if (!resolution.origin) {
         setOrigin(null);
-        setResults([]);
+        setRanked([]);
         setChoices([]);
         setError(resolution.error);
         setSearching(false);
@@ -185,7 +210,8 @@ export function useBranchLocator(branches: BranchView[]) {
     setQuery("");
     setCity("");
     setOrigin(null);
-    setResults([]);
+    setRanked([]);
+    setBranchQuery("");
     setChoices([]);
     setError(null);
     setSearching(false);
@@ -214,7 +240,7 @@ export function useBranchLocator(branches: BranchView[]) {
         if (mine !== token.current) return;
         if (resolution.choices.length > 0) {
           setOrigin(null);
-          setResults([]);
+          setRanked([]);
           setChoices(resolution.choices);
           setError(null);
           setSearching(false);
@@ -222,7 +248,7 @@ export function useBranchLocator(branches: BranchView[]) {
         }
         if (!resolution.origin) {
           setOrigin(null);
-          setResults([]);
+          setRanked([]);
           setChoices([]);
           setError(resolution.error);
           setSearching(false);
@@ -234,6 +260,39 @@ export function useBranchLocator(branches: BranchView[]) {
     [index, query, rankAround],
   );
 
+  /**
+   * The branch filter inside the results.
+   *
+   * Runs over the already-ranked list, so it costs one `includes` per branch over
+   * a string `decorate` built once — no geocoding, no re-resolution, and above all
+   * no touching `origin`. That is the whole contract: an agent who has located a
+   * customer and then wants to know where P0030 sits relative to them must not
+   * lose the customer's location to ask.
+   *
+   * It searches the whole ranked directory rather than the visible slice, because
+   * "how far is P0030" is exactly the question asked about a branch that did *not*
+   * make the top 20 — answering "no match" for a branch that is merely 21st would
+   * be the filter failing at its only job.
+   */
+  const branchMatches = useMemo(() => {
+    const tokens = tokenize(branchQuery);
+    if (tokens.length === 0) return null;
+    return ranked.filter((entry) => tokens.every((token) => entry.item.haystack.includes(token)));
+  }, [branchQuery, ranked]);
+
+  /**
+   * The rows on screen: the filter's answer when one is typed, else the nearest
+   * `LOCATOR_LIMIT`.
+   *
+   * Filtered results are not re-cut to the limit — a filter that hid matches
+   * would be worse than no filter — but they keep the ranked order, so the
+   * nearest match to the customer still leads.
+   */
+  const results = useMemo(
+    () => branchMatches ?? ranked.slice(0, LOCATOR_LIMIT),
+    [branchMatches, ranked],
+  );
+
   return {
     active,
     query,
@@ -243,6 +302,12 @@ export function useBranchLocator(branches: BranchView[]) {
     cities,
     origin,
     results,
+    /** How many branches were ranked in total, for the filter's empty state. */
+    rankedCount: ranked.length,
+    branchQuery,
+    setBranchQuery,
+    /** True while the results list is showing a filter's answer. */
+    branchFiltered: branchMatches != null,
     choices,
     suggestions,
     error,

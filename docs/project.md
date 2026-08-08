@@ -1141,6 +1141,77 @@ last resort, reached only when the local index has no answer.
 there is no traffic data, no rider availability and no queue depth, so a single
 figure would be a promise the model cannot keep.
 
+#### Reading a city out of the query
+
+The gazetteer indexes **one place per entry** — the district "النخيل", the city
+"الرياض" — but a Saudi address is dictated as both at once. "حي النخيل، الرياض"
+therefore normalized to the single string `"النخيل الرياض"`, which matched
+nothing: not the district (whose term is shorter than the query by more than the
+fuzzy budget allows on length alone), not the city, not any branch. The search
+fell through to OpenStreetMap, whose answer for a bare Arabic district name is a
+coin flip between the same-named districts in Riyadh, Qassim and Al Majma'ah —
+which is how a customer 3 km from P0030 was told their nearest branch was P0004,
+50 km away.
+
+`splitCityQualifier` pulls the two apart before anything is scored, testing both
+ends of the query because both are dictated ("حي النخيل، الرياض" and the sheet's
+own "الرياض/ حي النخيل"). It generalizes to any `<place> <city>` pair and needs no
+per-neighbourhood knowledge — the city terms come from the gazetteer, English
+aliases included, so "Al Rawdah Riyadh" splits the same way.
+
+A city read out of the **query text** is a hard filter, where the city
+**dropdown** stays a preference. The two are different statements: the dropdown is
+a standing hint the agent set once and may have stopped looking at, so out-of-city
+matches stay visible beneath it; a city typed into this particular query is that
+query's answer to "which one", and re-offering the other city would re-open the
+question the agent just closed. This is what makes "حي النخيل" ask and "حي
+النخيل، الرياض" answer — and the ambiguity prompt still fires, unchanged, for any
+duplicated name typed without a city.
+
+A geocoder answer is now checked against the city the agent named before it is
+believed (`agreesWithCity`): it agrees if it resolved the same city, or failing
+that if it is within 75 km of that city's centroid. When it disagrees — or when
+there was never a local match to begin with — the named city's own centroid is
+the answer, which is coarse but in the right place and says so on the origin line.
+
+#### What the locator will not show you
+
+Head office, the regional office and the warehouses are in the directory because
+agents need their switchboards, but a nearest-branch list is read out loud to a
+caller, so `isCustomerFacingBranch` keeps them out of it. Keyed off
+`branch.reference` — which `referenceKind` already derives from the branch code —
+rather than a list of names, so any code that is not a numbered pharmacy is
+excluded the day it is imported. The filter is applied **once**, in
+`useBranchLocator`, and feeds both the gazetteer and the ranking: a warehouse is
+therefore not merely missing from the results, it is not a place the locator can
+resolve to at all.
+
+#### Distance is straight-line, and says so
+
+There is no `GOOGLE_MAPS_API_KEY` configured, so `rankNearestBranches` runs on
+Haversine and every `DistanceResult` comes back `source: "straight-line"`. A road
+trip across a Saudi city runs 15–25% longer than the direct line, which is the
+reported "panel says 55 km, Google says 65 km" gap in full — the arithmetic was
+never wrong, the label was missing. Every number now carries "≈", the panel states
+once that these are direct distances and not driving distances, and Directions
+opens the real route.
+
+Nothing here is a stopgap for a routing call: `rankNearestBranches` already takes
+a `DistanceProvider`, `routeMatrix` in `lib/maps/google.server.ts` already
+implements it against the Routes API, and the day a key is configured the "≈"
+disappears on its own because `source` starts coming back `road`.
+
+#### The branch filter inside the results
+
+The nearest twenty (raised from ten) are the visible slice of a list that ranks
+the **whole** serviceable directory, held in full so the filter can answer for a
+branch that did not make the cut. Typing "P0030" filters that ranked list — one
+`includes` per branch over the haystack `decorate` built once — and deliberately
+touches neither `origin` nor the geocoder: the agent has already located the
+customer, and asking where one branch sits relative to them must not cost them
+that. The "Recommended" hero is suppressed while the filter is on, because the top
+row of a filtered list is whatever was typed rather than a recommendation.
+
 ### Import
 
 `import-parse.ts` reads the workbook (`xlsx`), `constants.ts` holds

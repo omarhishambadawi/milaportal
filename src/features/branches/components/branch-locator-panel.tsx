@@ -9,6 +9,7 @@ import {
   Loader2,
   MapPin,
   Navigation,
+  Ruler,
   Search,
   Signpost,
   Star,
@@ -23,7 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { describeDistance, formatDistance } from "@/lib/geo";
+import { describeDistance, formatDistance, type DistanceResult } from "@/lib/geo";
 import { cn } from "@/lib/utils";
 import { COVERAGE_RADIUS_METRES, coverageTier, type CoverageTier } from "../delivery-eta";
 import { REFERENCE_LABEL } from "../normalize";
@@ -80,10 +81,15 @@ const VISIBLE_RESULTS = 5;
 /**
  * Height of the results list, in pixels.
  *
- * Capped rather than grown-into, so that finding ten branches does not push the
- * directory below it off the screen — the card an agent is about to be scrolled
- * to has to still be visible when they click. Five rows is the list an agent can
- * take in without scrolling, and everything past the fifth is one flick away.
+ * Capped rather than grown-into, so that finding twenty branches does not push
+ * the directory below it off the screen — the card an agent is about to be
+ * scrolled to has to still be visible when they click. Five rows is the list an
+ * agent can take in without scrolling, and everything past the fifth is one flick
+ * away.
+ *
+ * The cap is why widening the result set from ten to twenty costs no height at
+ * all: the list was already scrolling at ten, and the extra rows land below the
+ * fold of a box whose size never changed.
  *
  * A max-height rather than a height: three results should occupy the room three
  * results need, not leave two rows of empty box under them.
@@ -92,6 +98,21 @@ const RESULTS_MAX_HEIGHT = VISIBLE_RESULTS * RESULT_ROW_HEIGHT;
 
 /** Sentinel for "no city scope", because a Radix Select item cannot hold "". */
 const ANY_CITY = "__any__";
+
+/**
+ * The distance, marked with how it was measured.
+ *
+ * The "≈" is not decoration. A straight-line figure and a driving figure are
+ * different claims about the world — the second is the one a customer hears as a
+ * promise — and the panel prints whichever it has, so it has to say which. The
+ * marker appears on every straight-line number and disappears on its own the day
+ * a routing provider is configured and `source` starts coming back as `road`,
+ * with no further change here.
+ */
+function distanceLabel(distance: DistanceResult): string {
+  const formatted = formatDistance(distance.metres);
+  return distance.source === "road" ? formatted : `≈ ${formatted}`;
+}
 
 interface Props {
   query: string;
@@ -107,6 +128,12 @@ interface Props {
   suggestions: LocationEntry[];
   error: string | null;
   searching: boolean;
+  /** The in-results branch filter. Never re-runs the customer-location search. */
+  branchQuery: string;
+  /** True while `results` is showing that filter's answer rather than the top N. */
+  branchFiltered: boolean;
+  /** How many branches were ranked in total, filter or no filter. */
+  rankedCount: number;
   /** The branch currently highlighted in the directory, if it is one of ours. */
   selected: string | null;
   /** Minimised to the summary bar after a selection. */
@@ -114,6 +141,7 @@ interface Props {
   onQueryChange: (value: string) => void;
   onCityChange: (value: string) => void;
   onSearch: (value: string) => void;
+  onBranchQueryChange: (value: string) => void;
   onChooseLocation: (entry: LocationEntry) => void;
   onSelect: (branchNo: string) => void;
   onExpand: () => void;
@@ -130,11 +158,15 @@ export function BranchLocatorPanel({
   suggestions,
   error,
   searching,
+  branchQuery,
+  branchFiltered,
+  rankedCount,
   selected,
   collapsed,
   onQueryChange,
   onCityChange,
   onSearch,
+  onBranchQueryChange,
   onChooseLocation,
   onSelect,
   onExpand,
@@ -151,6 +183,9 @@ export function BranchLocatorPanel({
   }, [collapsed]);
 
   const chosen = selected ? results.find((entry) => entry.item.branch_no === selected) : undefined;
+
+  /** The rows the list renders, hero already accounted for. See its use below. */
+  const branchRows = branchFiltered ? results : results.slice(1);
 
   if (collapsed) {
     return (
@@ -366,64 +401,147 @@ export function BranchLocatorPanel({
         </div>
       )}
 
-      {origin && results.length === 0 && !searching && (
+      {origin && rankedCount === 0 && !searching && (
         <p className="mt-2 rounded-lg border border-dashed border-border/70 px-3 py-4 text-center text-xs text-muted-foreground">
           No branch in the directory has coordinates near that location.
         </p>
       )}
 
-      {results.length > 0 && origin && (
+      {rankedCount > 0 && origin && (
         <>
-          {/* The recommendation. Same ranking as the list — it *is* the list's
-              first row — surfaced separately because an agent mid-call wants one
-              answer, and scanning ten rows to work out that the top one already
-              was the answer is the work this saves. */}
-          <RecommendedBranch
-            result={results[0]}
-            origin={origin}
-            active={selected === results[0].item.branch_no}
-            onSelect={onSelect}
-          />
+          {/* Stated once for the whole panel rather than on every number.
 
-          {results.length > 1 && (
-            <>
-              <div className="mt-2 flex items-center gap-1.5 px-0.5 pb-1 text-[9.5px] font-medium uppercase tracking-wide text-muted-foreground">
-                <Info className="h-3 w-3 shrink-0" aria-hidden />
-                {/* Stated once, above the list, rather than repeated on every
-                    row. The "≈" on each estimate carries it after the first
-                    read. */}
-                {results.length - 1} more nearby · in-coverage first, then nearest · estimates are
-                approximate
-              </div>
+              This is the honest reading of what is actually being measured, and
+              it is load-bearing rather than a disclaimer: these are great-circle
+              distances, and a road trip across a Saudi city routinely runs 15–25%
+              longer than the straight line. An agent who quotes the figure as a
+              driving distance is short by kilometres every time, which is exactly
+              the "55 vs 65 km" gap that was reported. Directions opens the real
+              route. */}
+          <p className="mt-1.5 flex items-start gap-1.5 rounded-md bg-muted/50 px-2 py-1 text-[10px] leading-4 text-muted-foreground">
+            <Ruler className="mt-px h-3 w-3 shrink-0 opacity-70" aria-hidden />
+            <span>
+              <span className="font-medium text-foreground/75">Straight-line distance</span> —
+              direct, not by road. Driving distance is longer; open Directions for the route.
+            </span>
+          </p>
 
-              {/* Fixed height with its own scrollbar. The list is a finder, and a
-                  finder that grows until it pushes the branch cards off the
-                  screen defeats the click it exists to invite.
+          {/* Suppressed while the branch filter is on. The hero says
+              "Recommended", and the top row of a filtered list is whatever the
+              agent typed rather than a recommendation — labelling P0030 as
+              recommended because it was searched for would be the panel agreeing
+              with itself. */}
+          {!branchFiltered && results.length > 0 && (
+            <RecommendedBranch
+              result={results[0]}
+              origin={origin}
+              active={selected === results[0].item.branch_no}
+              onSelect={onSelect}
+            />
+          )}
 
-                  No `overscroll-contain`: it stopped a wheel that reached the end
-                  of this list from continuing to the directory beneath, which is
-                  the "page scrolling feels blocked" complaint. Chaining is the
-                  natural behaviour and the default. */}
-              <ol
-                className="divide-y divide-border/40 overflow-y-auto rounded-lg border border-border/50 bg-card [scrollbar-width:thin]"
-                style={{ maxHeight: RESULTS_MAX_HEIGHT }}
-              >
-                {results.slice(1).map((result, index) => (
-                  <LocatorRow
-                    key={result.item.branch_no}
-                    result={result}
-                    origin={origin}
-                    rank={index + 2}
-                    active={selected === result.item.branch_no}
-                    onSelect={onSelect}
-                  />
-                ))}
-              </ol>
-            </>
+          <div className="mt-2 flex items-center justify-between gap-2 px-0.5 pb-1">
+            <span className="flex min-w-0 items-center gap-1.5 text-[9.5px] font-medium uppercase tracking-wide text-muted-foreground">
+              <Info className="h-3 w-3 shrink-0" aria-hidden />
+              <span className="truncate">
+                {branchFiltered
+                  ? `${results.length} of ${rankedCount} ${results.length === 1 ? "branch" : "branches"} · distance from the same location`
+                  : `${Math.max(results.length - 1, 0)} more nearby · in-coverage first, then nearest`}
+              </span>
+            </span>
+            <BranchFilter value={branchQuery} onChange={onBranchQueryChange} />
+          </div>
+
+          {/* Unfiltered, the first result is already the hero above, so the list
+              starts at two — and is empty when the directory held exactly one
+              branch. Filtered, there is no hero and every match belongs in the
+              list. Either way an empty `<ol>` must not render: a bordered box with
+              nothing in it reads as a list that failed to load. */}
+          {branchRows.length > 0 ? (
+            /* Fixed height with its own scrollbar. The list is a finder, and a
+               finder that grows until it pushes the branch cards off the
+               screen defeats the click it exists to invite.
+
+               No `overscroll-contain`: it stopped a wheel that reached the end
+               of this list from continuing to the directory beneath, which is
+               the "page scrolling feels blocked" complaint. Chaining is the
+               natural behaviour and the default. */
+            <ol
+              className="divide-y divide-border/40 overflow-y-auto rounded-lg border border-border/50 bg-card [scrollbar-width:thin]"
+              style={{ maxHeight: RESULTS_MAX_HEIGHT }}
+            >
+              {branchRows.map((result, index) => (
+                <LocatorRow
+                  key={result.item.branch_no}
+                  result={result}
+                  origin={origin}
+                  rank={branchFiltered ? index + 1 : index + 2}
+                  active={selected === result.item.branch_no}
+                  onSelect={onSelect}
+                />
+              ))}
+            </ol>
+          ) : (
+            branchFiltered && (
+              <p className="rounded-lg border border-dashed border-border/70 px-3 py-4 text-center text-xs text-muted-foreground">
+                No branch matches “{branchQuery}”.
+              </p>
+            )
           )}
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * The branch filter that lives inside the results.
+ *
+ * A second search box on a panel whose whole purpose is a search box needs to be
+ * unmistakably a different question, so it is deliberately small, sits *inside*
+ * the results header rather than next to the location input, and says what it
+ * searches. The two are not interchangeable: the box at the top asks "where is
+ * the customer" and re-geocodes; this one asks "where is P0030 relative to the
+ * customer I already found" and touches nothing but the list.
+ *
+ * Not a form, and that is the point — no submit, no Enter to press. It filters as
+ * it is typed against data already in memory, so there is no request to fire and
+ * nothing to wait for. `type="search"` for the native clear affordance, with the
+ * webkit chrome suppressed to match every other input on this panel.
+ */
+function BranchFilter({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <span className="relative w-[124px] shrink-0 sm:w-[152px]">
+      <Search
+        className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground"
+        aria-hidden
+      />
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          // Escape clears rather than closing anything, and the propagation stop
+          // keeps it from reaching the directory's own Escape handling.
+          if (event.key === "Escape" && value) {
+            event.stopPropagation();
+            onChange("");
+          }
+        }}
+        type="search"
+        autoComplete="off"
+        spellCheck={false}
+        placeholder="Find a branch…"
+        aria-label="Find a specific branch in these results"
+        title="Filter these results by branch code, city or address — the customer location stays as it is"
+        className={cn(
+          "h-7 w-full rounded-md border border-border/70 bg-card pl-7 pr-2 text-[11.5px] font-medium shadow-sm",
+          "placeholder:font-normal placeholder:text-muted-foreground/70",
+          "transition-[border-color,box-shadow] duration-150 hover:border-border",
+          "focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/15",
+          "[&::-webkit-search-cancel-button]:appearance-none",
+        )}
+      />
+    </span>
   );
 }
 
@@ -485,8 +603,11 @@ function SelectedSummary({
             </span>
           )}
           {result && (
-            <span className="text-[11px] font-semibold tabular-nums text-foreground/70">
-              {formatDistance(result.distance.metres)}
+            <span
+              title={describeDistance(result.distance)}
+              className="text-[11px] font-semibold tabular-nums text-foreground/70"
+            >
+              {distanceLabel(result.distance)}
             </span>
           )}
           {result && <CoverageBadge tier={coverageTier(result.distance.metres)} compact />}
@@ -656,15 +777,19 @@ function DistanceBlock({ result, size }: { result: LocatorResult; size: "row" | 
   const hero = size === "hero";
 
   return (
-    // Fixed width so the distance column lines up across every row, hero included.
-    <div className="flex w-[86px] shrink-0 flex-col items-end gap-0.5">
+    // Fixed width so the distance column lines up across every row, hero
+    // included. Widened from 86px when the numbers gained their "≈": the marker
+    // and its space are two characters that "1.5 km" did not have to fit, and the
+    // hero prints them at 19px.
+    <div className="flex w-[98px] shrink-0 flex-col items-end gap-0.5">
       <div
+        title={describeDistance(result.distance)}
         className={cn(
           "whitespace-nowrap font-bold leading-none tabular-nums text-foreground",
-          hero ? "text-[20px]" : "text-base",
+          hero ? "text-[19px]" : "text-[15px]",
         )}
       >
-        {formatDistance(result.distance.metres)}
+        {distanceLabel(result.distance)}
       </div>
 
       {/* Directly under the distance, because the two are read as one statement:

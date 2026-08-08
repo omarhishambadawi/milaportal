@@ -1,6 +1,6 @@
 ﻿import { describe, expect, it, vi } from "vitest";
 import { buildLocationIndex } from "../location-index";
-import { rankNearestBranches, resolveOrigin, type OriginLocality } from "../locator";
+import { LOCATOR_LIMIT, rankNearestBranches, resolveOrigin, type OriginLocality } from "../locator";
 import { decorate } from "../search";
 import type { Branch } from "../types";
 
@@ -448,5 +448,185 @@ describe("rankNearestBranches with a resolved locality", () => {
     expect(reversed.map((entry) => entry.item.branch_no)).toEqual(
       forward.map((entry) => entry.item.branch_no),
     );
+  });
+});
+
+/**
+ * The reported failure, reproduced.
+ *
+ * A customer in حي النخيل, Riyadh. P0030 is ~3 km away in the same district;
+ * P0004 is ~20 km east in a different one. The bug was that the query resolved
+ * to neither — the gazetteer never split "النخيل الرياض" into a district and a
+ * city, matched nothing, and fell through to a geocoder whose answer for a bare
+ * Arabic district name landed nowhere near.
+ */
+const NAKHEEL = decorate([
+  branch({
+    branch_no: "P0030",
+    city: "الرياض",
+    address: "الرياض/ حي النخيل /ش التخصصي",
+    latitude: 24.7241,
+    longitude: 46.6402,
+  }),
+  branch({
+    branch_no: "P0004",
+    city: "الرياض",
+    address: "الرياض/ حي النسيم /ش خالد بن الوليد",
+    latitude: 24.6408,
+    longitude: 46.8214,
+  }),
+  // The same district name in another city — the reason the bare query has to ask.
+  branch({
+    branch_no: "P0055",
+    city: "بريدة",
+    address: "بريدة/ حي النخيل",
+    latitude: 26.3253,
+    longitude: 43.975,
+  }),
+]);
+
+const NAKHEEL_INDEX = buildLocationIndex(NAKHEEL);
+
+describe("a district qualified by its city", () => {
+  it("resolves to that city's district rather than falling through to a geocoder", async () => {
+    // The geocoder must not even be consulted: the directory already knows this
+    // place, and reaching past it is what produced the wrong answer.
+    const geocode = vi.fn().mockResolvedValue(null);
+    const { origin, choices, error } = await resolveOrigin(
+      "حي النخيل، الرياض",
+      NAKHEEL_INDEX,
+      geocode,
+    );
+
+    expect(error).toBeNull();
+    expect(choices).toHaveLength(0);
+    expect(geocode).not.toHaveBeenCalled();
+    expect(origin?.kind).toBe("place");
+    expect(origin?.locality.city).toBe("الرياض");
+    expect(origin?.locality.district).toContain("النخيل");
+    // The Riyadh النخيل, not the Buraydah one 320 km away.
+    expect(origin?.point.lat).toBeCloseTo(24.7241, 3);
+  });
+
+  it("puts the genuinely nearest branch first", async () => {
+    const { origin } = await resolveOrigin("حي النخيل، الرياض", NAKHEEL_INDEX);
+    const ranked = await rankNearestBranches(origin!.point, NAKHEEL, {
+      locality: origin!.locality,
+    });
+
+    expect(ranked[0].item.branch_no).toBe("P0030");
+    expect(ranked[0].distance.metres).toBeLessThan(1_000);
+    // The branch that used to be reported as nearest is still in the list, and
+    // still a long way off — the ordering was the bug, not the arithmetic.
+    const wrong = ranked.find((entry) => entry.item.branch_no === "P0004");
+    expect(wrong!.distance.metres).toBeGreaterThan(15_000);
+  });
+
+  it("still asks which city when the city is left out", async () => {
+    const { origin, choices } = await resolveOrigin("حي النخيل", NAKHEEL_INDEX);
+    expect(origin).toBeNull();
+    expect(choices.length).toBeGreaterThan(1);
+    expect(new Set(choices.map((entry) => entry.city))).toEqual(new Set(["الرياض", "بريدة"]));
+  });
+
+  it("works the same way for any duplicated name, in either word order", async () => {
+    const buraydah = await resolveOrigin("النخيل بريدة", NAKHEEL_INDEX);
+    expect(buraydah.origin?.point.lat).toBeCloseTo(26.3253, 3);
+
+    const riyadhFirst = await resolveOrigin("الرياض النخيل", NAKHEEL_INDEX);
+    expect(riyadhFirst.origin?.point.lat).toBeCloseTo(24.7241, 3);
+  });
+});
+
+describe("a geocoder that contradicts the city the agent named", () => {
+  /** A district the directory has never heard of, so step 1 must miss. */
+  const UNKNOWN = "حي الياسمين الشمالي، الرياض";
+
+  it("is disbelieved, and the named city stands instead", async () => {
+    // Jeddah, ~850 km from Riyadh: the shape of the failure being guarded
+    // against, where a duplicated Arabic name resolves in the wrong region.
+    const geocode = vi.fn().mockResolvedValue({
+      point: { lat: 21.5433, lng: 39.1728 },
+      city: "جدة",
+      precision: "district",
+    });
+
+    const { origin, error } = await resolveOrigin(UNKNOWN, NAKHEEL_INDEX, geocode);
+
+    expect(geocode).toHaveBeenCalled();
+    expect(error).toBeNull();
+    // Coarser than the district asked for, but in the right city.
+    expect(origin?.kind).toBe("place");
+    expect(origin?.locality.city).toBe("الرياض");
+    expect(origin?.point.lng).toBeGreaterThan(45);
+  });
+
+  it("is believed when it agrees", async () => {
+    const geocode = vi.fn().mockResolvedValue({
+      point: { lat: 24.8206, lng: 46.6386 },
+      city: "الرياض",
+      district: "الياسمين",
+      precision: "district",
+    });
+
+    const { origin } = await resolveOrigin(UNKNOWN, NAKHEEL_INDEX, geocode);
+    expect(origin?.kind).toBe("geocoded");
+    expect(origin?.point.lat).toBeCloseTo(24.8206, 4);
+  });
+});
+
+describe("branches a customer cannot be sent to", () => {
+  it("keeps reference locations out of the nearest branches entirely", async () => {
+    const rows = decorate([
+      // All three sit closer to the origin than the only real pharmacy.
+      branch({
+        branch_no: "الإدارة العامة",
+        city: "الرياض",
+        latitude: 24.6401,
+        longitude: 46.7,
+      }),
+      branch({ branch_no: "الإدارة الفرعية", city: "الرياض", latitude: 24.6402, longitude: 46.7 }),
+      branch({ branch_no: "المستودع", city: "الرياض", latitude: 24.6403, longitude: 46.7 }),
+      branch({ branch_no: "المستودع-2", city: "الرياض", latitude: 24.6404, longitude: 46.7 }),
+      branch({ branch_no: "P0100", city: "الرياض", latitude: 24.7, longitude: 46.7 }),
+    ]);
+
+    const ranked = await rankNearestBranches({ lat: 24.64, lng: 46.7 }, rows);
+
+    expect(ranked.map((entry) => entry.item.branch_no)).toEqual(["P0100"]);
+  });
+
+  it("excludes any non-pharmacy code, not a list of known names", async () => {
+    // The rule is "not a numbered branch", so a facility nobody has added yet is
+    // already excluded — no edit here required when the sheet grows one.
+    const rows = decorate([
+      branch({ branch_no: "مبنى التدريب", city: "الرياض", latitude: 24.64, longitude: 46.7 }),
+      branch({ branch_no: "P0100", city: "الرياض", latitude: 24.9, longitude: 46.9 }),
+    ]);
+
+    const ranked = await rankNearestBranches({ lat: 24.64, lng: 46.7 }, rows);
+    expect(ranked.map((entry) => entry.item.branch_no)).toEqual(["P0100"]);
+  });
+});
+
+describe("how many branches come back", () => {
+  it("returns twenty, not ten", async () => {
+    const many = decorate(
+      Array.from({ length: 30 }, (_, index) =>
+        branch({
+          branch_no: `P${String(index + 1).padStart(4, "0")}`,
+          city: "الرياض",
+          latitude: 24.64 + index * 0.01,
+          longitude: 46.7,
+        }),
+      ),
+    );
+
+    const ranked = await rankNearestBranches({ lat: 24.64, lng: 46.7 }, many);
+    expect(ranked).toHaveLength(LOCATOR_LIMIT);
+    expect(LOCATOR_LIMIT).toBe(20);
+    // Still nearest-first across the whole widened list.
+    expect(ranked[0].item.branch_no).toBe("P0001");
+    expect(ranked[19].item.branch_no).toBe("P0020");
   });
 });
