@@ -224,10 +224,7 @@ export function BranchMap({ branches, selected, onSelect }: BranchMapProps) {
   );
 
   return (
-    <section
-      aria-label="Branch map"
-      className="relative overflow-hidden rounded-xl border bg-card"
-    >
+    <section aria-label="Branch map" className="relative overflow-hidden rounded-xl border bg-card">
       <div ref={container} className="h-[320px] w-full sm:h-[380px]" />
       {(error || !ready) && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center bg-card/70 text-sm text-muted-foreground">
