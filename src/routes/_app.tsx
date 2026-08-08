@@ -4,6 +4,7 @@ import { useAuth, isAdministrator, isOwnerRole } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import {
   LayoutDashboard,
+  FileText,
   ListOrdered,
   Plus,
   Users,
@@ -80,6 +81,12 @@ function AppLayout() {
     hasPerm(role, profile?.permissions as any, "view_branches") ||
     hasPerm(role, profile?.permissions as any, "admin_access");
   const canCallCenter = canViewCallCenter(role, profile?.permissions as any);
+  /**
+   * Management reporting. `view_reports` already existed and already draws the
+   * line the brief asks for — owner, admin, supervisor and auditor hold it, and
+   * neither agent role does — so the page needed no new permission.
+   */
+  const canReports = hasPerm(role, profile?.permissions as any, "view_reports");
   // Team agents get one Calls page and no module landing page, so the parent
   // entry points straight at it and the sibling pages are never rendered.
   const callsTeam = callsTeamForRole(role);
@@ -87,6 +94,7 @@ function AppLayout() {
   const nav = useMemo(
     () => [
       ...(canDashboard ? [{ to: "/dashboard", label: "Dashboard", icon: LayoutDashboard }] : []),
+      ...(canReports ? [{ to: "/reports", label: "Reports", icon: FileText }] : []),
       ...(canOrders ? [{ to: "/orders", label: "Orders", icon: ListOrdered }] : []),
       ...(canCreate ? [{ to: "/orders/new", label: "New Order", icon: Plus }] : []),
       ...(canComplaints
@@ -150,6 +158,7 @@ function AppLayout() {
     ],
     [
       canDashboard,
+      canReports,
       canOrders,
       canCreate,
       canComplaints,

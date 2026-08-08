@@ -16,6 +16,7 @@ import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiCspReportRouteImport } from './routes/api/csp-report'
 import { Route as ApiCdrSyncRouteImport } from './routes/api/cdr-sync'
+import { Route as AppReportsRouteImport } from './routes/_app.reports'
 import { Route as AppProfileRouteImport } from './routes/_app.profile'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
 import { Route as AppCallCenterRouteImport } from './routes/_app.call-center'
@@ -80,6 +81,11 @@ const ApiCdrSyncRoute = ApiCdrSyncRouteImport.update({
   id: '/api/cdr-sync',
   path: '/api/cdr-sync',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AppReportsRoute = AppReportsRouteImport.update({
+  id: '/reports',
+  path: '/reports',
+  getParentRoute: () => AppRoute,
 } as any)
 const AppProfileRoute = AppProfileRouteImport.update({
   id: '/profile',
@@ -248,6 +254,7 @@ export interface FileRoutesByFullPath {
   '/call-center': typeof AppCallCenterRoute
   '/dashboard': typeof AppDashboardRoute
   '/profile': typeof AppProfileRoute
+  '/reports': typeof AppReportsRoute
   '/api/cdr-sync': typeof ApiCdrSyncRoute
   '/api/csp-report': typeof ApiCspReportRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
@@ -286,6 +293,7 @@ export interface FileRoutesByTo {
   '/call-center': typeof AppCallCenterRoute
   '/dashboard': typeof AppDashboardRoute
   '/profile': typeof AppProfileRoute
+  '/reports': typeof AppReportsRoute
   '/api/cdr-sync': typeof ApiCdrSyncRoute
   '/api/csp-report': typeof ApiCspReportRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
@@ -326,6 +334,7 @@ export interface FileRoutesById {
   '/_app/call-center': typeof AppCallCenterRoute
   '/_app/dashboard': typeof AppDashboardRoute
   '/_app/profile': typeof AppProfileRoute
+  '/_app/reports': typeof AppReportsRoute
   '/api/cdr-sync': typeof ApiCdrSyncRoute
   '/api/csp-report': typeof ApiCspReportRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
@@ -366,6 +375,7 @@ export interface FileRouteTypes {
     | '/call-center'
     | '/dashboard'
     | '/profile'
+    | '/reports'
     | '/api/cdr-sync'
     | '/api/csp-report'
     | '/.lovable/oauth/consent'
@@ -404,6 +414,7 @@ export interface FileRouteTypes {
     | '/call-center'
     | '/dashboard'
     | '/profile'
+    | '/reports'
     | '/api/cdr-sync'
     | '/api/csp-report'
     | '/.lovable/oauth/consent'
@@ -443,6 +454,7 @@ export interface FileRouteTypes {
     | '/_app/call-center'
     | '/_app/dashboard'
     | '/_app/profile'
+    | '/_app/reports'
     | '/api/cdr-sync'
     | '/api/csp-report'
     | '/.lovable/oauth/consent'
@@ -540,6 +552,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/cdr-sync'
       preLoaderRoute: typeof ApiCdrSyncRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_app/reports': {
+      id: '/_app/reports'
+      path: '/reports'
+      fullPath: '/reports'
+      preLoaderRoute: typeof AppReportsRouteImport
+      parentRoute: typeof AppRoute
     }
     '/_app/profile': {
       id: '/_app/profile'
@@ -758,6 +777,7 @@ interface AppRouteChildren {
   AppCallCenterRoute: typeof AppCallCenterRoute
   AppDashboardRoute: typeof AppDashboardRoute
   AppProfileRoute: typeof AppProfileRoute
+  AppReportsRoute: typeof AppReportsRoute
   AppAdminBranchesRoute: typeof AppAdminBranchesRoute
   AppAdminUsersRoute: typeof AppAdminUsersRoute
   AppAdminYeastarRoute: typeof AppAdminYeastarRoute
@@ -783,6 +803,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppCallCenterRoute: AppCallCenterRoute,
   AppDashboardRoute: AppDashboardRoute,
   AppProfileRoute: AppProfileRoute,
+  AppReportsRoute: AppReportsRoute,
   AppAdminBranchesRoute: AppAdminBranchesRoute,
   AppAdminUsersRoute: AppAdminUsersRoute,
   AppAdminYeastarRoute: AppAdminYeastarRoute,

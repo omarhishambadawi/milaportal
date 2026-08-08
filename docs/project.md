@@ -1036,6 +1036,102 @@ method's own orders that completed and is not a share of anything.
 
 ---
 
+## Reports Module
+
+**Route:** `/reports` · **Gate:** `view_reports`
+
+Two reports that were being produced by hand — the evening WhatsApp summary and
+a monthly Excel workbook — generated from the figures the portal already holds.
+
+`view_reports` already existed and already drew the line the business asked for:
+owner, admin, supervisor and auditor hold it, neither agent role does. No new
+permission and no new role were added; `__tests__/access.test.ts` pins that so a
+future edit to the role tables cannot quietly hand an agent the whole network's
+monthly sales.
+
+### It computes nothing
+
+This is the module's defining constraint. `features/reports/daily.ts` and
+`monthly.ts` are pure, take figures the Dashboard's RPCs and the Calls module's
+analytics already produced, and **rearrange** them. A report that recomputed its
+own totals would be a second source of truth for numbers management already reads
+on the dashboard, and the first evening the two disagreed the report is the one
+that would be believed.
+
+Concretely: order figures come from `orders_kpis`, fulfillment from
+`summarizeFulfillment`, the Missed/Abandoned split from
+`resolveQueueOutcomeSplit`. None of the three is reimplemented here.
+
+The one piece of arithmetic the daily report does own is the brief's own rule —
+**Total Sales = Cash + Wasfaty** — taken over the two type buckets rather than
+read off the `total` bucket, which can include an order whose type is neither and
+would make the four lines above it fail to add up in front of the reader.
+
+### Daily report
+
+Telesales and Customer Care side by side, then the combined total, in the exact
+format currently sent by hand. Rendered twice from one `DailyReport` value: the
+cards on screen and the plain text in the copy box, so the message and the
+preview cannot drift.
+
+The text is deliberately not Markdown — WhatsApp renders `*bold*` and swallows
+stray asterisks, so anything that looked like formatting would arrive as either
+formatting or debris. `__tests__/daily.test.ts` pins the output byte for byte
+against the report it replaces.
+
+Four queries, two per team: `orders_kpis` and the Calls module's own analytics,
+both keyed under the namespaces those modules already use, so a window the
+Dashboard or a Calls page has loaded is a cache hit rather than a second fetch.
+
+**Basis** selects what the day's figures count. The default is every order logged
+that day, because that is what the manual report has always counted — it goes out
+the same evening, when most of the day's orders are not yet marked complete, and
+counting only completed ones would report a fraction of the day's trading as the
+day's trading. Completed-only is offered for a report re-run against a closed day,
+and the message says so when it is used.
+
+A PBX outage degrades rather than fails: the call lines are flagged as unavailable
+and the Supabase-derived sales half still renders. A report whose call figures
+read zero because Yeastar was down, sent as though they were real, is worse than
+one that says so.
+
+### Monthly report
+
+Executive KPIs → team performance → Cash vs Wasfaty → Delivery vs Store Pickup →
+sales trend → call centre → branch and geography.
+
+It reuses **`useDashboardData` wholesale** rather than reimplementing it, which is
+the load-bearing decision: that hook already fetches, for one window and under
+`queryKeys.dashboard.*`, every aggregation this report needs. The report and the
+dashboard cannot disagree because they read the same cache entries. Two extra
+`orders_kpis` calls sit on top, one per team, because the team comparison needs
+Cash and Wasfaty per team and `orders_teams` carries only sales and a completion
+rate.
+
+Percentages divide by the population they are read against — the two teams'
+contributions against the month's completed sales, Cash and Wasfaty against their
+own pair's sum — so each set reaches 100 rather than nearly 100. Trend highlights
+exclude days that never traded and count them separately: a public holiday is not
+the month's worst trading day, and letting it take that label buries the day that
+genuinely underperformed.
+
+One chart, `lazy()`-loaded. Recharts is the largest dependency the app ships and
+the Daily Report — which is what the page opens on — has no chart in it at all.
+
+The reference workbook (`Shams Call Center June Sales.xlsx`) informed **which**
+KPIs are worth showing and nothing else. It is not recreated, converted or
+imported; its eleven sheets were mostly working-out, and the portal does the
+working-out.
+
+### PDF export
+
+`window.print()`, the same as the Calls pages: the browser's own PDF writer
+renders what is on screen and `print:` utilities drop the controls. The daily
+report gets a **separate print rendering** — one table instead of two cards and a
+textarea, because a textarea prints as a grey box with a scrollbar.
+
+---
+
 ## Orders Module
 
 **Routes:** `/orders`, `/orders/new`, `/orders/$id`
