@@ -993,6 +993,7 @@ not a client-side reduction:
 | Top agents by sales                  | `orders_agents`          |
 | Sales by location (+ Saudi heat map) | `orders_locations`       |
 | Delivery method                      | `orders_delivery`        |
+| Fulfillment mix                      | `orders_delivery` (same) |
 | Delivery matrix                      | `orders_delivery_matrix` |
 | Invoice verification                 | `orders_verification`    |
 | Complaint KPIs                       | `complaints_kpis`        |
@@ -1005,6 +1006,33 @@ ranking, the values and the chart layout stay exactly as they are.
 `sales-charts.tsx` is `lazy()`-loaded behind `SalesChartsSkeleton`. Export
 (`features/dashboard/export.ts`) writes a multi-sheet XLSX from a query with
 `enabled: false`, fetched only when the button is pressed.
+
+### Completed orders fulfillment mix
+
+Delivery vs store pickup over **completed orders only**, with the Cash/Wasfaty
+composition of each. It answers the question the delivery section is opened for —
+of everything that actually completed, how much did we take to the customer and
+how much did they collect — and the per-method table underneath then says which
+courier carried the delivery half.
+
+**It costs no query.** `orders_delivery` gained `completed_count`,
+`completed_cash_count` and `completed_wasfaty_count`; the panel is a fold over the
+four rows the Dashboard already fetches, using the same
+`classifyFulfillment` every other surface reads. No second definition, no second
+round trip, no client-side pass over the orders table.
+
+Percentages are taken against **classified** orders rather than the grand total,
+which is what makes Delivery% + Pickup% come to exactly 100. An order whose
+method was never recorded cannot be assigned to either side without inventing the
+answer, so it gets its own "Not recorded" line — rendered only when the count is
+non-zero — and sits outside the denominator while still reconciling into the
+Total row.
+
+Two labels in the neighbouring "Delivery method performance" table were corrected
+at the same time: its first numeric column is headed "Completed orders" and was
+showing `order_count` (every order on that method, whatever its status), and
+"Share of sales" was rendering `completion_rate`, which is the proportion of that
+method's own orders that completed and is not a share of anything.
 
 ---
 
@@ -1019,10 +1047,42 @@ never blanks the table, and a single `orders_kpi_summary` RPC for the KPI strip.
 Filters: date range, team, agent, status, **fulfillment**, "mine only", free-text
 search. Page size (25/50/100) persists at `orders.pageSize`.
 
-`FULFILLMENT_OPTIONS` maps the stored courier name to the coarser question users
-actually ask — anything whose `delivery_type` contains `"pickup"`
-(case-insensitive) is a pickup, everything else a delivery, so a new courier
-counts as a delivery automatically.
+### Fulfillment — one definition, three surfaces
+
+`features/orders/fulfillment.ts` is the **single source of truth** for delivery
+vs store pickup. `orders.delivery_type` records only the _method_ — AlShrouq,
+Azman, Branch Scooter, Store Pickup — and nothing recorded whether a method _is_
+a delivery, so every caller re-derived it and the derivations drifted.
+
+`classifyFulfillment` is three cases: blank → `null`, contains `"pickup"`
+(case-insensitive) → `pickup`, otherwise → `delivery`. The asymmetry is
+deliberate — _pickup_ is a closed concept whose wording the business controls,
+_delivery_ is open, so a courier signed next quarter counts the day it appears in
+the data with no code change.
+
+**Blank is `null`, not a delivery**, and that was the bug. The list query used
+PostgREST `not(delivery_type, ilike, '%pickup%')`, which reads as "not a pickup"
+but under SQL's three-valued logic means "known not to be a pickup" — for a row
+with no method, `NULL NOT ILIKE x` is NULL, so the row was dropped. The
+`orders_kpi_summary` RPC beside it wrote `COALESCE(delivery_type,'') NOT ILIKE …`
+and counted that same row as a delivery. The table and the KPI cards above it
+were totalling different sets of orders, which is what "the Delivery/Pickup filter
+is not working" actually was. Both now state the null and blank cases explicitly
+and land in neither group.
+
+`public.order_fulfillment()` (migration `20260808120000_orders_fulfillment.sql`)
+is the SQL mirror, and exists only because a PostgREST filter cannot call into
+TypeScript. `__tests__/fulfillment.test.ts` pins both to one table of values.
+
+`FULFILLMENT_OPTIONS` offers the question at two resolutions in one control: the
+two groups, then each individual method. Group values go through the classifier;
+method values are the stored `delivery_type` verbatim, so filtering to one courier
+is an equality test that cannot disagree with the group containing it. Selecting
+**Delivery** therefore spans El Shorouk, Azman and Branch Scooter — nothing in
+that predicate names a courier at all, which is what guarantees it. The individual
+options are derived from `DELIVERY_TYPES`, so a method added to the order form
+becomes filterable without a second edit; only the _label_ is overridden where the
+floor's word differs from the sheet's ("AlShrouq" → "El Shorouk").
 
 ### Form
 
@@ -1724,8 +1784,11 @@ layer: it changes only where the rows they consume come from.
    own-row + `verify_own_orders` is enough.
 7. An agent may only insert an order for themselves (`auth.uid() = agent_id`) and
    must be active.
-8. Fulfillment: `delivery_type` containing "pickup" → pickup, else delivery.
-9. Completion rate and sales totals count `status = 'Completed'` rows only.
+8. Fulfillment: `delivery_type` containing "pickup" → pickup; any other recorded
+   method → delivery; **blank or absent → neither**. One definition, in
+   `features/orders/fulfillment.ts`, mirrored by `public.order_fulfillment()`.
+9. Completion rate and sales totals count `status = 'Completed'` rows only — the
+   Dashboard fulfillment mix included.
 
 ### Complaints
 

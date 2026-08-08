@@ -267,11 +267,70 @@ function Dashboard() {
       {/* Delivery method analysis */}
       <div>
         <SectionTitle title="Delivery methods" icon={Truck} />
+        {/* Completed orders, delivery vs collected at the branch.
+
+            First in the section because it is the question the section is asked:
+            of everything that actually completed, how much did we take to the
+            customer and how much did they come and get. The per-method table
+            underneath then says which courier carried the delivery half.
+
+            Percentages are taken against classified orders, so Delivery and
+            Store Pickup come to exactly 100%. An order whose method was never
+            recorded cannot be assigned to either without inventing the answer, so
+            it gets its own line — and only when there is one. */}
+        <AnalyticsCard
+          title="Completed orders fulfillment mix"
+          subtitle="Delivery vs store pickup, and how Cash and Wasfaty split across them"
+          icon={PackageCheck}
+          flush
+        >
+          <AnalyticsTable minWidth={520}>
+            <Thead>
+              <tr>
+                <Th>Fulfillment</Th>
+                <Th align="right">Completed orders</Th>
+                <Th align="right">Share</Th>
+                <Th align="right">Cash</Th>
+                <Th align="right">Wasfaty</Th>
+              </tr>
+            </Thead>
+            <Tbody>
+              {d.fulfillmentMix.total.count === 0 && <EmptyRow colSpan={5} />}
+              {d.fulfillmentMix.total.count > 0 &&
+                [
+                  d.fulfillmentMix.delivery,
+                  d.fulfillmentMix.pickup,
+                  // Only when it exists: a permanent "Not recorded — 0" line
+                  // would be a defect that is never fixed, displayed forever.
+                  ...(d.fulfillmentMix.unknown.count > 0 ? [d.fulfillmentMix.unknown] : []),
+                ].map((row) => (
+                  <tr key={row.label}>
+                    <Td className="font-medium">{row.label}</Td>
+                    <Td numeric>{row.count.toLocaleString()}</Td>
+                    <Td numeric>{row.key === "unknown" ? "—" : `${row.percent.toFixed(1)}%`}</Td>
+                    <Td numeric>{row.cash.toLocaleString()}</Td>
+                    <Td numeric>{row.wasfaty.toLocaleString()}</Td>
+                  </tr>
+                ))}
+              {d.fulfillmentMix.total.count > 0 && (
+                <tr className="border-t border-border/60 font-semibold">
+                  <Td className="font-semibold">Total</Td>
+                  <Td numeric>{d.fulfillmentMix.total.count.toLocaleString()}</Td>
+                  <Td numeric>{d.fulfillmentMix.classified.count > 0 ? "100%" : "—"}</Td>
+                  <Td numeric>{d.fulfillmentMix.total.cash.toLocaleString()}</Td>
+                  <Td numeric>{d.fulfillmentMix.total.wasfaty.toLocaleString()}</Td>
+                </tr>
+              )}
+            </Tbody>
+          </AnalyticsTable>
+        </AnalyticsCard>
+
         <AnalyticsCard
           title="Delivery method performance"
           subtitle="Completed orders and their sales by method"
           icon={PackageCheck}
           flush
+          className="mt-3"
         >
           <AnalyticsTable minWidth={520}>
             <Thead>
@@ -279,7 +338,11 @@ function Dashboard() {
                 <Th>Method</Th>
                 <Th align="right">Completed orders</Th>
                 <Th align="right">Completed sales</Th>
-                <Th align="right">Share of sales</Th>
+                {/* Was headed "Share of sales" over `completion_rate`, which is
+                    the proportion of that method's own orders that completed —
+                    not a share of anything. The column is unchanged; the header
+                    now names it. */}
+                <Th align="right">Completion rate</Th>
               </tr>
             </Thead>
             <Tbody>
@@ -287,7 +350,9 @@ function Dashboard() {
               {d.deliveryData.map((dd) => (
                 <tr key={dd.name}>
                   <Td className="font-medium">{dd.name}</Td>
-                  <Td numeric>{dd.count}</Td>
+                  {/* `completed`, not `count`: the header says completed orders
+                      and `count` is every order on the method, whatever status. */}
+                  <Td numeric>{dd.completed?.toLocaleString() ?? "—"}</Td>
                   <Td numeric>{fmtSAR(dd.sales)}</Td>
                   <Td numeric>{dd.rate.toFixed(1)}%</Td>
                 </tr>

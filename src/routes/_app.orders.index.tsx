@@ -5,6 +5,8 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -203,9 +205,15 @@ function OrdersList() {
               ))}
             </SelectContent>
           </Select>
-          {/* Delivery & Pickup — coarser than the courier stored on the row:
-              anything collected at the branch is a pickup, everything else a
-              delivery. Feeds the list, the KPI summary and the export alike. */}
+          {/* Delivery & Pickup, at two resolutions in one control.
+
+              The top two entries are the grouped question — was it taken to the
+              customer, or collected at the branch — and Delivery deliberately
+              spans every courier, which is what it had stopped doing. Under them
+              sit the individual methods for the narrower question, so picking
+              "Azman" never has to mean leaving the grouped view first. Both feed
+              the list, the KPI summary and the export through one classification
+              (see features/orders/fulfillment.ts). */}
           <Select
             value={f.fulfillment}
             onValueChange={(v) => f.onFilterChange(() => f.setFulfillment(v))}
@@ -215,7 +223,14 @@ function OrdersList() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Delivery &amp; Pickup</SelectItem>
-              {FULFILLMENT_OPTIONS.map((o) => (
+              {FULFILLMENT_OPTIONS.filter((o) => o.group === "fulfillment").map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+              <SelectSeparator />
+              <SelectLabel>Method</SelectLabel>
+              {FULFILLMENT_OPTIONS.filter((o) => o.group === "method").map((o) => (
                 <SelectItem key={o.value} value={o.value}>
                   {o.label}
                 </SelectItem>

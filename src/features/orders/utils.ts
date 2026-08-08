@@ -1,5 +1,5 @@
 import { format, parseISO } from "date-fns";
-import { PICKUP_MATCH } from "./constants";
+import { isFulfillmentGroup } from "./fulfillment";
 
 export const toISO = (d: Date) => format(d, "yyyy-MM-dd");
 
@@ -74,8 +74,46 @@ export interface OrderFilterState {
   canFilterAgents: boolean;
   agent: string;
   term: string;
-  /** "all" | "delivery" | "pickup" — see FULFILLMENT_OPTIONS. */
+  /**
+   * "all", a fulfillment group ("delivery" / "pickup"), or one `delivery_type`
+   * verbatim ("AlShrouq", "Azman", "Branch Scooter", "Store Pickup").
+   * See FULFILLMENT_OPTIONS.
+   */
   fulfillment: string;
+}
+
+/**
+ * Narrow a query to a fulfillment group or to one delivery method.
+ *
+ * The three cases mirror `classifyFulfillment` exactly, and the third is the one
+ * that was wrong. `not(delivery_type, ilike, %pickup%)` reads as "everything that
+ * is not a pickup", but SQL's three-valued logic makes it "everything that is
+ * known not to be a pickup": for a row with no method recorded, `NULL NOT ILIKE
+ * '%pickup%'` is NULL rather than true, so the row was dropped. The KPI RPC
+ * beside it wrote `COALESCE(delivery_type,'') NOT ILIKE …`, which counts that same
+ * row as a delivery — so the table and the cards above it were totalling
+ * different sets, and the filter looked broken because it *was* inconsistent.
+ *
+ * Both now say the same thing, and say it explicitly: a row with no method is in
+ * neither group. Selecting Delivery therefore returns El Shorouk, Azman and
+ * Branch Scooter — the whole point of a group filter is that it does not care
+ * which courier — and selecting a single method is a plain equality test that
+ * cannot fall out of step with the group containing it.
+ */
+function applyFulfillment(qb: any, fulfillment: string) {
+  if (fulfillment === "all") return qb;
+
+  if (!isFulfillmentGroup(fulfillment)) {
+    // An individual method: the stored value, verbatim.
+    return qb.eq("delivery_type", fulfillment);
+  }
+
+  if (fulfillment === "pickup") return qb.ilike("delivery_type", "%pickup%");
+
+  return qb
+    .not("delivery_type", "is", null)
+    .neq("delivery_type", "")
+    .not("delivery_type", "ilike", "%pickup%");
 }
 
 /**
@@ -89,10 +127,7 @@ export function applyOrderFilters(qb: any, s: OrderFilterState) {
   if (s.status !== "all") qb = qb.eq("status", s.status);
   if (s.mineOnly && s.userId) qb = qb.eq("agent_id", s.userId);
   if (s.canFilterAgents && s.agent !== "all") qb = qb.eq("agent_id", s.agent);
-  // Delivery & Pickup. `not(...ilike)` also drops rows with no method recorded,
-  // which is right: a row that names no hand-over method is not a known delivery.
-  if (s.fulfillment === "pickup") qb = qb.ilike("delivery_type", `%${PICKUP_MATCH}%`);
-  else if (s.fulfillment === "delivery") qb = qb.not("delivery_type", "ilike", `%${PICKUP_MATCH}%`);
+  qb = applyFulfillment(qb, s.fulfillment);
   if (s.searching) qb = qb.or(buildSearchOr(s.term));
   return qb;
 }

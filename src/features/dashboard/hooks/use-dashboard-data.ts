@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { queryKeys } from "@/lib/query-keys";
 import type { DashboardFilters } from "@/lib/query-keys";
 import type { KpiRow, DashKpiStats } from "../types";
+import { summarizeFulfillment } from "@/features/orders/fulfillment";
 import { teamLabel } from "../utils";
 
 interface UseDashboardDataArgs {
@@ -260,6 +261,17 @@ export function useDashboardData({
         order_count: number;
         completed_sales: number;
         completion_rate: number;
+        /**
+         * Added by 20260808120000_orders_fulfillment.sql, so optional here.
+         *
+         * Not defensive habit: between a client deploy and its migration these
+         * three are genuinely absent, and `Number(undefined)` is NaN — which
+         * renders as "NaN" across a dashboard rather than as a column that is not
+         * ready yet. Absent is handled as absent instead.
+         */
+        completed_count?: number;
+        completed_cash_count?: number;
+        completed_wasfaty_count?: number;
       }>;
     },
     enabled,
@@ -269,9 +281,35 @@ export function useDashboardData({
       (deliveryRows ?? []).map((r) => ({
         name: r.delivery_type,
         count: Number(r.order_count),
+        // The table's first numeric column is headed "Completed orders" and was
+        // showing `order_count`, which is every order on that method whatever its
+        // status. Now that the RPC returns the completed figure, the column can
+        // mean what it says — and renders an em dash rather than a wrong number
+        // if it is asked before the migration lands.
+        completed: r.completed_count == null ? null : Number(r.completed_count),
         sales: Number(r.completed_sales),
         rate: Number(r.completion_rate),
       })),
+    [deliveryRows],
+  );
+
+  /**
+   * Completed orders, delivery vs store pickup, with the Cash/Wasfaty split.
+   *
+   * Derived from `deliveryRows` rather than fetched: those are already on the
+   * page, there are four of them, and the classification is the shared one every
+   * other surface uses. No query, no second definition.
+   */
+  const fulfillmentMix = useMemo(
+    () =>
+      summarizeFulfillment(
+        (deliveryRows ?? []).map((r) => ({
+          name: r.delivery_type,
+          completedCount: Number(r.completed_count ?? 0),
+          completedCash: Number(r.completed_cash_count ?? 0),
+          completedWasfaty: Number(r.completed_wasfaty_count ?? 0),
+        })),
+      ),
     [deliveryRows],
   );
 
@@ -428,6 +466,7 @@ export function useDashboardData({
     cityData,
     cityMapData,
     deliveryData,
+    fulfillmentMix,
     deliveryMethods,
     deliveryBranchMatrix,
     deliveryCityMatrix,
