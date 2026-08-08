@@ -33,6 +33,7 @@ import {
   legendText,
 } from "../chart-theme";
 import { fmtAxisSAR } from "../chart-format";
+import { useChartMotion } from "../chart-motion";
 import { AnalyticsCard } from "./analytics-card";
 import { HorizontalBarPanel } from "./horizontal-bar-panel";
 import { CHART_PANEL_HEIGHT } from "./sales-charts-skeleton";
@@ -102,6 +103,7 @@ function ChartPanel({
  */
 function TeamBarChart({ data }: { data: (Named & { sales: number })[] }) {
   const [active, setActive] = useState<number | null>(null);
+  const motion = useChartMotion();
 
   return (
     <ResponsiveContainer width="100%" height="100%">
@@ -142,7 +144,7 @@ function TeamBarChart({ data }: { data: (Named & { sales: number })[] }) {
           name="Completed sales"
           fill="url(#teamBar)"
           radius={[6, 6, 0, 0]}
-          isAnimationActive={false}
+          {...motion.bar}
           onMouseEnter={(_, index: number) => setActive(index)}
         >
           {data.map((t, i) => {
@@ -171,6 +173,8 @@ function TeamBarChart({ data }: { data: (Named & { sales: number })[] }) {
 }
 
 function SalesChartsImpl({ data }: { data: SalesChartsData }) {
+  const motion = useChartMotion();
+
   return (
     <div className="grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
       <ChartPanel
@@ -225,9 +229,8 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
               stroke="var(--color-chart-1)"
               strokeWidth={2}
               fill="url(#dailyAll)"
-              activeDot={{ r: 4 }}
-              isAnimationActive
-              animationDuration={500}
+              activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--color-card)" }}
+              {...motion.area}
             />
             <Area
               type="monotone"
@@ -236,9 +239,8 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
               stroke="var(--positive)"
               strokeWidth={2}
               fill="url(#dailyCompleted)"
-              activeDot={{ r: 4 }}
-              isAnimationActive
-              animationDuration={600}
+              activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--color-card)" }}
+              {...motion.area}
             />
           </AreaChart>
         </ResponsiveContainer>
@@ -257,6 +259,10 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
               // than the default black hairline, which is a visible seam on dark.
               stroke="var(--color-card)"
               strokeWidth={2}
+              // Recharts defaults a Pie to 1500ms behind a 400ms delay, which is
+              // nearly two seconds of spinning wedge on a page of half-second
+              // panels. Same budget as everything else here.
+              {...motion.bar}
             >
               {data.statusData.map((s, i) => (
                 <Cell key={i} fill={STATUS_COLORS[s.name] ?? COLORS[i % COLORS.length]} />

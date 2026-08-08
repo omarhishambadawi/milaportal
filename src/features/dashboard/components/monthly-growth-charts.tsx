@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import {
   Bar,
   BarChart,
@@ -14,7 +14,6 @@ import {
   YAxis,
 } from "recharts";
 import { ChartColumnIncreasing, Coins, Layers, TrendingUp } from "lucide-react";
-import { fmtSAR } from "@/lib/branches";
 import {
   AXIS_TICK,
   BAR_CURSOR,
@@ -28,6 +27,8 @@ import {
   legendText,
 } from "../chart-theme";
 import { fmtAxisSAR } from "../chart-format";
+import { useChartMotion } from "../chart-motion";
+import { formatCompactSAR, formatCount, formatGrowth } from "../format";
 import type { MonthRow } from "../monthly-growth";
 import { AnalyticsCard } from "./analytics-card";
 import { CHART_PANEL_HEIGHT } from "./sales-charts-skeleton";
@@ -48,21 +49,29 @@ import { CHART_PANEL_HEIGHT } from "./sales-charts-skeleton";
  * for exactly that reason.
  */
 
-const fmtPct = (value: number | string) => {
-  const n = typeof value === "string" ? Number(value) : value;
-  if (!Number.isFinite(n)) return "—";
-  return `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(2)}%`;
+/**
+ * Recharts hands every value over as `number | string`; the section's shared
+ * formatters take numbers. These are the adapters, and nothing more — the
+ * charts print figures the same way the tables above them do rather than
+ * carrying a second opinion about decimals.
+ */
+const num = (value: number | string) => (typeof value === "string" ? Number(value) : value);
+const finite = (value: number | string) => {
+  const n = num(value);
+  return Number.isFinite(n) ? n : null;
 };
 
+const fmtTooltipSAR = (value: number | string) => formatCompactSAR(finite(value));
+const fmtTooltipPct = (value: number | string) => formatGrowth(finite(value));
+const fmtTooltipCount = (value: number | string) => formatCount(finite(value));
+
+/** Whole percentages on an axis; the tooltip carries the decimal. */
 const fmtAxisPct = (value: number | string) => {
-  const n = typeof value === "string" ? Number(value) : value;
-  return Number.isFinite(n) ? `${Math.round(n)}%` : "";
+  const n = finite(value);
+  return n == null ? "" : `${Math.round(n)}%`;
 };
 
-const fmtCount = (value: number | string) => {
-  const n = typeof value === "string" ? Number(value) : value;
-  return Number.isFinite(n) ? n.toLocaleString() : "—";
-};
+const fmtAxisCount = (value: number | string) => formatCount(finite(value));
 
 function ChartPanel({
   title,
@@ -82,23 +91,41 @@ function ChartPanel({
   );
 }
 
-export function MonthlyGrowthCharts({ rows }: { rows: readonly MonthRow[] }) {
+/** A month still running is drawn back, not drawn as if it had finished. */
+const PARTIAL_OPACITY = 0.45;
+
+function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
+  const motion = useChartMotion();
+
   const data = useMemo(
     () =>
-      rows.map((r) => ({
-        label: r.label,
-        careRevenue: r.customerCare?.totalRevenue ?? null,
-        telesalesRevenue: r.telesales?.totalRevenue ?? null,
-        careOrders: r.customerCare?.totalOrders ?? null,
-        telesalesOrders: r.telesales?.totalOrders ?? null,
-        cash: r.combined.cashRevenue,
-        wasfaty: r.combined.wasfatyRevenue,
-        growth: r.combined.revenueGrowth,
-      })),
+      rows.map((r, index) => {
+        const previous = rows[index - 1];
+        // The one sentence each tooltip closes with. Precomputed per point
+        // because it differs per point — a growth bar is measured against
+        // whichever month precedes it, and the last month may not be over.
+        const progress = r.partial ? "In progress — partial month" : "";
+        return {
+          label: r.label,
+          careRevenue: r.customerCare?.totalRevenue ?? null,
+          telesalesRevenue: r.telesales?.totalRevenue ?? null,
+          careOrders: r.customerCare?.totalOrders ?? null,
+          telesalesOrders: r.telesales?.totalOrders ?? null,
+          cash: r.combined.cashRevenue,
+          wasfaty: r.combined.wasfatyRevenue,
+          growth: r.combined.revenueGrowth,
+          partial: r.partial,
+          note: progress || undefined,
+          growthNote:
+            [previous ? `vs ${previous.label}` : null, progress || null]
+              .filter(Boolean)
+              .join(" · ") || undefined,
+        };
+      }),
     [rows],
   );
 
-  const growthData = data.filter((d) => d.growth != null);
+  const growthData = useMemo(() => data.filter((d) => d.growth != null), [data]);
 
   return (
     <div className="grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
@@ -132,20 +159,26 @@ export function MonthlyGrowthCharts({ rows }: { rows: readonly MonthRow[] }) {
               tickMargin={6}
             />
             <Tooltip
-              content={<ChartTooltip format={fmtSAR} />}
+              content={<ChartTooltip format={fmtTooltipSAR} footerKey="note" />}
               cursor={POINT_CURSOR}
               wrapperStyle={TOOLTIP_WRAPPER}
             />
             <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
+            {/* Dots small and unfilled-looking at rest, decisive on hover. A
+                3px dot at every month on two series is fourteen marks competing
+                with the two lines they belong to; the reader wants the shape,
+                and the exact point only where the pointer is. `activeDot` takes
+                a card-coloured ring so it reads as lifted off the line. */}
             <Line
               type="monotone"
               dataKey="careRevenue"
               name="Customer Care"
               stroke="var(--color-chart-1)"
               strokeWidth={2}
-              dot={{ r: 3 }}
-              activeDot={{ r: 5 }}
+              dot={{ r: 2, strokeWidth: 0, fill: "var(--color-chart-1)" }}
+              activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--color-card)" }}
               connectNulls={false}
+              {...motion.line}
             />
             <Line
               type="monotone"
@@ -153,12 +186,13 @@ export function MonthlyGrowthCharts({ rows }: { rows: readonly MonthRow[] }) {
               name="Telesales"
               stroke="var(--color-chart-3)"
               strokeWidth={2}
-              dot={{ r: 3 }}
-              activeDot={{ r: 5 }}
+              dot={{ r: 2, strokeWidth: 0, fill: "var(--color-chart-3)" }}
+              activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--color-card)" }}
               // Off deliberately: Feb and Mar have no Telesales, and joining
               // March to April would draw a line through months the team did
               // not exist for.
               connectNulls={false}
+              {...motion.line}
             />
           </LineChart>
         </ResponsiveContainer>
@@ -170,7 +204,7 @@ export function MonthlyGrowthCharts({ rows }: { rows: readonly MonthRow[] }) {
         icon={Layers}
       >
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} margin={CHART_MARGIN} maxBarSize={48}>
+          <BarChart data={data} margin={CHART_MARGIN} maxBarSize={44} barCategoryGap="24%">
             <CartesianGrid
               vertical={false}
               strokeDasharray="3 3"
@@ -194,7 +228,7 @@ export function MonthlyGrowthCharts({ rows }: { rows: readonly MonthRow[] }) {
               tickMargin={6}
             />
             <Tooltip
-              content={<ChartTooltip format={fmtSAR} />}
+              content={<ChartTooltip format={fmtTooltipSAR} footerKey="note" />}
               cursor={BAR_CURSOR}
               wrapperStyle={TOOLTIP_WRAPPER}
             />
@@ -204,8 +238,12 @@ export function MonthlyGrowthCharts({ rows }: { rows: readonly MonthRow[] }) {
               name="Cash"
               stackId="mix"
               fill="var(--color-chart-4)"
-              isAnimationActive={false}
-            />
+              {...motion.bar}
+            >
+              {data.map((d) => (
+                <Cell key={d.label} fillOpacity={d.partial ? PARTIAL_OPACITY : 1} />
+              ))}
+            </Bar>
             {/* Cash and Wasfaty are the only order types there are
                 (`ORDER_TYPES`), so the mix is the whole of the mix. Where a
                 historical month's stated total exceeds its two channels, the
@@ -219,8 +257,12 @@ export function MonthlyGrowthCharts({ rows }: { rows: readonly MonthRow[] }) {
               stackId="mix"
               fill="var(--color-chart-1)"
               radius={[6, 6, 0, 0]}
-              isAnimationActive={false}
-            />
+              {...motion.bar}
+            >
+              {data.map((d) => (
+                <Cell key={d.label} fillOpacity={d.partial ? PARTIAL_OPACITY : 1} />
+              ))}
+            </Bar>
           </BarChart>
         </ResponsiveContainer>
       </ChartPanel>
@@ -255,16 +297,35 @@ export function MonthlyGrowthCharts({ rows }: { rows: readonly MonthRow[] }) {
               tickMargin={6}
             />
             <Tooltip
-              content={<ChartTooltip format={fmtPct} />}
+              content={<ChartTooltip format={fmtTooltipPct} footerKey="growthNote" />}
               cursor={BAR_CURSOR}
               wrapperStyle={TOOLTIP_WRAPPER}
             />
             {/* The zero line is the whole point of this panel: it is what makes
                 a bar below it read as a contraction rather than as a short bar. */}
             <ReferenceLine y={0} stroke={GRID_STROKE} strokeOpacity={0.9} />
-            <Bar dataKey="growth" name="Growth" radius={[4, 4, 0, 0]} isAnimationActive={false}>
-              {growthData.map((d, i) => (
-                <Cell key={i} fill={(d.growth ?? 0) >= 0 ? "var(--positive)" : "var(--negative)"} />
+            <Bar dataKey="growth" name="Revenue growth" radius={[4, 4, 0, 0]} {...motion.bar}>
+              {growthData.map((d) => (
+                <Cell
+                  key={d.label}
+                  fill={(d.growth ?? 0) >= 0 ? "var(--positive)" : "var(--negative)"}
+                  /* A month still running is being compared with a whole one,
+                     so its bar is the one figure on this panel that is not yet
+                     a fact. Drawn back and outlined rather than omitted: the
+                     month is genuinely there, it is just not finished, and the
+                     tooltip says so in words for anyone who cannot see the
+                     difference in tone. */
+                  fillOpacity={d.partial ? PARTIAL_OPACITY : 1}
+                  stroke={
+                    d.partial
+                      ? (d.growth ?? 0) >= 0
+                        ? "var(--positive)"
+                        : "var(--negative)"
+                      : undefined
+                  }
+                  strokeWidth={d.partial ? 1 : 0}
+                  strokeDasharray={d.partial ? "3 2" : undefined}
+                />
               ))}
             </Bar>
           </BarChart>
@@ -277,7 +338,16 @@ export function MonthlyGrowthCharts({ rows }: { rows: readonly MonthRow[] }) {
         icon={Coins}
       >
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} margin={CHART_MARGIN} maxBarSize={28}>
+          {/* `barGap` pairs the two teams within a month and `barCategoryGap`
+              separates the months, so the eye compares the pair before it
+              compares the row — which is the question the panel is asked. */}
+          <BarChart
+            data={data}
+            margin={CHART_MARGIN}
+            maxBarSize={26}
+            barGap={3}
+            barCategoryGap="26%"
+          >
             <CartesianGrid
               vertical={false}
               strokeDasharray="3 3"
@@ -294,14 +364,14 @@ export function MonthlyGrowthCharts({ rows }: { rows: readonly MonthRow[] }) {
             />
             <YAxis
               tick={AXIS_TICK}
-              tickFormatter={fmtCount}
+              tickFormatter={fmtAxisCount}
               axisLine={false}
               tickLine={false}
               width={48}
               tickMargin={6}
             />
             <Tooltip
-              content={<ChartTooltip format={fmtCount} />}
+              content={<ChartTooltip format={fmtTooltipCount} unit="orders" footerKey="note" />}
               cursor={BAR_CURSOR}
               wrapperStyle={TOOLTIP_WRAPPER}
             />
@@ -311,18 +381,41 @@ export function MonthlyGrowthCharts({ rows }: { rows: readonly MonthRow[] }) {
               name="Customer Care"
               fill="var(--color-chart-2)"
               radius={[4, 4, 0, 0]}
-              isAnimationActive={false}
-            />
+              {...motion.bar}
+            >
+              {data.map((d) => (
+                <Cell key={d.label} fillOpacity={d.partial ? PARTIAL_OPACITY : 1} />
+              ))}
+            </Bar>
             <Bar
               dataKey="telesalesOrders"
               name="Telesales"
               fill="var(--color-chart-5)"
               radius={[4, 4, 0, 0]}
-              isAnimationActive={false}
-            />
+              {...motion.bar}
+            >
+              {data.map((d) => (
+                <Cell key={d.label} fillOpacity={d.partial ? PARTIAL_OPACITY : 1} />
+              ))}
+            </Bar>
           </BarChart>
         </ResponsiveContainer>
       </ChartPanel>
     </div>
   );
 }
+
+/**
+ * Memoised on `rows`, and that is load-bearing now that these panels animate.
+ *
+ * The section owns the Combined / Customer Care / Telesales toggle, so every
+ * click on it re-renders this subtree with the identical `rows` reference. Left
+ * unmemoised that is four Recharts layouts recomputed for no new information —
+ * and, with `isAnimationActive` on, a risk of the enter animation replaying on
+ * a tab click. `rows` comes from `useMonthlyGrowth`'s `useMemo`, so comparing it
+ * by reference is both correct and as cheap as the default shallow compare.
+ */
+export const MonthlyGrowthCharts = memo(
+  MonthlyGrowthChartsImpl,
+  (prev, next) => prev.rows === next.rows,
+);

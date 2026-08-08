@@ -17,6 +17,7 @@ import {
   TOOLTIP_WRAPPER,
 } from "../chart-theme";
 import { fmtAxisSAR } from "../chart-format";
+import { useChartMotion } from "../chart-motion";
 import { widestLabel } from "../text-metrics";
 
 /**
@@ -101,6 +102,7 @@ function HorizontalBarPanelImpl({
   barName?: string;
 }) {
   const { ref, width } = usePanelWidth();
+  const motion = useChartMotion();
 
   const axisWidth = useMemo(() => {
     const widest = widestLabel(
@@ -178,8 +180,7 @@ function HorizontalBarPanelImpl({
                 name={barName}
                 fill={color}
                 radius={[0, 5, 5, 0]}
-                isAnimationActive
-                animationDuration={450}
+                {...motion.bar}
               />
             </BarChart>
           </ResponsiveContainer>

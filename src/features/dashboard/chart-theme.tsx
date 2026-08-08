@@ -158,7 +158,8 @@ interface TooltipEntry {
   value?: number | string;
   color?: string;
   dataKey?: string | number;
-  payload?: { fill?: string };
+  /** The whole data row the point came from, which is where `footerKey` looks. */
+  payload?: Record<string, unknown> & { fill?: string };
 }
 
 interface ChartTooltipProps {
@@ -170,6 +171,22 @@ interface ChartTooltipProps {
   format?: (value: number | string) => string;
   /** Suppress the heading when the category is already the only row. */
   hideLabel?: boolean;
+  /**
+   * What the values are counted in — "orders", "calls". Appended to each value
+   * rather than folded into the series name, so the name column stays the
+   * series and the number column stays a number with its unit.
+   */
+  unit?: string;
+  /**
+   * Field on the hovered data row carrying a closing line — "vs Jun 2026",
+   * "In progress".
+   *
+   * Data-driven rather than a render prop because the line differs per point:
+   * a growth bar is measured against whichever month precedes *it*, and a
+   * function prop would be a new identity on every render for a string the
+   * series already knows.
+   */
+  footerKey?: string;
 }
 
 /**
@@ -180,13 +197,26 @@ interface ChartTooltipProps {
  * read as low-contrast in dark mode. The swatch keeps the link to the series that
  * colouring the text used to provide, without spending the text's contrast on it.
  */
-export function ChartTooltip({ active, payload, label, format, hideLabel }: ChartTooltipProps) {
+export function ChartTooltip({
+  active,
+  payload,
+  label,
+  format,
+  hideLabel,
+  unit,
+  footerKey,
+}: ChartTooltipProps) {
   if (!active || !payload || payload.length === 0) return null;
 
   const render = (value: number | string | undefined) => {
     if (value == null) return "—";
-    return format ? format(value) : String(value);
+    const text = format ? format(value) : String(value);
+    return unit ? `${text} ${unit}` : text;
   };
+
+  // Every row of a Recharts tooltip carries the same source row, so the first
+  // one is as good as any — and is the only one there is on a single series.
+  const footer = footerKey ? payload[0]?.payload?.[footerKey] : undefined;
 
   return (
     <div className="min-w-[10rem] rounded-xl border border-border/80 bg-popover px-3 py-2.5 text-popover-foreground shadow-2xl shadow-black/15 ring-1 ring-black/5 dark:shadow-black/50 dark:ring-white/5">
@@ -215,6 +245,11 @@ export function ChartTooltip({ active, payload, label, format, hideLabel }: Char
           </li>
         ))}
       </ul>
+      {typeof footer === "string" && footer !== "" && (
+        <div className="mt-1.5 border-t border-border/60 pt-1.5 text-[10px] text-muted-foreground">
+          {footer}
+        </div>
+      )}
     </div>
   );
 }
