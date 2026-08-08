@@ -352,6 +352,17 @@ function BranchDirectory() {
         )}
       </div>
 
+      {/* The filtered rows on a map. Markers follow `results`, so every filter
+          and the locator's own selection are reflected here without any second
+          source of branch data. */}
+      {!error && (
+        <ClientOnly fallback={MAP_FALLBACK}>
+          <Suspense fallback={MAP_FALLBACK}>
+            <BranchMap branches={results} selected={selected} onSelect={handleFocusBranch} />
+          </Suspense>
+        </ClientOnly>
+      )}
+
       {error ? (
         <div className="rounded-xl border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
           Could not load branches: {error.message}
