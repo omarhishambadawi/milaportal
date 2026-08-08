@@ -24,6 +24,7 @@ import { useBranchLocator } from "@/features/branches/hooks/use-branch-locator";
 import { useDirectoryFreshness } from "@/features/branches/hooks/use-directory-freshness";
 import { EMPTY_FILTERS, hasActiveFilters, type BranchFilters } from "@/features/branches/search";
 import type { BranchView } from "@/features/branches/types";
+import { isGoogleMapsConfigured } from "@/lib/google-maps";
 
 /**
  * The map, client-only and lazily imported.
@@ -354,8 +355,14 @@ function BranchDirectory() {
 
       {/* The filtered rows on a map. Markers follow `results`, so every filter
           and the locator's own selection are reflected here without any second
-          source of branch data. */}
-      {!error && (
+          source of branch data.
+
+          Gated on the connection rather than left to the map to explain itself:
+          `MAP_FALLBACK` reserves 380px through SSR and hydration, so a map that
+          rendered a "not connected" notice — or simply returned null once it
+          mounted — still cost the fold on every load. With no connector the
+          directory is a list, and the list starts at the top. */}
+      {!error && isGoogleMapsConfigured && (
         <ClientOnly fallback={MAP_FALLBACK}>
           <Suspense fallback={MAP_FALLBACK}>
             <BranchMap branches={results} selected={selected} onSelect={handleFocusBranch} />

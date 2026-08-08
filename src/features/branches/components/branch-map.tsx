@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { KSA_CENTER } from "@/lib/geo";
+import { GOOGLE_MAPS_BROWSER_KEY, GOOGLE_MAPS_TRACKING_ID } from "@/lib/google-maps";
 import { useTheme } from "@/lib/theme";
 import type { BranchView } from "../types";
 
@@ -7,14 +8,18 @@ import type { BranchView } from "../types";
  * The Branch Directory map.
  *
  * Google Maps JavaScript SDK, loaded with the browser key published by the
- * managed Google Maps connection (`VITE_LOVABLE_CONNECTOR_GOOGLE_MAPS_BROWSER_KEY`).
- * No key is hardcoded, and nothing here talks to the server: the directory
- * already carries every branch's coordinates, so the map is a second view of the
- * rows the filters produced rather than a second data source.
+ * managed Google Maps connection (see `@/lib/google-maps`). No key is
+ * hardcoded, and nothing here talks to the server: the directory already
+ * carries every branch's coordinates, so the map is a second view of the rows
+ * the filters produced rather than a second data source.
  *
  * Markers follow `branches` — the filtered result set — so narrowing the search
  * narrows the map. `selected` focuses one branch and opens its info window,
  * which is the same selection the cards and the locator share.
+ *
+ * Callers gate on `isGoogleMapsConfigured`, so with no connection this renders
+ * nothing rather than a panel explaining itself. The `null` below is the
+ * belt-and-braces half of that, not the mechanism.
  */
 
 /** Only ever loaded once per page, however many maps mount. */
@@ -30,7 +35,7 @@ function loadMapsSdk(key: string): Promise<typeof google.maps> {
     (window as unknown as Record<string, unknown>)[callbackName] = () =>
       resolve(window.google.maps);
     const script = document.createElement("script");
-    const tracking = import.meta.env.VITE_LOVABLE_CONNECTOR_GOOGLE_MAPS_TRACKING_ID;
+    const tracking = GOOGLE_MAPS_TRACKING_ID;
     script.src =
       `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}` +
       `&loading=async&callback=${callbackName}&region=SA` +
@@ -108,7 +113,7 @@ export function BranchMap({ branches, selected, onSelect }: BranchMapProps) {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const key = import.meta.env.VITE_LOVABLE_CONNECTOR_GOOGLE_MAPS_BROWSER_KEY as string | undefined;
+  const key = GOOGLE_MAPS_BROWSER_KEY;
 
   /** Only rows that can actually be placed. */
   const plotted = useMemo(
@@ -117,10 +122,7 @@ export function BranchMap({ branches, selected, onSelect }: BranchMapProps) {
   );
 
   useEffect(() => {
-    if (!key) {
-      setError("Google Maps is not connected.");
-      return;
-    }
+    if (!key) return;
     let cancelled = false;
     loadMapsSdk(key)
       .then((maps) => {
@@ -222,6 +224,10 @@ export function BranchMap({ branches, selected, onSelect }: BranchMapProps) {
     },
     [],
   );
+
+  // No connection, no map surface. Every hook above has already run, so this is
+  // a render decision rather than a conditional hook.
+  if (!key) return null;
 
   return (
     <section aria-label="Branch map" className="relative overflow-hidden rounded-xl border bg-card">
