@@ -93,15 +93,11 @@ export function MonthlyGrowthCharts({ rows }: { rows: readonly MonthRow[] }) {
         telesalesOrders: r.telesales?.totalOrders ?? null,
         cash: r.combined.cashRevenue,
         wasfaty: r.combined.wasfatyRevenue,
-        unallocated: r.combined.unallocatedRevenue,
         growth: r.combined.revenueGrowth,
       })),
     [rows],
   );
 
-  // The unallocated segment exists for one supplied month; a legend entry for a
-  // series that is zero everywhere would be noise on every other dashboard.
-  const hasUnallocated = data.some((d) => Math.abs(d.unallocated) > 0.005);
   const growthData = data.filter((d) => d.growth != null);
 
   return (
@@ -210,25 +206,21 @@ export function MonthlyGrowthCharts({ rows }: { rows: readonly MonthRow[] }) {
               fill="var(--color-chart-4)"
               isAnimationActive={false}
             />
+            {/* Cash and Wasfaty are the only order types there are
+                (`ORDER_TYPES`), so the mix is the whole of the mix. Where a
+                historical month's stated total exceeds its two channels, the
+                total stays authoritative everywhere it is reported and the
+                difference is simply not a segment — a bar labelled with a
+                category the business does not have is worse than a bar that is
+                marginally shorter than the total beside it. */}
             <Bar
               dataKey="wasfaty"
               name="Wasfaty"
               stackId="mix"
               fill="var(--color-chart-1)"
-              radius={hasUnallocated ? undefined : [6, 6, 0, 0]}
+              radius={[6, 6, 0, 0]}
               isAnimationActive={false}
             />
-            {hasUnallocated && (
-              <Bar
-                dataKey="unallocated"
-                name="Unallocated"
-                stackId="mix"
-                fill="var(--color-muted-foreground)"
-                fillOpacity={0.45}
-                radius={[6, 6, 0, 0]}
-                isAnimationActive={false}
-              />
-            )}
           </BarChart>
         </ResponsiveContainer>
       </ChartPanel>

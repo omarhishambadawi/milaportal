@@ -3,10 +3,13 @@ import {
   HISTORICAL_MONTHLY,
   buildInsights,
   buildMonthlyGrowth,
+  formatCompactSAR,
+  formatCount,
   formatGrowth,
   growthPct,
   monthWindow,
   monthsBetween,
+  revenueDriver,
   type MonthlyTeamEntry,
 } from "../monthly-growth";
 
@@ -144,26 +147,23 @@ describe("historical baseline — Telesales", () => {
   /**
    * June 2026 is the one supplied month whose two channels do not add up to its
    * stated total (56,748.31 + 107,474.89 = 164,223.20 against 188,985.39), and
-   * the business's own +86.90% validation is measured on the stated total. The
-   * total therefore wins and the 24,762.19 difference is carried as unallocated
-   * — visible, rather than absorbed into Cash or Wasfaty or silently dropped.
+   * the business's own +86.90% validation is measured on the stated total.
+   *
+   * So the stated total stays authoritative for revenue, growth and average
+   * order value, and the 24,762.19 difference is **not modelled at all**. There
+   * are two payment channels and only two; a residual is not a third one. The
+   * mix chart reads `cashRevenue` and `wasfatyRevenue` directly, so nothing can
+   * put that difference in front of a user as a category.
    */
-  it("keeps the stated June total and reports the unreconciled difference", () => {
+  it("keeps the stated June total without inventing a third channel", () => {
     const june = row("2026-06").telesales!;
     expect(june.totalRevenue).toBeCloseTo(188985.39, 2);
-    expect(june.unallocatedRevenue).toBeCloseTo(24762.19, 2);
-    expect(june.unallocatedOrders).toBe(0);
-  });
-
-  it("leaves every other month fully reconciled", () => {
-    for (const r of rows) {
-      for (const metrics of [r.customerCare, r.telesales]) {
-        if (!metrics) continue;
-        if (r.month === "2026-06" && metrics === r.telesales) continue;
-        expect(metrics.unallocatedRevenue).toBeCloseTo(0, 6);
-        expect(metrics.unallocatedOrders).toBe(0);
-      }
-    }
+    // The channels are exactly as supplied — the gap is absorbed by neither.
+    expect(june.cashRevenue).toBe(56748.31);
+    expect(june.wasfatyRevenue).toBe(107474.89);
+    expect(june.cashRevenue + june.wasfatyRevenue).toBeCloseTo(164223.2, 2);
+    // No residual is derived anywhere on the metrics.
+    expect(Object.keys(june).some((k) => k.toLowerCase().includes("unallocated"))).toBe(false);
   });
 });
 
@@ -290,15 +290,50 @@ describe("month arithmetic", () => {
   });
 });
 
+describe("revenue driver", () => {
+  it("ranks channels by the money they moved, not by their percentage", () => {
+    // May 2026 Telesales: Wasfaty grew 630.29 → 26,090.24, which is +4,039% and
+    // 25,459.95 SAR. Cash grew 51,217.27 → 75,024.43, which is only +46% but
+    // 23,807.16 SAR. Wasfaty still wins here — narrowly, and on the money.
+    const may = row("2026-05").telesales!;
+    const april = row("2026-04").telesales!;
+    expect(revenueDriver(may, april)).toEqual({
+      channel: "Wasfaty",
+      delta: 26090.24 - 630.29,
+    });
+  });
+
+  it("names the channel that fell when revenue fell", () => {
+    const driver = revenueDriver(row("2026-03").customerCare!, row("2026-02").customerCare!);
+    // Cash rose 8,515.60; Wasfaty fell 6,597.96. Cash moved more, so Cash it is.
+    expect(driver?.channel).toBe("Cash");
+    expect(driver!.delta).toBeGreaterThan(0);
+  });
+
+  it("has no driver without a previous month, or when nothing moved", () => {
+    expect(revenueDriver(row("2026-02").customerCare!, null)).toBeNull();
+    expect(revenueDriver(row("2026-06").combined, row("2026-06").combined)).toBeNull();
+  });
+});
+
 describe("insights", () => {
-  it("reads the last complete month and cites the calculated rates", () => {
+  it("gives at most three readings of the last complete month", () => {
     const insights = buildInsights(rows);
-    const text = insights.map((i) => i.text);
-    expect(text).toContain("Customer Care revenue increased 18.44% in Jun 2026.");
-    expect(text).toContain("Telesales revenue increased 86.90% in Jun 2026.");
-    expect(insights.every((i) => i.text.includes("Jun 2026") || i.id === "wasfaty-share")).toBe(
-      true,
-    );
+    expect(insights.length).toBeLessThanOrEqual(3);
+    expect(insights.map((i) => i.id)).toEqual(["combined-growth", "growth-driver", "team-share"]);
+
+    const [growth, driver, share] = insights;
+    // Combined June revenue is 445,332.92 against May's 317,555.17 — +40.2%.
+    expect(growth.value).toBe("+40.2%");
+    expect(growth.label).toBe("Combined revenue growth in Jun 2026");
+    expect(growth.tone).toBe("positive");
+
+    expect(driver.value).toBe("Wasfaty");
+    expect(driver.label).toBe("Primary revenue growth driver");
+
+    // Customer Care 256,347.53 of 445,332.92 = 57.6%.
+    expect(share.value).toBe("57.6%");
+    expect(share.label).toBe("Customer Care contribution");
   });
 
   it("ignores a month that is still running", () => {
@@ -313,9 +348,9 @@ describe("insights", () => {
     const insights = buildInsights(
       buildMonthlyGrowth([...HISTORICAL_MONTHLY, ...partialJuly], { currentMonth: "2026-07" }),
     );
-    // Subject is June, not the four days of July that happen to be loaded.
-    expect(insights.some((i) => i.text.includes("Jul 2026"))).toBe(false);
-    expect(insights.some((i) => i.text.includes("Jun 2026"))).toBe(true);
+    // Subject is June, not the eight days of July that happen to be loaded.
+    expect(insights.some((i) => i.label.includes("Jul 2026"))).toBe(false);
+    expect(insights.some((i) => i.label.includes("Jun 2026"))).toBe(true);
   });
 
   it("emits nothing at all when there is no complete month", () => {
@@ -326,13 +361,35 @@ describe("insights", () => {
     );
     expect(buildInsights(onlyPartial)).toEqual([]);
   });
+
+  it("skips the tiles whose calculation does not exist", () => {
+    // February: no previous month, and no Telesales to compare against.
+    const february = buildMonthlyGrowth(HISTORICAL_MONTHLY.filter((e) => e.month === "2026-02"));
+    expect(buildInsights(february)).toEqual([]);
+  });
 });
 
-describe("formatGrowth", () => {
-  it("signs a rate and dashes a missing one", () => {
-    expect(formatGrowth(55.9718)).toBe("+55.97%");
-    expect(formatGrowth(-3.1)).toBe("−3.10%");
-    expect(formatGrowth(0)).toBe("+0.00%");
+describe("display formatting", () => {
+  it("signs a growth rate to one decimal and dashes a missing one", () => {
+    expect(formatGrowth(55.9718)).toBe("+56.0%");
+    expect(formatGrowth(67.86)).toBe("+67.9%");
+    expect(formatGrowth(-3.14)).toBe("−3.1%");
+    expect(formatGrowth(0)).toBe("+0.0%");
     expect(formatGrowth(null)).toBe("—");
+  });
+
+  it("abbreviates money above ten thousand and keeps small figures exact", () => {
+    expect(formatCompactSAR(747542.65)).toBe("SAR 747.5K");
+    expect(formatCompactSAR(113803.21)).toBe("SAR 113.8K");
+    expect(formatCompactSAR(1250000)).toBe("SAR 1.3M");
+    expect(formatCompactSAR(2000000)).toBe("SAR 2M");
+    expect(formatCompactSAR(274.13)).toBe("SAR 274");
+    expect(formatCompactSAR(null)).toBe("—");
+  });
+
+  it("groups order counts rather than abbreviating them", () => {
+    expect(formatCount(2727)).toBe("2,727");
+    expect(formatCount(87)).toBe("87");
+    expect(formatCount(null)).toBe("—");
   });
 });

@@ -1,25 +1,44 @@
 import { Suspense, lazy, useState } from "react";
-import { CalendarRange, Coins, Lightbulb, Table2, TrendingUp } from "lucide-react";
-import { fmtSAR } from "@/lib/branches";
-import { cn } from "@/lib/utils";
+import { Coins, Sparkles, Table2, TrendingUp, Users } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatGrowth, type MonthRow, type TeamMonthMetrics } from "../monthly-growth";
-import type { Insight } from "../monthly-growth";
+import { cn } from "@/lib/utils";
+import {
+  formatCompactSAR,
+  formatCount,
+  formatGrowth,
+  latestCompleteMonth,
+  previousCompleteMonth,
+  revenueDriver,
+  type Insight,
+  type MonthRow,
+  type TeamMonthMetrics,
+} from "../monthly-growth";
 import { AnalyticsCard } from "./analytics-card";
 import { AnalyticsTable, EmptyRow, Tbody, Td, Th, Thead } from "./analytics-table";
 import { SectionTitle } from "./section-title";
 
 /**
- * Monthly comparison and growth analytics.
+ * Monthly performance — the executive view.
  *
- * Reads `useMonthlyGrowth` and renders it in the dashboard's own chrome —
- * `SectionTitle`, `AnalyticsCard`, `AnalyticsTable`, the shared chart theme.
- * Nothing here is styled from scratch, which is why it sits under the KPI cards
- * without looking bolted on.
+ * The shape of this section is the point of it. An earlier cut rendered every
+ * derived figure in three wide tables (eleven columns, then ten, then seven),
+ * which is every number the analytics layer can produce and no answer to the
+ * question the page is opened with. What management reads in ten seconds is:
+ * how big was last month, which way is it moving, who moved it, and what drove
+ * it. So that is the order — KPI strip, charts, team split and drivers, then a
+ * compact trend table underneath as the supporting detail, then three insights.
  *
- * The one thing this section says that the rest of the page does not: it is not
- * scoped by the date picker. Its subject is the whole timeline, and it says so
- * in the subtitle rather than quietly ignoring a filter the user just moved.
+ * Everything is the dashboard's own chrome: `SectionTitle`, `AnalyticsCard`,
+ * `AnalyticsTable`, `Card`, the chart theme, the `--positive`/`--negative`
+ * tokens. Nothing is styled from scratch and no new visual language is
+ * introduced, which is why it sits under the KPI cards without looking bolted
+ * on.
+ *
+ * Two things it says out loud rather than implying: it is not scoped by the
+ * date picker (its subject is the whole timeline), and its headline figures are
+ * the last *complete* month, named in the strip. A month still running is in
+ * the trend table, flagged, and nowhere else.
  */
 
 const MonthlyGrowthCharts = lazy(() =>
@@ -41,46 +60,65 @@ const scopeMetrics = (row: MonthRow, scope: Scope): TeamMonthMetrics | null =>
       ? row.customerCare
       : row.telesales;
 
-/** Money, or an em dash when the team was not operating that month. */
-const money = (value: number | null | undefined) => (value == null ? "—" : fmtSAR(value));
+/** The two team colours, matched to their lines on the revenue-trend chart. */
+const TEAM_COLOR = {
+  customerCare: "var(--color-chart-1)",
+  telesales: "var(--color-chart-3)",
+} as const;
 
-const count = (value: number | null | undefined) => (value == null ? "—" : value.toLocaleString());
+const growthTone = (value: number | null) =>
+  value == null
+    ? "text-muted-foreground"
+    : value >= 0
+      ? "text-[var(--positive)]"
+      : "text-[var(--negative)]";
 
-/**
- * A growth rate, coloured by direction.
- *
- * `--positive` and `--negative` are the tokens the rest of the portal already
- * uses for exactly this, and both are defined per theme — so a contraction reads
- * as red on the light dashboard and on the dark one without a second palette.
- */
-function Growth({ value }: { value: number | null }) {
-  if (value == null) return <span className="text-muted-foreground">—</span>;
+/** A growth figure in its direction's colour. */
+function Growth({ value, className }: { value: number | null; className?: string }) {
   return (
-    <span
-      className={cn(
-        "font-semibold",
-        value >= 0 ? "text-[var(--positive)]" : "text-[var(--negative)]",
-      )}
-    >
+    <span className={cn("font-semibold tabular-nums", growthTone(value), className)}>
       {formatGrowth(value)}
     </span>
   );
 }
 
-/** A team that did not exist that month. Distinct from a dash, which means
- *  "no previous month to compare with". */
-const NA = <span className="text-muted-foreground/70">N/A</span>;
-
-function MonthCell({ row }: { row: MonthRow }) {
+/**
+ * One KPI in the strip.
+ *
+ * Deliberately the same type scale as `StatCard` — the tile the Complaints row
+ * already uses — so the two strips on this page read as one component even
+ * though this one carries a coloured second line that `StatCard` has no reason
+ * to grow a prop for.
+ */
+function KpiTile({
+  label,
+  value,
+  valueTone,
+  sub,
+  subTone = "text-muted-foreground",
+}: {
+  label: string;
+  value: string;
+  valueTone?: string;
+  sub?: string;
+  subTone?: string;
+}) {
   return (
-    <span className="flex items-center gap-2 whitespace-nowrap">
-      <span className="font-medium">{row.label}</span>
-      {row.partial && (
-        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-          In progress
-        </span>
-      )}
-    </span>
+    <Card className="border-border/60 shadow-sm">
+      <CardContent className="p-3 sm:p-4">
+        <div className="truncate text-[10px] uppercase tracking-wider text-muted-foreground sm:text-[11px]">
+          {label}
+        </div>
+        <div
+          className={cn("mt-1 truncate text-base font-semibold tabular-nums sm:text-xl", valueTone)}
+        >
+          {value}
+        </div>
+        {sub && (
+          <div className={cn("mt-0.5 truncate text-[11px] tabular-nums", subTone)}>{sub}</div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -97,40 +135,239 @@ function ChartsSkeleton() {
   );
 }
 
-function Insights({ insights }: { insights: readonly Insight[] }) {
-  if (insights.length === 0) return null;
+/* -------------------------------------------------------------------------- */
+
+function KpiStrip({ current, previous }: { current: MonthRow; previous: MonthRow | null }) {
+  const now = current.combined;
+  const then = previous?.combined ?? null;
+  const versus = previous ? `vs ${previous.label}` : "No previous month";
+  const aovGrowth =
+    now.avgOrderValue != null && then?.avgOrderValue
+      ? ((now.avgOrderValue - then.avgOrderValue) / then.avgOrderValue) * 100
+      : null;
+
+  return (
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 lg:grid-cols-5">
+      <KpiTile
+        label="Total revenue"
+        value={formatCompactSAR(now.totalRevenue)}
+        sub={then ? `from ${formatCompactSAR(then.totalRevenue)}` : undefined}
+      />
+      <KpiTile
+        label="Revenue growth"
+        value={formatGrowth(now.revenueGrowth)}
+        valueTone={growthTone(now.revenueGrowth)}
+        sub={versus}
+      />
+      <KpiTile
+        label="Completed orders"
+        value={formatCount(now.totalOrders)}
+        sub={then ? `from ${formatCount(then.totalOrders)}` : undefined}
+      />
+      <KpiTile
+        label="Order growth"
+        value={formatGrowth(now.orderGrowth)}
+        valueTone={growthTone(now.orderGrowth)}
+        sub={versus}
+      />
+      <KpiTile
+        label="Avg order value"
+        value={formatCompactSAR(now.avgOrderValue)}
+        sub={aovGrowth == null ? undefined : `${formatGrowth(aovGrowth)} MoM`}
+        subTone={growthTone(aovGrowth)}
+      />
+    </div>
+  );
+}
+
+/** One team's month: revenue, its direction, and the orders behind it. */
+function TeamTile({
+  name,
+  color,
+  metrics,
+}: {
+  name: string;
+  color: string;
+  metrics: TeamMonthMetrics | null;
+}) {
+  return (
+    <div className="min-w-0 rounded-lg border border-border/60 bg-muted/25 p-3 sm:p-3.5">
+      <div className="flex items-center gap-2">
+        <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
+        <span className="truncate text-xs font-medium text-muted-foreground">{name}</span>
+      </div>
+      {metrics ? (
+        <>
+          <div className="mt-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <span className="text-lg font-semibold tabular-nums">
+              {formatCompactSAR(metrics.totalRevenue)}
+            </span>
+            <Growth value={metrics.revenueGrowth} className="text-xs" />
+          </div>
+          <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+            {formatCount(metrics.totalOrders)} orders
+          </div>
+        </>
+      ) : (
+        <div className="mt-1.5 text-sm text-muted-foreground/70">Not operating this month</div>
+      )}
+    </div>
+  );
+}
+
+function TeamPerformance({ current }: { current: MonthRow }) {
+  const care = current.customerCare;
+  const telesales = current.telesales;
+  const total = current.combined.totalRevenue;
+  const careShare = care && total > 0 ? (care.totalRevenue / total) * 100 : null;
+  const telesalesShare = telesales && total > 0 ? (telesales.totalRevenue / total) * 100 : null;
 
   return (
     <AnalyticsCard
-      title="Performance insights"
-      subtitle="Generated from the figures below"
-      icon={Lightbulb}
-      className="mt-3"
+      title="Team performance"
+      subtitle={`Customer Care against Telesales · ${current.label}`}
+      icon={Users}
     >
-      <ul className="grid gap-2 sm:grid-cols-2">
-        {insights.map((insight) => (
-          <li
-            key={insight.id}
-            className="flex items-start gap-2.5 rounded-lg border border-border/60 bg-muted/30 px-3 py-2.5 text-sm"
+      <div className="grid gap-2 sm:grid-cols-2 sm:gap-3">
+        <TeamTile name="Customer Care" color={TEAM_COLOR.customerCare} metrics={care} />
+        <TeamTile name="Telesales" color={TEAM_COLOR.telesales} metrics={telesales} />
+      </div>
+
+      {careShare != null && telesalesShare != null && (
+        <div className="mt-3">
+          {/* Share of revenue as one bar rather than two more numbers: the
+              split is the whole message, and a bar says it without being read. */}
+          <div
+            className="flex h-2 w-full overflow-hidden rounded-full bg-muted"
+            role="img"
+            aria-label={`Customer Care ${careShare.toFixed(1)}% of revenue, Telesales ${telesalesShare.toFixed(1)}%`}
           >
             <span
-              aria-hidden
-              className={cn(
-                "mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full",
-                insight.tone === "positive"
-                  ? "bg-[var(--positive)]"
-                  : insight.tone === "negative"
-                    ? "bg-[var(--negative)]"
-                    : "bg-muted-foreground/60",
-              )}
+              style={{ width: `${careShare}%`, background: TEAM_COLOR.customerCare }}
+              className="h-full"
             />
-            <span className="min-w-0 leading-relaxed">{insight.text}</span>
-          </li>
-        ))}
-      </ul>
+            <span
+              style={{ width: `${telesalesShare}%`, background: TEAM_COLOR.telesales }}
+              className="h-full"
+            />
+          </div>
+          <div className="mt-1.5 flex justify-between text-[11px] text-muted-foreground tabular-nums">
+            <span>Customer Care {careShare.toFixed(1)}%</span>
+            <span>Telesales {telesalesShare.toFixed(1)}%</span>
+          </div>
+        </div>
+      )}
     </AnalyticsCard>
   );
 }
+
+function ChannelTile({
+  name,
+  color,
+  revenueGrowth,
+  orderGrowth,
+  avgOrderValue,
+}: {
+  name: string;
+  color: string;
+  revenueGrowth: number | null;
+  orderGrowth: number | null;
+  avgOrderValue: number | null;
+}) {
+  return (
+    <div className="min-w-0 rounded-lg border border-border/60 bg-muted/25 p-3 sm:p-3.5">
+      <div className="flex items-center gap-2">
+        <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
+        <span className="truncate text-xs font-medium text-muted-foreground">{name}</span>
+      </div>
+      <div className="mt-1.5 space-y-0.5 text-sm">
+        <div className="flex items-baseline justify-between gap-2">
+          <Growth value={revenueGrowth} />
+          <span className="text-xs text-muted-foreground">revenue</span>
+        </div>
+        <div className="flex items-baseline justify-between gap-2">
+          <Growth value={orderGrowth} />
+          <span className="text-xs text-muted-foreground">orders</span>
+        </div>
+      </div>
+      <div className="mt-2 border-t border-border/50 pt-1.5 text-[11px] text-muted-foreground tabular-nums">
+        Avg order {formatCompactSAR(avgOrderValue)}
+      </div>
+    </div>
+  );
+}
+
+function RevenueDrivers({ current, previous }: { current: MonthRow; previous: MonthRow | null }) {
+  const now = current.combined;
+  const driver = revenueDriver(now, previous?.combined ?? null);
+
+  return (
+    <AnalyticsCard
+      title="Revenue drivers"
+      subtitle={`What's driving monthly growth? · ${current.label}`}
+      icon={Coins}
+    >
+      <div className="grid gap-2 sm:grid-cols-2 sm:gap-3">
+        <ChannelTile
+          name="Cash"
+          color="var(--color-chart-4)"
+          revenueGrowth={now.cashRevenueGrowth}
+          orderGrowth={now.cashOrderGrowth}
+          avgOrderValue={now.avgCashOrderValue}
+        />
+        <ChannelTile
+          name="Wasfaty"
+          color="var(--color-chart-1)"
+          revenueGrowth={now.wasfatyRevenueGrowth}
+          orderGrowth={now.wasfatyOrderGrowth}
+          avgOrderValue={now.avgWasfatyOrderValue}
+        />
+      </div>
+
+      {driver && (
+        <p className="mt-3 text-sm text-muted-foreground">
+          {driver.delta >= 0 ? "Growth is primarily driven by" : "The largest decline is in"}{" "}
+          <span className="font-medium text-foreground">{driver.channel}</span> revenue.
+        </p>
+      )}
+    </AnalyticsCard>
+  );
+}
+
+function KeyInsights({ insights }: { insights: readonly Insight[] }) {
+  if (insights.length === 0) return null;
+
+  return (
+    <AnalyticsCard title="Key insights" icon={Sparkles} className="mt-3">
+      <div className="grid gap-2 sm:grid-cols-3 sm:gap-3">
+        {insights.map((insight) => (
+          <div
+            key={insight.id}
+            className="min-w-0 rounded-lg border border-border/60 bg-muted/25 p-3 sm:p-3.5"
+          >
+            <div
+              className={cn(
+                "truncate text-lg font-semibold tabular-nums sm:text-xl",
+                insight.tone === "positive"
+                  ? "text-[var(--positive)]"
+                  : insight.tone === "negative"
+                    ? "text-[var(--negative)]"
+                    : "text-foreground",
+              )}
+            >
+              {insight.value}
+            </div>
+            <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+              {insight.label}
+            </div>
+          </div>
+        ))}
+      </div>
+    </AnalyticsCard>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 
 export function MonthlyGrowthSection({
   rows,
@@ -143,232 +380,107 @@ export function MonthlyGrowthSection({
 }) {
   const [scope, setScope] = useState<Scope>("combined");
 
-  const unreconciled = rows.some((r) => Math.abs(r.combined.unallocatedRevenue) > 0.005);
+  const current = latestCompleteMonth(rows);
+  const previous = previousCompleteMonth(rows);
 
-  const scopeTabs = (
-    <Tabs value={scope} onValueChange={(v) => setScope(v as Scope)}>
-      <TabsList className="h-8">
-        {(Object.keys(SCOPE_LABEL) as Scope[]).map((key) => (
-          <TabsTrigger key={key} value={key} className="px-2.5 py-0.5 text-xs">
-            {SCOPE_LABEL[key]}
-          </TabsTrigger>
-        ))}
-      </TabsList>
-    </Tabs>
-  );
+  // A team scope shows only the months that team operated, rather than a column
+  // of N/A down to April 2026. The absence is real and is stated in the team
+  // comparison above; repeating it once per row is noise, not information.
+  const trendRows = rows.filter((row) => scopeMetrics(row, scope) !== null);
 
   return (
     <div>
-      <SectionTitle title="Monthly comparison & growth" icon={TrendingUp} />
+      <SectionTitle title="Monthly performance" icon={TrendingUp} />
       <p className="-mt-1 mb-3 text-xs text-muted-foreground">
-        Completed orders only, whole months, both teams — the full timeline, so this section is not
-        narrowed by the date range above. February–June 2026 is the historical baseline; July 2026
-        onward is live completed-order data.
-        {isLoading && <span className="ml-1 animate-pulse">Loading current months…</span>}
+        Completed orders only · Month-over-month performance · Full timeline, not the date range
+        above
+        {isLoading && <span className="ml-1 animate-pulse">· Loading current months…</span>}
       </p>
 
-      <Insights insights={insights} />
-
-      {/* 1 — the headline comparison */}
-      <AnalyticsCard
-        title="Monthly comparison"
-        subtitle="Customer Care against Telesales, and the two combined"
-        icon={Table2}
-        className="mt-3"
-        flush
-      >
-        <AnalyticsTable minWidth={1180}>
-          <Thead>
-            <tr>
-              <Th>Month</Th>
-              <Th align="right">CC revenue</Th>
-              <Th align="right">CC growth</Th>
-              <Th align="right">CC orders</Th>
-              <Th align="right">TS revenue</Th>
-              <Th align="right">TS growth</Th>
-              <Th align="right">TS orders</Th>
-              <Th align="right">Combined revenue</Th>
-              <Th align="right">Combined growth</Th>
-              <Th align="right">Combined orders</Th>
-              <Th align="right">Avg order value</Th>
-            </tr>
-          </Thead>
-          <Tbody>
-            {rows.length === 0 && <EmptyRow colSpan={11} />}
-            {rows.map((row) => (
-              <tr key={row.month}>
-                <Td>
-                  <MonthCell row={row} />
-                </Td>
-                <Td numeric>{row.customerCare ? money(row.customerCare.totalRevenue) : NA}</Td>
-                <Td numeric>
-                  {row.customerCare ? <Growth value={row.customerCare.revenueGrowth} /> : NA}
-                </Td>
-                <Td numeric>{row.customerCare ? count(row.customerCare.totalOrders) : NA}</Td>
-                <Td numeric>{row.telesales ? money(row.telesales.totalRevenue) : NA}</Td>
-                <Td numeric>
-                  {row.telesales ? <Growth value={row.telesales.revenueGrowth} /> : NA}
-                </Td>
-                <Td numeric>{row.telesales ? count(row.telesales.totalOrders) : NA}</Td>
-                <Td numeric className="font-semibold">
-                  {money(row.combined.totalRevenue)}
-                </Td>
-                <Td numeric>
-                  <Growth value={row.combined.revenueGrowth} />
-                </Td>
-                <Td numeric className="font-semibold">
-                  {count(row.combined.totalOrders)}
-                </Td>
-                <Td numeric>{money(row.combined.avgOrderValue)}</Td>
-              </tr>
-            ))}
-          </Tbody>
-        </AnalyticsTable>
-        <p className="border-t border-border/60 px-4 py-2.5 text-xs text-muted-foreground">
-          <span className="font-medium">N/A</span> means the team was not operating that month —
-          Telesales started in April 2026. <span className="font-medium">—</span> means there is no
-          previous month to compare against.
-        </p>
-      </AnalyticsCard>
-
-      {/* 2 — the per-month revenue analytics, per scope */}
-      <AnalyticsCard
-        title="Monthly revenue analytics"
-        subtitle={`Cash, Wasfaty and totals — ${SCOPE_LABEL[scope]}`}
-        icon={CalendarRange}
-        className="mt-3"
-        actions={scopeTabs}
-        flush
-      >
-        <AnalyticsTable minWidth={1080}>
-          <Thead>
-            <tr>
-              <Th>Month</Th>
-              <Th align="right">Cash revenue</Th>
-              <Th align="right">Wasfaty revenue</Th>
-              <Th align="right">Total revenue</Th>
-              <Th align="right">Revenue growth</Th>
-              <Th align="right">Cash orders</Th>
-              <Th align="right">Wasfaty orders</Th>
-              <Th align="right">Total orders</Th>
-              <Th align="right">Order growth</Th>
-              <Th align="right">Avg order value</Th>
-            </tr>
-          </Thead>
-          <Tbody>
-            {rows.length === 0 && <EmptyRow colSpan={10} />}
-            {rows.map((row) => {
-              const m = scopeMetrics(row, scope);
-              return (
-                <tr key={row.month}>
-                  <Td>
-                    <MonthCell row={row} />
-                  </Td>
-                  {m ? (
-                    <>
-                      <Td numeric>{money(m.cashRevenue)}</Td>
-                      <Td numeric>{money(m.wasfatyRevenue)}</Td>
-                      <Td numeric className="font-semibold">
-                        {money(m.totalRevenue)}
-                      </Td>
-                      <Td numeric>
-                        <Growth value={m.revenueGrowth} />
-                      </Td>
-                      <Td numeric>{count(m.cashOrders)}</Td>
-                      <Td numeric>{count(m.wasfatyOrders)}</Td>
-                      <Td numeric className="font-semibold">
-                        {count(m.totalOrders)}
-                      </Td>
-                      <Td numeric>
-                        <Growth value={m.orderGrowth} />
-                      </Td>
-                      <Td numeric>{money(m.avgOrderValue)}</Td>
-                    </>
-                  ) : (
-                    <Td colSpan={9} className="text-center text-muted-foreground/70">
-                      {SCOPE_LABEL[scope]} was not operating this month
-                    </Td>
-                  )}
-                </tr>
-              );
-            })}
-          </Tbody>
-        </AnalyticsTable>
-        {unreconciled && (
-          <p className="border-t border-border/60 px-4 py-2.5 text-xs text-muted-foreground">
-            June 2026 Telesales was supplied with a total of 188,985.39 SAR against Cash + Wasfaty
-            of 164,223.20 SAR. The supplied total is used — it is what the reported growth is
-            measured on — and the 24,762.19 SAR difference is shown as{" "}
-            <span className="font-medium">Unallocated</span> in the revenue mix chart rather than
-            being folded into either channel.
-          </p>
-        )}
-      </AnalyticsCard>
-
-      {/* 3 — where the growth is actually coming from */}
-      <AnalyticsCard
-        title="Cash vs Wasfaty growth breakdown"
-        subtitle={`Whether growth is volume or basket size — ${SCOPE_LABEL[scope]}`}
-        icon={Coins}
-        className="mt-3"
-        actions={scopeTabs}
-        flush
-      >
-        <AnalyticsTable minWidth={880}>
-          <Thead>
-            <tr>
-              <Th>Month</Th>
-              <Th align="right">Cash revenue Δ</Th>
-              <Th align="right">Cash orders Δ</Th>
-              <Th align="right">Avg cash order</Th>
-              <Th align="right">Wasfaty revenue Δ</Th>
-              <Th align="right">Wasfaty orders Δ</Th>
-              <Th align="right">Avg Wasfaty order</Th>
-            </tr>
-          </Thead>
-          <Tbody>
-            {rows.length === 0 && <EmptyRow colSpan={7} />}
-            {rows.map((row) => {
-              const m = scopeMetrics(row, scope);
-              return (
-                <tr key={row.month}>
-                  <Td>
-                    <MonthCell row={row} />
-                  </Td>
-                  {m ? (
-                    <>
-                      <Td numeric>
-                        <Growth value={m.cashRevenueGrowth} />
-                      </Td>
-                      <Td numeric>
-                        <Growth value={m.cashOrderGrowth} />
-                      </Td>
-                      <Td numeric>{money(m.avgCashOrderValue)}</Td>
-                      <Td numeric>
-                        <Growth value={m.wasfatyRevenueGrowth} />
-                      </Td>
-                      <Td numeric>
-                        <Growth value={m.wasfatyOrderGrowth} />
-                      </Td>
-                      <Td numeric>{money(m.avgWasfatyOrderValue)}</Td>
-                    </>
-                  ) : (
-                    <Td colSpan={6} className="text-center text-muted-foreground/70">
-                      {SCOPE_LABEL[scope]} was not operating this month
-                    </Td>
-                  )}
-                </tr>
-              );
-            })}
-          </Tbody>
-        </AnalyticsTable>
-      </AnalyticsCard>
+      {current && (
+        <>
+          <div className="mb-2 text-[11px] uppercase tracking-wider text-muted-foreground">
+            {current.label} · latest complete month
+          </div>
+          <KpiStrip current={current} previous={previous} />
+        </>
+      )}
 
       <div className="mt-3">
         <Suspense fallback={<ChartsSkeleton />}>
           <MonthlyGrowthCharts rows={rows} />
         </Suspense>
       </div>
+
+      {current && (
+        <div className="mt-3 grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
+          <TeamPerformance current={current} />
+          <RevenueDrivers current={current} previous={previous} />
+        </div>
+      )}
+
+      <AnalyticsCard
+        title="Monthly trend"
+        subtitle={SCOPE_LABEL[scope]}
+        icon={Table2}
+        className="mt-3"
+        flush
+        actions={
+          <Tabs value={scope} onValueChange={(v) => setScope(v as Scope)}>
+            <TabsList className="h-8">
+              {(Object.keys(SCOPE_LABEL) as Scope[]).map((key) => (
+                <TabsTrigger key={key} value={key} className="px-2.5 py-0.5 text-xs">
+                  {SCOPE_LABEL[key]}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        }
+      >
+        <AnalyticsTable minWidth={520}>
+          <Thead>
+            <tr>
+              <Th>Month</Th>
+              <Th align="right">Revenue</Th>
+              <Th align="right">MoM</Th>
+              <Th align="right">Orders</Th>
+              <Th align="right">Avg order</Th>
+            </tr>
+          </Thead>
+          <Tbody>
+            {trendRows.length === 0 && <EmptyRow colSpan={5} />}
+            {trendRows.map((row) => {
+              const m = scopeMetrics(row, scope)!;
+              return (
+                <tr key={row.month}>
+                  <Td>
+                    <span className="flex items-center gap-2 whitespace-nowrap font-medium">
+                      {row.label}
+                      {row.partial && (
+                        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                          In progress
+                        </span>
+                      )}
+                    </span>
+                  </Td>
+                  <Td numeric className="font-medium">
+                    {formatCompactSAR(m.totalRevenue)}
+                  </Td>
+                  <Td numeric>
+                    <Growth value={m.revenueGrowth} />
+                  </Td>
+                  <Td numeric>{formatCount(m.totalOrders)}</Td>
+                  <Td numeric className="text-muted-foreground">
+                    {formatCompactSAR(m.avgOrderValue)}
+                  </Td>
+                </tr>
+              );
+            })}
+          </Tbody>
+        </AnalyticsTable>
+      </AnalyticsCard>
+
+      <KeyInsights insights={insights} />
     </div>
   );
 }

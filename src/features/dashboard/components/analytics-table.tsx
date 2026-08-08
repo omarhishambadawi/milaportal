@@ -111,19 +111,15 @@ export function Td({
   align = "left",
   /** Currency and other figures: tabular digits, right-aligned by default. */
   numeric,
-  /** For the one-cell row a table uses to say a whole period is unavailable. */
-  colSpan,
   className,
 }: {
   children?: React.ReactNode;
   align?: "left" | "right";
   numeric?: boolean;
-  colSpan?: number;
   className?: string;
 }) {
   return (
     <td
-      colSpan={colSpan}
       className={cn(
         "border-b border-border/40 px-4 py-3 align-middle leading-6",
         // Money never breaks across lines: "12,300 SAR" is one token to a reader,

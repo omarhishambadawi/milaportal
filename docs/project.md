@@ -1037,7 +1037,7 @@ showing `order_count` (every order on that method, whatever its status), and
 "Share of sales" was rendering `completion_rate`, which is the proportion of that
 method's own orders that completed and is not a share of anything.
 
-### Monthly comparison & growth
+### Monthly performance
 
 **Gate:** `view_team_analytics` (not merely `view_dashboard`) — the section
 compares Customer Care with Telesales against a team-wide historical baseline, and
@@ -1045,18 +1045,38 @@ for a viewer whose rows RLS narrows to their own, the live months would be one
 agent's work sitting in a table beside whole-team history. Same gate as the team
 filter, for the same reason.
 
-Three tables (headline comparison, per-month revenue analytics, Cash-vs-Wasfaty
-growth breakdown), a computed insights panel, and four `lazy()`-loaded charts —
-revenue trend, revenue mix, MoM growth, order volume — in the dashboard's own
-`AnalyticsCard` / `AnalyticsTable` / chart-theme chrome.
+**Read in ten seconds, not read in full.** The first cut of this section rendered
+every figure the analytics layer can produce in three wide tables — eleven
+columns, then ten, then seven — which is a data dump, not a management view. It
+is now a hierarchy, and the order is the argument:
 
-| File                                    | Role                                                                                            |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `features/dashboard/monthly-growth.ts`  | Pure: the historical baseline, month arithmetic, every derived rate, and the insight generator. |
-| `features/dashboard/kpis-query.ts`      | `orderKpisQuery` — the shared `orders_kpis` options factory (also used by both Reports hooks).  |
-| `hooks/use-monthly-growth.ts`           | Baseline + live months, via `useQueries({ combine })`.                                          |
-| `components/monthly-growth-section.tsx` | Tables, insights, scope tabs.                                                                   |
-| `components/monthly-growth-charts.tsx`  | The four Recharts panels, behind the section's own Suspense boundary.                           |
+1. **KPI strip** (5 tiles) — total revenue, revenue growth, completed orders,
+   order growth, average order value, all for the **last complete month**, named
+   above the strip. No tile repeats another's number: the value tiles carry the
+   previous month's figure (`from SAR 445.3K`), the growth tiles carry the
+   comparison month (`vs Jun 2026`).
+2. **Charts** — revenue trend, revenue mix, MoM growth, order volume.
+3. **Team performance** and **Revenue drivers**, side by side. The first is two
+   tiles plus a share-of-revenue bar; the second is Cash against Wasfaty by
+   revenue Δ, order Δ and average order value, with one computed sentence naming
+   the driver.
+4. **Monthly trend** — five columns (Month, Revenue, MoM, Orders, Avg order) with
+   a Combined / Customer Care / Telesales toggle.
+5. **Key insights** — at most three tiles, each a figure and what it is.
+
+| File                                    | Role                                                                                              |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `features/dashboard/monthly-growth.ts`  | Pure: the historical baseline, month arithmetic, every derived rate, the insights and formatters. |
+| `features/dashboard/kpis-query.ts`      | `orderKpisQuery` — the shared `orders_kpis` options factory (also used by both Reports hooks).    |
+| `hooks/use-monthly-growth.ts`           | Baseline + live months, via `useQueries({ combine })`.                                            |
+| `components/monthly-growth-section.tsx` | KPI strip, team performance, revenue drivers, trend table, insights.                              |
+| `components/monthly-growth-charts.tsx`  | The four Recharts panels, behind the section's own Suspense boundary.                             |
+
+**Number formatting is part of the design.** `formatCompactSAR` gives
+`SAR 747.5K` / `SAR 1.2M` / `SAR 274`; `formatGrowth` gives one decimal
+(`+67.9%`); `formatCount` never abbreviates an order count (`2,727`, not `2.7K`).
+Full precision belongs in the chart tooltips (`fmtSAR`) and the export, where
+there is room to be exact.
 
 **No migration, no new table, no second source of truth.** February–June 2026
 predates the orders table as an authority and is a typed constant
@@ -1070,11 +1090,12 @@ read; `status = 'Completed'` stays defined once, in SQL. The live window is
 Three deliberate behaviours:
 
 - **Absent is not zero.** Telesales did not exist before April 2026, so those
-  months carry no Telesales row and render `N/A`, never `0` — which would put a
-  −100% in the growth column. A team's growth is measured against the previous
-  month **that team has data for**, so April is Telesales' first month and has no
-  rate at all (`—`). A live team-month with zero completed orders is likewise
-  treated as absent.
+  months carry no Telesales row, never a `0` — which would put a −100% in the
+  growth column. A team's growth is measured against the previous month **that
+  team has data for**, so April is Telesales' first month and has no rate at all
+  (`—`). A live team-month with zero completed orders is likewise treated as
+  absent. On a team-scoped trend table the absent months are simply not listed,
+  rather than a column of `N/A` down to April.
 - **Not scoped by the date picker.** The subject is the whole timeline, and the
   baseline is whole-month, team-wide, agent-less. Slicing only the live half by an
   arbitrary window would put two different questions in one table; the subtitle
@@ -1086,12 +1107,22 @@ Three deliberate behaviours:
 **One supplied figure does not reconcile.** June 2026 Telesales was given as Cash
 56,748.31 + Wasfaty 107,474.89 against a stated total of 188,985.39 — a 24,762.19
 gap, and the business's own +86.90% validation is measured on the stated total.
-The stated total therefore wins (`MonthTeamTotals.totalRevenue` exists only for
-this case) and the difference is carried as `unallocatedRevenue`: shown as an
-"Unallocated" segment in the revenue-mix chart and explained in a footnote, rather
-than folded into either channel or silently dropped. Every other month reconciles
-exactly, which `__tests__/monthly-growth.test.ts` asserts along with all fifteen
-supplied figures and all six validated growth rates.
+
+The stated total therefore stays authoritative for revenue, growth and average
+order value (`MonthTeamTotals.totalRevenue` exists only for this case), and the
+difference **is not modelled**. There are exactly two payment channels —
+`ORDER_TYPES` is `["Cash", "Wasfaty"]` — and a residual from a supplied
+spreadsheet is not a third one. An earlier cut derived an `unallocatedRevenue`
+and charted it as an "Unallocated" segment, which put a category the business
+does not have in front of users; that derivation is gone, not hidden. The mix
+chart reads `cashRevenue` and `wasfatyRevenue` directly, so for that one month
+its bar is marginally shorter than the total reported beside it — which is the
+honest rendering of a source discrepancy, and a standing reason to reconcile the
+June Telesales figure at source.
+
+Every other month reconciles exactly, which `__tests__/monthly-growth.test.ts`
+asserts along with all fifteen supplied figures, all six validated growth rates,
+and the absence of any residual field on the derived metrics.
 
 ---
 

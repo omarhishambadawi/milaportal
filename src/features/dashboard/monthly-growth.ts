@@ -49,8 +49,11 @@ export interface MonthTeamTotals {
    * growth validation is measured on. Deriving the total from the parts would
    * silently restate that month as 164,223.20 and its growth as +62.41%.
    *
-   * So the stated total wins, and the difference is carried through to
-   * `unallocatedRevenue` rather than being absorbed into either channel.
+   * So the stated total stays authoritative for revenue, growth and average
+   * order value, and the difference is simply not modelled. There are exactly
+   * two payment channels — Cash and Wasfaty (`ORDER_TYPES`) — and a residual
+   * from an old spreadsheet is not a third one. Anything charting the *mix*
+   * reads `cashRevenue` and `wasfatyRevenue`; nothing derives a remainder.
    */
   totalRevenue?: number;
   totalOrders?: number;
@@ -70,13 +73,6 @@ export interface MonthlyTeamEntry {
 
 /** Everything the tables, charts and insights read for one team-month. */
 export interface TeamMonthMetrics extends ResolvedTotals {
-  /**
-   * Revenue in the total that belongs to neither channel — 0 for every month
-   * that reconciles, which is all of them but June 2026 Telesales. Charted as
-   * its own stacked segment so a revenue-mix bar always adds up to its total.
-   */
-  unallocatedRevenue: number;
-  unallocatedOrders: number;
   /** `null` rather than 0 when there are no orders to average over. */
   avgOrderValue: number | null;
   avgCashOrderValue: number | null;
@@ -201,8 +197,9 @@ export const HISTORICAL_MONTHLY: readonly MonthlyTeamEntry[] = [
     source: "historical",
     // The one supplied month whose channels do not add up to its stated total:
     // 56,748.31 + 107,474.89 = 164,223.20 against 188,985.39. See the note on
-    // `MonthTeamTotals.totalRevenue` — the stated total is authoritative, and
-    // the 24,762.19 difference shows as unallocated rather than disappearing.
+    // `MonthTeamTotals.totalRevenue` — the stated total is authoritative for
+    // revenue, growth and average order value; the difference is not modelled
+    // as a channel, because the business does not have a third one.
     totals: {
       cashRevenue: 56748.31,
       cashOrders: 84,
@@ -311,8 +308,6 @@ function deriveMetrics(
 
   return {
     ...totals,
-    unallocatedRevenue: totalRevenue - totals.cashRevenue - totals.wasfatyRevenue,
-    unallocatedOrders: totalOrders - totals.cashOrders - totals.wasfatyOrders,
     avgOrderValue: ratio(totalRevenue, totalOrders),
     avgCashOrderValue: ratio(totals.cashRevenue, totals.cashOrders),
     avgWasfatyOrderValue: ratio(totals.wasfatyRevenue, totals.wasfatyOrders),
@@ -395,116 +390,157 @@ export function buildMonthlyGrowth(
 
 export type InsightTone = "positive" | "negative" | "neutral";
 
+/**
+ * One reading of the month: a figure and what it is.
+ *
+ * Split into `value` and `label` rather than one sentence so the card can set
+ * the figure at display size and the wording underneath it — which is how a
+ * management dashboard is read, and the reason this section does not look like
+ * a list of chat messages.
+ */
 export interface Insight {
   id: string;
-  text: string;
+  value: string;
+  label: string;
   tone: InsightTone;
 }
 
-const pct = (n: number) => `${Math.abs(n).toFixed(2)}%`;
-const moved = (n: number) => (n >= 0 ? "increased" : "decreased");
+/**
+ * The last month whose figures are complete.
+ *
+ * Every headline on the section — the KPI row, the team comparison, the revenue
+ * drivers and the insights — is about this month rather than the calendar's. A
+ * month still in progress is being compared against a full one, and "revenue
+ * fell 74%" on the 8th is an artefact of the calendar, not a finding.
+ */
+export function latestCompleteMonth(rows: readonly MonthRow[]): MonthRow | null {
+  const complete = rows.filter((r) => !r.partial);
+  return complete[complete.length - 1] ?? null;
+}
+
+/** The month before `latestCompleteMonth`, for changes measured against it. */
+export function previousCompleteMonth(rows: readonly MonthRow[]): MonthRow | null {
+  const complete = rows.filter((r) => !r.partial);
+  return complete[complete.length - 2] ?? null;
+}
 
 /**
- * Plain-language readings of the numbers above them — computed, never written.
+ * Which channel actually moved the month's revenue.
  *
- * Every line is emitted only when the calculation behind it exists: a team with
- * no previous month contributes no growth sentence, and a month with no orders
- * contributes no average-order-value sentence. There is no template that fires
- * on missing data, and no model involved.
+ * Compares the two channels by the **size of their change in SAR**, not by
+ * their growth percentage: Wasfaty going from 630 to 26,090 is +4,000% and
+ * almost no money, and a driver that ranks on percentages would name it over a
+ * channel that added ten times as much revenue.
  *
- * The subject is the last **complete** month. A month that is still running is
- * being compared against a full one, and "revenue fell 74%" on the 8th is not an
- * insight, it is an artefact of the calendar.
+ * `null` when there is no previous month, or when neither channel moved.
+ */
+export function revenueDriver(
+  current: TeamMonthMetrics,
+  previous: TeamMonthMetrics | null,
+): { channel: "Cash" | "Wasfaty"; delta: number } | null {
+  if (!previous) return null;
+  const cash = current.cashRevenue - previous.cashRevenue;
+  const wasfaty = current.wasfatyRevenue - previous.wasfatyRevenue;
+  if (cash === 0 && wasfaty === 0) return null;
+  return Math.abs(cash) >= Math.abs(wasfaty)
+    ? { channel: "Cash", delta: cash }
+    : { channel: "Wasfaty", delta: wasfaty };
+}
+
+/**
+ * At most three readings of the last complete month — computed, never written.
+ *
+ * Three, in priority order: how much the business grew, what drove it, and
+ * which team carried it. Each is emitted only when the calculation behind it
+ * exists, so a first month contributes no growth tile rather than a zero, and
+ * a month with one team contributes no contribution tile. There is no template
+ * that fires on missing data, and no model involved.
  */
 export function buildInsights(rows: readonly MonthRow[]): Insight[] {
-  const complete = rows.filter((r) => !r.partial);
-  const current = complete[complete.length - 1];
+  const current = latestCompleteMonth(rows);
   if (!current) return [];
-  const previous = complete[complete.length - 2] ?? null;
+  const previous = previousCompleteMonth(rows);
 
   const insights: Insight[] = [];
-  const teams = [
-    { key: "customerCare" as const, name: "Customer Care" },
-    { key: "telesales" as const, name: "Telesales" },
-  ];
-
-  for (const { key, name } of teams) {
-    const metrics = current[key];
-    if (!metrics || metrics.revenueGrowth == null) continue;
-    insights.push({
-      id: `${key}-revenue-growth`,
-      text: `${name} revenue ${moved(metrics.revenueGrowth)} ${pct(metrics.revenueGrowth)} in ${current.label}.`,
-      tone: metrics.revenueGrowth >= 0 ? "positive" : "negative",
-    });
-  }
-
-  // Which payment channel the month actually rests on.
-  if (current.combined.totalRevenue > 0) {
-    const share = (current.combined.wasfatyRevenue / current.combined.totalRevenue) * 100;
-    insights.push({
-      id: "wasfaty-share",
-      text: `Wasfaty contributed ${share.toFixed(1)}% of total revenue in ${current.label}, Cash ${(100 - share).toFixed(1)}%.`,
-      tone: "neutral",
-    });
-  }
-
   const combined = current.combined;
-  const previousAov = previous?.combined.avgOrderValue ?? null;
 
-  // Volume against basket size — the two ways revenue can move, and the reason
-  // the section carries average order value at all.
-  if (combined.orderGrowth != null && combined.avgOrderValue != null && previousAov != null) {
-    const aovGrowth = growthPct(combined.avgOrderValue, previousAov);
-    if (aovGrowth != null) {
-      if (combined.orderGrowth > 0 && aovGrowth < 0) {
-        insights.push({
-          id: "volume-vs-aov",
-          text: `In ${current.label} order volume increased ${pct(combined.orderGrowth)} while average order value decreased ${pct(aovGrowth)}.`,
-          tone: "neutral",
-        });
-      } else if (combined.orderGrowth < 0 && aovGrowth > 0) {
-        insights.push({
-          id: "volume-vs-aov",
-          text: `In ${current.label} order volume decreased ${pct(combined.orderGrowth)} while average order value increased ${pct(aovGrowth)}.`,
-          tone: "neutral",
-        });
-      }
-
-      if (combined.revenueGrowth != null && combined.revenueGrowth !== 0) {
-        const driver =
-          Math.abs(combined.orderGrowth) >= Math.abs(aovGrowth)
-            ? "order volume"
-            : "higher average order value";
-        insights.push({
-          id: "growth-driver",
-          text: `Combined revenue ${moved(combined.revenueGrowth)} ${pct(combined.revenueGrowth)} in ${current.label}, driven primarily by ${driver}.`,
-          tone: combined.revenueGrowth >= 0 ? "positive" : "negative",
-        });
-      }
-    }
+  // 1 — the headline: how the whole business moved.
+  if (combined.revenueGrowth != null) {
+    insights.push({
+      id: "combined-growth",
+      value: formatGrowth(combined.revenueGrowth),
+      label: `Combined revenue growth in ${current.label}`,
+      tone: combined.revenueGrowth >= 0 ? "positive" : "negative",
+    });
   }
 
-  // Which team carried the month.
+  // 2 — what moved it.
+  const driver = revenueDriver(combined, previous?.combined ?? null);
+  if (driver) {
+    insights.push({
+      id: "growth-driver",
+      value: driver.channel,
+      label: driver.delta >= 0 ? "Primary revenue growth driver" : "Largest revenue decline",
+      tone: driver.delta >= 0 ? "positive" : "negative",
+    });
+  }
+
+  // 3 — who carried it.
   if (current.customerCare && current.telesales && combined.totalRevenue > 0) {
     const careShare = (current.customerCare.totalRevenue / combined.totalRevenue) * 100;
-    const leader = careShare >= 50 ? "Customer Care" : "Telesales";
-    const leaderShare = careShare >= 50 ? careShare : 100 - careShare;
+    const leadsWithCare = careShare >= 50;
     insights.push({
       id: "team-share",
-      text: `${leader} generated ${leaderShare.toFixed(1)}% of ${current.label} revenue.`,
+      value: `${(leadsWithCare ? careShare : 100 - careShare).toFixed(1)}%`,
+      label: `${leadsWithCare ? "Customer Care" : "Telesales"} contribution`,
       tone: "neutral",
     });
   }
 
-  return insights;
+  return insights.slice(0, 3);
 }
 
 /* -------------------------------------------------------------------------- */
 /* Display helpers                                                             */
 /* -------------------------------------------------------------------------- */
 
-/** A growth rate as text: `+55.97%`, `-3.10%`, or an em dash when there is none. */
+/**
+ * A growth rate as text: `+56.0%`, `−3.1%`, or an em dash when there is none.
+ *
+ * One decimal. A second decimal on a percentage nobody will act on to that
+ * precision is two more characters in every cell of every growth column, and
+ * this section has a lot of them. Full precision lives in the chart tooltips,
+ * where there is room to be exact.
+ */
 export function formatGrowth(value: number | null): string {
   if (value == null) return "—";
-  return `${value >= 0 ? "+" : "−"}${Math.abs(value).toFixed(2)}%`;
+  return `${value >= 0 ? "+" : "−"}${Math.abs(value).toFixed(1)}%`;
+}
+
+/**
+ * Money at a glance: `SAR 747.5K`, `SAR 1.2M`, `SAR 274`.
+ *
+ * The exact figure — `747,542.65 SAR`, via `fmtSAR` — is what a chart tooltip
+ * shows, and what an export carries. On a card or in a scan-first table it is
+ * eleven characters of precision to convey one fact of magnitude, and it is
+ * what made the first cut of these tables read as a data dump.
+ */
+export function formatCompactSAR(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) return `SAR ${trimZero(value / 1_000_000)}M`;
+  if (abs >= 10_000) return `SAR ${trimZero(value / 1_000)}K`;
+  return `SAR ${Math.round(value).toLocaleString()}`;
+}
+
+/** `1.20` → `1.2`, `3.00` → `3`. One decimal, only when it carries meaning. */
+function trimZero(n: number): string {
+  const s = n.toFixed(1);
+  return s.endsWith(".0") ? s.slice(0, -2) : s;
+}
+
+/** An order count: grouped, never abbreviated. `2,727`, not `2.7K`. */
+export function formatCount(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return value.toLocaleString();
 }
