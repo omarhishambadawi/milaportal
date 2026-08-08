@@ -1,5 +1,5 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { ClientOnly, createFileRoute, Link } from "@tanstack/react-router";
+import { Suspense, lazy, useCallback, useMemo, useRef, useState } from "react";
 import { ChevronDown, Download, ShieldAlert, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +24,19 @@ import { useBranchLocator } from "@/features/branches/hooks/use-branch-locator";
 import { useDirectoryFreshness } from "@/features/branches/hooks/use-directory-freshness";
 import { EMPTY_FILTERS, hasActiveFilters, type BranchFilters } from "@/features/branches/search";
 import type { BranchView } from "@/features/branches/types";
+
+/**
+ * The map, client-only and lazily imported.
+ *
+ * The Google Maps SDK is a browser-only global, so both the render *and* the
+ * import have to stay off the SSR path — see the execution-model rules.
+ */
+const BranchMap = lazy(() => import("@/features/branches/components/branch-map"));
+
+/** Placeholder that reserves the map's height so nothing shifts on hydration. */
+const MAP_FALLBACK = (
+  <div className="h-[320px] w-full animate-pulse rounded-xl border bg-muted/40 sm:h-[380px]" />
+);
 
 export const Route = createFileRoute("/_app/branches/")({
   head: () => ({ meta: [{ title: "Branch Directory — MilaServ Portal" }] }),
@@ -338,6 +351,17 @@ function BranchDirectory() {
           />
         )}
       </div>
+
+      {/* The filtered rows on a map. Markers follow `results`, so every filter
+          and the locator's own selection are reflected here without any second
+          source of branch data. */}
+      {!error && (
+        <ClientOnly fallback={MAP_FALLBACK}>
+          <Suspense fallback={MAP_FALLBACK}>
+            <BranchMap branches={results} selected={selected} onSelect={handleFocusBranch} />
+          </Suspense>
+        </ClientOnly>
+      )}
 
       {error ? (
         <div className="rounded-xl border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
