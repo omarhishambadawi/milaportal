@@ -1,7 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
-import { queryKeys } from "@/lib/query-keys";
-import type { KpiRow } from "@/features/dashboard/types";
+import { orderKpisQuery } from "@/features/dashboard/kpis-query";
 import type { OrderBuckets } from "../monthly";
 
 /**
@@ -23,26 +21,10 @@ export function useReportOrderKpis(args: {
   team: string;
   enabled: boolean;
 }): { buckets: OrderBuckets; isLoading: boolean } {
-  // Exactly `DashboardFilters`, field for field. An extra key here would be a
-  // different cache entry from the Dashboard's, which is the whole point of
-  // borrowing its namespace.
-  const filters = { from: args.from, to: args.to, agent: "all", team: args.team };
-
-  const { data, isLoading } = useQuery({
-    queryKey: queryKeys.dashboard.kpis(filters),
-    queryFn: async () => {
-      const { data, error } = await supabase.rpc("orders_kpis" as any, {
-        _from: args.from,
-        _to: args.to,
-        _team: args.team,
-        _agent: null,
-        _mine: false,
-      });
-      if (error) throw error;
-      return (data ?? []) as KpiRow[];
-    },
-    enabled: args.enabled,
-  });
+  // The RPC, its arguments and its key all come from `orderKpisQuery`, which is
+  // the Dashboard's own definition — see the note there on why the key shape
+  // matters. This hook adds only the bucket mapping a report reads.
+  const { data, isLoading } = useQuery(orderKpisQuery(args));
 
   const rows = data ?? [];
   const find = (name: string) => {

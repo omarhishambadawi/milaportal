@@ -879,7 +879,10 @@ unmodified in structure and consumed through the `@/components/ui/*` alias.
 `use-dashboard-filters` · `use-dashboard-data` (11 aggregation queries + their
 transforms; supports `restrictAgentIdentity`, which anonymises other agents'
 names for roles without `view_all_agents` while leaving the ranking intact) ·
-`use-dashboard-export-data` (`enabled: false`, fetched via `refetch()`).
+`use-dashboard-export-data` (`enabled: false`, fetched via `refetch()`) ·
+`use-monthly-growth` (the monthly comparison timeline — one `orders_kpis` call
+per month per team through `orderKpisQuery`, combined with the historical
+baseline).
 
 ### Orders
 
@@ -1033,6 +1036,62 @@ at the same time: its first numeric column is headed "Completed orders" and was
 showing `order_count` (every order on that method, whatever its status), and
 "Share of sales" was rendering `completion_rate`, which is the proportion of that
 method's own orders that completed and is not a share of anything.
+
+### Monthly comparison & growth
+
+**Gate:** `view_team_analytics` (not merely `view_dashboard`) — the section
+compares Customer Care with Telesales against a team-wide historical baseline, and
+for a viewer whose rows RLS narrows to their own, the live months would be one
+agent's work sitting in a table beside whole-team history. Same gate as the team
+filter, for the same reason.
+
+Three tables (headline comparison, per-month revenue analytics, Cash-vs-Wasfaty
+growth breakdown), a computed insights panel, and four `lazy()`-loaded charts —
+revenue trend, revenue mix, MoM growth, order volume — in the dashboard's own
+`AnalyticsCard` / `AnalyticsTable` / chart-theme chrome.
+
+| File                                    | Role                                                                                            |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `features/dashboard/monthly-growth.ts`  | Pure: the historical baseline, month arithmetic, every derived rate, and the insight generator. |
+| `features/dashboard/kpis-query.ts`      | `orderKpisQuery` — the shared `orders_kpis` options factory (also used by both Reports hooks).  |
+| `hooks/use-monthly-growth.ts`           | Baseline + live months, via `useQueries({ combine })`.                                          |
+| `components/monthly-growth-section.tsx` | Tables, insights, scope tabs.                                                                   |
+| `components/monthly-growth-charts.tsx`  | The four Recharts panels, behind the section's own Suspense boundary.                           |
+
+**No migration, no new table, no second source of truth.** February–June 2026
+predates the orders table as an authority and is a typed constant
+(`HISTORICAL_MONTHLY`); July 2026 onward (`LIVE_DATA_START`) is fetched with the
+Dashboard's own `orders_kpis` RPC, one call per month per team, under
+`queryKeys.dashboard.kpis` — the Dashboard's own cache entries, so the section and
+the headline cards cannot disagree. Only `completed_sales` / `completed_count` are
+read; `status = 'Completed'` stays defined once, in SQL. The live window is
+`LIVE_DATA_START … current month`, so future months appear by themselves.
+
+Three deliberate behaviours:
+
+- **Absent is not zero.** Telesales did not exist before April 2026, so those
+  months carry no Telesales row and render `N/A`, never `0` — which would put a
+  −100% in the growth column. A team's growth is measured against the previous
+  month **that team has data for**, so April is Telesales' first month and has no
+  rate at all (`—`). A live team-month with zero completed orders is likewise
+  treated as absent.
+- **Not scoped by the date picker.** The subject is the whole timeline, and the
+  baseline is whole-month, team-wide, agent-less. Slicing only the live half by an
+  arbitrary window would put two different questions in one table; the subtitle
+  says so rather than silently ignoring the filter.
+- **The running month is flagged.** Its row is marked "In progress" and
+  `buildInsights` reads the last _complete_ month — "revenue fell 74%" on the 8th
+  is an artefact of the calendar, not an insight.
+
+**One supplied figure does not reconcile.** June 2026 Telesales was given as Cash
+56,748.31 + Wasfaty 107,474.89 against a stated total of 188,985.39 — a 24,762.19
+gap, and the business's own +86.90% validation is measured on the stated total.
+The stated total therefore wins (`MonthTeamTotals.totalRevenue` exists only for
+this case) and the difference is carried as `unallocatedRevenue`: shown as an
+"Unallocated" segment in the revenue-mix chart and explained in a footnote, rather
+than folded into either channel or silently dropped. Every other month reconciles
+exactly, which `__tests__/monthly-growth.test.ts` asserts along with all fifteen
+supplied figures and all six validated growth rates.
 
 ---
 

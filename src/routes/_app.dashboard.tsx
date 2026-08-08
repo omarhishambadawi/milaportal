@@ -40,9 +40,11 @@ import { SectionTitle } from "@/features/dashboard/components/section-title";
 import { StatCard } from "@/features/dashboard/components/stat-card";
 import { DashKpiCard } from "@/features/dashboard/components/dash-kpi-card";
 import { DeliveryMatrix } from "@/features/dashboard/components/delivery-matrix";
+import { MonthlyGrowthSection } from "@/features/dashboard/components/monthly-growth-section";
 import { useDashboardFilters } from "@/features/dashboard/hooks/use-dashboard-filters";
 import { useDashboardData } from "@/features/dashboard/hooks/use-dashboard-data";
 import { useDashboardExportData } from "@/features/dashboard/hooks/use-dashboard-export-data";
+import { useMonthlyGrowth } from "@/features/dashboard/hooks/use-monthly-growth";
 
 /**
  * Recharts, deferred.
@@ -78,6 +80,16 @@ function Dashboard() {
     // an anonymised agent ranking; every other analytic is unchanged for them.
     restrictAgentIdentity: !f.canViewAllAgents,
   });
+  /**
+   * Month-by-month growth, gated on `view_team_analytics`.
+   *
+   * That permission and not `view_dashboard`: the section compares Customer Care
+   * with Telesales against a team-wide historical baseline, and for a viewer
+   * whose rows RLS narrows to their own, the live months would be one agent's
+   * work sitting in a table next to whole-team history. Same gate as the team
+   * filter, for the same reason.
+   */
+  const growth = useMonthlyGrowth({ enabled: f.canViewDashboard && f.canViewTeamAnalytics });
   const { refetchExport, exportBusy } = useDashboardExportData({
     from: f.from,
     to: f.to,
@@ -205,6 +217,17 @@ function Dashboard() {
           />
         </div>
       </div>
+
+      {/* Monthly comparison & growth — the full timeline, not the picked range.
+          Above the period-scoped panels below it because it is the question the
+          page is opened with: is the month better than the last one. */}
+      {f.canViewTeamAnalytics && (
+        <MonthlyGrowthSection
+          rows={growth.rows}
+          insights={growth.insights}
+          isLoading={growth.isLoading}
+        />
+      )}
 
       {/* Call Center Invoice Verification — details table (redundant KPI cards removed per spec) */}
       <div>
