@@ -1168,11 +1168,39 @@ question the agent just closed. This is what makes "حي النخيل" ask and "
 النخيل، الرياض" answer — and the ambiguity prompt still fires, unchanged, for any
 duplicated name typed without a city.
 
-A geocoder answer is now checked against the city the agent named before it is
-believed (`agreesWithCity`): it agrees if it resolved the same city, or failing
-that if it is within 75 km of that city's centroid. When it disagrees — or when
-there was never a local match to begin with — the named city's own centroid is
-the answer, which is coarse but in the right place and says so on the origin line.
+#### Constraining the geocoder, not just checking it
+
+Splitting the query is only half the answer, because the gazetteer holds **only
+districts that contain a branch**. حي النخيل in Riyadh has none, so
+"الرياض حي النخيل" still reaches OpenStreetMap — which answered with the حي
+النخيل in **Huraymila**, a town 75-odd km north-west of Riyadh. Three things had
+to change, and the order matters:
+
+1. **The hint goes to the provider.** `Geocoder` takes an optional
+   `GeocodeHint` — the named city and its centroid — and `geocode-nominatim`
+   turns it into a `viewbox` with `bounded=1`. `countrycodes=sa` narrows to a
+   country the size of Western Europe, which is not narrow enough for a name that
+   repeats in four Saudi towns. Bounded means the wrong-city answer is not ranked
+   lower, it is **not returned**. Checking afterwards can only refuse the wrong
+   النخيل; bounding is what returns the right one.
+2. **A named city settles it, in either script.** `agreesWithCity` compared
+   OpenStreetMap's city against the Arabic "الرياض" only. OSM answered
+   `"Huraymila"` — Latin — so the check could never match and the decision fell
+   to a distance guard. Both the Arabic name and the curated English alias are
+   compared now, and a named city matching neither is a _disagreement_, not an
+   absence of agreement. The distance guard survives only for a provider that
+   returned a bare point, at 60 km rather than 75 km: any radius wide enough to
+   hold every legitimate Riyadh suburb is also wide enough to hold the next town,
+   which is precisely why the name check has to carry the weight.
+3. **The cache was retired.** Entries are keyed by query and kept forever by
+   design, so the Huraymila answer would have outlived the bug. `CACHE_KEY` moved
+   to `…osm.v3`, and the key now includes the city hint — two searches for
+   "الروضة" that named different cities are different questions, and one entry
+   for both would reintroduce the duplicate-name failure through the cache.
+
+When the provider disagrees, or returns nothing inside the box, the named city's
+own centroid is the answer — coarse, in the right city, and the origin line says
+which it is.
 
 #### What the locator will not show you
 

@@ -1,4 +1,5 @@
 ﻿import { describe, expect, it, vi } from "vitest";
+import { haversineMetres } from "@/lib/geo";
 import { buildLocationIndex } from "../location-index";
 import { LOCATOR_LIMIT, rankNearestBranches, resolveOrigin, type OriginLocality } from "../locator";
 import { decorate } from "../search";
@@ -628,5 +629,81 @@ describe("how many branches come back", () => {
     // Still nearest-first across the whole widened list.
     expect(ranked[0].item.branch_no).toBe("P0001");
     expect(ranked[19].item.branch_no).toBe("P0020");
+  });
+});
+
+describe("the Huraymila regression", () => {
+  /**
+   * The exact failure that survived the first fix.
+   *
+   * "الرياض حي النخيل" split correctly and found no النخيل in the Riyadh
+   * gazetteer — no branch sits in that district — so it reached OpenStreetMap,
+   * which answered with the حي النخيل in Huraymila: a town 74.4 km from Riyadh's
+   * branch centroid, named in Latin script. The city check compared "Huraymila"
+   * against "الرياض" only, could not match across scripts, and handed the
+   * decision to a 75 km distance guard that cleared a town-sized error by 600 m.
+   */
+  const HURAYMILA = {
+    point: { lat: 25.116, lng: 46.105 },
+    city: "Huraymila",
+    district: "حي النخيل",
+    precision: "district" as const,
+  };
+
+  /** Riyadh branches, spread so the city centroid lands near the real one. */
+  const RIYADH = decorate([
+    branch({ branch_no: "P0030", city: "الرياض", latitude: 24.7241, longitude: 46.6402 }),
+    branch({ branch_no: "P0004", city: "الرياض", latitude: 24.6408, longitude: 46.8214 }),
+    branch({ branch_no: "P0007", city: "الرياض", latitude: 24.7743, longitude: 46.7386 }),
+  ]);
+  const RIYADH_INDEX = buildLocationIndex(RIYADH);
+
+  it("rejects a city named in a different script from the one asked for", async () => {
+    const geocode = vi.fn().mockResolvedValue(HURAYMILA);
+    const { origin } = await resolveOrigin("الرياض حي النخيل", RIYADH_INDEX, geocode);
+
+    expect(geocode).toHaveBeenCalled();
+    // Not the Huraymila point, whatever else happens.
+    expect(origin?.point.lat).not.toBeCloseTo(25.116, 2);
+    // The named city stands instead: coarse, but in Riyadh.
+    expect(origin?.locality.city).toBe("الرياض");
+  });
+
+  it("accepts the same city written in English", async () => {
+    // The other half of the script fix: rejecting on a script mismatch would be
+    // just as wrong as accepting on one.
+    const geocode = vi.fn().mockResolvedValue({
+      point: { lat: 24.7241, lng: 46.6402 },
+      city: "Riyadh",
+      district: "حي النخيل",
+      precision: "district" as const,
+    });
+
+    const { origin } = await resolveOrigin("الرياض حي النخيل", RIYADH_INDEX, geocode);
+    expect(origin?.kind).toBe("geocoded");
+    expect(origin?.point.lat).toBeCloseTo(24.7241, 4);
+  });
+
+  it("hands the geocoder the city and a point to search around", async () => {
+    // The check-afterwards half cannot find the right النخيل, only refuse the
+    // wrong one. Constraining the search up front is what returns the right one.
+    const geocode = vi.fn().mockResolvedValue(null);
+    await resolveOrigin("الرياض حي النخيل", RIYADH_INDEX, geocode);
+
+    const hint = geocode.mock.calls[0][1];
+    expect(hint.city).toBe("الرياض");
+    expect(hint.near.lat).toBeCloseTo((24.7241 + 24.6408 + 24.7743) / 3, 4);
+  });
+
+  it("would not have caught it on distance alone", async () => {
+    // Documents why the name check had to carry the weight: Huraymila is inside
+    // any radius wide enough to hold every legitimate Riyadh suburb.
+    const centroid = {
+      lat: (24.7241 + 24.6408 + 24.7743) / 3,
+      lng: (46.6402 + 46.8214 + 46.7386) / 3,
+    };
+    const metres = haversineMetres(centroid, HURAYMILA.point);
+    expect(metres).toBeGreaterThan(60_000);
+    expect(metres).toBeLessThan(80_000);
   });
 });

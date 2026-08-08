@@ -167,12 +167,31 @@ export interface GeocodeHit {
 }
 
 /**
+ * What the resolver already knows about where the answer should be.
+ *
+ * Passed to the provider rather than merely used to check its answer afterwards,
+ * because the two are not equivalent: a geocoder asked for "حي النخيل" with no
+ * geography attached ranks every النخيل in the country and returns its favourite,
+ * and rejecting that afterwards leaves us with no district at all. Constraining
+ * the search up front is what makes it return the *right* one.
+ */
+export interface GeocodeHint {
+  /** The city the agent named, as the directory writes it. */
+  city?: string | null;
+  /** That city's centre, for a provider that can bias or bound by area. */
+  near?: LatLng;
+}
+
+/**
  * A provider may answer with a bare point or with a point plus the names around
  * it. The richer shape is what lets a geocoded origin still get a neighbourhood
  * tie-break and a same-district delivery band; the bare shape stays valid so a
  * minimal provider — and every existing test — keeps working.
+ *
+ * The hint is optional on both sides: a provider that ignores it is still a valid
+ * `Geocoder`, and a caller that has no city to offer still gets an answer.
  */
-export type Geocoder = (text: string) => Promise<GeocodeHit | LatLng | null>;
+export type Geocoder = (text: string, hint?: GeocodeHint) => Promise<GeocodeHit | LatLng | null>;
 
 function asHit(value: GeocodeHit | LatLng | null): GeocodeHit | null {
   if (!value) return null;
@@ -363,17 +382,22 @@ export async function resolveOrigin(
   // The city the agent named, whether they typed it or chose it. Everything
   // below is about not throwing that away: it is the strongest signal in the
   // query, and the old cascade dropped it the moment the local index missed.
-  const namedCity = splitCityQualifier(index, trimmed).city ?? scope?.city ?? null;
+  const typedCity = splitCityQualifier(index, trimmed).city;
+  const namedCity = typedCity ?? scope?.city ?? null;
   const anchor = namedCity ? cityEntry(index, namedCity) : null;
 
   // Step 3. Only now, and only if a provider was supplied.
   if (geocode) {
-    // The city goes into the query text rather than a parameter, because that is
-    // the only place a geocoder can take it: "الروضة" alone is a name in a dozen
-    // Saudi cities, and "الروضة الرياض" is one place. Appended rather than
-    // prepended so the thing being searched for still leads the string.
-    const query = scope?.city ? `${trimmed} ${scope.city}` : trimmed;
-    const hit = asHit(await geocode(query));
+    // A city from the *dropdown* has to be written into the query text, because
+    // the agent never typed it: "الروضة" alone is a name in a dozen Saudi cities
+    // and "الروضة جدة" is one place. A city the agent typed is already in there,
+    // and appending it again would send "الرياض حي النخيل الرياض" — a string no
+    // geocoder ranks better than the one it was built from.
+    const query = !typedCity && scope?.city ? `${trimmed} ${scope.city}` : trimmed;
+    // The hint carries what the query text cannot: a point to search around. A
+    // provider that can bound its search by area is the difference between
+    // "the النخيل in Riyadh" and "whichever النخيل ranks highest in the country".
+    const hit = asHit(await geocode(query, { city: namedCity, near: anchor?.point }));
     if (hit && isWithin(hit.point, KSA_BOUNDS) && agreesWithCity(hit, anchor)) {
       const named = [hit.district, hit.city].filter(Boolean).join(", ");
       return {
@@ -417,32 +441,50 @@ function cityEntry(index: LocationIndex, city: string): LocationEntry | null {
  * How far a geocoded point may sit from the centre of the city it claims to be
  * in before the claim is disbelieved.
  *
- * Generous on purpose. Riyadh is roughly 70 km across and the gazetteer's centre
- * is the mean of the branches in it rather than the municipal centroid, so a
- * legitimate outer-suburb district can be a long way from it. This is a sanity
- * bound against an answer in the *wrong city* — the failure that actually
- * happens, where a bare Arabic district name resolves to a same-named place a
- * region away — not an attempt to police which suburb is plausible.
+ * Only consulted when the provider returned **no** city name of its own, so it is
+ * a backstop rather than the main test. Sized to match the bounding box the
+ * provider is asked to search inside (see `geocode-nominatim`), because a point
+ * that came back from a bounded search and then failed this check would mean the
+ * two disagreed about the same city.
+ *
+ * It was 75 km, and 75 km was wrong in the most instructive way available: حي
+ * النخيل in Huraymila sits 74.4 km from Riyadh's branch centroid, so the guard
+ * cleared a town-sized error by six hundred metres. A radius wide enough to
+ * contain every legitimate suburb of Riyadh is also wide enough to contain the
+ * next town over, which is why the name check below now carries the weight and
+ * this only catches the case where there is no name to check.
  */
-const CITY_SANITY_RADIUS_M = 75_000;
+const CITY_SANITY_RADIUS_M = 60_000;
 
 /**
  * Does a geocoder's answer agree with the city the agent named?
  *
  * Duplicate neighbourhood names are the norm here rather than the exception, and
  * a geocoder asked for one in Arabic answers with whichever it ranks highest —
- * which is how "حي النخيل" with Riyadh on the query resolved to a النخيل
- * elsewhere, and why the nearest branch came back 50 km away instead of 3.
+ * which is how "حي النخيل، الرياض" resolved to the النخيل in Huraymila, and why
+ * the nearest branch came back 55 km away instead of 3.
  *
- * Two ways to agree, because the provider may or may not return names: the city
- * it resolved matches the one asked for, or — when it named no city, or named one
- * under a spelling the directory does not use — the point is at least in the
- * right part of the country. Nothing to check against means nothing to disagree
- * with, so an unqualified query passes untouched.
+ * **A city the provider names settles it outright**, in either direction. That is
+ * the fix for the failure above: OpenStreetMap answered `"Huraymila"` — in Latin
+ * script, where the directory writes "الرياض" — so a check against the Arabic
+ * name alone could never match, and the distance backstop was left deciding a
+ * question it is bad at. Both scripts are compared now, and a named city that
+ * matches neither is a disagreement rather than an absence of agreement.
+ *
+ * The distance test survives only for a provider that returned a bare point.
+ * Nothing to check against means nothing to disagree with, so an unqualified
+ * query passes untouched.
  */
 function agreesWithCity(hit: GeocodeHit, anchor: LocationEntry | null): boolean {
   if (!anchor) return true;
-  if (hit.city && sameName(hit.city, anchor.name)) return true;
+
+  if (hit.city) {
+    return (
+      sameName(hit.city, anchor.name) ||
+      (anchor.english != null && sameName(hit.city, anchor.english))
+    );
+  }
+
   return haversineMetres(hit.point, anchor.point) <= CITY_SANITY_RADIUS_M;
 }
 

@@ -1,6 +1,21 @@
 import { KSA_BOUNDS, isWithin, roundCoordinate } from "@/lib/geo";
-import type { GeocodeHit, GeocodePrecision, Geocoder } from "./locator";
+import type { GeocodeHint, GeocodeHit, GeocodePrecision, Geocoder } from "./locator";
 import { normalizePlace } from "./location-index";
+
+/**
+ * Half-width of the box a city-qualified search is confined to, in degrees.
+ *
+ * 0.5° is roughly 55 km each way — comfortably larger than any Saudi metro area
+ * this network operates in, so a genuine outer district is still inside it, and
+ * tight enough to exclude the next town: Huraymila sits 0.6° of longitude from
+ * Riyadh's centroid, which is the error this bounds out.
+ *
+ * Degrees rather than metres because that is the unit Nominatim's `viewbox`
+ * takes. The longitude degree is worth less than the latitude one at this
+ * latitude (~0.9×), which makes the box slightly narrower east-to-west than it
+ * is tall — harmless, and in the conservative direction.
+ */
+const VIEWBOX_DEGREES = 0.5;
 
 /**
  * OpenStreetMap, as the last resort only.
@@ -40,15 +55,23 @@ const MIN_INTERVAL_MS = 1100;
 const TIMEOUT_MS = 5000;
 
 /**
- * Bumped from v1 because the stored shape gained the names around the point.
+ * Bumped from v1 because the stored shape gained the names around the point, and
+ * from v2 because the *answers themselves* were wrong.
  *
  * A v1 entry parses fine — the reader defaults its missing fields to null — but
  * it would then be a *point-only* answer that permanently outranks the richer
  * one a refetch would produce, silently denying every cached query the locality
  * tie-break and the same-district delivery band. One refetch per query is the
  * cheaper mistake.
+ *
+ * v2 entries were resolved by an unbounded search, so a query like "حي النخيل،
+ * الرياض" is cached against a point in Huraymila. Those are exactly the queries
+ * this version exists to fix, and "cache everything that succeeds, forever"
+ * means the bad answer would outlive the bug by design. Bumping the key is the
+ * only way to retire them: the entries are keyed by query, so there is nothing
+ * to selectively evict without re-deciding which of them were wrong.
  */
-const CACHE_KEY = "milaserv.geocode.osm.v2";
+const CACHE_KEY = "milaserv.geocode.osm.v3";
 
 /** Entries kept in localStorage. Bounded so the key cannot grow without limit. */
 const MAX_CACHED = 500;
@@ -259,8 +282,15 @@ function firstOf(values: (string | undefined)[]): string | null {
  * without narrowing. It remains assignable to `Geocoder` — a narrower return type
  * always is — which is what `resolveOrigin` type-checks against.
  */
-export const geocodeWithOpenStreetMap = (async (text: string): Promise<GeocodeHit | null> => {
-  const key = normalizePlace(text);
+export const geocodeWithOpenStreetMap = (async (
+  text: string,
+  hint?: GeocodeHint,
+): Promise<GeocodeHit | null> => {
+  // The city is part of the key, not just of the request. Two searches for
+  // "الروضة" that named different cities are different questions with different
+  // answers, and collapsing them onto one entry would let whichever ran first
+  // answer for both.
+  const key = [normalizePlace(text), normalizePlace(hint?.city ?? "")].filter(Boolean).join("|");
   if (!key) return null;
 
   const cached = cache().get(key);
@@ -279,6 +309,26 @@ export const geocodeWithOpenStreetMap = (async (text: string): Promise<GeocodeHi
     // wrong country that looks perfectly reasonable in the UI.
     countrycodes: "sa",
   });
+
+  // Bound the search to the named city when there is one.
+  //
+  // `countrycodes=sa` narrows the answer to a country the size of Western
+  // Europe, which is not narrow enough for a Saudi district name: "حي النخيل"
+  // exists in Riyadh, Buraydah, Al Majma'ah and Huraymila, and Nominatim returns
+  // whichever it ranks highest rather than the one in the city the agent typed.
+  // `bounded=1` makes the viewbox a filter rather than a preference, so the
+  // wrong-city answer is not ranked lower — it is not returned at all, and the
+  // caller falls back to the city centroid, which is coarse but correct.
+  if (hint?.near) {
+    const { lat, lng } = hint.near;
+    params.set(
+      "viewbox",
+      [lng - VIEWBOX_DEGREES, lat + VIEWBOX_DEGREES, lng + VIEWBOX_DEGREES, lat - VIEWBOX_DEGREES]
+        .map((value) => value.toFixed(4))
+        .join(","),
+    );
+    params.set("bounded", "1");
+  }
 
   try {
     const found = await serialize(async () => {
