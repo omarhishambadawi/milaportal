@@ -1181,6 +1181,7 @@ export type Database = {
         }
         Returns: undefined
       }
+      order_fulfillment: { Args: { _delivery_type: string }; Returns: string }
       orders_agents: {
         Args: {
           _agent?: string
@@ -1221,7 +1222,10 @@ export type Database = {
           _to: string
         }
         Returns: {
+          completed_cash_count: number
+          completed_count: number
           completed_sales: number
+          completed_wasfaty_count: number
           completion_rate: number
           delivery_type: string
           order_count: number
