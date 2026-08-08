@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectLabel,
   SelectSeparator,
@@ -229,12 +230,17 @@ function OrdersList() {
                 </SelectItem>
               ))}
               <SelectSeparator />
-              <SelectLabel>Method</SelectLabel>
-              {FULFILLMENT_OPTIONS.filter((o) => o.group === "method").map((o) => (
-                <SelectItem key={o.value} value={o.value}>
-                  {o.label}
-                </SelectItem>
-              ))}
+              {/* SelectLabel reads its group from context, so it must sit inside a
+                  SelectGroup — as a direct child of SelectContent it throws and
+                  takes the whole page down. */}
+              <SelectGroup>
+                <SelectLabel>Method</SelectLabel>
+                {FULFILLMENT_OPTIONS.filter((o) => o.group === "method").map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
             </SelectContent>
           </Select>
 
