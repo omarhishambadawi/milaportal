@@ -148,10 +148,15 @@ function KpiStrip({ current, previous }: { current: MonthRow; previous: MonthRow
 
   return (
     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 lg:grid-cols-5">
+      {/* Each tile names its own period: a level figure is stamped with the
+          month it belongs to, a rate with the month it is measured against.
+          The strip previously read `from SAR 445.3K` under the levels, which
+          is the same comparison stated as a number the reader then has to
+          attribute to a month themselves. */}
       <KpiTile
         label="Total revenue"
         value={formatCompactSAR(now.totalRevenue)}
-        sub={then ? `from ${formatCompactSAR(then.totalRevenue)}` : undefined}
+        sub={current.label}
       />
       <KpiTile
         label="Revenue growth"
@@ -159,11 +164,7 @@ function KpiStrip({ current, previous }: { current: MonthRow; previous: MonthRow
         valueTone={growthTone(now.revenueGrowth)}
         sub={versus}
       />
-      <KpiTile
-        label="Completed orders"
-        value={formatCount(now.totalOrders)}
-        sub={then ? `from ${formatCount(then.totalOrders)}` : undefined}
-      />
+      <KpiTile label="Completed orders" value={formatCount(now.totalOrders)} sub={current.label} />
       <KpiTile
         label="Order growth"
         value={formatGrowth(now.orderGrowth)}
@@ -399,8 +400,19 @@ export function MonthlyGrowthSection({
 
       {current && (
         <>
-          <div className="mb-2 text-[11px] uppercase tracking-wider text-muted-foreground">
-            {current.label} · latest complete month
+          {/* The reporting period, stated once above the strip. Without the
+              second line the tiles are a set of figures and a set of
+              percentages with no stated basis — the reader can work out that
+              the growth is against June, but should not have to. */}
+          <div className="mb-2">
+            <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              {current.label} · latest complete month
+            </div>
+            {previous && (
+              <div className="text-[11px] text-muted-foreground/80">
+                Compared with {previous.label}
+              </div>
+            )}
           </div>
           <KpiStrip current={current} previous={previous} />
         </>
