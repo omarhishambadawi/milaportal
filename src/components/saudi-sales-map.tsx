@@ -327,7 +327,14 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
 
 
       if (!chosen) {
-        for (const cand of build(gap)) {
+        // Last resort: clamp into view, but still prefer a position that is not
+        // sitting on another city's bubble.
+        const candidates = build(gap);
+        const ordered = [
+          ...candidates.filter((cand) => !hitsForeignBubble(rectFor(cand), c.name)),
+          ...candidates,
+        ];
+        for (const cand of ordered) {
           const rect = rectFor(cand);
           const clampedX = Math.min(Math.max(rect.x, PAD), W - PAD - rect.w);
           const clampedY = Math.min(Math.max(rect.y, PAD), H - PAD - rect.h);
@@ -338,6 +345,7 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
           break;
         }
       }
+
 
       return {
         ...c,
