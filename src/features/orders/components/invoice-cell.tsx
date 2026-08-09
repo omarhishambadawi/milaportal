@@ -1,69 +1,34 @@
-import { useState, type MouseEvent as ReactMouseEvent } from "react";
-import { Check, Copy } from "lucide-react";
-import { toast } from "sonner";
-import { cn } from "@/lib/utils";
-
 /**
- * Displays one or many invoice numbers with a copy affordance that mirrors
- * `CopyableOrderNo`. Multiple invoices are split on comma/newline and copied
- * as newline-separated values so the paste target (Excel, WhatsApp, notes)
- * receives one per line.
+ * Every invoice number on the order, one per line.
+ *
+ * An order can carry several invoices, and the cell used to show the first with
+ * a "+2" pill standing in for the rest — which meant the numbers agents
+ * reconcile against all afternoon were the one thing the row would not tell
+ * them. They are all rendered now; the column is sized for a six-digit number,
+ * so a second or third invoice grows the row's height rather than its width and
+ * the table's horizontal scroll is unchanged.
+ *
+ * There is deliberately no copy affordance here (there was one, mirroring
+ * `CopyableOrderNo`). Invoice numbers are copied continuously as part of the
+ * workflow, and a button that appears under the cursor on every row of a list
+ * that is scrolled all day is noise on the one column read most often.
  */
 export function InvoiceCell({ value }: { value: string | null | undefined }) {
-  const [copied, setCopied] = useState(false);
-
   if (!value) return <span className="text-muted-foreground font-sans">—</span>;
+
   const parts = String(value)
     .split(/[,\n]+/)
     .map((s) => s.trim())
     .filter(Boolean);
   if (parts.length === 0) return <span className="text-muted-foreground font-sans">—</span>;
 
-  const [first, ...rest] = parts;
-  const hasMany = rest.length > 0;
-  const copyPayload = parts.join("\n");
-
-  const onCopy = async (e: ReactMouseEvent) => {
-    e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(copyPayload);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      toast.error("Copy failed");
-    }
-  };
-
   return (
-    <span className="inline-flex items-center gap-1.5 min-w-0">
-      <span className="truncate">{first}</span>
-      {hasMany && (
-        <span
-          className="shrink-0 inline-flex items-center rounded-full bg-primary/10 text-primary text-[10px] font-sans font-semibold px-1.5 py-0.5 leading-none"
-          title={parts.join("\n")}
-        >
-          +{rest.length}
+    <span className="flex flex-col items-start gap-0.5 min-w-0 leading-tight">
+      {parts.map((invoice, i) => (
+        <span key={`${invoice}-${i}`} className="block max-w-full truncate" title={invoice}>
+          {invoice}
         </span>
-      )}
-      <button
-        type="button"
-        onClick={onCopy}
-        aria-label={
-          copied
-            ? "Copied"
-            : hasMany
-              ? `Copy ${parts.length} invoice numbers`
-              : "Copy invoice number"
-        }
-        title={hasMany ? `Copy all ${parts.length} invoices (one per line)` : "Copy invoice"}
-        className={cn(
-          "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-opacity",
-          "opacity-0 group-hover:opacity-100 focus:opacity-100",
-          copied && "opacity-100 text-[var(--positive-alt)]",
-        )}
-      >
-        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-      </button>
+      ))}
     </span>
   );
 }

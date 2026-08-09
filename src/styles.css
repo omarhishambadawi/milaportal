@@ -259,7 +259,7 @@
 @property --tint-row {
   syntax: "<color>";
   inherits: true;
-  initial-value: oklch(0.72 0.12 194 / 0.06);
+  initial-value: oklch(0.72 0.12 194 / 0.15);
 }
 @property --tint-resolved {
   syntax: "<color>";
@@ -356,7 +356,13 @@
   --tint-cash: oklch(98.7% 0.022 95.277); /* amber-50 */
   --tint-wasfaty: oklch(97.7% 0.013 236.62); /* sky-50 */
   --tint-map: oklch(0.98 0.015 195);
-  --tint-row: oklch(0.72 0.12 194 / 0.06);
+  /* Verified Orders rows. 6% turquoise over a near-white card is a tint you can
+   * only see by comparing two rows side by side, so in light mode the state was
+   * carried entirely by the 3px rail — dark mode, tinting 12% over a dark
+   * surface, read fine. Raised until the row is obvious at a glance while still
+   * sitting far under the text it holds: the row composites to #dcf5f5, where
+   * body text still measures 14.5:1 and muted text 5.2:1. */
+  --tint-row: oklch(0.72 0.12 194 / 0.15);
   --tint-resolved: oklch(98.2% 0.018 155.826 / 0.4); /* green-50/40 */
   --map-land-top: oklch(0.93 0.035 195);
   --map-land-bottom: oklch(0.9 0.022 215);

@@ -71,12 +71,13 @@ export const FULFILLMENT_LABEL: Record<Fulfillment, string> = {
  *
  * Individual options are derived from `DELIVERY_TYPES` — the same list the order
  * form offers — rather than spelled again here, so a method added to the form
- * becomes filterable without a second edit. The label is the business's word for
- * it where that differs from the stored value: the sheet says "AlShrouq" and the
- * floor says "El Shorouk".
+ * becomes filterable without a second edit. A method appears under its stored
+ * name unless there is a shorter word for it that means the same thing; the map
+ * below is only for that, never for renaming a courier. The filter used to show
+ * "El Shorouk" for the stored "AlShrouq", which read as a different provider
+ * from the one every other surface names.
  */
 const METHOD_LABEL: Record<string, string> = {
-  AlShrouq: "El Shorouk",
   "Branch Scooter": "Scooter",
 };
 

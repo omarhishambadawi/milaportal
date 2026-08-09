@@ -22,6 +22,7 @@ import {
   Plus,
   Search,
   ShieldCheck,
+  Star,
 } from "lucide-react";
 import { STATUSES, STATUS_STYLES, TEAMS, fmtSAR, formatOrderNo } from "@/lib/branches";
 import { cn } from "@/lib/utils";
@@ -38,6 +39,7 @@ import { useOrdersListData } from "@/features/orders/hooks/use-orders-list-data"
 import { useOrdersMutations } from "@/features/orders/hooks/use-orders-mutations";
 import { useOrdersExport } from "@/features/orders/hooks/use-orders-export";
 import { useOrdersScrollRestoration } from "@/features/orders/hooks/use-orders-scroll-restoration";
+import { useStarredOrders } from "@/features/orders/hooks/use-starred-orders";
 
 export const Route = createFileRoute("/_app/orders/")({
   head: () => ({ meta: [{ title: "Orders" }] }),
@@ -74,6 +76,9 @@ function OrdersList() {
     canVerifyAll: f.canVerifyAll,
     canVerifyOwn: f.canVerifyOwn,
   });
+  // Personal, per-agent shortcuts. Scoped to the signed-in user's id, so two
+  // agents on the same call-floor machine never see each other's stars.
+  const { starred, toggleStar, canStar } = useStarredOrders(f.userId);
   const { exportXlsx } = useOrdersExport({
     from: f.from,
     to: f.to,
@@ -304,16 +309,17 @@ function OrdersList() {
 
             A raw <table> rather than the ui/table wrapper, because the wrapper's
             own overflow container fights an outer one. `min-w` is what forces
-            the horizontal scroll rather than letting eleven columns crush
+            the horizontal scroll rather than letting twelve columns crush
             themselves into 380px.
           */}
           <div className="w-full overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
             <table
               className="w-full caption-bottom text-sm border-separate border-spacing-0"
-              style={{ minWidth: 1200 }}
+              style={{ minWidth: 1240 }}
             >
               <colgroup>
                 <col style={{ width: 44 }} />
+                <col style={{ width: 40 }} />
                 <col style={{ width: 168 }} />
                 <col style={{ width: 176 }} />
                 <col style={{ width: 210 }} />
@@ -336,6 +342,12 @@ function OrdersList() {
                       aria-label="Verified"
                     />
                   </th>
+                  <th
+                    className="text-center px-1 py-3 border-b border-border/70"
+                    title="Starred by you"
+                  >
+                    <Star className="h-4 w-4 mx-auto text-primary/80" aria-label="Starred" />
+                  </th>
                   <th className="text-left px-3 py-3 border-b border-border/70">Order</th>
                   <th className="text-left px-3 py-3 border-b border-border/70">Date</th>
                   <th className="text-left px-3 py-3 border-b border-border/70">Customer</th>
@@ -352,7 +364,7 @@ function OrdersList() {
                 {isLoading && (
                   <tr>
                     <td
-                      colSpan={11}
+                      colSpan={12}
                       className="text-center text-muted-foreground py-14 border-b border-border/50"
                     >
                       Loading…
@@ -362,7 +374,7 @@ function OrdersList() {
                 {!isLoading && pageRows.length === 0 && (
                   <tr>
                     <td
-                      colSpan={11}
+                      colSpan={12}
                       className="text-center text-muted-foreground py-14 border-b border-border/50"
                     >
                       No orders found
@@ -373,6 +385,7 @@ function OrdersList() {
                   const editable = canEditOrder(o);
                   const canVerifyRow = canVerifyOrder(o);
                   const verified = !!o.call_center_verified;
+                  const isStarred = starred.has(o.id);
                   const zebra = idx % 2 === 1;
                   const rowBg = verified
                     ? "bg-[var(--tint-row)]"
@@ -401,6 +414,31 @@ function OrdersList() {
                           onCheckedChange={(v) => toggleVerified(o, !!v)}
                           aria-label="Call Center invoice verified"
                         />
+                      </td>
+                      <td
+                        className={cn("text-center px-1", cellCls)}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => toggleStar(o.id)}
+                          disabled={!canStar}
+                          aria-pressed={isStarred}
+                          aria-label={isStarred ? "Remove star" : "Star this order"}
+                          title={
+                            isStarred ? "Starred — only you see this" : "Star — only you see this"
+                          }
+                          className={cn(
+                            "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors",
+                            "hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                            isStarred
+                              ? "text-[var(--attention)]"
+                              : "text-muted-foreground/60 hover:text-foreground",
+                            !canStar && "pointer-events-none opacity-40",
+                          )}
+                        >
+                          <Star className={cn("h-4 w-4", isStarred && "fill-current")} />
+                        </button>
                       </td>
                       <td className={cn("px-3", cellCls)}>
                         <div className="flex flex-col items-start gap-1 min-w-0">

@@ -889,6 +889,7 @@ baseline).
 `use-orders-list-filters` · `use-orders-list-data` (paginated page fetch with
 `keepPreviousData`, the `orders_kpi_summary` RPC, per-row enrichment) ·
 `use-orders-mutations` · `use-orders-export` · `use-orders-scroll-restoration` ·
+`use-starred-orders` (per-agent stars, localStorage keyed by user id) ·
 `use-order-form`.
 
 ### Users
@@ -1263,6 +1264,37 @@ never blanks the table, and a single `orders_kpi_summary` RPC for the KPI strip.
 Filters: date range, team, agent, status, **fulfillment**, "mine only", free-text
 search. Page size (25/50/100) persists at `orders.pageSize`.
 
+One twelve-column table at every width, scrolled sideways below `min-w: 1240`.
+Three of those columns carry state rather than a field:
+
+- **Verified** (col 1) — the `call_center_verified` checkbox, a 3px `bg-primary`
+  rail down the row's left edge, and the row tint `--tint-row`. One state, one
+  set of styles, both themes. Light mode tinted at 6% turquoise over a white
+  card, which was invisible without a second row to compare against; it is 15%
+  now — the row composites to `#dcf5f5`, body text 14.5:1 and muted text 5.2:1 —
+  matching what dark mode already did at 12% over a dark surface (`#13313a`,
+  unchanged).
+- **Star** (col 2) — `useStarredOrders`, below.
+- **Invoice No.** — every invoice on the order, one per line
+  (`components/invoice-cell`). It used to show the first with a "+2" pill, which
+  hid the numbers agents reconcile against all day. The column is sized for a
+  six-digit number, so extra invoices grow the row's height, not the table's
+  width. Deliberately no copy button: invoice numbers are copied continuously,
+  and a hover affordance on every row of the most-read column was noise.
+
+### Starred orders
+
+`hooks/use-starred-orders` — one agent's shortcut list, keyed
+`milaserv.orders.starred.<user id>` in localStorage. Same reasoning as the branch
+directory's favourites (`features/branches/hooks/use-branch-prefs`): nobody
+reports on them, nobody else may read them, and losing one costs a re-star, so a
+table would buy a migration, RLS policies and a write round trip per click for
+nothing. **The user id in the key is load-bearing** — the call floor shares
+machines, and an unkeyed list would show one agent another's stars on the next
+sign-in. Hydrated in an effect keyed on the user id, never during render (this
+app server-renders). Consequence: stars are per browser, so an agent signing in
+on a second machine starts with none.
+
 ### Fulfillment — one definition, three surfaces
 
 `features/orders/fulfillment.ts` is the **single source of truth** for delivery
@@ -1294,11 +1326,15 @@ TypeScript. `__tests__/fulfillment.test.ts` pins both to one table of values.
 two groups, then each individual method. Group values go through the classifier;
 method values are the stored `delivery_type` verbatim, so filtering to one courier
 is an equality test that cannot disagree with the group containing it. Selecting
-**Delivery** therefore spans El Shorouk, Azman and Branch Scooter — nothing in
+**Delivery** therefore spans AlShrouq, Azman and Branch Scooter — nothing in
 that predicate names a courier at all, which is what guarantees it. The individual
 options are derived from `DELIVERY_TYPES`, so a method added to the order form
-becomes filterable without a second edit; only the _label_ is overridden where the
-floor's word differs from the sheet's ("AlShrouq" → "El Shorouk").
+becomes filterable without a second edit. Methods appear under their stored name;
+`METHOD_LABEL` overrides only where a shorter word means the same thing ("Branch
+Scooter" → "Scooter"). It used to relabel the stored "AlShrouq" as "El Shorouk",
+which named a courier no other surface — the order form, the export, the
+Dashboard mix — knew about; the stored value was always `AlShrouq` and is
+unchanged.
 
 ### Form
 

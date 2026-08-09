@@ -65,7 +65,9 @@ describe("FULFILLMENT_OPTIONS", () => {
 
   it("labels the methods the way the floor says them", () => {
     const label = (value: string) => FULFILLMENT_OPTIONS.find((o) => o.value === value)?.label;
-    expect(label("AlShrouq")).toBe("El Shorouk");
+    // The stored name, verbatim. It had been relabelled "El Shorouk" here and
+    // nowhere else, so the filter named a courier no other surface knew.
+    expect(label("AlShrouq")).toBe("AlShrouq");
     expect(label("Branch Scooter")).toBe("Scooter");
     expect(label("Azman")).toBe("Azman");
     expect(label("Store Pickup")).toBe("Store Pickup");
