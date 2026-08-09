@@ -121,7 +121,6 @@ function lookupCoords(name: string): [number, number] | undefined {
  * data — no per-city special cases.
  */
 
-
 export interface CitySales {
   name: string;
   sales: number;
@@ -617,7 +616,6 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                       : `transform 520ms cubic-bezier(.34,1.4,.5,1) ${i * 40}ms, opacity 340ms ease ${i * 40}ms`,
                   }}
                 >
-
                   {/* Soft pulse for top cities */}
                   {topThree && (
                     <circle
