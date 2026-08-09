@@ -912,7 +912,8 @@ baseline).
 
 `use-orders-list-filters` · `use-orders-list-data` (paginated page fetch with
 `keepPreviousData`, the `orders_kpi_summary` RPC, per-row enrichment) ·
-`use-orders-mutations` · `use-orders-export` · `use-orders-scroll-restoration` ·
+`use-orders-mutations` · `use-orders-export` ·
+`use-orders-scroll-restoration` (returns to the edited row, below) ·
 `use-starred-orders` (per-agent stars in `order_stars`; optimistic toggle) ·
 `use-order-form`.
 
@@ -1289,6 +1290,44 @@ Filters: date range, team, agent, status, **fulfillment**, "mine only",
 **"starred only"**, free-text search — all composable, all applied server-side
 through one `applyOrderFilters`. Page size (25/50/100) persists at
 `orders.pageSize`.
+
+**Page header** holds the page-level actions — My/All orders, **Export Excel**,
+New order. Export lives here rather than in the filter bar because it acts on
+what the filters have already selected rather than being one of them, and in the
+bar it was the only control on a second row, so the container carried a row of
+empty space to hold one button.
+
+**Filter bar**: one row of `h-10` controls at ≥1280px of content width, two below
+that, never three; `p-2.5 sm:p-3` around them, since it is a strip of controls
+rather than content. Search is the primary control and is built to look it —
+it takes the leftover width (capped at `max-w-md`), and lifts its shadow on
+focus — while keeping the same radius, border and focus ring as everything
+beside it. "Starred" is an outline toggle, not a filled button, so it reads as a
+filter; active is a `primary/10` wash, a `primary/60` border and a filled amber
+star, with the **label left at `foreground`** because turquoise text on a
+turquoise wash measures 2.15:1. Measured in both themes: active label 15.1 light
+/ 12.7 dark, star 4.6 / 9.8, search text 16.5 / 15.1.
+
+### Returning from an order
+
+`use-orders-scroll-restoration` puts the agent back on the row they left, which
+matters most for the agents working the bottom of a long list.
+
+`rememberOrderReturn(orderId)` is called by the row action **before** navigating,
+capturing the id and `window.scrollY` together — read on the way back it is
+already gone, because opening the much shorter edit form clamps the scroll
+offset. On return the restore looks the row up by `data-order-id`.
+
+The wait is commit-driven, not timed. The effect keys on `rowsKey` (the rendered
+row ids), so it re-runs after every commit that changes the table and always
+searches a DOM that holds the latest render, and on `settled` (`!isLoading &&
+!isFetching`), which is what distinguishes _not yet_ from _not here_: a missing
+row mid-fetch leaves the restore armed for a later commit, while a missing row
+once the query has settled means the order moved page or its own update filtered
+it out, and the remembered offset applies instead. `decideRestore` is that policy
+as a pure function, pinned by `__tests__/scroll-restoration.test.ts`. Filters,
+search and page are already preserved by the module-level filter cache, so the
+list the agent comes back to is the one they left.
 
 One twelve-column table at every width, scrolled sideways below `min-w: 1240`.
 Three of those columns carry state rather than a field:

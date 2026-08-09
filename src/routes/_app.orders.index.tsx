@@ -38,7 +38,10 @@ import { useOrdersListFilters } from "@/features/orders/hooks/use-orders-list-fi
 import { useOrdersListData } from "@/features/orders/hooks/use-orders-list-data";
 import { useOrdersMutations } from "@/features/orders/hooks/use-orders-mutations";
 import { useOrdersExport } from "@/features/orders/hooks/use-orders-export";
-import { useOrdersScrollRestoration } from "@/features/orders/hooks/use-orders-scroll-restoration";
+import {
+  rememberOrderReturn,
+  useOrdersScrollRestoration,
+} from "@/features/orders/hooks/use-orders-scroll-restoration";
 
 export const Route = createFileRoute("/_app/orders/")({
   head: () => ({ meta: [{ title: "Orders" }] }),
@@ -96,9 +99,16 @@ function OrdersList() {
   // the one frame before the ids land.
   const isLoading = data.isLoading || (f.starredOnly && f.starsLoading);
 
-  // Restore list scroll position when returning from an order (filters, search
-  // and pagination are already preserved via the module-level filter cache).
-  useOrdersScrollRestoration(!isLoading);
+  // Put the agent back on the order they left (filters, search and pagination
+  // are already preserved via the module-level filter cache). `rowsKey` re-runs
+  // the restore after each commit that changes the rows, so it searches a DOM
+  // that holds the latest render; `settled` is what tells it a row that is still
+  // missing is genuinely absent rather than not fetched yet.
+  useOrdersScrollRestoration({
+    ready: !isLoading && pageRows.length > 0,
+    settled: !isLoading && !data.isFetching,
+    rowsKey: pageRows.map((o: any) => o.id).join(","),
+  });
 
   if (!f.canView) {
     return (
@@ -141,6 +151,18 @@ function OrdersList() {
           >
             {f.mineOnly ? "My orders" : "All orders"}
           </Button>
+          {/* Export sits with the page-level actions rather than in the filter
+              bar. It is not a filter — it acts on whatever the filters have
+              already selected — and down there it was the only control on a
+              second row, so the container carried a row of empty space to hold
+              one button. Outline, so it reads as a utility beside the primary
+              New order rather than competing with it. */}
+          {f.canExport && (
+            <Button variant="outline" size="sm" onClick={exportXlsx}>
+              <Download className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Export Excel</span>
+            </Button>
+          )}
           {f.canCreate && (
             <Button size="sm" onClick={() => navigate({ to: "/orders/new" })}>
               <Plus className="h-4 w-4 sm:mr-2" />
@@ -150,10 +172,20 @@ function OrdersList() {
         </div>
       </div>
 
+      {/* Filter bar.
+          One row of equal-height controls at desktop width, wrapping to as many
+          as it needs below that. The padding is tighter than the page's other
+          cards on purpose: this is a strip of controls, not content, and it sat
+          two sizes too tall — `p-4` around `h-10` controls plus a second row
+          holding nothing but the (now relocated) Export button. */}
       <Card>
-        <CardContent className="p-3 sm:p-4 flex flex-wrap items-center gap-2 lg:gap-3">
-          <div className="relative flex-1 min-w-[200px] lg:max-w-xs">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <CardContent className="p-2.5 sm:p-3 flex flex-wrap items-center gap-2">
+          {/* Search is the primary control of the bar and is built to look it:
+              it takes the leftover width up to `max-w-md` and lifts its shadow
+              on focus. The dropdowns beside it narrow a set; this is the one an
+              agent types an invoice number into all day. */}
+          <div className="relative flex-1 min-w-[220px] lg:min-w-[260px] lg:max-w-md">
+            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               placeholder="Search order, invoice, customer, phone…"
               value={f.q}
@@ -162,7 +194,11 @@ function OrdersList() {
                 f.setQ(e.target.value);
                 f.setPage(0);
               }}
-              className="pl-9 h-10"
+              aria-label="Search orders"
+              // Same radius, border and focus ring as every other control here
+              // — the emphasis comes from width, breathing room around the icon
+              // and a shadow that lifts on focus, not from a different shape.
+              className="h-10 w-full pl-10 pr-3 text-sm shadow-sm transition-shadow placeholder:text-muted-foreground/75 focus-visible:shadow-md"
             />
           </div>
           <Select
@@ -174,7 +210,7 @@ function OrdersList() {
               })
             }
           >
-            <SelectTrigger className="h-10 w-[150px]">
+            <SelectTrigger className="h-10 w-[140px]">
               <SelectValue placeholder="Team" />
             </SelectTrigger>
             <SelectContent>
@@ -190,7 +226,7 @@ function OrdersList() {
               people's work and holds it by default. */}
           {f.canFilterAgents && (
             <Select value={f.agent} onValueChange={(v) => f.onFilterChange(() => f.setAgent(v))}>
-              <SelectTrigger className="h-10 w-[180px]">
+              <SelectTrigger className="h-10 w-[160px]">
                 <SelectValue placeholder="Agent" />
               </SelectTrigger>
               <SelectContent>
@@ -266,9 +302,8 @@ function OrdersList() {
               being a mystery: an agent who has starred nothing can see that
               before turning it on. */}
           <Button
-            variant={f.starredOnly ? "default" : "outline"}
+            variant="outline"
             size="sm"
-            className="h-10"
             aria-pressed={f.starredOnly}
             disabled={!f.canStar}
             onClick={() => f.onFilterChange(() => f.setStarredOnly((v) => !v))}
@@ -277,16 +312,35 @@ function OrdersList() {
                 ? "Showing only orders you starred — click to show all"
                 : "Show only orders you starred"
             }
+            // Outline like the dropdowns beside it, so it reads as one of the
+            // filters rather than an action button that wandered in. Active is a
+            // tinted surface and a filled star, not a solid block: it has to
+            // look switched on without becoming the loudest thing in the bar.
+            //
+            // The label stays `foreground` when active rather than taking the
+            // primary colour — turquoise text on a 10% turquoise wash measures
+            // 2.15:1, which is a filter you cannot read. The border, the tint
+            // and the star carry the state; the word stays legible.
+            className={cn(
+              "h-10 gap-2 px-3 font-normal",
+              f.starredOnly && "border-primary/60 bg-primary/10 font-medium hover:bg-primary/15",
+            )}
           >
-            <Star className={cn("h-4 w-4 mr-2", f.starredOnly && "fill-current")} />
+            {/* Amber, so the filter and the starred rows it selects read as one
+                feature. `--badge-amber` rather than the row's `--attention`:
+                against this button's tinted surface that one measures 2.92:1 in
+                light mode, under the 3:1 a meaningful graphic needs, and the
+                badge token is the darker amber the system already keeps for
+                exactly this — legible on a light fill, light on a dark one. */}
+            <Star
+              className={cn(
+                "h-4 w-4",
+                f.starredOnly ? "fill-current text-[var(--badge-amber)]" : "text-muted-foreground",
+              )}
+            />
             Starred
             {f.starred.size > 0 && (
-              <span
-                className={cn(
-                  "ml-2 rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums",
-                  f.starredOnly ? "bg-primary-foreground/20" : "bg-muted text-muted-foreground",
-                )}
-              >
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums text-muted-foreground">
                 {f.starred.size}
               </span>
             )}
@@ -300,12 +354,6 @@ function OrdersList() {
             }}
             disabled={f.searching}
           />
-          {f.canExport && (
-            <Button variant="outline" size="sm" onClick={exportXlsx} className="h-10 ml-auto">
-              <Download className="h-4 w-4 mr-2" />
-              Export
-            </Button>
-          )}
         </CardContent>
       </Card>
 
@@ -439,6 +487,10 @@ function OrdersList() {
                   return (
                     <tr
                       key={o.id}
+                      // What the scroll restoration looks the row up by when the
+                      // agent comes back from editing it. An id rather than an
+                      // offset, because a save can move the row.
+                      data-order-id={o.id}
                       className={cn("group transition-colors hover:bg-accent/50", rowBg)}
                     >
                       <td
@@ -577,7 +629,13 @@ function OrdersList() {
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8 opacity-70 group-hover:opacity-100 transition-opacity"
-                          onClick={() => navigate({ to: "/orders/$id", params: { id: o.id } })}
+                          onClick={() => {
+                            // Captured here, before the navigation: opening the
+                            // (much shorter) form clamps window.scrollY, so a
+                            // position read on the way back is already lost.
+                            rememberOrderReturn(o.id);
+                            navigate({ to: "/orders/$id", params: { id: o.id } });
+                          }}
                           aria-label={editable ? "Edit order" : "View order"}
                         >
                           {editable ? <Pencil className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
