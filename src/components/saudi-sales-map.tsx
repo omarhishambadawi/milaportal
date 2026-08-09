@@ -272,7 +272,6 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
         return dx * dx + dy * dy < (d.r + 2) * (d.r + 2);
       });
 
-
     const out: Placed[] = raw.map(({ c, lon, lat, cx, cy }, idx) => {
       const ratio = c.sales / maxSales;
       const share = totalCompleted > 0 ? c.sales / totalCompleted : 0;
@@ -325,7 +324,6 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
         if (chosen) break;
       }
 
-
       if (!chosen) {
         // Last resort: clamp into view, but still prefer a position that is not
         // sitting on another city's bubble.
@@ -345,7 +343,6 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
           break;
         }
       }
-
 
       return {
         ...c,
