@@ -315,6 +315,7 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
             rect.y + rect.h > H - PAD
           )
             continue;
+          if (hitsForeignBubble(rect, c.name)) continue;
           if (!overlaps(rect)) {
             chosen = cand;
             placedLabels.push(rect);
@@ -323,6 +324,7 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
         }
         if (chosen) break;
       }
+
 
       if (!chosen) {
         for (const cand of build(gap)) {
