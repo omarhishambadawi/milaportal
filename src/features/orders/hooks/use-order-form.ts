@@ -146,7 +146,15 @@ export function useOrderForm(mode: "create" | "edit") {
       }
       qc.invalidateQueries({ queryKey: queryKeys.orders.all() });
       qc.invalidateQueries({ queryKey: queryKeys.dashboard.all() });
-      navigate({ to: "/orders" });
+      // `resetScroll: false`, or the agent lands at the top of the list every
+      // time they save. This is a *push* — a new history entry with a new
+      // `__TSR_key` — so the router's scroll-restoration cache has no entry for
+      // it and its `onRendered` subscriber falls through to
+      // `window.scrollTo({top: 0})`. Opting out leaves the viewport to
+      // `useOrdersScrollRestoration`, which puts the edited row back where it
+      // was; without it, that hook is only ever undoing a jump the agent has
+      // already seen.
+      navigate({ to: "/orders", resetScroll: false });
     } catch (e: any) {
       toast.error(e.message ?? "Failed to save");
     } finally {
@@ -169,7 +177,9 @@ export function useOrderForm(mode: "create" | "edit") {
     toast.success("Deleted");
     qc.invalidateQueries({ queryKey: queryKeys.orders.all() });
     qc.invalidateQueries({ queryKey: queryKeys.dashboard.all() });
-    navigate({ to: "/orders" });
+    // Same as above. The deleted row will not be found on return, so the
+    // restoration falls back to the offset the list was left at.
+    navigate({ to: "/orders", resetScroll: false });
   };
 
   return {

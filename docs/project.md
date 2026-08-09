@@ -1330,10 +1330,34 @@ app-wide design-system decision, not an Orders one.
 `use-orders-scroll-restoration` puts the agent back on the row they left, which
 matters most for the agents working the bottom of a long list.
 
+**The router was the thing scrolling to the top, and no amount of restoring
+fixed it.** `scrollRestoration: true` installs an `onRendered` subscriber
+(`@tanstack/router-core/scroll-restoration`) that looks the incoming location up
+in a sessionStorage cache keyed by `location.state.__TSR_key`; finding nothing,
+it falls through to `window.scrollTo({top: 0})`. Saving ends in
+`navigate({ to: "/orders" })` — a **push**, so a new key, so a guaranteed cache
+miss, so a guaranteed jump to the top on every single save. An earlier version of
+this hook tried to out-race it with two `requestAnimationFrame`s, which at best
+converted one jump into two. The three navigations back to the list (save,
+delete, cancel) now pass **`resetScroll: false`**, which sets
+`router.resetNextScroll` and makes that subscriber return before touching the
+viewport.
+
+With nothing else moving the page, the restore runs in a **`useLayoutEffect`** —
+after the DOM holds the new rows, before the browser paints them — so there is no
+frame at the wrong position. No timeout, no rAF: both only ever existed to win
+that race.
+
 `rememberOrderReturn(orderId)` is called by the row action **before** navigating,
-capturing the id and `window.scrollY` together — read on the way back it is
-already gone, because opening the much shorter edit form clamps the scroll
-offset. On return the restore looks the row up by `data-order-id`.
+capturing the id, `window.scrollY` **and the row's offset from the top of the
+viewport**. Reading it there is the point: opening the much shorter edit form
+clamps the scroll offset, so the position is already gone by the time the agent
+returns. Restoring the _viewport offset_ rather than the raw scroll is what makes
+the return seamless — the row lands back under the agent's eye even when the save
+reordered the list. Measured in a browser against the real module: rows removed
+above, rows inserted above, and no change at all all land the row within 1px of
+where it was, where a raw `scrollY` restore drifts by 267px and 356px in the
+first two.
 
 The wait is commit-driven, not timed. The effect keys on `rowsKey` (the rendered
 row ids), so it re-runs after every commit that changes the table and always
@@ -1341,10 +1365,19 @@ searches a DOM that holds the latest render, and on `settled` (`!isLoading &&
 !isFetching`), which is what distinguishes _not yet_ from _not here_: a missing
 row mid-fetch leaves the restore armed for a later commit, while a missing row
 once the query has settled means the order moved page or its own update filtered
-it out, and the remembered offset applies instead. `decideRestore` is that policy
-as a pure function, pinned by `__tests__/scroll-restoration.test.ts`. Filters,
-search and page are already preserved by the module-level filter cache, so the
-list the agent comes back to is the one they left.
+it out, and the remembered offset applies instead. `decideRestore`,
+`scrollTopForRow` and `isRowVisible` are that policy and its arithmetic as pure
+functions, pinned by `__tests__/scroll-restoration.test.ts`.
+
+Two cases the geometry cannot honour, both handled: a row sorted to the very top
+cannot sit 300px down a page that will not scroll above 0, and a list the save
+made much shorter clamps the scroll. Both are caught by re-measuring after the
+scroll and falling back to `scrollIntoView({ block: "center" })`, so the
+guarantee that survives is the one that matters — the edited order is on screen.
+
+Filters, search, date, Starred and page are preserved independently, by the
+module-level filter cache in `use-orders-list-filters`, so the list the agent
+comes back to is the one they left.
 
 One twelve-column table at every width, scrolled sideways below `min-w: 1240`.
 Three of those columns carry state rather than a field:

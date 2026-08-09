@@ -517,7 +517,10 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
             <Button
               type="button"
               variant="outline"
-              onClick={() => navigate({ to: "/orders" })}
+              // `resetScroll: false` for the same reason as the save path:
+              // backing out of an order must return the agent to the row they
+              // opened, not to the top of the list.
+              onClick={() => navigate({ to: "/orders", resetScroll: false })}
               className="w-full sm:w-auto"
             >
               {readOnly ? "Close" : "Cancel"}
