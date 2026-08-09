@@ -111,14 +111,15 @@ function lookupCoords(name: string): [number, number] | undefined {
   return hit?.[1];
 }
 
-// Visual-only label swap requested by ops (data unchanged).
-function displayLabel(name: string): string {
-  if (name === "جدة") return "الطائف";
-  if (name === "الطائف") return "جدة";
-  if (name.toLowerCase() === "jeddah") return "Taif";
-  if (name.toLowerCase() === "taif") return "Jeddah";
-  return name;
-}
+/**
+ * City labels render the city's own name.
+ *
+ * There used to be a hard-coded visual swap here that printed "الطائف" over the
+ * Jeddah point and vice versa. The coordinates for both cities were already
+ * correct (Jeddah 39.19/21.49, Taif 40.42/21.27), so the swap was itself the
+ * bug being reported: each point showed its neighbour's name. Labels follow the
+ * data — no per-city special cases.
+ */
 
 export interface CitySales {
   name: string;
@@ -424,7 +425,7 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <span className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-background/70 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
-              <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+              <span className="h-1.5 w-1.5 rounded-full bg-primary motion-safe:animate-pulse" />
               {placed.length} {placed.length === 1 ? "city" : "cities"}
             </span>
             {totalCompleted > 0 && (
@@ -580,7 +581,7 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                   fill={`url(#bg-${slug(p.name)})`}
                   style={{
                     pointerEvents: "none",
-                    opacity: mounted ? (active ? 1 : 0.7) : 0,
+                    opacity: reducedMotion || mounted ? (active ? 1 : 0.7) : 0,
                     transition: "opacity 400ms ease, r 260ms cubic-bezier(.34,1.4,.5,1)",
                   }}
                 />
@@ -597,9 +598,22 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                   style={{
                     pointerEvents: "none",
                     transformOrigin: `${p.cx}px ${p.cy}px`,
-                    transform: mounted ? (active ? "scale(1.08)" : "scale(1)") : "scale(0)",
-                    opacity: mounted ? 1 : 0,
-                    transition: `transform 520ms cubic-bezier(.34,1.4,.5,1) ${i * 40}ms, opacity 340ms ease ${i * 40}ms`,
+                    // Under reduced motion the staggered scale-in is skipped
+                    // entirely — the bubbles are simply there — while the hover
+                    // emphasis is kept, since that one carries meaning.
+                    transform: reducedMotion
+                      ? active
+                        ? "scale(1.06)"
+                        : "scale(1)"
+                      : mounted
+                        ? active
+                          ? "scale(1.08)"
+                          : "scale(1)"
+                        : "scale(0)",
+                    opacity: reducedMotion || mounted ? 1 : 0,
+                    transition: reducedMotion
+                      ? "transform 160ms ease"
+                      : `transform 520ms cubic-bezier(.34,1.4,.5,1) ${i * 40}ms, opacity 340ms ease ${i * 40}ms`,
                   }}
                 >
                   {/* Soft pulse for top cities */}
@@ -718,8 +732,8 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                   <g
                     key={`lbl-${p.name}`}
                     style={{
-                      opacity: mounted ? 1 : 0,
-                      transition: "opacity 340ms ease 260ms",
+                      opacity: reducedMotion || mounted ? 1 : 0,
+                      transition: reducedMotion ? "none" : "opacity 340ms ease 260ms",
                       pointerEvents: "none",
                     }}
                   >
@@ -746,7 +760,7 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                         transition: "stroke-width 200ms ease",
                       }}
                     >
-                      {displayLabel(p.name)}
+                      {p.name}
                     </text>
                   </g>
                 );
@@ -941,7 +955,7 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                       style={{ background: p.color }}
                     />
                     <span className="min-w-0 flex-1 truncate text-[13px] font-medium" dir="auto">
-                      {displayLabel(p.name)}
+                      {p.name}
                     </span>
                     <span className="shrink-0 text-[12px] font-semibold tabular-nums">
                       {fmtSAR(p.sales)}
@@ -1005,7 +1019,7 @@ function CityDetail({ city }: { city: Placed }) {
             }}
           />
           <span className="truncate text-[15px] font-semibold leading-tight text-foreground">
-            {displayLabel(city.name)}
+            {city.name}
           </span>
         </div>
         <span
