@@ -464,6 +464,35 @@ export type Database = {
           },
         ]
       }
+      order_stars: {
+        Row: {
+          created_at: string
+          id: string
+          order_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          order_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          order_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "order_stars_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       orders: {
         Row: {
           agent_id: string
@@ -1287,6 +1316,7 @@ export type Database = {
           _fulfillment?: string
           _mine?: boolean
           _q?: string
+          _starred?: boolean
           _status?: string
           _team?: string
           _to: string
