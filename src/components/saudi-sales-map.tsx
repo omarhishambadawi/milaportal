@@ -241,6 +241,38 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
         (p) => !(r.x + r.w < p.x || p.x + p.w < r.x || r.y + r.h < p.y || p.y + p.h < r.y),
       );
 
+    /**
+     * Every bubble's disc, so a label can be kept off cities other than its own.
+     *
+     * Jeddah and Taif are ~50 SVG units apart, and with only label-vs-label
+     * collision to satisfy, Jeddah's name was free to land to the right — on top
+     * of Taif's bubble — while Taif's name went left onto Jeddah's. Both labels
+     * were attached to the correct point and the pair still read as swapped. A
+     * label that sits on someone else's marker is wrong regardless of the leader
+     * line, so candidate positions covering a foreign disc are now rejected.
+     */
+    const discs = raw.map(({ c, cx, cy }) => ({
+      name: c.name,
+      cx,
+      cy,
+      r: 7 + Math.sqrt(c.sales / maxSales) * 28,
+    }));
+
+    const hitsForeignBubble = (
+      r: { x: number; y: number; w: number; h: number },
+      ownName: string,
+    ) =>
+      discs.some((d) => {
+        if (d.name === ownName) return false;
+        // Closest point on the rect to the disc centre.
+        const nx = Math.min(Math.max(d.cx, r.x), r.x + r.w);
+        const ny = Math.min(Math.max(d.cy, r.y), r.y + r.h);
+        const dx = d.cx - nx;
+        const dy = d.cy - ny;
+        return dx * dx + dy * dy < (d.r + 2) * (d.r + 2);
+      });
+
+
     const out: Placed[] = raw.map(({ c, lon, lat, cx, cy }, idx) => {
       const ratio = c.sales / maxSales;
       const share = totalCompleted > 0 ? c.sales / totalCompleted : 0;
