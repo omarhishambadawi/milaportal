@@ -111,14 +111,16 @@ function lookupCoords(name: string): [number, number] | undefined {
   return hit?.[1];
 }
 
-// Visual-only label swap requested by ops (data unchanged).
-function displayLabel(name: string): string {
-  if (name === "جدة") return "الطائف";
-  if (name === "الطائف") return "جدة";
-  if (name.toLowerCase() === "jeddah") return "Taif";
-  if (name.toLowerCase() === "taif") return "Jeddah";
-  return name;
-}
+/**
+ * City labels render the city's own name.
+ *
+ * There used to be a hard-coded visual swap here that printed "الطائف" over the
+ * Jeddah point and vice versa. The coordinates for both cities were already
+ * correct (Jeddah 39.19/21.49, Taif 40.42/21.27), so the swap was itself the
+ * bug being reported: each point showed its neighbour's name. Labels follow the
+ * data — no per-city special cases.
+ */
+
 
 export interface CitySales {
   name: string;
