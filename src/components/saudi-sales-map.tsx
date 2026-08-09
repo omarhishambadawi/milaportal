@@ -599,11 +599,25 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                   style={{
                     pointerEvents: "none",
                     transformOrigin: `${p.cx}px ${p.cy}px`,
-                    transform: mounted ? (active ? "scale(1.08)" : "scale(1)") : "scale(0)",
-                    opacity: mounted ? 1 : 0,
-                    transition: `transform 520ms cubic-bezier(.34,1.4,.5,1) ${i * 40}ms, opacity 340ms ease ${i * 40}ms`,
+                    // Under reduced motion the staggered scale-in is skipped
+                    // entirely — the bubbles are simply there — while the hover
+                    // emphasis is kept, since that one carries meaning.
+                    transform: reducedMotion
+                      ? active
+                        ? "scale(1.06)"
+                        : "scale(1)"
+                      : mounted
+                        ? active
+                          ? "scale(1.08)"
+                          : "scale(1)"
+                        : "scale(0)",
+                    opacity: reducedMotion || mounted ? 1 : 0,
+                    transition: reducedMotion
+                      ? "transform 160ms ease"
+                      : `transform 520ms cubic-bezier(.34,1.4,.5,1) ${i * 40}ms, opacity 340ms ease ${i * 40}ms`,
                   }}
                 >
+
                   {/* Soft pulse for top cities */}
                   {topThree && (
                     <circle
