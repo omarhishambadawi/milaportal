@@ -35,6 +35,20 @@ export interface OrdersFilters {
   /** "all" | "delivery" | "pickup" — the Delivery & Pickup filter. */
   fulfillment: string;
   mineOnly: boolean;
+  /** Narrow to the signed-in agent's starred orders. */
+  starredOnly: boolean;
+  /**
+   * Identity of the star set the query was built from — the sorted order ids,
+   * joined, and empty whenever `starredOnly` is false.
+   *
+   * Part of the key because the starred filter is applied as an `id IN (…)`
+   * built from that set: starring an order while the filter is on changes which
+   * rows the *same* filter selects, and without this the page and its KPI cards
+   * would both answer from a cache entry keyed on a set that no longer exists.
+   * Empty when the filter is off, so an ordinary toggle of a star never
+   * invalidates the unfiltered list.
+   */
+  starKey: string;
   term: string;
   userId: string | undefined;
 }
@@ -79,6 +93,17 @@ export const queryKeys = {
     kpi: (filters: OrdersFilters) => ["orders", "kpi", filters] as const,
     detail: (id: string | undefined) => ["orders", "detail", id] as const,
     activity: (orderId: string) => ["orders", "activity", orderId] as const,
+    /**
+     * The signed-in agent's starred order ids.
+     *
+     * Keyed by user id so a sign-out/sign-in on a shared machine cannot serve
+     * the previous agent's shortlist out of the cache. Nested under `orders`
+     * so it is swept by the same `orders.all()` boundary as everything else
+     * about an order; the toggle itself does not use that boundary (see
+     * `useStarredOrders`), which is what keeps starring an order from
+     * re-running the page fetch and the KPI aggregation.
+     */
+    stars: (userId: string | undefined) => ["orders", "stars", userId] as const,
   },
 
   dashboard: {

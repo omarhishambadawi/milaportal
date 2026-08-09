@@ -10,6 +10,7 @@ import { useAgentDirectory } from "@/lib/directory";
 import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, PAGE_SIZE_STORAGE_KEY } from "../constants";
 import type { OrdersFilterCache } from "../types";
 import { applyOrderFilters, describeDateRange, normalizeSearchTerm, toISO } from "../utils";
+import { useStarredOrders } from "./use-starred-orders";
 
 // In-memory filter cache. Survives SPA navigation (e.g. edit an order and come
 // back) but is wiped on a full page refresh because the JS module reloads.
@@ -66,6 +67,7 @@ export function useOrdersListFilters() {
   const [status, setStatus] = useState<string>(initial?.status ?? "all");
   const [fulfillment, setFulfillment] = useState<string>(initial?.fulfillment ?? "all");
   const [mineOnly, setMineOnly] = useState<boolean>(initial?.mineOnly ?? false);
+  const [starredOnly, setStarredOnly] = useState<boolean>(initial?.starredOnly ?? false);
   const [page, setPage] = useState(initial?.page ?? 0);
   const [pageSize, setPageSizeState] = useState<number>(() => {
     if (typeof window === "undefined") return DEFAULT_PAGE_SIZE;
@@ -97,11 +99,24 @@ export function useOrdersListFilters() {
     status,
     fulfillment,
     mineOnly,
+    starredOnly,
     page,
   };
 
   const term = normalizeSearchTerm(debouncedQ);
   const searching = term.length > 0;
+
+  /**
+   * The signed-in agent's starred orders.
+   *
+   * Read here rather than in the route because *Starred only* is a filter like
+   * any other: the ids have to be in hand where `applyFilters` is built, so the
+   * list, the export and the KPI strip all narrow to the same set. The lookups
+   * below are fetched here for the same reason.
+   */
+  const { starred, toggleStar, canStar, starsLoading } = useStarredOrders(user?.id);
+  /** Sorted so the query key is stable regardless of the order rows came back in. */
+  const starredIds = useMemo(() => [...starred].sort(), [starred]);
 
   // Shared agent directory (profiles + user_roles). Powers both the admin filter
   // dropdown and the per-row name/code enrichment below, so it stays enabled for
@@ -139,6 +154,8 @@ export function useOrdersListFilters() {
     status,
     fulfillment,
     mineOnly,
+    starredOnly,
+    starKey: starredOnly ? starredIds.join(",") : "",
     term,
     userId: user?.id,
   };
@@ -157,6 +174,8 @@ export function useOrdersListFilters() {
       agent,
       term,
       fulfillment,
+      starredOnly,
+      starredIds,
     });
 
   /** Weekday and date, split so the header can emphasise the day name. */
@@ -197,6 +216,8 @@ export function useOrdersListFilters() {
     setFulfillment,
     mineOnly,
     setMineOnly,
+    starredOnly,
+    setStarredOnly,
     page,
     setPage,
     pageSize,
@@ -211,6 +232,11 @@ export function useOrdersListFilters() {
     dateParts,
     onFilterChange,
     applyFilters,
+    // stars
+    starred,
+    toggleStar,
+    canStar,
+    starsLoading,
     // lookups
     filteredAgentOpts,
     namesById,

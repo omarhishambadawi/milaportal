@@ -80,6 +80,14 @@ export interface OrderFilterState {
    * See FULFILLMENT_OPTIONS.
    */
   fulfillment: string;
+  /** Narrow to the signed-in agent's starred orders. */
+  starredOnly: boolean;
+  /**
+   * That agent's starred order ids. Read only when `starredOnly` is set, and
+   * supplied by the caller rather than fetched here so this stays pure and the
+   * list, the KPI strip and the export all narrow to one set.
+   */
+  starredIds: readonly string[];
 }
 
 /**
@@ -127,6 +135,12 @@ export function applyOrderFilters(qb: any, s: OrderFilterState) {
   if (s.status !== "all") qb = qb.eq("status", s.status);
   if (s.mineOnly && s.userId) qb = qb.eq("agent_id", s.userId);
   if (s.canFilterAgents && s.agent !== "all") qb = qb.eq("agent_id", s.agent);
+  // Starred is a narrowing like any other, so it composes with the date range,
+  // the team, the fulfillment method and the search rather than replacing them,
+  // and pagination still happens server-side over the narrowed set. An empty
+  // list is passed through as `id IN ()` — an agent with no stars who turns the
+  // filter on has no starred orders, and that is the honest answer.
+  if (s.starredOnly) qb = qb.in("id", s.starredIds as string[]);
   qb = applyFulfillment(qb, s.fulfillment);
   if (s.searching) qb = qb.or(buildSearchOr(s.term));
   return qb;

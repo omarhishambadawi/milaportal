@@ -125,7 +125,7 @@ Nitro server entry  (src/server.ts)
 │   ├── router.tsx  server.ts  start.ts  styles.css
 ├── supabase/
 │   ├── config.toml              CLI project ref
-│   ├── migrations/              87 SQL migrations
+│   ├── migrations/              91 SQL migrations
 │   └── verify/security_verification.sql
 ├── eslint.config.js  vite.config.ts  vitest.config.ts  vercel.json
 └── AGENTS.md                    Lovable-managed block (do not rewrite history)
@@ -448,7 +448,7 @@ permission _sets_ are identical for `supervisor`, `customer_care`, `telesales`,
 
 ## Database Schema
 
-PostgreSQL on Supabase, `public` schema, PostGIS 3.3.x enabled. 87 migrations in
+PostgreSQL on Supabase, `public` schema, PostGIS 3.3.x enabled. 91 migrations in
 `supabase/migrations/`.
 
 ### `profiles`
@@ -536,6 +536,17 @@ and reversing a diff across all of them is far harder than restoring prior state
 `id`, `user_id`, `kind`, `title`, `body`, `link`, `entity_type`, `entity_id`,
 `read_at`, `created_at`. Inserted only by SECURITY DEFINER triggers.
 
+### `order_stars`
+
+`id`, `user_id` → `auth.users` (cascade), `order_id` → `orders` (cascade),
+`created_at`. `UNIQUE (user_id, order_id)` — an agent cannot star the same order
+twice, and that index is also how "my stars" is read, so there is no second one.
+
+One agent's personal shortlist of orders. Deliberately a join table and not a
+`starred` column on `orders`: the flag is per _agent_, and a column would make it
+one shared value that the last agent to click won. No UPDATE grant and no UPDATE
+policy — a star has no mutable field, so toggling is INSERT/DELETE.
+
 ### `satisfaction_surveys`
 
 `id`, `call_id`, `agent_id`, `rating`, `comment`, `submitted_at`, `created_at`.
@@ -622,7 +633,7 @@ come with the extension.
 **Analytics RPCs** (`SECURITY INVOKER` — RLS applies), all taking
 `_from, _to, _team, _agent, _mine`:
 `orders_in_scope`, `orders_kpis`, `orders_kpi_summary` (adds `_status`, `_q`,
-`_fulfillment`; returns `json`), `orders_daily`, `orders_status`, `orders_teams`,
+`_fulfillment`, `_starred`; returns `json`), `orders_daily`, `orders_status`, `orders_teams`,
 `orders_agents`, `orders_locations`, `orders_delivery`,
 `orders_delivery_matrix`, `orders_verification`; and for complaints
 `complaints_in_scope`, `complaints_kpis`, `complaints_locations`.
@@ -761,6 +772,19 @@ roles.
 SELECT / UPDATE / DELETE: `auth.uid() = user_id`. **No INSERT policy** —
 notifications come from SECURITY DEFINER triggers only.
 
+### `order_stars`
+
+SELECT / INSERT / DELETE: `auth.uid() = user_id` (INSERT as `WITH CHECK`, which
+is what stops an agent creating a row owned by someone else). No UPDATE policy.
+`REVOKE ALL FROM anon` and from `authenticated` before granting back exactly
+SELECT/INSERT/DELETE, so the privilege list matches the policy list rather than
+leaning on RLS to deny what a grant still permits.
+
+**No administrator override, on purpose.** Every other per-agent table in this
+schema opens up to `is_administrator` or `view_all_agents`; this one does not. A
+shortlist is a note-to-self, no role has a reason to read another agent's, and
+the isolation the feature promises is only as strong as its weakest policy.
+
 ### `satisfaction_surveys`
 
 SELECT: `is_active(uid)` AND (`is_administrator` OR `view_all_agents` OR
@@ -889,7 +913,7 @@ baseline).
 `use-orders-list-filters` · `use-orders-list-data` (paginated page fetch with
 `keepPreviousData`, the `orders_kpi_summary` RPC, per-row enrichment) ·
 `use-orders-mutations` · `use-orders-export` · `use-orders-scroll-restoration` ·
-`use-starred-orders` (per-agent stars, localStorage keyed by user id) ·
+`use-starred-orders` (per-agent stars in `order_stars`; optimistic toggle) ·
 `use-order-form`.
 
 ### Users
@@ -1261,8 +1285,10 @@ textarea, because a textarea prints as a grey box with a scrollbar.
 
 Server-side pagination (`range` + `count`), `keepPreviousData` so a filter change
 never blanks the table, and a single `orders_kpi_summary` RPC for the KPI strip.
-Filters: date range, team, agent, status, **fulfillment**, "mine only", free-text
-search. Page size (25/50/100) persists at `orders.pageSize`.
+Filters: date range, team, agent, status, **fulfillment**, "mine only",
+**"starred only"**, free-text search — all composable, all applied server-side
+through one `applyOrderFilters`. Page size (25/50/100) persists at
+`orders.pageSize`.
 
 One twelve-column table at every width, scrolled sideways below `min-w: 1240`.
 Three of those columns carry state rather than a field:
@@ -1274,7 +1300,7 @@ Three of those columns carry state rather than a field:
   now — the row composites to `#dcf5f5`, body text 14.5:1 and muted text 5.2:1 —
   matching what dark mode already did at 12% over a dark surface (`#13313a`,
   unchanged).
-- **Star** (col 2) — `useStarredOrders`, below.
+- **Star** (col 2) — `useStarredOrders`, below. Per agent, in `order_stars`.
 - **Invoice No.** — every invoice on the order, one per line
   (`components/invoice-cell`). It used to show the first with a "+2" pill, which
   hid the numbers agents reconcile against all day. The column is sized for a
@@ -1284,16 +1310,49 @@ Three of those columns carry state rather than a field:
 
 ### Starred orders
 
-`hooks/use-starred-orders` — one agent's shortcut list, keyed
-`milaserv.orders.starred.<user id>` in localStorage. Same reasoning as the branch
-directory's favourites (`features/branches/hooks/use-branch-prefs`): nobody
-reports on them, nobody else may read them, and losing one costs a re-star, so a
-table would buy a migration, RLS policies and a write round trip per click for
-nothing. **The user id in the key is load-bearing** — the call floor shares
-machines, and an unkeyed list would show one agent another's stars on the next
-sign-in. Hydrated in an effect keyed on the user id, never during render (this
-app server-renders). Consequence: stars are per browser, so an agent signing in
-on a second machine starts with none.
+`hooks/use-starred-orders` reads and writes `order_stars` (schema and RLS above).
+This began as localStorage keyed by user id, which scoped stars per agent but
+also per _browser_ — an agent who starred an order on the call-floor machine saw
+nothing of it on their laptop. Postgres makes a star follow the account.
+
+Isolation is RLS, not the hook. Every policy is `auth.uid() = user_id`, so a bug
+in this file degrades to showing an agent nothing, never to showing them somebody
+else's shortlist.
+
+The toggle is optimistic and **does not invalidate on settle**: the write is one
+id added or one id removed, exactly what `onMutate` already applied, so a refetch
+could only re-fetch the answer the cache holds. The error path restores the
+previous set and toasts. A `23505` on insert is swallowed — the unique constraint
+firing means the star this click asked for already exists, which is the state the
+caller wanted (two tabs on the same list).
+
+`order_stars` is **not in the generated Supabase types**, so the queries cast the
+table name. That file is re-emitted by Lovable and a hand-edit is lost on the next
+sync; the codebase already casts for `orders_kpi_summary` for the same reason.
+
+### Starred only — the filter
+
+A toggle in the Orders filter bar (same `Star` icon as the column, with a count),
+not a separate page or nav item. It composes with every other filter, because it
+is applied through the same `applyOrderFilters` they are:
+
+- **The list** narrows with `id IN (…)` built from the agent's star set, so
+  pagination and the exact count stay server-side. An empty set is passed through
+  as `id IN ()` rather than falling through to the unfiltered list — an agent who
+  has starred nothing has no starred orders, and showing them the whole range
+  would be the wrong answer.
+- **The KPI cards** narrow through `orders_kpi_summary(_starred)`, which resolves
+  the set from `auth.uid()` server-side. The predicate had to reach both: adding
+  it to only the table would put a list and a total on the same screen describing
+  different sets of orders, which is the defect `order_fulfillment()` exists to
+  have ended.
+- **The export** inherits it, since it shares `applyFilters`.
+
+The star set's identity (`starKey` in `OrdersFilters`) is part of the query key,
+and empty whenever the filter is off — so starring an order while filtered
+refetches the narrowed page, and starring one while unfiltered refetches nothing.
+`useStarredOrders` is called inside `useOrdersListFilters` rather than the route
+because the ids must be in hand where `applyFilters` is built.
 
 ### Fulfillment — one definition, three surfaces
 

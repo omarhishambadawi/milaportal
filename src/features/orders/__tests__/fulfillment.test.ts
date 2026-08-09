@@ -102,7 +102,7 @@ function recorder() {
   return { qb, calls };
 }
 
-function filterState(fulfillment: string): OrderFilterState {
+function filterState(fulfillment: string, overrides: Partial<OrderFilterState> = {}) {
   return {
     searching: false,
     from: "2026-08-01",
@@ -115,7 +115,10 @@ function filterState(fulfillment: string): OrderFilterState {
     agent: "all",
     term: "",
     fulfillment,
-  };
+    starredOnly: false,
+    starredIds: [],
+    ...overrides,
+  } satisfies OrderFilterState;
 }
 
 describe("applyOrderFilters — Delivery & Pickup", () => {
@@ -149,6 +152,51 @@ describe("applyOrderFilters — Delivery & Pickup", () => {
     for (const method of DELIVERY_TYPES) {
       expect(fulfillmentCalls(method)).toEqual([`eq("delivery_type",${JSON.stringify(method)})`]);
     }
+  });
+
+  it("narrows to the agent's starred ids, server-side, only when asked", () => {
+    const idCalls = (state: OrderFilterState) => {
+      const { qb, calls } = recorder();
+      applyOrderFilters(qb, state);
+      return calls.filter((c) => c.startsWith("in("));
+    };
+
+    // Off: the list is untouched, so an ordinary page never pays for the filter.
+    expect(idCalls(filterState("all"))).toEqual([]);
+
+    // On: an `id IN (…)` on the same query builder every other filter narrows,
+    // which is what keeps pagination and counting server-side.
+    expect(idCalls(filterState("all", { starredOnly: true, starredIds: ["a", "b"] }))).toEqual([
+      'in("id",["a","b"])',
+    ]);
+
+    // No stars is not "no filter". Falling through to the unfiltered list would
+    // show an agent every order in the range the moment they turned it on.
+    expect(idCalls(filterState("all", { starredOnly: true, starredIds: [] }))).toEqual([
+      'in("id",[])',
+    ]);
+  });
+
+  it("composes starred with the date range and the delivery method", () => {
+    // The combination the feature is judged on: Starred + a range + Delivery has
+    // to be all three predicates, not the last one to win.
+    const { qb, calls } = recorder();
+    applyOrderFilters(
+      qb,
+      filterState("AlShrouq", {
+        starredOnly: true,
+        starredIds: ["a"],
+        mineOnly: true,
+        userId: "u",
+      }),
+    );
+    expect(calls).toEqual([
+      'gte("order_date","2026-08-01")',
+      'lte("order_date","2026-08-08")',
+      'eq("agent_id","u")',
+      'in("id",["a"])',
+      'eq("delivery_type","AlShrouq")',
+    ]);
   });
 
   it("keeps Delivery spanning every courier", () => {

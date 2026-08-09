@@ -12,6 +12,13 @@ interface UseOrdersListDataArgs {
   status: string;
   fulfillment: string;
   mineOnly: boolean;
+  /**
+   * Narrow to the caller's starred orders. The page fetch gets this through
+   * `applyFilters` as an `id IN (…)`; the KPI RPC resolves it server-side from
+   * `auth.uid()`, so the cards and the table narrow to the same set without the
+   * client having to send the ids twice.
+   */
+  starredOnly: boolean;
   userId: string | undefined;
   /** Mirrors `OrderFilterState.canFilterAgents` — see the note there. */
   canFilterAgents: boolean;
@@ -39,6 +46,7 @@ export function useOrdersListData({
   status,
   fulfillment,
   mineOnly,
+  starredOnly,
   userId,
   canFilterAgents,
   term,
@@ -84,6 +92,7 @@ export function useOrdersListData({
         _mine: mineOnly && !!userId,
         _q: searching ? term : null,
         _fulfillment: fulfillment,
+        _starred: starredOnly,
       });
       if (error) throw error;
       return (data ?? {}) as Record<string, number>;

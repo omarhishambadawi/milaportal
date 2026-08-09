@@ -1,75 +1,114 @@
-import { useCallback, useEffect, useState } from "react";
-import { STARRED_ORDERS_KEY_PREFIX } from "../constants";
+import { useCallback, useMemo } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { queryKeys } from "@/lib/query-keys";
 
 /**
- * The orders one agent has starred.
+ * The orders the signed-in agent has starred.
  *
- * Stars are a personal shortcut — the handful of orders an agent is chasing this
- * shift — and they follow the pattern the branch directory already uses for
- * exactly this (`features/branches/hooks/use-branch-prefs`): localStorage rather
- * than a table. A `order_stars` table would mean a migration, RLS policies and a
- * write round trip per click to store something nobody reports on and nobody
- * else may read; losing it costs a re-star. Consequence worth knowing: stars are
- * per browser, so an agent who signs in on a second machine starts with none.
+ * Backed by `public.order_stars` (migration `20260809120000_order_stars.sql`),
+ * one row per (agent, order). This was localStorage, which made a star a
+ * property of the *browser*: an agent who starred an order on the call-floor
+ * machine saw nothing of it on their laptop. It follows the account now.
  *
- * Scoping is by the authenticated user's id, appended to the storage key. That
- * is the part that matters here and the part a bare key would get wrong: the
- * call floor shares machines, so an unkeyed list would show one agent another's
- * stars the moment they signed in on the same browser. Signing out leaves each
- * agent's list untouched under their own key, which is why a star survives
- * re-login.
+ * Isolation is RLS, not this file. Every policy on the table is
+ * `auth.uid() = user_id`, so the select below cannot return another agent's rows
+ * and the insert cannot create one owned by somebody else — a bug here degrades
+ * to showing the agent nothing, never to showing them someone else's shortlist.
+ * The redundant `.eq("user_id")` states the same scope the policy enforces, so
+ * the query reads as what it is rather than relying on the reader knowing the
+ * policy.
  *
- * Reads happen after mount, never during render — this app server-renders, and
- * touching localStorage while rendering produces markup the client cannot match.
+ * `as any` on the table name because `order_stars` is not in the generated
+ * Supabase types — that file is re-emitted by Lovable and a hand-edit is lost on
+ * the next sync, so the codebase casts instead (see the `orders_kpi_summary`
+ * call in `use-orders-list-data`).
  */
-
-function storageKey(userId: string): string {
-  return `${STARRED_ORDERS_KEY_PREFIX}.${userId}`;
-}
-
-function readIds(key: string): string[] {
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((v) => typeof v === "string") : [];
-  } catch {
-    // Private-mode storage denial, a quota error, or hand-edited JSON. A broken
-    // shortcut list must never break the Orders list.
-    return [];
-  }
-}
-
-function writeIds(key: string, ids: string[]): void {
-  try {
-    window.localStorage.setItem(key, JSON.stringify(ids));
-  } catch {
-    /* best-effort */
-  }
-}
-
 export function useStarredOrders(userId: string | undefined) {
-  const [starred, setStarred] = useState<Set<string>>(() => new Set());
+  const qc = useQueryClient();
+  const key = queryKeys.orders.stars(userId);
 
-  // Re-hydrated when the signed-in user changes, so switching accounts in one
-  // browser swaps the list rather than inheriting the previous agent's.
-  useEffect(() => {
-    setStarred(userId ? new Set(readIds(storageKey(userId))) : new Set());
-  }, [userId]);
+  const { data, isLoading } = useQuery({
+    queryKey: key,
+    enabled: !!userId,
+    // A shortlist changes only when this agent clicks a star, and the toggle
+    // below keeps the cache exact. Re-reading it on every remount of the Orders
+    // page would be a round trip that can only confirm what is already held.
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("order_stars" as any)
+        .select("order_id")
+        .eq("user_id", userId as string);
+      if (error) throw error;
+      return (data ?? []).map((row: any) => row.order_id as string);
+    },
+  });
+
+  const starred = useMemo(() => new Set(data ?? []), [data]);
+
+  const mutation = useMutation({
+    mutationFn: async ({ orderId, next }: { orderId: string; next: boolean }) => {
+      if (!userId) return;
+      if (next) {
+        const { error } = await supabase
+          .from("order_stars" as any)
+          .insert({ user_id: userId, order_id: orderId } as any);
+        // 23505 is the (user_id, order_id) unique constraint: the star this
+        // click asked for already exists, which is the state the caller wanted.
+        // Two tabs open on the same list should not raise an error between them.
+        if (error && (error as any).code !== "23505") throw error;
+        return;
+      }
+      const { error } = await supabase
+        .from("order_stars" as any)
+        .delete()
+        .eq("user_id", userId)
+        .eq("order_id", orderId);
+      if (error) throw error;
+    },
+
+    // Applied to the cache before the request leaves, so the star fills in on
+    // the click rather than a round trip later.
+    onMutate: async ({ orderId, next }) => {
+      await qc.cancelQueries({ queryKey: key });
+      const previous = qc.getQueryData<string[]>(key);
+      qc.setQueryData<string[]>(key, (current) => {
+        const ids = current ?? [];
+        if (next) return ids.includes(orderId) ? ids : [...ids, orderId];
+        return ids.filter((id) => id !== orderId);
+      });
+      return { previous };
+    },
+
+    onError: (_err, _vars, context) => {
+      // Put the star back where it was. Leaving the optimistic value on screen
+      // after a failed write is the one outcome worse than not starring: the
+      // agent believes a shortlist holds an order that it does not.
+      if (context?.previous !== undefined) qc.setQueryData(key, context.previous);
+      toast.error("Could not update star");
+    },
+
+    // Deliberately no invalidate-on-settle. The write is one id added or one id
+    // removed, which is exactly what `onMutate` already applied, so a refetch
+    // could only re-fetch the answer the cache is holding. The error path
+    // restores the truth instead.
+  });
 
   const toggleStar = useCallback(
     (orderId: string) => {
       if (!userId || !orderId) return;
-      setStarred((current) => {
-        const next = new Set(current);
-        if (next.has(orderId)) next.delete(orderId);
-        else next.add(orderId);
-        writeIds(storageKey(userId), [...next]);
-        return next;
-      });
+      mutation.mutate({ orderId, next: !starred.has(orderId) });
     },
-    [userId],
+    [mutation, starred, userId],
   );
 
-  return { starred, toggleStar, canStar: !!userId };
+  return {
+    starred,
+    toggleStar,
+    canStar: !!userId,
+    /** True until the agent's shortlist has been read at least once. */
+    starsLoading: !!userId && isLoading,
+  };
 }

@@ -10,5 +10,6 @@ export type OrdersFilterCache = {
   status: string;
   fulfillment: string;
   mineOnly: boolean;
+  starredOnly: boolean;
   page: number;
 };

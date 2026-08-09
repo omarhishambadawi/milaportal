@@ -39,7 +39,6 @@ import { useOrdersListData } from "@/features/orders/hooks/use-orders-list-data"
 import { useOrdersMutations } from "@/features/orders/hooks/use-orders-mutations";
 import { useOrdersExport } from "@/features/orders/hooks/use-orders-export";
 import { useOrdersScrollRestoration } from "@/features/orders/hooks/use-orders-scroll-restoration";
-import { useStarredOrders } from "@/features/orders/hooks/use-starred-orders";
 
 export const Route = createFileRoute("/_app/orders/")({
   head: () => ({ meta: [{ title: "Orders" }] }),
@@ -58,6 +57,7 @@ function OrdersList() {
     fulfillment: f.fulfillment,
 
     mineOnly: f.mineOnly,
+    starredOnly: f.starredOnly,
     userId: f.userId,
     canFilterAgents: f.canFilterAgents,
     term: f.term,
@@ -76,9 +76,10 @@ function OrdersList() {
     canVerifyAll: f.canVerifyAll,
     canVerifyOwn: f.canVerifyOwn,
   });
-  // Personal, per-agent shortcuts. Scoped to the signed-in user's id, so two
-  // agents on the same call-floor machine never see each other's stars.
-  const { starred, toggleStar, canStar } = useStarredOrders(f.userId);
+  // Personal, per-agent shortcuts, read through `useOrdersListFilters` because
+  // "Starred only" is one of the filters. RLS on `order_stars` is what keeps one
+  // agent's shortlist out of another's list.
+  const { starred, toggleStar, canStar } = f;
   const { exportXlsx } = useOrdersExport({
     from: f.from,
     to: f.to,
@@ -88,8 +89,12 @@ function OrdersList() {
     cities: f.cities,
   });
 
-  const { isLoading, pageRows, summary, total, totalPages, currentPage, rangeStart, rangeEnd } =
-    data;
+  const { pageRows, summary, total, totalPages, currentPage, rangeStart, rangeEnd } = data;
+  // The starred filter is an `id IN (…)` built from the agent's shortlist, so
+  // until that list has arrived the narrowed query would legitimately match
+  // nothing. Reporting it as loading keeps "No orders found" off the screen for
+  // the one frame before the ids land.
+  const isLoading = data.isLoading || (f.starredOnly && f.starsLoading);
 
   // Restore list scroll position when returning from an order (filters, search
   // and pagination are already preserved via the module-level filter cache).
@@ -124,7 +129,8 @@ function OrdersList() {
           )}
           <p className="truncate text-xs text-muted-foreground sm:text-sm">
             <span className="font-medium text-foreground">{total}</span>{" "}
-            {f.mineOnly ? "of your" : ""} orders{f.searching ? " · search results" : ""}
+            {f.mineOnly ? "of your" : ""} orders{f.starredOnly ? " · starred" : ""}
+            {f.searching ? " · search results" : ""}
           </p>
         </div>
         <div className="flex gap-2 items-center shrink-0">
@@ -248,6 +254,43 @@ function OrdersList() {
               </SelectGroup>
             </SelectContent>
           </Select>
+
+          {/* Starred only.
+              A toggle rather than an entry in one of the Selects: it answers a
+              different question from "which orders" (it answers "which of mine
+              am I keeping an eye on"), and it has to compose with every other
+              filter — Starred + this month + Delivery is the case it exists
+              for. Sits in the filter bar rather than behind a second page, and
+              carries the same icon as the column so the two read as one
+              feature. The count is the affordance that stops the empty state
+              being a mystery: an agent who has starred nothing can see that
+              before turning it on. */}
+          <Button
+            variant={f.starredOnly ? "default" : "outline"}
+            size="sm"
+            className="h-10"
+            aria-pressed={f.starredOnly}
+            disabled={!f.canStar}
+            onClick={() => f.onFilterChange(() => f.setStarredOnly((v) => !v))}
+            title={
+              f.starredOnly
+                ? "Showing only orders you starred — click to show all"
+                : "Show only orders you starred"
+            }
+          >
+            <Star className={cn("h-4 w-4 mr-2", f.starredOnly && "fill-current")} />
+            Starred
+            {f.starred.size > 0 && (
+              <span
+                className={cn(
+                  "ml-2 rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums",
+                  f.starredOnly ? "bg-primary-foreground/20" : "bg-muted text-muted-foreground",
+                )}
+              >
+                {f.starred.size}
+              </span>
+            )}
+          </Button>
 
           <DateRangePicker
             range={f.range}
