@@ -748,7 +748,7 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                         transition: "stroke-width 200ms ease",
                       }}
                     >
-                      {displayLabel(p.name)}
+                      {p.name}
                     </text>
                   </g>
                 );
@@ -943,7 +943,7 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                       style={{ background: p.color }}
                     />
                     <span className="min-w-0 flex-1 truncate text-[13px] font-medium" dir="auto">
-                      {displayLabel(p.name)}
+                      {p.name}
                     </span>
                     <span className="shrink-0 text-[12px] font-semibold tabular-nums">
                       {fmtSAR(p.sales)}
@@ -1007,7 +1007,7 @@ function CityDetail({ city }: { city: Placed }) {
             }}
           />
           <span className="truncate text-[15px] font-semibold leading-tight text-foreground">
-            {displayLabel(city.name)}
+            {city.name}
           </span>
         </div>
         <span
