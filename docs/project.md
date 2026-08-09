@@ -1291,22 +1291,39 @@ Filters: date range, team, agent, status, **fulfillment**, "mine only",
 through one `applyOrderFilters`. Page size (25/50/100) persists at
 `orders.pageSize`.
 
-**Page header** holds the page-level actions — My/All orders, **Export Excel**,
-New order. Export lives here rather than in the filter bar because it acts on
-what the filters have already selected rather than being one of them, and in the
-bar it was the only control on a second row, so the container carried a row of
-empty space to hold one button.
+**Page header**, split into two groups by a hairline divider:
 
-**Filter bar**: one row of `h-10` controls at ≥1280px of content width, two below
-that, never three; `p-2.5 sm:p-3` around them, since it is a strip of controls
-rather than content. Search is the primary control and is built to look it —
-it takes the leftover width (capped at `max-w-md`), and lifts its shadow on
-focus — while keeping the same radius, border and focus ring as everything
-beside it. "Starred" is an outline toggle, not a filled button, so it reads as a
-filter; active is a `primary/10` wash, a `primary/60` border and a filled amber
-star, with the **label left at `foreground`** because turquoise text on a
-turquoise wash measures 2.15:1. Measured in both themes: active label 15.1 light
-/ 12.7 dark, star 4.6 / 9.8, search text 16.5 / 15.1.
+- **Scope — All orders · My orders · Starred.** What set am I looking at.
+  All/My were one button that swapped its own label, so the state you were _not_
+  in was invisible; they are two buttons now, `variant="default"` on the active
+  one. Starred joins them because it names a set of orders rather than a
+  property to filter them by. It is a separate `aria-pressed` toggle rather than
+  a third segment of the pair: it **narrows** whichever of All/My is selected,
+  and a third segment would promise a mutual exclusivity it does not have.
+- **Actions — Export Excel, New order.** Export is here rather than in the
+  filter bar because it acts on what the filters have already selected rather
+  than being one of them, and in the bar it was the only control on a second
+  row, so the container carried a row of empty space to hold one button.
+
+The header stays on one row down to 720px; the group wraps rather than
+overflowing below that.
+
+**Filter bar** — Search · Team · Agent · Status · Delivery & Pickup · Date. One
+row of `h-10` controls at ≥1150px of content width (it was ≥1280 before Starred
+moved to the header), two below that, never three; `p-2.5 sm:p-3` around them,
+since it is a strip of controls rather than content. Search is the primary
+control and is built to look it — it takes the leftover width (capped at
+`max-w-md`) and lifts its shadow on focus — while keeping the same radius,
+border and focus ring as everything beside it.
+
+Contrast, measured against the compiled CSS in both themes (light / dark):
+active Starred label 2.3 / 9.4, its count badge 16.3 / 16.5, inactive badge
+5.4 / 6.1, search text 16.5 / 15.1. The badge is a **solid** chip when active —
+`primary-foreground/20` on the primary fill measured 1.01:1, a count you cannot
+read. The 2.3 on the active label is the `variant="default"` pairing itself
+(white on brand turquoise), shared with New order and every other primary button
+in the app; it is recorded here rather than fixed, since changing it is an
+app-wide design-system decision, not an Orders one.
 
 ### Returning from an order
 
@@ -1371,9 +1388,11 @@ sync; the codebase already casts for `orders_kpi_summary` for the same reason.
 
 ### Starred only — the filter
 
-A toggle in the Orders filter bar (same `Star` icon as the column, with a count),
-not a separate page or nav item. It composes with every other filter, because it
-is applied through the same `applyOrderFilters` they are:
+A toggle in the Orders page header beside All/My orders (same `Star` icon as the
+column, with a count), not a separate page or nav item. Its position is
+presentation only — it is still one `starredOnly` flag on `useOrdersListFilters`,
+and it composes with every other filter because it is applied through the same
+`applyOrderFilters` they are:
 
 - **The list** narrows with `id IN (…)` built from the agent's star set, so
   pagination and the exact count stay server-side. An empty set is passed through

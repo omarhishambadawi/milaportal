@@ -143,14 +143,80 @@ function OrdersList() {
             {f.searching ? " · search results" : ""}
           </p>
         </div>
-        <div className="flex gap-2 items-center shrink-0">
-          <Button
-            variant={f.mineOnly ? "default" : "outline"}
-            size="sm"
-            onClick={() => f.onFilterChange(() => f.setMineOnly((v) => !v))}
-          >
-            {f.mineOnly ? "My orders" : "All orders"}
-          </Button>
+        <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
+          {/* Which orders am I looking at — the scope group.
+              All / My were one button that swapped its own label, which meant
+              the state you were not in was invisible. Two buttons state both,
+              and Starred joins them because it answers the same question: it
+              names a set of orders, not a property to filter them by, which is
+              why it reads better here than among the dropdowns.
+
+              Grouped tightly and divided from the actions on the right, so the
+              header splits into "what I'm looking at" and "what I can do". */}
+          <div className="flex items-center gap-1.5">
+            {/* Guarded so clicking the scope you are already on does nothing.
+                `onFilterChange` resets to page 1, which is right when the set
+                changes and wrong when it does not — as a single toggle the case
+                could not arise, and as two buttons it can. */}
+            <Button
+              variant={!f.mineOnly ? "default" : "outline"}
+              size="sm"
+              aria-pressed={!f.mineOnly}
+              onClick={() => f.mineOnly && f.onFilterChange(() => f.setMineOnly(false))}
+            >
+              All orders
+            </Button>
+            <Button
+              variant={f.mineOnly ? "default" : "outline"}
+              size="sm"
+              aria-pressed={f.mineOnly}
+              onClick={() => !f.mineOnly && f.onFilterChange(() => f.setMineOnly(true))}
+            >
+              My orders
+            </Button>
+            {/* Starred is *not* a third option of the pair beside it — it
+                narrows whichever of All/My is selected, and every other filter
+                on top of that. Hence a separate pressed toggle rather than a
+                third segment, which would promise the mutual exclusivity it
+                does not have. */}
+            <Button
+              variant={f.starredOnly ? "default" : "outline"}
+              size="sm"
+              aria-pressed={f.starredOnly}
+              disabled={!f.canStar}
+              onClick={() => f.onFilterChange(() => f.setStarredOnly((v) => !v))}
+              title={
+                f.starredOnly
+                  ? "Showing only orders you starred — click to show all"
+                  : "Show only orders you starred"
+              }
+            >
+              {/* Inherits the button's own foreground in both states, so the
+                  contrast is the variant's rather than a colour of its own —
+                  amber on a turquoise fill was the one pairing the design system
+                  has no token for. */}
+              <Star className={cn("h-4 w-4 sm:mr-2", f.starredOnly && "fill-current")} />
+              <span className="hidden sm:inline">Starred</span>
+              {f.starred.size > 0 && (
+                <span
+                  className={cn(
+                    "ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums",
+                    // A solid chip when active, not a translucent one: white on
+                    // 20%-white over the primary fill measures 1.01:1, which is
+                    // a count you cannot read at all.
+                    f.starredOnly
+                      ? "bg-background text-foreground"
+                      : "bg-muted text-muted-foreground",
+                  )}
+                >
+                  {f.starred.size}
+                </span>
+              )}
+            </Button>
+          </div>
+
+          <div className="mx-0.5 hidden h-5 w-px bg-border sm:block" aria-hidden />
+
           {/* Export sits with the page-level actions rather than in the filter
               bar. It is not a filter — it acts on whatever the filters have
               already selected — and down there it was the only control on a
@@ -290,61 +356,6 @@ function OrdersList() {
               </SelectGroup>
             </SelectContent>
           </Select>
-
-          {/* Starred only.
-              A toggle rather than an entry in one of the Selects: it answers a
-              different question from "which orders" (it answers "which of mine
-              am I keeping an eye on"), and it has to compose with every other
-              filter — Starred + this month + Delivery is the case it exists
-              for. Sits in the filter bar rather than behind a second page, and
-              carries the same icon as the column so the two read as one
-              feature. The count is the affordance that stops the empty state
-              being a mystery: an agent who has starred nothing can see that
-              before turning it on. */}
-          <Button
-            variant="outline"
-            size="sm"
-            aria-pressed={f.starredOnly}
-            disabled={!f.canStar}
-            onClick={() => f.onFilterChange(() => f.setStarredOnly((v) => !v))}
-            title={
-              f.starredOnly
-                ? "Showing only orders you starred — click to show all"
-                : "Show only orders you starred"
-            }
-            // Outline like the dropdowns beside it, so it reads as one of the
-            // filters rather than an action button that wandered in. Active is a
-            // tinted surface and a filled star, not a solid block: it has to
-            // look switched on without becoming the loudest thing in the bar.
-            //
-            // The label stays `foreground` when active rather than taking the
-            // primary colour — turquoise text on a 10% turquoise wash measures
-            // 2.15:1, which is a filter you cannot read. The border, the tint
-            // and the star carry the state; the word stays legible.
-            className={cn(
-              "h-10 gap-2 px-3 font-normal",
-              f.starredOnly && "border-primary/60 bg-primary/10 font-medium hover:bg-primary/15",
-            )}
-          >
-            {/* Amber, so the filter and the starred rows it selects read as one
-                feature. `--badge-amber` rather than the row's `--attention`:
-                against this button's tinted surface that one measures 2.92:1 in
-                light mode, under the 3:1 a meaningful graphic needs, and the
-                badge token is the darker amber the system already keeps for
-                exactly this — legible on a light fill, light on a dark one. */}
-            <Star
-              className={cn(
-                "h-4 w-4",
-                f.starredOnly ? "fill-current text-[var(--badge-amber)]" : "text-muted-foreground",
-              )}
-            />
-            Starred
-            {f.starred.size > 0 && (
-              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums text-muted-foreground">
-                {f.starred.size}
-              </span>
-            )}
-          </Button>
 
           <DateRangePicker
             range={f.range}
