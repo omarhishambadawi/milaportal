@@ -426,7 +426,7 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <span className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-background/70 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
-              <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+              <span className="h-1.5 w-1.5 rounded-full bg-primary motion-safe:animate-pulse" />
               {placed.length} {placed.length === 1 ? "city" : "cities"}
             </span>
             {totalCompleted > 0 && (
@@ -582,7 +582,7 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                   fill={`url(#bg-${slug(p.name)})`}
                   style={{
                     pointerEvents: "none",
-                    opacity: mounted ? (active ? 1 : 0.7) : 0,
+                    opacity: reducedMotion || mounted ? (active ? 1 : 0.7) : 0,
                     transition: "opacity 400ms ease, r 260ms cubic-bezier(.34,1.4,.5,1)",
                   }}
                 />
@@ -734,8 +734,8 @@ export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
                   <g
                     key={`lbl-${p.name}`}
                     style={{
-                      opacity: mounted ? 1 : 0,
-                      transition: "opacity 340ms ease 260ms",
+                      opacity: reducedMotion || mounted ? 1 : 0,
+                      transition: reducedMotion ? "none" : "opacity 340ms ease 260ms",
                       pointerEvents: "none",
                     }}
                   >
