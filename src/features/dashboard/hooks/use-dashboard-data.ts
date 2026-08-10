@@ -7,6 +7,25 @@ import type { KpiRow, DashKpiStats } from "../types";
 import { summarizeFulfillment } from "@/features/orders/fulfillment";
 import { teamLabel } from "../utils";
 
+/**
+ * The eleven aggregations this hook owns, as switchable names.
+ *
+ * A consumer that reads six of them was still paying for all eleven, because
+ * `enabled` was one flag for the whole set. The Dashboard reads every one and
+ * passes nothing; the Monthly Report reads five and says so.
+ */
+export type DashboardSection =
+  | "kpis"
+  | "daily"
+  | "status"
+  | "teams"
+  | "agentSales"
+  | "locations"
+  | "delivery"
+  | "deliveryMatrix"
+  | "verification"
+  | "complaints";
+
 interface UseDashboardDataArgs {
   from: string;
   to: string;
@@ -24,6 +43,16 @@ interface UseDashboardDataArgs {
    * and the chart layout stay exactly as they are.
    */
   restrictAgentIdentity?: boolean;
+  /**
+   * Which aggregations to actually fetch. Omitted means all of them, which is
+   * what the Dashboard wants and what this hook did before the option existed.
+   *
+   * Listing a subset gates the others' `enabled` only — the keys, the RPCs and
+   * every derived shape are untouched, so a section a caller switched off still
+   * reads from cache if some other surface has already fetched it, and the
+   * derived value is simply the empty one until then.
+   */
+  sections?: readonly DashboardSection[];
 }
 
 /**
@@ -44,7 +73,11 @@ export function useDashboardData({
   enabled,
   viewerId,
   restrictAgentIdentity = false,
+  sections,
 }: UseDashboardDataArgs) {
+  // `undefined` is "everything", not "nothing": the Dashboard never passes this
+  // and must keep fetching all eleven.
+  const wants = (section: DashboardSection) => enabled && (!sections || sections.includes(section));
   // Headline KPI cards now come from the orders_kpis RPC (server-side
   // aggregation) instead of the client-side cash/wasfaty/total reduction.
   // Scoped by the same effective team/agent filters; RLS applies.
@@ -61,7 +94,7 @@ export function useDashboardData({
       if (error) throw error;
       return (data ?? []) as KpiRow[];
     },
-    enabled,
+    enabled: wants("kpis"),
   });
 
   const kpiByBucket = useMemo(() => {
@@ -100,7 +133,7 @@ export function useDashboardData({
       if (error) throw error;
       return (data ?? []) as Array<{ day: string; total_sales: number; completed_sales: number }>;
     },
-    enabled,
+    enabled: wants("daily"),
   });
   const dailyData = useMemo(
     () =>
@@ -126,7 +159,7 @@ export function useDashboardData({
       if (error) throw error;
       return (data ?? []) as Array<{ status: string; order_count: number }>;
     },
-    enabled,
+    enabled: wants("status"),
   });
   const statusData = useMemo(
     () => (statusRows ?? []).map((r) => ({ name: r.status, value: Number(r.order_count) })),
@@ -152,7 +185,7 @@ export function useDashboardData({
         completion_rate: number;
       }>;
     },
-    enabled,
+    enabled: wants("teams"),
   });
   const teamData = useMemo(
     () =>
@@ -178,7 +211,7 @@ export function useDashboardData({
         completed_sales: number;
       }>;
     },
-    enabled,
+    enabled: wants("agentSales"),
   });
   const agentSalesData = useMemo(
     () =>
@@ -211,7 +244,7 @@ export function useDashboardData({
         completion_rate: number;
       }>;
     },
-    enabled,
+    enabled: wants("locations"),
   });
   const branchData = useMemo(
     () =>
@@ -274,7 +307,7 @@ export function useDashboardData({
         completed_wasfaty_count?: number;
       }>;
     },
-    enabled,
+    enabled: wants("delivery"),
   });
   const deliveryData = useMemo(
     () =>
@@ -333,7 +366,7 @@ export function useDashboardData({
         completed_sales: number;
       }>;
     },
-    enabled,
+    enabled: wants("deliveryMatrix"),
   });
   const pivotMatrix = (type: "branch" | "city") => {
     const m: Record<string, Record<string, number>> = {};
@@ -368,7 +401,7 @@ export function useDashboardData({
         rate: number;
       }>;
     },
-    enabled,
+    enabled: wants("verification"),
   });
   const verifData = useMemo(
     () =>
@@ -405,7 +438,7 @@ export function useDashboardData({
         resolution_rate: number;
       }>;
     },
-    enabled,
+    enabled: wants("complaints"),
   });
   const cmpKpi = cmpKpiRows?.[0];
   const { data: cmpLocRows } = useQuery({
@@ -427,7 +460,7 @@ export function useDashboardData({
         rate: number;
       }>;
     },
-    enabled,
+    enabled: wants("complaints"),
   });
   const cmpBranchData = useMemo(
     () =>

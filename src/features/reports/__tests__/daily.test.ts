@@ -82,18 +82,14 @@ describe("formatDailyReportText", () => {
   const text = formatDailyReportText(buildDailyReport(AUGUST_4));
 
   it("matches the format that goes out on WhatsApp", () => {
+    const rule = "────────────────────────";
     expect(text).toBe(
       [
-        "Telesales Daily Report — Tuesday, August 4, 2026",
+        "DAILY REPORT",
+        "Tuesday, August 4, 2026",
+        rule,
         "",
-        "• Total Calls: 161",
-        "• Total Orders: 35",
-        "• Total Cash: 3,103.40 SAR",
-        "• Total Wasfaty: 11,119.46 SAR",
-        "",
-        "➡️ Total Sales: 14,222.86 SAR",
-        "",
-        "Customer Care Daily Report — Tuesday, August 4, 2026",
+        "CUSTOMER CARE",
         "",
         "• Inbound Calls: 35",
         "• Total Calls (Inbound & Outbound): 63",
@@ -103,9 +99,56 @@ describe("formatDailyReportText", () => {
         "",
         "➡️ Total Sales: 17,454.92 SAR",
         "",
+        rule,
+        "",
+        "TELESALES",
+        "",
+        "• Total Calls: 161",
+        "• Total Orders: 35",
+        "• Total Cash: 3,103.40 SAR",
+        "• Total Wasfaty: 11,119.46 SAR",
+        "",
+        "➡️ Total Sales: 14,222.86 SAR",
+        "",
+        rule,
+        "",
+        "TOTAL",
+        "",
         "➡️ Total Daily Sales (Customer Care + Telesales): 31,677.78 SAR",
       ].join("\n"),
     );
+  });
+
+  it("carries the same figures as the message it replaces", () => {
+    // The restructure is headings and rules only. Every value that went out
+    // before still goes out, and no new one was invented to fill the sections.
+    for (const line of [
+      "• Inbound Calls: 35",
+      "• Total Calls (Inbound & Outbound): 63",
+      "• Total Orders: 83",
+      "• Cash Sales: 1,823.14 SAR",
+      "• Wasfaty Sales: 15,631.78 SAR",
+      "• Total Calls: 161",
+      "• Total Orders: 35",
+      "• Total Cash: 3,103.40 SAR",
+      "• Total Wasfaty: 11,119.46 SAR",
+      "➡️ Total Sales: 17,454.92 SAR",
+      "➡️ Total Sales: 14,222.86 SAR",
+      "➡️ Total Daily Sales (Customer Care + Telesales): 31,677.78 SAR",
+    ]) {
+      expect(text).toContain(line);
+    }
+  });
+
+  it("separates the three sections so a phone screen does not show one block", () => {
+    // The failure being fixed: two teams and a total running together with a
+    // single blank line between them, which in a notification preview reads as
+    // one paragraph of numbers.
+    const sections = text.split("────────────────────────");
+    expect(sections).toHaveLength(4);
+    expect(sections[1]).toContain("CUSTOMER CARE");
+    expect(sections[2]).toContain("TELESALES");
+    expect(sections[3]).toContain("TOTAL");
   });
 
   it("carries no markup that WhatsApp would render or mangle", () => {

@@ -902,7 +902,10 @@ unmodified in structure and consumed through the `@/components/ui/*` alias.
 
 `use-dashboard-filters` · `use-dashboard-data` (11 aggregation queries + their
 transforms; supports `restrictAgentIdentity`, which anonymises other agents'
-names for roles without `view_all_agents` while leaving the ranking intact) ·
+names for roles without `view_all_agents` while leaving the ranking intact, and
+`sections`, which gates each query's `enabled` so a consumer reading five of the
+eleven pays for five — omitting it means all eleven, which is what the Dashboard
+itself does) ·
 `use-dashboard-export-data` (`enabled: false`, fetched via `refetch()`) ·
 `use-monthly-growth` (the monthly comparison timeline — one `orders_kpis` call
 per month per team through `orderKpisQuery`, combined with the historical
@@ -1215,19 +1218,30 @@ would make the four lines above it fail to add up in front of the reader.
 
 ### Daily report
 
-Telesales and Customer Care side by side, then the combined total, in the exact
-format currently sent by hand. Rendered twice from one `DailyReport` value: the
-cards on screen and the plain text in the copy box, so the message and the
-preview cannot drift.
+Customer Care and Telesales side by side, then the combined total. Rendered twice
+from one `DailyReport` value: the cards on screen and the plain text in the copy
+box, so the message and the preview cannot drift. The card order follows the
+message order, because the preview exists so the sender can check at a glance
+that what they are about to paste is what they are looking at.
+
+The message is three labelled sections — **Customer Care**, **Telesales**,
+**Total** — separated by a rule of U+2500 box-drawing characters. It carries the
+same figures the hand-typed report always did and no new arithmetic; what changed
+is that the two teams and the total no longer run together as one block, which is
+how a phone notification preview used to render them.
 
 The text is deliberately not Markdown — WhatsApp renders `*bold*` and swallows
 stray asterisks, so anything that looked like formatting would arrive as either
-formatting or debris. `__tests__/daily.test.ts` pins the output byte for byte
-against the report it replaces.
+formatting or debris in whichever app it is pasted into. Emphasis is carried by
+structure: upper-case headings, rules, a bullet per figure, an arrow on the line
+that matters. `__tests__/daily.test.ts` pins the output byte for byte, asserts the
+three sections are genuinely separated, and asserts no character WhatsApp treats
+as markup survives.
 
 Four queries, two per team: `orders_kpis` and the Calls module's own analytics,
 both keyed under the namespaces those modules already use, so a window the
 Dashboard or a Calls page has loaded is a cache hit rather than a second fetch.
+They run only while the Daily tab is the one on screen — see **Fetching**, below.
 
 **Basis** selects what the day's figures count. The default is every order logged
 that day, because that is what the manual report has always counted — it goes out
@@ -1243,38 +1257,138 @@ one that says so.
 
 ### Monthly report
 
-Executive KPIs → team performance → Cash vs Wasfaty → Delivery vs Store Pickup →
-sales trend → call centre → branch and geography.
+KPI summary → team performance → charts → call centre → order mix → trend
+highlights → branch and geography.
 
-It reuses **`useDashboardData` wholesale** rather than reimplementing it, which is
-the load-bearing decision: that hook already fetches, for one window and under
-`queryKeys.dashboard.*`, every aggregation this report needs. The report and the
-dashboard cannot disagree because they read the same cache entries. Two extra
-`orders_kpis` calls sit on top, one per team, because the team comparison needs
-Cash and Wasfaty per team and `orders_teams` carries only sales and a completion
-rate.
+**KPI summary** is the eight figures a management summary quotes: total revenue,
+completed revenue, total orders, completed orders, overall completion rate,
+average order value, revenue lost (non-completed) and the top city by revenue.
+Revenue lost is `totalSales − completedSales` — a subtraction of two figures
+already on the page, not a second count of cancelled and pending value, so it
+cannot disagree with the RPC's own definition of completed. Each team then gets
+its completed revenue, completed orders and completion rate called out above the
+full comparison table.
+
+**Charts** (seven, in `components/monthly-charts.tsx`): revenue by team, the daily
+revenue trend, revenue by city, top branches, order status distribution, revenue
+share by delivery company, and Cash vs Wasfaty revenue. Every series is shaped in
+`useMonthlyReport` from buckets the tables above them already render — the
+revenue-by-team chart reads the two per-team `orders_kpis` rows rather than
+`orders_teams`, so there is one figure for "Telesales revenue" on the page and not
+two that could drift. The ranked charts cap at ten; the full lists stay in the
+tables and the workbook.
+
+**Call centre** carries Customer Care total calls, Telesales total calls and
+conversion rate, and the network total. The per-team split comes out of the single
+whole-network analytics response's own `teamCompare`, so it costs no query and
+uses the same extension-to-agent mapping and team classification as every Calls
+page. The network total is that response's own total rather than the two teams
+added — a call from an unmapped extension belongs in the total and in neither
+team. Conversion is Telesales only (`conversion.overall.conversionRate`, orders ÷
+answered) and is the one figure that needs the orders join, which is why the
+Telesales analytics query is the only one the report runs with `includeOrders`.
+An absent rate renders as an em dash, never as 0%.
 
 Percentages divide by the population they are read against — the two teams'
-contributions against the month's completed sales, Cash and Wasfaty against their
-own pair's sum — so each set reaches 100 rather than nearly 100. Trend highlights
-exclude days that never traded and count them separately: a public holiday is not
-the month's worst trading day, and letting it take that label buries the day that
-genuinely underperformed.
+contributions against the month's completed revenue, Cash and Wasfaty against
+their own pair's sum — so each set reaches 100 rather than nearly 100. Trend
+highlights exclude days that never traded and count them separately: a public
+holiday is not the month's worst trading day, and letting it take that label
+buries the day that genuinely underperformed.
 
-One chart, `lazy()`-loaded. Recharts is the largest dependency the app ships and
-the Daily Report — which is what the page opens on — has no chart in it at all.
+All seven charts sit behind **one** `lazy()` boundary. Recharts is the largest
+dependency the app ships and the Daily Report — which is what the page opens on —
+has no chart in it at all; seven boundaries would mean seven chunks and seven
+cards popping into a grid at different moments.
 
 The reference workbook (`Shams Call Center June Sales.xlsx`) informed **which**
 KPIs are worth showing and nothing else. It is not recreated, converted or
 imported; its eleven sheets were mostly working-out, and the portal does the
 working-out.
 
+### Fetching
+
+Two decisions keep this page from being the slowest in the portal, and both are
+about **not asking** rather than about caching harder.
+
+**Only the visible tab fetches.** `Tabs` is controlled and each hook takes
+`active`; Radix already unmounts the hidden tab's markup but cannot stop a hook
+the route called. Before this, opening `/reports` issued nineteen requests —
+including a month-wide CDR sweep — to render a tab that shows four figures.
+
+**The monthly report asks `useDashboardData` for five of its eleven
+aggregations.** `sections` gates each query's `enabled`; passing nothing means all
+eleven, which is what the Dashboard does and what the hook did before the option
+existed. The report reads `kpis`, `daily`, `status`, `locations` and `delivery`;
+the agent ranking, the delivery crosstab, invoice verification and both
+complaints aggregations were being fetched, parsed and discarded on every visit.
+The keys, RPCs and derivations are untouched, so a section a caller switched off
+still reads from cache if the Dashboard has already fetched it.
+
+Everything else was already right and was left alone: the queries are independent
+and React Query runs them in parallel, the global `staleTime` is 60s with every
+write path invalidating `queryKeys.dashboard.all()`, and `resolveRefreshPolicy`
+already stops polling a closed window.
+
 ### PDF export
 
-`window.print()`, the same as the Calls pages: the browser's own PDF writer
-renders what is on screen and `print:` utilities drop the controls. The daily
-report gets a **separate print rendering** — one table instead of two cards and a
-textarea, because a textarea prints as a grey box with a scrollbar.
+`window.print()` — the browser's own writer over the real DOM, so text stays
+selectable and charts stay vector. That was always the right architecture; what
+the document lacked was any print geometry at all, which is the whole of the
+cropping and overflow that used to come out of the Monthly Report. See the
+`@media print` block at the foot of `src/styles.css`:
+
+- **`@page { size: A4 portrait; margin: 14mm 12mm 18mm }`.** There was no `@page`,
+  so the writer used its own margins over a layout still carrying the app shell.
+- **The shell hides itself.** The rail and the top bar carry `print:hidden`; the
+  sidebar was taking a sixth of every sheet and narrowing the report column to
+  match, which is what pushed the charts and the nine-column team table off the
+  right edge. `main` and its content wrapper drop their padding and their
+  `overflow-x-clip`, which on paper is literally a crop rather than a reflow.
+- **Charts scale instead of clipping.** Recharts sizes its SVG in pixels from the
+  on-screen container and never re-measures for the print box. The surface carries
+  a `viewBox`, so a relative width lets it fit whatever the printable column is.
+- **Nothing is cut mid-card.** Grids collapse to one column, cards and chart
+  panels carry `break-inside-avoid`, table headers repeat via
+  `display: table-header-group`, and the major sections start on a fresh sheet.
+- **Dark mode does not reach paper.** The `.dark` palette block is scoped to
+  `@media screen`, so a PDF exported from a dark session falls back to the `:root`
+  light values rather than needing all fifty-two tokens restated.
+- **Branding.** `components/print-chrome.tsx` adds a masthead on the first sheet
+  and a running footer (`position: fixed`, which the print renderer repeats) on
+  every sheet. There is no page number: Chromium implements neither `@page` margin
+  boxes nor `counter(page)`, so the sheet count is left to the browser's own print
+  options rather than faked.
+
+The daily report keeps its **separate print rendering** — one table instead of two
+cards and a textarea, because a textarea prints as a grey box with a scrollbar.
+
+### Excel export
+
+`features/reports/export.ts`, and the same architecture as the Dashboard's:
+`xlsx` is imported inside the function so the writer stays out of the route's
+chunk until somebody clicks Export, and the function is pure output. It is handed
+the values `useMonthlyReport` already derived and refetches nothing, which is what
+makes the workbook and the page incapable of disagreeing.
+
+Four sheets: **Monthly Report** (KPI summary, each team's completed performance,
+the full team detail table), **Revenue Analysis** (by team, the daily trend, by
+city, by branch, by delivery company, Cash vs Wasfaty, trend highlights),
+**Orders Analysis** (counts, status breakdown, team breakdown, fulfillment), and
+**Call Center** (per-team volume, Telesales conversion, quality, rates, and which
+system decided the Missed/Abandoned split).
+
+Number formats are applied **per cell**, not per column: these sheets stack
+several tables under one set of column letters, so column B is money in the KPI
+block and an order count two tables further down, and a count rendered under a
+currency format reads as money it is not.
+
+The workbook does **not** carry the brand's fills and font colours, and cannot:
+cell styling and embedded charts are SheetJS Pro features, and the community build
+this project depends on drops a `.s` style object on write without complaint.
+Adding a second spreadsheet library to colour a header would put a parallel writer
+into the bundle for decoration. The charts live in the PDF, which is the artefact
+meant to be looked at; the workbook is the one meant to be filtered and pivoted.
 
 ---
 

@@ -56,7 +56,9 @@ export function AppHeader({
   return (
     <header
       className={cn(
-        "sticky top-0 z-30 h-16 flex items-center gap-2 px-3 sm:px-5",
+        // `print:hidden`: the top bar is app chrome, and a sticky element in a
+        // printed document repeats itself at the top of nothing useful.
+        "sticky top-0 z-30 h-16 flex items-center gap-2 px-3 sm:px-5 print:hidden",
         "border-b bg-card/70 backdrop-blur-xl supports-[backdrop-filter]:bg-card/55",
         "transition-[box-shadow,background-color,border-color] duration-300",
         scrolled

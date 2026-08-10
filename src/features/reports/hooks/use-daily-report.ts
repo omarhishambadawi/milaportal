@@ -29,13 +29,23 @@ export function useDailyReport(args: {
   basis: ReportBasis;
   canView: boolean;
   authLoading: boolean;
+  /**
+   * False while the Monthly tab is the one on screen.
+   *
+   * Both reports are declared by the route, so both used to fetch on mount and
+   * opening the page cost nineteen requests for a tab showing four figures. The
+   * hooks stay mounted — their memos, their state and the cache entry they will
+   * read are all preserved — and only the network work waits for the tab.
+   */
+  active?: boolean;
 }): {
   report: DailyReport;
   isLoading: boolean;
   callsUnavailable: boolean;
 } {
-  const { date, basis, canView, authLoading } = args;
-  const enabled = canView && !authLoading;
+  const { date, basis, canView, authLoading, active = true } = args;
+  const wanted = canView && active;
+  const enabled = wanted && !authLoading;
 
   // One day: the window is the same date on both ends.
   const telesalesOrders = useReportOrderKpis({ from: date, to: date, team: "telesales", enabled });
@@ -45,14 +55,14 @@ export function useDailyReport(args: {
     from: date,
     to: date,
     team: "telesales",
-    canView,
+    canView: wanted,
     authLoading,
   });
   const careCalls = useReportCalls({
     from: date,
     to: date,
     team: "customer_care",
-    canView,
+    canView: wanted,
     authLoading,
   });
 

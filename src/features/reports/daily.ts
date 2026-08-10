@@ -118,14 +118,34 @@ function count(value: number): string {
 }
 
 /**
+ * The rule between sections.
+ *
+ * Box-drawing (U+2500) rather than hyphens or asterisks. WhatsApp, Telegram and
+ * SMS all render it as a continuous line and none of them treats it as markup —
+ * where a row of `---` reads as debris and a row of `***` is markup in one app
+ * and debris in the next. Twenty-four characters is the widest run that does not
+ * wrap in a phone notification preview.
+ */
+const RULE = "────────────────────────";
+
+/**
  * The report as plain text, ready to paste into WhatsApp.
  *
  * Deliberately not the rendered card's markup, and deliberately not Markdown:
  * WhatsApp renders `*bold*` and swallows stray asterisks, so anything that
- * looked like formatting here would arrive as either bold text or debris. What
- * goes out is what the operations team already sends — a bullet per figure, an
- * arrow on the line that matters, and a blank line between the two teams so the
- * message is skimmable in a notification preview.
+ * looked like formatting here would arrive as either bold text or debris in
+ * whichever app it is pasted into. Emphasis is carried by structure instead —
+ * an upper-case section heading, a rule between sections, a bullet per figure,
+ * and an arrow on the line that matters.
+ *
+ * Three sections, in the order management reads them: Customer Care, Telesales,
+ * then the combined total on its own. The previous version ran the two teams
+ * together with one blank line between them and closed with a total that looked
+ * like it belonged to Customer Care, which is what made a phone screen show it
+ * as one continuous block.
+ *
+ * Every figure here is the same figure the previous message carried, and there
+ * is no new arithmetic: the section headings and the rules are the whole change.
  *
  * The arrow is U+27A1 plus a variation selector, which is the glyph the current
  * reports use; keeping it means the automated message looks like the manual one
@@ -135,16 +155,11 @@ export function formatDailyReportText(report: DailyReport): string {
   const { telesales: ts, customerCare: cc } = report;
 
   const lines = [
-    `Telesales Daily Report — ${report.dateLabel}`,
+    `DAILY REPORT`,
+    report.dateLabel,
+    RULE,
     ``,
-    `• Total Calls: ${count(ts.total)}`,
-    `• Total Orders: ${count(ts.orders)}`,
-    `• Total Cash: ${money(ts.cashSales)}`,
-    `• Total Wasfaty: ${money(ts.wasfatySales)}`,
-    ``,
-    `➡️ Total Sales: ${money(ts.totalSales)}`,
-    ``,
-    `Customer Care Daily Report — ${report.dateLabel}`,
+    `CUSTOMER CARE`,
     ``,
     `• Inbound Calls: ${count(cc.inbound)}`,
     `• Total Calls (Inbound & Outbound): ${count(cc.total)}`,
@@ -154,12 +169,27 @@ export function formatDailyReportText(report: DailyReport): string {
     ``,
     `➡️ Total Sales: ${money(cc.totalSales)}`,
     ``,
+    RULE,
+    ``,
+    `TELESALES`,
+    ``,
+    `• Total Calls: ${count(ts.total)}`,
+    `• Total Orders: ${count(ts.orders)}`,
+    `• Total Cash: ${money(ts.cashSales)}`,
+    `• Total Wasfaty: ${money(ts.wasfatySales)}`,
+    ``,
+    `➡️ Total Sales: ${money(ts.totalSales)}`,
+    ``,
+    RULE,
+    ``,
+    `TOTAL`,
+    ``,
     `➡️ Total Daily Sales (Customer Care + Telesales): ${money(report.combinedSales)}`,
   ];
 
-  // Stated only when it is not the default, so the everyday message stays
-  // byte-identical to the one being replaced — but a report deliberately run
-  // over completed orders never goes out looking like the usual one.
+  // Stated only when it is not the default, so the everyday message reads
+  // exactly as the one being replaced — but a report deliberately run over
+  // completed orders never goes out looking like the usual one.
   if (report.basis === "completed") {
     lines.push(``, `(Completed orders only)`);
   }

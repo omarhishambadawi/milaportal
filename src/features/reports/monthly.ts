@@ -69,6 +69,14 @@ export interface ExecutiveSummary {
    * exactly when the month went badly.
    */
   averageOrderValue: number;
+  /**
+   * Revenue that was logged and never completed.
+   *
+   * A subtraction of two figures already on the report rather than a third
+   * query: total sales minus completed sales is, by the RPC's own definition of
+   * completed, exactly the value sitting in orders that did not close.
+   */
+  revenueLost: number;
 }
 
 export function buildExecutiveSummary(buckets: OrderBuckets): ExecutiveSummary {
@@ -85,6 +93,7 @@ export function buildExecutiveSummary(buckets: OrderBuckets): ExecutiveSummary {
     cashSales: cash.completedSales,
     wasfatySales: wasfaty.completedSales,
     averageOrderValue: total.completedOrders > 0 ? total.completedSales / total.completedOrders : 0,
+    revenueLost: total.totalSales - total.completedSales,
   };
 }
 
@@ -97,6 +106,8 @@ export interface TeamPerformanceRow {
   orders: number;
   completedOrders: number;
   completionRate: number;
+  /** Every order logged to the team, completed or not. Drives the revenue chart. */
+  totalSales: number;
   completedSales: number;
   cashSales: number;
   wasfatySales: number;
@@ -119,6 +130,7 @@ function teamRow(
     orders: total.totalOrders,
     completedOrders: total.completedOrders,
     completionRate: total.completionRate,
+    totalSales: total.totalSales,
     completedSales: total.completedSales,
     cashSales: cash.completedSales,
     wasfatySales: wasfaty.completedSales,
@@ -253,6 +265,54 @@ export function buildCallSummary(
     abandonedRate: share(split.abandoned, totals.inbound),
     avgTalkSec: totals.answered > 0 ? totals.talkSeconds / totals.answered : null,
     splitSource: split.source,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Call centre, by team                                                        */
+/* -------------------------------------------------------------------------- */
+
+/** One row of the analytics' own `teamCompare`, narrowed to what a report reads. */
+export interface TeamCallInput {
+  team: "customer_care" | "telesales";
+  calls: number;
+}
+
+export interface CallCenterBreakdown {
+  customerCare: { totalCalls: number };
+  /**
+   * Telesales carries a conversion rate and Customer Care does not, which is the
+   * brief's own asymmetry and the Calls module's: conversion is orders ÷
+   * answered outbound work, and an inbound care queue does not convert.
+   */
+  telesales: { totalCalls: number; conversionRate: number | null };
+  overall: { totalCalls: number };
+}
+
+/**
+ * Customer Care and Telesales call volumes, split out of the month's own
+ * analytics rather than fetched per team.
+ *
+ * `teamCompare` is already in the single whole-network analytics response the
+ * report loads, keyed by the same extension-to-agent mapping and team
+ * classification every Calls page uses. Splitting it here costs no query and
+ * cannot disagree with those pages.
+ *
+ * `overall` is the response's own total, not the two teams added: a call from an
+ * extension mapped to no team belongs in the network total and in neither team,
+ * and adding the rows would silently drop it.
+ */
+export function buildCallCenterBreakdown(
+  teams: readonly TeamCallInput[],
+  overallTotalCalls: number,
+  telesalesConversionRate: number | null,
+): CallCenterBreakdown {
+  const calls = (team: TeamCallInput["team"]) => teams.find((row) => row.team === team)?.calls ?? 0;
+
+  return {
+    customerCare: { totalCalls: calls("customer_care") },
+    telesales: { totalCalls: calls("telesales"), conversionRate: telesalesConversionRate },
+    overall: { totalCalls: overallTotalCalls },
   };
 }
 

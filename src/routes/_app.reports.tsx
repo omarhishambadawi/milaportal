@@ -1,7 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { endOfMonth, format, startOfMonth } from "date-fns";
-import { FileText, Printer, ShieldAlert } from "lucide-react";
+import { FileSpreadsheet, Printer, ShieldAlert } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -16,6 +17,7 @@ import { useAuth } from "@/lib/auth";
 import { hasPerm } from "@/lib/permissions";
 import { DailyReportPrintTable, DailyReportView } from "@/features/reports/components/daily-report";
 import { MonthlyReportView } from "@/features/reports/components/monthly-report";
+import { ReportPrintFooter, ReportPrintHeader } from "@/features/reports/components/print-chrome";
 import { useDailyReport } from "@/features/reports/hooks/use-daily-report";
 import { useMonthlyReport } from "@/features/reports/hooks/use-monthly-report";
 import { BASIS_LABEL, type ReportBasis } from "@/features/reports/daily";
@@ -67,6 +69,18 @@ function Reports() {
   const [month, setMonth] = useState(now.getMonth());
   const [year, setYear] = useState(now.getFullYear());
 
+  /**
+   * Which report is on screen — controlled rather than `defaultValue`, because
+   * the two hooks below are declared by this component and would otherwise both
+   * fetch on mount.
+   *
+   * Radix already unmounts the hidden tab's markup; what it cannot do is stop a
+   * hook the route called. Opening this page cost nineteen requests to show a
+   * tab that reads four figures. Now the monthly report's month-wide RPCs and
+   * its CDR sweep wait until somebody asks for the monthly report.
+   */
+  const [tab, setTab] = useState("daily");
+
   const monthRange = useMemo(() => {
     const anchor = new Date(year, month, 1);
     return {
@@ -76,13 +90,45 @@ function Reports() {
     };
   }, [month, year]);
 
-  const daily = useDailyReport({ date, basis, canView, authLoading: loading });
+  const daily = useDailyReport({
+    date,
+    basis,
+    canView,
+    authLoading: loading,
+    active: tab === "daily",
+  });
   const monthly = useMonthlyReport({
     from: monthRange.from,
     to: monthRange.to,
     canView,
     authLoading: loading,
+    active: tab === "monthly",
   });
+
+  /**
+   * The workbook, written from what is already on screen.
+   *
+   * The writer is imported inside `exportMonthlyReport`, so clicking this is the
+   * first time `xlsx` is fetched — and a report nobody exports never pays for
+   * it. No refetch: the export takes the same derived values the page rendered,
+   * which is what makes the workbook and the page incapable of disagreeing.
+   */
+  const [exporting, setExporting] = useState(false);
+  const exportExcel = useCallback(async () => {
+    setExporting(true);
+    try {
+      const { exportMonthlyReport } = await import("@/features/reports/export");
+      await exportMonthlyReport(monthly, {
+        from: monthRange.from,
+        to: monthRange.to,
+        label: monthRange.label,
+      });
+    } catch {
+      toast.error("Could not build the workbook. Please try again.");
+    } finally {
+      setExporting(false);
+    }
+  }, [monthly, monthRange]);
 
   if (!loading && !canView) {
     return (
@@ -108,7 +154,7 @@ function Reports() {
         </div>
       </div>
 
-      <Tabs defaultValue="daily" className="space-y-4">
+      <Tabs value={tab} onValueChange={setTab} className="space-y-4">
         <TabsList className="print:hidden">
           <TabsTrigger value="daily">Daily Report</TabsTrigger>
           <TabsTrigger value="monthly">Monthly Report</TabsTrigger>
@@ -255,21 +301,29 @@ function Reports() {
             </div>
 
             {canExport && (
-              <Button size="sm" onClick={() => window.print()} disabled={monthly.isLoading}>
-                <Printer className="mr-2 h-4 w-4" />
-                Export PDF
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={exportExcel}
+                  disabled={monthly.isLoading || exporting}
+                >
+                  <FileSpreadsheet className="mr-2 h-4 w-4" />
+                  {exporting ? "Exporting…" : "Export Excel"}
+                </Button>
+                <Button size="sm" onClick={() => window.print()} disabled={monthly.isLoading}>
+                  <Printer className="mr-2 h-4 w-4" />
+                  Export PDF
+                </Button>
+              </div>
             )}
           </div>
 
-          <div className="hidden print:mb-3 print:block">
-            <h2 className="flex items-center gap-2 text-lg font-semibold">
-              <FileText className="h-4 w-4" aria-hidden />
-              Monthly Report — {monthRange.label}
-            </h2>
-          </div>
+          <ReportPrintHeader title="Monthly Report" period={monthRange.label} />
 
           <MonthlyReportView data={monthly} label={monthRange.label} />
+
+          <ReportPrintFooter label={`Monthly Report — ${monthRange.label}`} />
         </TabsContent>
       </Tabs>
     </div>

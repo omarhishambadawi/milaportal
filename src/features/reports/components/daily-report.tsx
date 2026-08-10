@@ -116,17 +116,11 @@ export function DailyReportView({
         </p>
       )}
 
+      {/* Customer Care first, then Telesales — the order the message now sends
+          them in. The preview exists so the sender can check at a glance that
+          what they are about to paste is what they are looking at, and that
+          check is harder when the two are in opposite orders. */}
       <div className="grid min-w-0 gap-3 lg:grid-cols-2">
-        <TeamBlock
-          title={`Telesales — ${report.dateLabel}`}
-          rows={[
-            { label: "Total Calls", value: ts.total.toLocaleString("en-US") },
-            { label: "Total Orders", value: ts.orders.toLocaleString("en-US") },
-            { label: "Total Cash", value: money(ts.cashSales) },
-            { label: "Total Wasfaty", value: money(ts.wasfatySales) },
-          ]}
-          total={money(ts.totalSales)}
-        />
         <TeamBlock
           title={`Customer Care — ${report.dateLabel}`}
           rows={[
@@ -140,6 +134,16 @@ export function DailyReportView({
             { label: "Wasfaty Sales", value: money(cc.wasfatySales) },
           ]}
           total={money(cc.totalSales)}
+        />
+        <TeamBlock
+          title={`Telesales — ${report.dateLabel}`}
+          rows={[
+            { label: "Total Calls", value: ts.total.toLocaleString("en-US") },
+            { label: "Total Orders", value: ts.orders.toLocaleString("en-US") },
+            { label: "Total Cash", value: money(ts.cashSales) },
+            { label: "Total Wasfaty", value: money(ts.wasfatySales) },
+          ]}
+          total={money(ts.totalSales)}
         />
       </div>
 
@@ -206,40 +210,40 @@ export function DailyReportPrintTable({ report }: { report: DailyReport }) {
       <Thead>
         <tr>
           <Th>Metric</Th>
-          <Th align="right">Telesales</Th>
           <Th align="right">Customer Care</Th>
+          <Th align="right">Telesales</Th>
         </tr>
       </Thead>
       <Tbody>
         <tr>
           <Td className="font-medium">Total Calls</Td>
-          <Td numeric>{ts.total.toLocaleString("en-US")}</Td>
           <Td numeric>{cc.total.toLocaleString("en-US")}</Td>
+          <Td numeric>{ts.total.toLocaleString("en-US")}</Td>
         </tr>
         <tr>
           <Td className="font-medium">Inbound Calls</Td>
-          <Td numeric>{ts.inbound.toLocaleString("en-US")}</Td>
           <Td numeric>{cc.inbound.toLocaleString("en-US")}</Td>
+          <Td numeric>{ts.inbound.toLocaleString("en-US")}</Td>
         </tr>
         <tr>
           <Td className="font-medium">Total Orders</Td>
-          <Td numeric>{ts.orders.toLocaleString("en-US")}</Td>
           <Td numeric>{cc.orders.toLocaleString("en-US")}</Td>
+          <Td numeric>{ts.orders.toLocaleString("en-US")}</Td>
         </tr>
         <tr>
           <Td className="font-medium">Cash Sales</Td>
-          <Td numeric>{money(ts.cashSales)}</Td>
           <Td numeric>{money(cc.cashSales)}</Td>
+          <Td numeric>{money(ts.cashSales)}</Td>
         </tr>
         <tr>
           <Td className="font-medium">Wasfaty Sales</Td>
-          <Td numeric>{money(ts.wasfatySales)}</Td>
           <Td numeric>{money(cc.wasfatySales)}</Td>
+          <Td numeric>{money(ts.wasfatySales)}</Td>
         </tr>
         <tr className="border-t border-border/60 font-semibold">
           <Td className="font-semibold">Total Sales</Td>
-          <Td numeric>{money(ts.totalSales)}</Td>
           <Td numeric>{money(cc.totalSales)}</Td>
+          <Td numeric>{money(ts.totalSales)}</Td>
         </tr>
       </Tbody>
     </AnalyticsTable>

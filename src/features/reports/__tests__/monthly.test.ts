@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildCallCenterBreakdown,
   buildCallSummary,
   buildExecutiveSummary,
   buildOrderTypeSplit,
@@ -197,5 +198,72 @@ describe("summarizeTrend", () => {
     const highlights = summarizeTrend([]);
     expect(highlights.best).toBeNull();
     expect(highlights.quietDays).toBe(0);
+  });
+});
+
+describe("revenue lost", () => {
+  it("is total revenue that never completed, not a second count", () => {
+    // Completed is decided server-side by `orders_kpis`; the subtraction cannot
+    // disagree with it because it is taken from the same two figures the KPI
+    // strip already shows.
+    const summary = buildExecutiveSummary(MONTH);
+    expect(summary.revenueLost).toBe(350_000 - 320_000);
+    expect(summary.totalSales - summary.completedSales).toBe(summary.revenueLost);
+  });
+
+  it("is zero for a month with nothing in it", () => {
+    expect(buildExecutiveSummary({}).revenueLost).toBe(0);
+  });
+
+  it("carries a team's total revenue alongside its completed revenue", () => {
+    // The revenue-by-team chart plots both, and it reads them off the same rows
+    // the table above it renders rather than from `orders_teams` — one figure
+    // for "Telesales revenue" on the page, not two that could drift.
+    const { rows, total } = buildTeamPerformance(MONTH, {}, MONTH);
+    expect(rows[0].totalSales).toBe(350_000);
+    expect(rows[1].totalSales).toBe(0);
+    expect(total.totalSales).toBe(350_000);
+  });
+});
+
+describe("buildCallCenterBreakdown", () => {
+  const TEAMS = [
+    { team: "customer_care" as const, calls: 1200 },
+    { team: "telesales" as const, calls: 800 },
+  ];
+
+  it("splits volume by team out of the analytics' own team comparison", () => {
+    const breakdown = buildCallCenterBreakdown(TEAMS, 2100, 14.5);
+    expect(breakdown.customerCare.totalCalls).toBe(1200);
+    expect(breakdown.telesales.totalCalls).toBe(800);
+  });
+
+  it("takes the network total from the response rather than adding the teams", () => {
+    // A call from an extension mapped to no team belongs in the network total
+    // and in neither team. Adding the rows would silently drop it — here, the
+    // hundred calls that are the difference between 2,100 and 2,000.
+    expect(buildCallCenterBreakdown(TEAMS, 2100, null).overall.totalCalls).toBe(2100);
+  });
+
+  it("carries a conversion rate for Telesales only", () => {
+    // The brief's asymmetry and the Calls module's: conversion is orders ÷
+    // answered outbound work, and an inbound care queue does not convert.
+    const breakdown = buildCallCenterBreakdown(TEAMS, 2100, 14.5);
+    expect(breakdown.telesales.conversionRate).toBe(14.5);
+    expect(breakdown.customerCare).not.toHaveProperty("conversionRate");
+  });
+
+  it("reports an absent conversion rate as null rather than zero", () => {
+    // Zero percent conversion and "the orders join did not answer" are
+    // different facts, and a report that prints the second as the first is
+    // telling management Telesales sold nothing.
+    expect(buildCallCenterBreakdown(TEAMS, 2100, null).telesales.conversionRate).toBeNull();
+  });
+
+  it("reads a missing team as no calls", () => {
+    const breakdown = buildCallCenterBreakdown([], 0, null);
+    expect(breakdown.customerCare.totalCalls).toBe(0);
+    expect(breakdown.telesales.totalCalls).toBe(0);
+    expect(breakdown.overall.totalCalls).toBe(0);
   });
 });

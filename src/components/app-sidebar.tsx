@@ -388,7 +388,10 @@ export function AppSidebar({
       <aside
         data-state={expanded ? "expanded" : "collapsed"}
         className={cn(
-          "group/rail z-20 hidden shrink-0 flex-col md:flex",
+          // `print:hidden`: the rail is app chrome. On paper it took a sixth of
+          // every page and narrowed the report column to match, which is what
+          // cropped the Monthly Report's charts and its widest table.
+          "group/rail z-20 hidden shrink-0 flex-col md:flex print:hidden",
           "sticky top-0 h-screen bg-card border-r border-border/70",
           // `will-change-[width]` was here and has been removed. will-change is a
           // hint to promote an element to its own compositor layer, which only

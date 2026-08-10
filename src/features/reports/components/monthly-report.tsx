@@ -1,5 +1,5 @@
 import { Suspense, lazy } from "react";
-import { Banknote, PackageCheck, PhoneCall, TrendingUp, Users2 } from "lucide-react";
+import { Banknote, BarChart3, PackageCheck, PhoneCall, TrendingUp, Users2 } from "lucide-react";
 import { fmtSAR } from "@/lib/branches";
 import { AnalyticsCard } from "@/features/dashboard/components/analytics-card";
 import {
@@ -17,20 +17,24 @@ import type { useMonthlyReport } from "../hooks/use-monthly-report";
 /**
  * The monthly management report.
  *
- * Ordered the way the question is asked: how much did we sell, who sold it, what
- * kind of orders were they, how did they reach the customer, how did the month
- * move, and how did the phones do. Every section is a compact table or a KPI row
- * — the reference workbook this replaces had eleven sheets of working-out, and
- * the portal does the working-out.
+ * Ordered the way the question is asked: what did the month do, who did it, what
+ * did it look like, how did the phones perform, and where did it happen. Every
+ * section is a compact KPI row, a table or a chart — the reference workbook this
+ * replaces had eleven sheets of working-out, and the portal does the working-out.
  *
- * Charts are deliberately singular. One trend line earns its place because "which
- * days were strong" is genuinely a shape question; everything else on this page
- * is a number somebody reads out, and a donut of two slices is a table with extra
- * steps.
+ * Nothing here computes. Every figure arrives from `useMonthlyReport`, which
+ * arranges figures the Dashboard's RPCs and the Calls module's analytics already
+ * produced. A report that recomputed its own totals would be a second source of
+ * truth for numbers management already reads on the dashboard.
+ *
+ * Print is a first-class rendering rather than an afterthought: the grids
+ * collapse to a single column, cards and charts carry `break-inside-avoid`, and
+ * a branded header and footer appear only on paper. See the `@media print` block
+ * in `styles.css` for the page geometry those rules assume.
  */
 
-const MonthlyTrendChart = lazy(() =>
-  import("./monthly-trend-chart").then((m) => ({ default: m.MonthlyTrendChart })),
+const MonthlyCharts = lazy(() =>
+  import("./monthly-charts").then((m) => ({ default: m.MonthlyCharts })),
 );
 
 type MonthlyData = ReturnType<typeof useMonthlyReport>;
@@ -44,59 +48,138 @@ function minutes(seconds: number | null): string {
   return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, "0")}s`;
 }
 
+/**
+ * A section that must not be split across a page break where it can be helped.
+ *
+ * `break-inside-avoid` on the wrapper keeps a heading with at least the start of
+ * its content; the cards inside carry their own copy of the rule so a long
+ * section still breaks *between* cards rather than through one.
+ */
+function ReportSection({
+  title,
+  icon,
+  children,
+  breakBefore,
+}: {
+  title: string;
+  icon: typeof Users2;
+  children: React.ReactNode;
+  /** Start this section on a fresh page in the PDF. */
+  breakBefore?: boolean;
+}) {
+  return (
+    <section className={breakBefore ? "print:break-before-page" : undefined}>
+      <SectionTitle title={title} icon={icon} />
+      {children}
+    </section>
+  );
+}
+
+/** The KPI grid, one place so every row on this page has the same rhythm. */
+function KpiGrid({ children }: { children: React.ReactNode }) {
+  return (
+    // Two columns on paper, not four. A4 portrait leaves ~186mm of printable
+    // width; four KPI cards across it gives each about 45mm, and `1,234,567.89
+    // SAR` at the card's figure size does not fit in 45mm — it would truncate,
+    // which on a management report is a wrong number rather than a tight one.
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 print:grid-cols-2 print:gap-2 [&>*]:break-inside-avoid">
+      {children}
+    </div>
+  );
+}
+
 export function MonthlyReportView({ data, label }: { data: MonthlyData; label: string }) {
-  const { summary, teams, orderTypes, fulfillment, trend, trendHighlights, calls } = data;
+  const { summary, teams, orderTypes, fulfillment, trendHighlights, calls, callCenter } = data;
+  const [customerCare, telesales] = teams.rows;
 
   return (
     <div className="space-y-6 print:space-y-4">
-      {/* Executive summary */}
-      <div>
-        <SectionTitle title={`Executive summary — ${label}`} icon={TrendingUp} />
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {/* ------------------------------------------------------------------ */}
+      {/* KPI summary                                                        */}
+      {/* ------------------------------------------------------------------ */}
+      <ReportSection title={`KPI summary — ${label}`} icon={TrendingUp}>
+        <KpiGrid>
+          <StatCard label="Total Revenue (SAR)" value={fmtSAR(summary.totalSales)} />
+          <StatCard
+            label="Completed Revenue (SAR)"
+            value={fmtSAR(summary.completedSales)}
+            accent="text-[var(--positive)]"
+          />
           <StatCard label="Total Orders" value={num(summary.totalOrders)} />
           <StatCard
             label="Completed Orders"
             value={num(summary.completedOrders)}
-            sub={`${pct(summary.completionRate)} completion rate`}
-          />
-          <StatCard label="Total Sales" value={fmtSAR(summary.totalSales)} />
-          <StatCard
-            label="Completed Sales"
-            value={fmtSAR(summary.completedSales)}
-            accent="text-[var(--positive)]"
-          />
-          <StatCard label="Cash Sales" value={fmtSAR(summary.cashSales)} sub="Completed" />
-          <StatCard label="Wasfaty Sales" value={fmtSAR(summary.wasfatySales)} sub="Completed" />
-          <StatCard
-            label="Average Order Value"
-            value={fmtSAR(summary.averageOrderValue)}
-            sub="Completed sales ÷ completed orders"
-          />
-          <StatCard
-            label="Completion Rate"
-            value={pct(summary.completionRate)}
             sub={`${num(summary.totalOrders - summary.completedOrders)} not completed`}
           />
-        </div>
-      </div>
+          <StatCard
+            label="Overall Completion Rate"
+            value={pct(summary.completionRate)}
+            sub="Completed orders ÷ all orders"
+          />
+          <StatCard
+            label="Avg Order Value (SAR)"
+            value={fmtSAR(summary.averageOrderValue)}
+            sub="Completed revenue ÷ completed orders"
+          />
+          {/* Total minus completed, by the RPC's own definition of completed —
+              not a second count of cancelled and pending value. */}
+          <StatCard
+            label="Revenue Lost (non-completed)"
+            value={fmtSAR(summary.revenueLost)}
+            sub={`${pct(100 - summary.completionRate)} of orders`}
+            accent="text-destructive"
+          />
+          <StatCard
+            label="Top City by Revenue"
+            value={data.topCity?.name ?? "—"}
+            sub={data.topCity ? fmtSAR(data.topCity.sales) : undefined}
+          />
+        </KpiGrid>
+      </ReportSection>
 
-      {/* Team performance */}
-      <div>
-        <SectionTitle title="Team performance" icon={Users2} />
+      {/* ------------------------------------------------------------------ */}
+      {/* Team performance                                                   */}
+      {/* ------------------------------------------------------------------ */}
+      <ReportSection title="Team performance" icon={Users2}>
+        {/* Completed performance per team, called out above the full table:
+            these three figures per team are what a management summary quotes,
+            and they are the same `orders_kpis` rows the table below expands. */}
+        <div className="grid gap-3 lg:grid-cols-2 print:grid-cols-2 print:gap-2">
+          {[customerCare, telesales].map((row) => (
+            <AnalyticsCard
+              key={row.team}
+              title={row.team}
+              subtitle="Completed performance"
+              icon={Users2}
+              className="break-inside-avoid"
+            >
+              <div className="grid grid-cols-3 gap-3">
+                <Figure label="Completed Revenue" value={fmtSAR(row.completedSales)} />
+                <Figure label="Completed Orders" value={num(row.completedOrders)} />
+                <Figure label="Completion Rate" value={pct(row.completionRate)} />
+              </div>
+            </AnalyticsCard>
+          ))}
+        </div>
+
         <AnalyticsCard
           title="Customer Care vs Telesales"
-          subtitle="Completed figures, with each team's share of the month's completed sales"
+          subtitle="Completed figures, with each team's share of the month's completed revenue"
           icon={Users2}
           flush
+          className="mt-3 break-inside-avoid"
         >
-          <AnalyticsTable minWidth={760}>
+          {/* `print:min-w-0` releases the scroll floor on paper: a 760px table in
+              a 700px printable column is exactly the horizontal overflow the PDF
+              was clipping. On screen the floor stays and the card scrolls. */}
+          <AnalyticsTable minWidth={760} className="print:[&_table]:min-w-0 print:text-[10px]">
             <Thead>
               <tr>
                 <Th>Team</Th>
                 <Th align="right">Orders</Th>
                 <Th align="right">Completed</Th>
                 <Th align="right">Rate</Th>
-                <Th align="right">Completed sales</Th>
+                <Th align="right">Completed revenue</Th>
                 <Th align="right">Cash</Th>
                 <Th align="right">Wasfaty</Th>
                 <Th align="right">AOV</Th>
@@ -135,101 +218,218 @@ export function MonthlyReportView({ data, label }: { data: MonthlyData; label: s
             </Tbody>
           </AnalyticsTable>
         </AnalyticsCard>
-      </div>
+      </ReportSection>
 
-      {/* Cash vs Wasfaty, and how orders were fulfilled. Side by side because
-          they answer the same question about the same completed population —
-          what kind of order was it, and how did it reach the customer. */}
-      <div className="grid min-w-0 gap-3 lg:grid-cols-2">
-        <AnalyticsCard title="Cash vs Wasfaty" subtitle="Completed orders" icon={Banknote} flush>
-          <AnalyticsTable minWidth={400}>
-            <Thead>
-              <tr>
-                <Th>Type</Th>
-                <Th align="right">Orders</Th>
-                <Th align="right">%</Th>
-                <Th align="right">Sales</Th>
-                <Th align="right">%</Th>
-              </tr>
-            </Thead>
-            <Tbody>
-              {orderTypes.totalOrders === 0 && <EmptyRow colSpan={5} />}
-              {orderTypes.totalOrders > 0 &&
-                orderTypes.rows.map((row) => (
-                  <tr key={row.label}>
-                    <Td className="font-medium">{row.label}</Td>
-                    <Td numeric>{num(row.orders)}</Td>
-                    <Td numeric>{pct(row.ordersPercent)}</Td>
-                    <Td numeric>{fmtSAR(row.sales)}</Td>
-                    <Td numeric>{pct(row.salesPercent)}</Td>
-                  </tr>
-                ))}
-              {orderTypes.totalOrders > 0 && (
-                <tr className="border-t border-border/60 font-semibold">
-                  <Td className="font-semibold">Total</Td>
-                  <Td numeric>{num(orderTypes.totalOrders)}</Td>
-                  <Td numeric>100%</Td>
-                  <Td numeric>{fmtSAR(orderTypes.totalSales)}</Td>
-                  <Td numeric>100%</Td>
-                </tr>
-              )}
-            </Tbody>
-          </AnalyticsTable>
-        </AnalyticsCard>
-
-        {/* The same `summarizeFulfillment` the Dashboard and the Orders filter
-            read — El Shorouk, Azman and Branch Scooter are Delivery, Store
-            Pickup is its own line, and nothing here re-decides that. */}
-        <AnalyticsCard
-          title="Delivery vs Store Pickup"
-          subtitle="Completed orders, with the Cash/Wasfaty split of each"
-          icon={PackageCheck}
-          flush
+      {/* ------------------------------------------------------------------ */}
+      {/* Charts                                                             */}
+      {/* ------------------------------------------------------------------ */}
+      <ReportSection title="Charts" icon={BarChart3} breakBefore>
+        <Suspense
+          fallback={
+            <div className="grid gap-3 sm:gap-4 lg:grid-cols-2">
+              <div className="h-[344px] animate-pulse rounded-xl bg-muted/40" />
+              <div className="h-[344px] animate-pulse rounded-xl bg-muted/40" />
+            </div>
+          }
         >
-          <AnalyticsTable minWidth={400}>
-            <Thead>
-              <tr>
-                <Th>Fulfillment</Th>
-                <Th align="right">Orders</Th>
-                <Th align="right">%</Th>
-                <Th align="right">Cash</Th>
-                <Th align="right">Wasfaty</Th>
-              </tr>
-            </Thead>
-            <Tbody>
-              {fulfillment.total.count === 0 && <EmptyRow colSpan={5} />}
-              {fulfillment.total.count > 0 &&
-                [
-                  fulfillment.delivery,
-                  fulfillment.pickup,
-                  ...(fulfillment.unknown.count > 0 ? [fulfillment.unknown] : []),
-                ].map((row) => (
-                  <tr key={row.label}>
-                    <Td className="font-medium">{row.label}</Td>
-                    <Td numeric>{num(row.count)}</Td>
-                    <Td numeric>{row.key === "unknown" ? "—" : pct(row.percent)}</Td>
-                    <Td numeric>{num(row.cash)}</Td>
-                    <Td numeric>{num(row.wasfaty)}</Td>
-                  </tr>
-                ))}
-              {fulfillment.total.count > 0 && (
-                <tr className="border-t border-border/60 font-semibold">
-                  <Td className="font-semibold">Total</Td>
-                  <Td numeric>{num(fulfillment.total.count)}</Td>
-                  <Td numeric>{fulfillment.classified.count > 0 ? "100%" : "—"}</Td>
-                  <Td numeric>{num(fulfillment.total.cash)}</Td>
-                  <Td numeric>{num(fulfillment.total.wasfaty)}</Td>
-                </tr>
-              )}
-            </Tbody>
-          </AnalyticsTable>
-        </AnalyticsCard>
-      </div>
+          <MonthlyCharts
+            data={{
+              teamRevenue: data.teamRevenue,
+              trend: data.trend,
+              topCities: data.topCities,
+              topBranches: data.topBranches,
+              statusData: data.statusData,
+              deliveryRevenue: data.deliveryRevenue,
+              orderTypeRevenue: data.orderTypeRevenue,
+            }}
+          />
+        </Suspense>
+      </ReportSection>
 
-      {/* Sales trend */}
-      <div>
-        <SectionTitle title="Sales trend" icon={TrendingUp} />
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {/* ------------------------------------------------------------------ */}
+      {/* Call centre                                                        */}
+      {/* ------------------------------------------------------------------ */}
+      <ReportSection title="Call centre" icon={PhoneCall} breakBefore>
+        {data.callsUnavailable ? (
+          <AnalyticsCard title="Call performance" icon={PhoneCall} className="break-inside-avoid">
+            <p className="text-sm text-muted-foreground">
+              Call analytics are unavailable for this period.
+            </p>
+          </AnalyticsCard>
+        ) : (
+          <>
+            {/* Volume per team and the Telesales conversion rate. Both come out
+                of the Calls module's own analytics — `teamCompare` for the
+                split, `conversion.overall` for the rate — so the extension
+                mapping and the team classification are the ones every Calls
+                page already uses. Conversion is Telesales-only by construction:
+                an inbound care queue does not convert. */}
+            <KpiGrid>
+              <StatCard
+                label="Customer Care — Total Calls"
+                value={num(callCenter.customerCare.totalCalls)}
+              />
+              <StatCard
+                label="Telesales — Total Calls"
+                value={num(callCenter.telesales.totalCalls)}
+              />
+              <StatCard
+                label="Telesales — Conversion Rate"
+                value={
+                  callCenter.telesales.conversionRate == null
+                    ? "—"
+                    : pct(callCenter.telesales.conversionRate)
+                }
+                sub="Orders ÷ answered calls"
+              />
+              <StatCard
+                label="Overall — Total Calls"
+                value={num(callCenter.overall.totalCalls)}
+                sub="Whole network, both directions"
+              />
+            </KpiGrid>
+
+            <div className="mt-3">
+              <KpiGrid>
+                <StatCard
+                  label="Answered"
+                  value={num(calls.answered)}
+                  sub={`${pct(calls.answerRate)} answer rate`}
+                  accent="text-[var(--positive)]"
+                />
+                {/* Missed and Abandoned come from `resolveQueueOutcomeSplit`, the
+                    shared classifier — never recomputed here, and the source is
+                    stated so the report and the Calls pages can be reconciled. */}
+                <StatCard
+                  label="Missed"
+                  value={num(calls.missed)}
+                  sub={`${pct(calls.missedRate)} of inbound`}
+                />
+                <StatCard
+                  label="Abandoned"
+                  value={num(calls.abandoned)}
+                  sub={`${pct(calls.abandonedRate)} of inbound`}
+                />
+                <StatCard label="Average talk time" value={minutes(calls.avgTalkSec)} />
+              </KpiGrid>
+            </div>
+
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Missed / Abandoned split:{" "}
+              {calls.splitSource === "call_report"
+                ? "Yeastar's own queue report"
+                : "derived from call records"}
+              .
+            </p>
+          </>
+        )}
+      </ReportSection>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Order mix and fulfillment                                          */}
+      {/* ------------------------------------------------------------------ */}
+      <ReportSection title="Order mix" icon={Banknote} breakBefore>
+        {/* Cash vs Wasfaty and how orders reached the customer, side by side:
+            they answer the same question about the same completed population. */}
+        <div className="grid min-w-0 gap-3 lg:grid-cols-2 print:grid-cols-2 print:gap-2">
+          <AnalyticsCard
+            title="Cash vs Wasfaty"
+            subtitle="Completed orders"
+            icon={Banknote}
+            flush
+            className="break-inside-avoid"
+          >
+            <AnalyticsTable minWidth={400} className="print:[&_table]:min-w-0">
+              <Thead>
+                <tr>
+                  <Th>Type</Th>
+                  <Th align="right">Orders</Th>
+                  <Th align="right">%</Th>
+                  <Th align="right">Revenue</Th>
+                  <Th align="right">%</Th>
+                </tr>
+              </Thead>
+              <Tbody>
+                {orderTypes.totalOrders === 0 && <EmptyRow colSpan={5} />}
+                {orderTypes.totalOrders > 0 &&
+                  orderTypes.rows.map((row) => (
+                    <tr key={row.label}>
+                      <Td className="font-medium">{row.label}</Td>
+                      <Td numeric>{num(row.orders)}</Td>
+                      <Td numeric>{pct(row.ordersPercent)}</Td>
+                      <Td numeric>{fmtSAR(row.sales)}</Td>
+                      <Td numeric>{pct(row.salesPercent)}</Td>
+                    </tr>
+                  ))}
+                {orderTypes.totalOrders > 0 && (
+                  <tr className="border-t border-border/60 font-semibold">
+                    <Td className="font-semibold">Total</Td>
+                    <Td numeric>{num(orderTypes.totalOrders)}</Td>
+                    <Td numeric>100%</Td>
+                    <Td numeric>{fmtSAR(orderTypes.totalSales)}</Td>
+                    <Td numeric>100%</Td>
+                  </tr>
+                )}
+              </Tbody>
+            </AnalyticsTable>
+          </AnalyticsCard>
+
+          {/* The same `summarizeFulfillment` the Dashboard and the Orders filter
+              read — El Shorouk, Azman and Branch Scooter are Delivery, Store
+              Pickup is its own line, and nothing here re-decides that. */}
+          <AnalyticsCard
+            title="Delivery vs Store Pickup"
+            subtitle="Completed orders, with the Cash/Wasfaty split of each"
+            icon={PackageCheck}
+            flush
+            className="break-inside-avoid"
+          >
+            <AnalyticsTable minWidth={400} className="print:[&_table]:min-w-0">
+              <Thead>
+                <tr>
+                  <Th>Fulfillment</Th>
+                  <Th align="right">Orders</Th>
+                  <Th align="right">%</Th>
+                  <Th align="right">Cash</Th>
+                  <Th align="right">Wasfaty</Th>
+                </tr>
+              </Thead>
+              <Tbody>
+                {fulfillment.total.count === 0 && <EmptyRow colSpan={5} />}
+                {fulfillment.total.count > 0 &&
+                  [
+                    fulfillment.delivery,
+                    fulfillment.pickup,
+                    ...(fulfillment.unknown.count > 0 ? [fulfillment.unknown] : []),
+                  ].map((row) => (
+                    <tr key={row.label}>
+                      <Td className="font-medium">{row.label}</Td>
+                      <Td numeric>{num(row.count)}</Td>
+                      <Td numeric>{row.key === "unknown" ? "—" : pct(row.percent)}</Td>
+                      <Td numeric>{num(row.cash)}</Td>
+                      <Td numeric>{num(row.wasfaty)}</Td>
+                    </tr>
+                  ))}
+                {fulfillment.total.count > 0 && (
+                  <tr className="border-t border-border/60 font-semibold">
+                    <Td className="font-semibold">Total</Td>
+                    <Td numeric>{num(fulfillment.total.count)}</Td>
+                    <Td numeric>{fulfillment.classified.count > 0 ? "100%" : "—"}</Td>
+                    <Td numeric>{num(fulfillment.total.cash)}</Td>
+                    <Td numeric>{num(fulfillment.total.wasfaty)}</Td>
+                  </tr>
+                )}
+              </Tbody>
+            </AnalyticsTable>
+          </AnalyticsCard>
+        </div>
+      </ReportSection>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Trend highlights                                                   */}
+      {/* ------------------------------------------------------------------ */}
+      <ReportSection title="Revenue trend highlights" icon={TrendingUp}>
+        <KpiGrid>
           <StatCard
             label="Best day"
             value={trendHighlights.best ? fmtSAR(trendHighlights.best.completed) : "—"}
@@ -243,111 +443,81 @@ export function MonthlyReportView({ data, label }: { data: MonthlyData; label: s
           />
           <StatCard label="Average day" value={fmtSAR(trendHighlights.averageDay)} />
           <StatCard
-            label="Days with no sales"
+            label="Days with no revenue"
             value={num(trendHighlights.quietDays)}
             sub="Excluded from the averages"
           />
-        </div>
-        <AnalyticsCard
-          title="Daily sales"
-          subtitle="Total vs completed, by day"
-          icon={TrendingUp}
-          className="mt-3"
-        >
-          <Suspense fallback={<div className="h-[260px] animate-pulse rounded-md bg-muted/40" />}>
-            <MonthlyTrendChart data={trend} />
-          </Suspense>
-        </AnalyticsCard>
-      </div>
+        </KpiGrid>
+      </ReportSection>
 
-      {/* Call centre */}
-      <div>
-        <SectionTitle title="Call centre" icon={PhoneCall} />
-        {data.callsUnavailable ? (
-          <AnalyticsCard title="Call performance" icon={PhoneCall}>
-            <p className="text-sm text-muted-foreground">
-              Call analytics are unavailable for this period.
-            </p>
+      {/* ------------------------------------------------------------------ */}
+      {/* Branch and geography                                               */}
+      {/* ------------------------------------------------------------------ */}
+      <ReportSection title="Branch & geography" icon={PackageCheck} breakBefore>
+        <div className="grid min-w-0 gap-3 lg:grid-cols-2 print:grid-cols-2 print:gap-2">
+          <AnalyticsCard
+            title="Top cities by revenue"
+            icon={PackageCheck}
+            flush
+            className="break-inside-avoid"
+          >
+            <AnalyticsTable minWidth={320} className="print:[&_table]:min-w-0">
+              <Thead>
+                <tr>
+                  <Th>City</Th>
+                  <Th align="right">Completed revenue</Th>
+                </tr>
+              </Thead>
+              <Tbody>
+                {data.cities.length === 0 && <EmptyRow colSpan={2} />}
+                {data.topCities.map((city) => (
+                  <tr key={city.name}>
+                    <Td className="font-medium">{city.name}</Td>
+                    <Td numeric>{fmtSAR(city.sales)}</Td>
+                  </tr>
+                ))}
+              </Tbody>
+            </AnalyticsTable>
           </AnalyticsCard>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <StatCard label="Total Calls" value={num(calls.totalCalls)} />
-            <StatCard
-              label="Answered"
-              value={num(calls.answered)}
-              sub={`${pct(calls.answerRate)} answer rate`}
-              accent="text-[var(--positive)]"
-            />
-            {/* Missed and Abandoned come from `resolveQueueOutcomeSplit`, the
-                shared classifier — never recomputed here, and the source is
-                stated so the report and the Calls pages can be reconciled. */}
-            <StatCard
-              label="Missed"
-              value={num(calls.missed)}
-              sub={`${pct(calls.missedRate)} of inbound`}
-            />
-            <StatCard
-              label="Abandoned"
-              value={num(calls.abandoned)}
-              sub={`${pct(calls.abandonedRate)} of inbound`}
-            />
-            <StatCard label="Average talk time" value={minutes(calls.avgTalkSec)} />
-            <StatCard
-              label="Missed / Abandoned source"
-              value={calls.splitSource === "call_report" ? "Phone system" : "Call records"}
-              sub={
-                calls.splitSource === "call_report"
-                  ? "Yeastar's own queue report"
-                  : "Derived from CDR"
-              }
-            />
-          </div>
-        )}
-      </div>
 
-      {/* Branch & geography. Last because it is the section management reads
-          only when something above it prompted the question. */}
-      <div className="grid min-w-0 gap-3 lg:grid-cols-2">
-        <AnalyticsCard title="Top cities by sales" icon={PackageCheck} flush>
-          <AnalyticsTable minWidth={320}>
-            <Thead>
-              <tr>
-                <Th>City</Th>
-                <Th align="right">Completed sales</Th>
-              </tr>
-            </Thead>
-            <Tbody>
-              {data.cities.length === 0 && <EmptyRow colSpan={2} />}
-              {data.cities.slice(0, 10).map((city) => (
-                <tr key={city.name}>
-                  <Td className="font-medium">{city.name}</Td>
-                  <Td numeric>{fmtSAR(city.sales)}</Td>
+          <AnalyticsCard
+            title="Top branches by revenue"
+            icon={PackageCheck}
+            flush
+            className="break-inside-avoid"
+          >
+            <AnalyticsTable minWidth={320} className="print:[&_table]:min-w-0">
+              <Thead>
+                <tr>
+                  <Th>Branch</Th>
+                  <Th align="right">Completed revenue</Th>
                 </tr>
-              ))}
-            </Tbody>
-          </AnalyticsTable>
-        </AnalyticsCard>
+              </Thead>
+              <Tbody>
+                {data.branches.length === 0 && <EmptyRow colSpan={2} />}
+                {data.topBranches.map((branch) => (
+                  <tr key={branch.name}>
+                    <Td className="font-medium">{branch.name}</Td>
+                    <Td numeric>{fmtSAR(branch.sales)}</Td>
+                  </tr>
+                ))}
+              </Tbody>
+            </AnalyticsTable>
+          </AnalyticsCard>
+        </div>
+      </ReportSection>
+    </div>
+  );
+}
 
-        <AnalyticsCard title="Top branches by sales" icon={PackageCheck} flush>
-          <AnalyticsTable minWidth={320}>
-            <Thead>
-              <tr>
-                <Th>Branch</Th>
-                <Th align="right">Completed sales</Th>
-              </tr>
-            </Thead>
-            <Tbody>
-              {data.branches.length === 0 && <EmptyRow colSpan={2} />}
-              {data.branches.slice(0, 10).map((branch) => (
-                <tr key={branch.name}>
-                  <Td className="font-medium">{branch.name}</Td>
-                  <Td numeric>{fmtSAR(branch.sales)}</Td>
-                </tr>
-              ))}
-            </Tbody>
-          </AnalyticsTable>
-        </AnalyticsCard>
+/** One labelled figure inside a card. */
+function Figure({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="truncate text-[10px] uppercase tracking-wider text-muted-foreground sm:text-[11px]">
+        {label}
       </div>
+      <div className="mt-1 truncate text-base font-semibold sm:text-lg">{value}</div>
     </div>
   );
 }

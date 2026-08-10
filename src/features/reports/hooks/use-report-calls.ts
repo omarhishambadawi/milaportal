@@ -11,11 +11,14 @@ import type { Team } from "@/features/call-center/types";
  * conversion join are all still computed server-side for those pages, and none
  * of them belong in a management report.
  *
- * `includeOrders: false` is the one deliberate difference. The orders join
- * exists for Telesales' conversion metrics; a report that already has the
- * authoritative order figures from `orders_kpis` would be paying for a second,
- * differently-scoped count of the same thing — and then have two numbers for
- * "orders" that could disagree.
+ * `includeOrders` defaults to false, and that is the one deliberate difference.
+ * The orders join exists for Telesales' conversion metrics; a report that
+ * already has the authoritative order figures from `orders_kpis` would be paying
+ * for a second, differently-scoped count of the same thing — and then have two
+ * numbers for "orders" that could disagree. The Monthly Report's telesales query
+ * turns it back on, because conversion rate is the one figure that *is* the
+ * join, and it is read from the Calls module's own `conversion.overall` rather
+ * than recomputed.
  */
 export function useReportCalls(args: {
   from: string;
@@ -23,6 +26,8 @@ export function useReportCalls(args: {
   team: Team;
   canView: boolean;
   authLoading: boolean;
+  /** Telesales conversion needs the orders join. Everything else does not. */
+  includeOrders?: boolean;
 }) {
   const analytics = useCallCenterAnalytics({
     from: args.from,
@@ -41,7 +46,7 @@ export function useReportCalls(args: {
     // polling a closed window; this is the cadence for the one case that is
     // still live — today's report, open on a screen.
     refreshMs: 60_000,
-    includeOrders: false,
+    includeOrders: args.includeOrders ?? false,
   });
 
   return analytics;

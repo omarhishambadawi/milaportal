@@ -382,63 +382,78 @@
   color-scheme: light;
 }
 
-.dark {
-  color-scheme: dark;
-  /* Premium dark palette — deep navy-slate surfaces with turquoise accents. Avoids pure black. */
-  --background: oklch(0.19 0.02 255); /* deep slate-navy */
-  --foreground: oklch(0.96 0.008 210);
-  --card: oklch(0.23 0.022 255); /* elevated surface */
-  --card-foreground: oklch(0.96 0.008 210);
-  --popover: oklch(0.24 0.022 255);
-  --popover-foreground: oklch(0.96 0.008 210);
-  --primary: oklch(0.76 0.13 194); /* turquoise, slightly brighter for dark bg */
-  --primary-foreground: oklch(0.17 0.02 255);
-  --secondary: oklch(0.3 0.025 255);
-  --secondary-foreground: oklch(0.96 0.008 210);
-  --muted: oklch(0.27 0.022 255);
-  --muted-foreground: oklch(0.72 0.02 220);
-  --accent: oklch(0.33 0.045 200);
-  --accent-foreground: oklch(0.94 0.02 195);
-  --destructive: oklch(0.65 0.2 25);
-  --destructive-foreground: oklch(0.99 0 0);
-  --success: oklch(0.7 0.15 155);
-  --success-foreground: oklch(0.17 0.02 255);
-  --warning: oklch(0.82 0.15 75);
-  --warning-foreground: oklch(0.2 0.05 75);
-  --border: oklch(0.32 0.02 250);
-  --input: oklch(0.32 0.02 250);
-  --ring: oklch(0.76 0.13 194);
-  --chart-1: oklch(0.78 0.13 194);
-  --chart-2: oklch(0.68 0.11 205);
-  --chart-3: oklch(0.62 0.1 235);
-  --chart-4: oklch(0.72 0.12 175);
-  --chart-5: oklch(0.85 0.09 190);
-  --positive: oklch(79.2% 0.209 151.711); /* green-400 */
-  --positive-alt: oklch(76.5% 0.177 163.223); /* emerald-400 */
-  --negative: oklch(70.4% 0.191 22.216); /* red-400 */
-  --attention: oklch(82.8% 0.189 84.429); /* amber-400 */
-  --badge-violet: oklch(81.1% 0.111 293.571); /* violet-300 */
-  --badge-blue: oklch(80.9% 0.105 251.813); /* blue-300 */
-  --badge-emerald: oklch(84.5% 0.143 164.978); /* emerald-300 */
-  --badge-amber: oklch(87.9% 0.169 91.605); /* amber-300 */
-  --tint-cash: oklch(76.9% 0.188 70.08 / 0.1); /* amber-500/10 */
-  --tint-wasfaty: oklch(68.5% 0.169 237.323 / 0.1); /* sky-500/10 */
-  --tint-map: oklch(0.22 0.03 200);
-  --tint-row: oklch(0.76 0.13 194 / 0.12);
-  --tint-resolved: oklch(72.3% 0.219 149.579 / 0.05); /* green-500/5 */
-  --map-land-top: oklch(0.32 0.038 198);
-  --map-land-bottom: oklch(0.27 0.028 222);
-  --map-outline: oklch(0.56 0.07 195);
-  --map-grid: oklch(0.33 0.02 222);
-  --map-leader: oklch(0.55 0.018 220);
-  --map-label: oklch(0.95 0.01 210);
-  --map-label-halo: oklch(0.21 0.022 255);
-  /* Lifted and slightly desaturated against the dark land mass; the ordering
+/*
+ * Screen only, deliberately.
+ *
+ * The dark palette is a screen affordance; on paper it is fifty pages of toner
+ * and a report nobody can read. Scoping the whole block to `@media screen` means
+ * a PDF exported from a dark session falls back to the `:root` values above
+ * rather than needing every token restated in the print block — the cascade
+ * already has the light palette, this simply stops overriding it.
+ *
+ * The `dark:` Tailwind variant still matches (the class stays on <html>), which
+ * is fine: it is used for a single subtle tint on these surfaces, not for
+ * anything that carries meaning.
+ */
+@media screen {
+  .dark {
+    color-scheme: dark;
+    /* Premium dark palette — deep navy-slate surfaces with turquoise accents. Avoids pure black. */
+    --background: oklch(0.19 0.02 255); /* deep slate-navy */
+    --foreground: oklch(0.96 0.008 210);
+    --card: oklch(0.23 0.022 255); /* elevated surface */
+    --card-foreground: oklch(0.96 0.008 210);
+    --popover: oklch(0.24 0.022 255);
+    --popover-foreground: oklch(0.96 0.008 210);
+    --primary: oklch(0.76 0.13 194); /* turquoise, slightly brighter for dark bg */
+    --primary-foreground: oklch(0.17 0.02 255);
+    --secondary: oklch(0.3 0.025 255);
+    --secondary-foreground: oklch(0.96 0.008 210);
+    --muted: oklch(0.27 0.022 255);
+    --muted-foreground: oklch(0.72 0.02 220);
+    --accent: oklch(0.33 0.045 200);
+    --accent-foreground: oklch(0.94 0.02 195);
+    --destructive: oklch(0.65 0.2 25);
+    --destructive-foreground: oklch(0.99 0 0);
+    --success: oklch(0.7 0.15 155);
+    --success-foreground: oklch(0.17 0.02 255);
+    --warning: oklch(0.82 0.15 75);
+    --warning-foreground: oklch(0.2 0.05 75);
+    --border: oklch(0.32 0.02 250);
+    --input: oklch(0.32 0.02 250);
+    --ring: oklch(0.76 0.13 194);
+    --chart-1: oklch(0.78 0.13 194);
+    --chart-2: oklch(0.68 0.11 205);
+    --chart-3: oklch(0.62 0.1 235);
+    --chart-4: oklch(0.72 0.12 175);
+    --chart-5: oklch(0.85 0.09 190);
+    --positive: oklch(79.2% 0.209 151.711); /* green-400 */
+    --positive-alt: oklch(76.5% 0.177 163.223); /* emerald-400 */
+    --negative: oklch(70.4% 0.191 22.216); /* red-400 */
+    --attention: oklch(82.8% 0.189 84.429); /* amber-400 */
+    --badge-violet: oklch(81.1% 0.111 293.571); /* violet-300 */
+    --badge-blue: oklch(80.9% 0.105 251.813); /* blue-300 */
+    --badge-emerald: oklch(84.5% 0.143 164.978); /* emerald-300 */
+    --badge-amber: oklch(87.9% 0.169 91.605); /* amber-300 */
+    --tint-cash: oklch(76.9% 0.188 70.08 / 0.1); /* amber-500/10 */
+    --tint-wasfaty: oklch(68.5% 0.169 237.323 / 0.1); /* sky-500/10 */
+    --tint-map: oklch(0.22 0.03 200);
+    --tint-row: oklch(0.76 0.13 194 / 0.12);
+    --tint-resolved: oklch(72.3% 0.219 149.579 / 0.05); /* green-500/5 */
+    --map-land-top: oklch(0.32 0.038 198);
+    --map-land-bottom: oklch(0.27 0.028 222);
+    --map-outline: oklch(0.56 0.07 195);
+    --map-grid: oklch(0.33 0.02 222);
+    --map-leader: oklch(0.55 0.018 220);
+    --map-label: oklch(0.95 0.01 210);
+    --map-label-halo: oklch(0.21 0.022 255);
+    /* Lifted and slightly desaturated against the dark land mass; the ordering
    * (cool → warm → hot) is what carries the meaning, not the absolute hue. */
-  --heat-low: oklch(0.75 0.12 195);
-  --heat-mid: oklch(0.82 0.16 70);
-  --heat-high: oklch(0.7 0.19 25);
-  --theme-dark: 1;
+    --heat-low: oklch(0.75 0.12 195);
+    --heat-mid: oklch(0.82 0.16 70);
+    --heat-high: oklch(0.7 0.19 25);
+    --theme-dark: 1;
+  }
 }
 
 /*
@@ -734,4 +749,161 @@ html.theme-vt * {
   opacity: var(--theme-dark);
   transform: rotate(calc((var(--theme-dark) - 1) * 90deg))
     scale(calc(0.5 + 0.5 * var(--theme-dark)));
+}
+
+/* ---------------------------------------------------------------------------
+ * Print — the PDF export
+ * ---------------------------------------------------------------------------
+ * The Reports and Calls pages export by handing the page to the browser's own
+ * PDF writer (`window.print()`), which is the right architecture: it renders the
+ * real DOM at print resolution, so text stays selectable and charts stay vector.
+ * What it lacked was any print geometry at all. The document had no `@page`, so
+ * the writer used its default margins over a layout still carrying the app
+ * shell — a 16rem fixed sidebar and a sticky header — and the report was laid
+ * out into whatever width was left. That is the cropping and the horizontal
+ * overflow: not a rendering bug, a page that was never told it was on paper.
+ *
+ * Everything below is print-only and changes nothing on screen.
+ * ------------------------------------------------------------------------- */
+@media print {
+  /*
+   * A4 portrait, with margins wide enough to survive a stapled corner and a
+   * printer's own unprintable edge. The extra millimetres at the foot are the
+   * running footer's room.
+   */
+  @page {
+    size: A4 portrait;
+    margin: 14mm 12mm 18mm;
+  }
+
+  /*
+   * Force the light palette onto paper regardless of the viewer's theme, and
+   * keep the browser from dropping backgrounds it thinks it is saving ink on —
+   * a table's header band and a KPI card's border are structure here, not
+   * decoration.
+   */
+  html {
+    color-scheme: light;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    /* Ensures a 1600px viewport does not scale the page down to 40% */
+    width: auto !important;
+  }
+
+  *,
+  *::before,
+  *::after {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    /* Shadows cost toner and render as grey smears at 300dpi. */
+    box-shadow: none !important;
+    /* A transition mid-print can paint a half-finished state. */
+    transition: none !important;
+    animation: none !important;
+  }
+
+  /*
+   * The app shell is chrome, not content, and hides itself with `print:hidden`
+   * on the rail and the top bar — an element selector would also have caught the
+   * `<header>` and `<aside>` elements that routes use inside their own content.
+   * Without that the sidebar takes a sixth of every page and the content column
+   * is narrowed to match, which is what pushed the charts and the nine-column
+   * team table off the right edge.
+   */
+
+  /*
+   * The route content wrapper carries responsive padding and `overflow-x-clip`.
+   * `clip` on paper is literally a crop: anything wider than the box is cut
+   * rather than reflowed, which is the second half of the cropping report.
+   */
+  main,
+  main > div {
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /*
+   * Recharts sizes its SVG in pixels from the on-screen container width and
+   * never re-measures for the print box, so a chart laid out at 700px CSS
+   * pixels was being asked to fit ~700px of A4 — with no guarantee, and with
+   * none at all on a wide monitor. The surface carries a `viewBox`, so giving
+   * it a relative width lets it scale to whatever the printable column is
+   * instead of being clipped at the edge of it.
+   */
+  .recharts-responsive-container,
+  .recharts-wrapper {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+  }
+
+  .recharts-wrapper svg,
+  svg.recharts-surface {
+    width: 100% !important;
+    height: auto !important;
+  }
+
+  /*
+   * Cell padding is sized for a pointer and a 1600px viewport: `px-4 py-3` is
+   * 32px of horizontal padding per cell, and the report's widest table has ten
+   * of them — 320px of whitespace inside a 186mm column, which is most of why
+   * that table did not fit. Millimetres here, because the page is measured in
+   * them.
+   */
+  th,
+  td {
+    padding: 1.4mm 2mm !important;
+  }
+
+  /*
+   * A card, a chart panel or a table split across a page boundary is the
+   * "awkwardly cut" failure. Components opt in with `break-inside-avoid`
+   * (Tailwind), and these two rules cover the primitives underneath them.
+   */
+  table {
+    break-inside: auto;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  tr,
+  img,
+  svg {
+    break-inside: avoid;
+  }
+
+  /* A heading stranded at the foot of a page is a heading on the wrong page. */
+  h1,
+  h2,
+  h3 {
+    break-after: avoid;
+  }
+
+  /*
+   * The running footer. `position: fixed` is repeated by the print renderer on
+   * every sheet, which is the only footer mechanism available here — CSS
+   * `@page` margin boxes, and with them `counter(page)`, are not implemented in
+   * Chromium, so the sheet number is left to the browser's own print options
+   * rather than faked.
+   */
+  .print-footer {
+    position: fixed;
+    bottom: -10mm;
+    left: 0;
+    right: 0;
+    display: flex !important;
+    justify-content: space-between;
+    border-top: 1px solid #d8dee3;
+    padding-top: 2mm;
+    font-size: 8pt;
+    color: #5b6670;
+  }
 }
