@@ -78,11 +78,21 @@ const STILL: ChartMotion = {
  * The three motion presets, memoised so spreading them cannot hand Recharts a
  * new prop object on every render.
  */
-export function useChartMotion(): Record<keyof typeof DURATION, ChartMotion> {
+export function useChartMotion(
+  /**
+   * Force every preset to `STILL`, whatever the OS says.
+   *
+   * For the PDF export. Recharts drives an enter animation from zero, and a
+   * printed page is a single instant — it captures whatever frame the animation
+   * happened to be on, which for a bar starting at the baseline is no bar at
+   * all. Paper has no motion to carry information anyway.
+   */
+  forceStill = false,
+): Record<keyof typeof DURATION, ChartMotion> {
   const reduced = usePrefersReducedMotion();
 
   return useMemo(() => {
-    if (reduced) return { line: STILL, area: STILL, bar: STILL };
+    if (reduced || forceStill) return { line: STILL, area: STILL, bar: STILL };
     return {
       line: {
         isAnimationActive: true,
@@ -100,5 +110,5 @@ export function useChartMotion(): Record<keyof typeof DURATION, ChartMotion> {
         animationEasing: "ease-out",
       },
     };
-  }, [reduced]);
+  }, [reduced, forceStill]);
 }

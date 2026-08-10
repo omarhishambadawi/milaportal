@@ -1276,7 +1276,7 @@ share by delivery company, and Cash vs Wasfaty revenue. Every series is shaped i
 revenue-by-team chart reads the two per-team `orders_kpis` rows rather than
 `orders_teams`, so there is one figure for "Telesales revenue" on the page and not
 two that could drift. The ranked charts cap at ten; the full lists stay in the
-tables and the workbook.
+tables.
 
 **Call centre** carries Customer Care total calls, Telesales total calls and
 conversion rate, and the network total. The per-team split comes out of the single
@@ -1345,50 +1345,72 @@ cropping and overflow that used to come out of the Monthly Report. See the
   match, which is what pushed the charts and the nine-column team table off the
   right edge. `main` and its content wrapper drop their padding and their
   `overflow-x-clip`, which on paper is literally a crop rather than a reflow.
-- **Charts scale instead of clipping.** Recharts sizes its SVG in pixels from the
-  on-screen container and never re-measures for the print box. The surface carries
-  a `viewBox`, so a relative width lets it fit whatever the printable column is.
-- **Nothing is cut mid-card.** Grids collapse to one column, cards and chart
-  panels carry `break-inside-avoid`, table headers repeat via
-  `display: table-header-group`, and the major sections start on a fresh sheet.
+- **Nothing is cut mid-card.** Cards and chart panels carry `break-inside-avoid`,
+  table headers repeat via `display: table-header-group`, and the major sections
+  start on a fresh sheet.
 - **Dark mode does not reach paper.** The `.dark` palette block is scoped to
   `@media screen`, so a PDF exported from a dark session falls back to the `:root`
   light values rather than needing all fifty-two tokens restated.
 - **Branding.** `components/print-chrome.tsx` adds a masthead on the first sheet
-  and a running footer (`position: fixed`, which the print renderer repeats) on
-  every sheet. There is no page number: Chromium implements neither `@page` margin
-  boxes nor `counter(page)`, so the sheet count is left to the browser's own print
-  options rather than faked.
+  and a footer at the end of the report. The footer was `position: fixed` so the
+  renderer would repeat it per sheet; Chromium does repeat fixed elements, but it
+  resolves their offsets against the first page box, so it landed across the
+  **top** of pages two and three, over the section heading and the first card.
+  Once, at the end, is reliable. There is no page number either: Chromium
+  implements neither `@page` margin boxes nor `counter(page)`, and its own print
+  options already offer one.
+
+**2. Charts were measured against the screen and printed onto paper.**
+`ResponsiveContainer` learns its size from a `ResizeObserver`, whose callback is
+delivered before the _next_ frame's paint, while `window.print()` is synchronous —
+so the writer received an SVG still carrying the monitor's dimensions.
+
+The first attempt corrected that in CSS, forcing `width: 100%` onto Recharts SVGs,
+and made it worse in two ways. `svg.recharts-surface` matches every _legend icon_
+as well as the chart, so each 14px dot was blown up to the width of its legend
+item — those were the giant circles over the plot area. And scaling a chart laid
+out at 1400px into a 703px page halves its axis labels with it. **There is now no
+chart CSS in the print block at all.** Instead:
+
+- `features/reports/print-width.ts` states the printable width — A4 less the
+  `@page` side margins, 703 CSS px.
+- The export handler pins the report to that width, waits two animation frames so
+  React can commit and the observer can fire, and only then calls `print()`. The
+  chart is already the right size when the page is handed over, so nothing needs
+  correcting afterwards.
+- Print therefore has **no second layout**. At 703px the responsive classes
+  already give one-column grids and a two-across KPI strip, so what is measured is
+  what is printed. Print-only column counts were removed for exactly that reason:
+  a chart measured against one layout and rendered into another is how it clipped.
+- `useChartMotion(forceStill)` switches the enter animations off for the export.
+  Recharts animates from the baseline and a print is one instant — it captured
+  whichever frame the animation was on, which for a bar starting at zero is a
+  chart with axes, a grid, a legend and no data in it.
+- `MonthlyReportView` takes `printing` and drops each table's `minWidth` floor.
+  `AnalyticsTable` applies that as an inline style, which no `print:` class can
+  override, so a 760px floor inside a 703px page printed the nine-column team
+  table sliced off at the right edge with a scrollbar under it.
+
+Validated by rendering the real artefact rather than trusting the build: headless
+Chrome `--print-to-pdf` over the report yields A4 portrait (MediaBox 595×842pt)
+across ten pages, with every legend icon back at 14×14, zero elements past the
+703px page width, all five tables inside it, and axis labels at their native
+11.5px.
 
 The daily report keeps its **separate print rendering** — one table instead of two
 cards and a textarea, because a textarea prints as a grey box with a scrollbar.
 
-### Excel export
+### No Excel export
 
-`features/reports/export.ts`, and the same architecture as the Dashboard's:
-`xlsx` is imported inside the function so the writer stays out of the route's
-chunk until somebody clicks Export, and the function is pure output. It is handed
-the values `useMonthlyReport` already derived and refetches nothing, which is what
-makes the workbook and the page incapable of disagreeing.
+The Monthly Report exports to **PDF only**. A four-sheet XLSX export existed
+briefly and was removed at the owner's request: the report's value is its charts
+and its layout, and the community build of `xlsx` can carry neither — cell styling
+and embedded charts are SheetJS Pro features — so the workbook was a plainer copy
+of a document the PDF already delivers.
 
-Four sheets: **Monthly Report** (KPI summary, each team's completed performance,
-the full team detail table), **Revenue Analysis** (by team, the daily trend, by
-city, by branch, by delivery company, Cash vs Wasfaty, trend highlights),
-**Orders Analysis** (counts, status breakdown, team breakdown, fulfillment), and
-**Call Center** (per-team volume, Telesales conversion, quality, rates, and which
-system decided the Missed/Abandoned split).
-
-Number formats are applied **per cell**, not per column: these sheets stack
-several tables under one set of column letters, so column B is money in the KPI
-block and an order count two tables further down, and a count rendered under a
-currency format reads as money it is not.
-
-The workbook does **not** carry the brand's fills and font colours, and cannot:
-cell styling and embedded charts are SheetJS Pro features, and the community build
-this project depends on drops a `.s` style object on write without complaint.
-Adding a second spreadsheet library to colour a header would put a parallel writer
-into the bundle for decoration. The charts live in the PDF, which is the artefact
-meant to be looked at; the workbook is the one meant to be filtered and pivoted.
+`xlsx` remains a dependency and is untouched elsewhere: the Dashboard export,
+the Orders export and the Branches import/export are genuinely tabular and still
+use it.
 
 ---
 

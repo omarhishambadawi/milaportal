@@ -829,25 +829,29 @@ html.theme-vt * {
   }
 
   /*
-   * Recharts sizes its SVG in pixels from the on-screen container width and
-   * never re-measures for the print box, so a chart laid out at 700px CSS
-   * pixels was being asked to fit ~700px of A4 — with no guarantee, and with
-   * none at all on a wide monitor. The surface carries a `viewBox`, so giving
-   * it a relative width lets it scale to whatever the printable column is
-   * instead of being clipped at the edge of it.
+   * ---------------------------------------------------------------------------
+   * Charts are NOT restyled here, and that is deliberate.
+   * ---------------------------------------------------------------------------
+   * This block used to force `width: 100%; height: auto` onto Recharts' SVGs so
+   * an over-wide chart would scale into the page. It did two bad things.
+   *
+   * First, `svg.recharts-surface` matches more than the chart. Recharts renders
+   * every *legend icon* as its own `<svg class="recharts-surface" width="14"
+   * height="14">`, so each 14px dot was blown up to the full width of its legend
+   * item — the giant circles sitting over the plot area in the exported PDF.
+   *
+   * Second, scaling a chart laid out at 1400px into a 703px page halves every
+   * axis label with it, which is why the printed ticks were illegible.
+   *
+   * The real defect was never CSS. `ResponsiveContainer` measures its parent
+   * through a `ResizeObserver`, whose callback lands asynchronously, and
+   * `window.print()` is synchronous — so the SVG the writer received still had
+   * the screen's dimensions baked into it. The fix is to lay the report out at
+   * the printable width *first* and give the observer a frame to run, which is
+   * what `PRINT_WIDTH_PX` and the export handler in `_app.reports.tsx` do. By
+   * the time the page is handed over, the chart is already the right size and
+   * needs no correcting here.
    */
-  .recharts-responsive-container,
-  .recharts-wrapper {
-    width: 100% !important;
-    max-width: 100% !important;
-    height: auto !important;
-  }
-
-  .recharts-wrapper svg,
-  svg.recharts-surface {
-    width: 100% !important;
-    height: auto !important;
-  }
 
   /*
    * Cell padding is sized for a pointer and a 1600px viewport: `px-4 py-3` is
@@ -888,19 +892,25 @@ html.theme-vt * {
   }
 
   /*
-   * The running footer. `position: fixed` is repeated by the print renderer on
-   * every sheet, which is the only footer mechanism available here — CSS
-   * `@page` margin boxes, and with them `counter(page)`, are not implemented in
-   * Chromium, so the sheet number is left to the browser's own print options
-   * rather than faked.
+   * The footer, in normal flow at the end of the report.
+   *
+   * It was `position: fixed` so the print renderer would repeat it on every
+   * sheet. Chromium does repeat fixed elements — but it resolves their offsets
+   * against the first page box, so `bottom` did not put this at the foot of
+   * sheets two and three; it landed across the top of their content, over the
+   * section heading and the first card. A footer that overprints the report is
+   * worse than a footer that appears once.
+   *
+   * Once, at the end, is what it does now. Per-sheet identity is not available
+   * to CSS here in any case: Chromium implements neither `@page` margin boxes
+   * nor `counter(page)`, and the browser's own print options already offer a
+   * header/footer with page numbers for anyone who wants them.
    */
   .print-footer {
-    position: fixed;
-    bottom: -10mm;
-    left: 0;
-    right: 0;
     display: flex !important;
     justify-content: space-between;
+    break-inside: avoid;
+    margin-top: 6mm;
     border-top: 1px solid #d8dee3;
     padding-top: 2mm;
     font-size: 8pt;

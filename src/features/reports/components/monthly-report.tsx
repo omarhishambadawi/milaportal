@@ -27,10 +27,14 @@ import type { useMonthlyReport } from "../hooks/use-monthly-report";
  * produced. A report that recomputed its own totals would be a second source of
  * truth for numbers management already reads on the dashboard.
  *
- * Print is a first-class rendering rather than an afterthought: the grids
- * collapse to a single column, cards and charts carry `break-inside-avoid`, and
- * a branded header and footer appear only on paper. See the `@media print` block
- * in `styles.css` for the page geometry those rules assume.
+ * Print does not get a second layout. The export narrows the page to the paper's
+ * own width (`PRINT_WIDTH_PX`) and the responsive classes already here do the
+ * rest — at 703px the two-column grids are single-column and the KPI strip is
+ * two across, which is exactly what lands on A4. Having print-only column counts
+ * meant the layout being measured and the layout being printed could differ, and
+ * a chart measured against one and rendered into the other is how the first
+ * version came out clipped. See `@media print` in `styles.css` for the page
+ * geometry and `print-width.ts` for why the width is applied before printing.
  */
 
 const MonthlyCharts = lazy(() =>
@@ -78,19 +82,39 @@ function ReportSection({
 /** The KPI grid, one place so every row on this page has the same rhythm. */
 function KpiGrid({ children }: { children: React.ReactNode }) {
   return (
-    // Two columns on paper, not four. A4 portrait leaves ~186mm of printable
-    // width; four KPI cards across it gives each about 45mm, and `1,234,567.89
-    // SAR` at the card's figure size does not fit in 45mm — it would truncate,
-    // which on a management report is a wrong number rather than a tight one.
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 print:grid-cols-2 print:gap-2 [&>*]:break-inside-avoid">
+    // At the printable width this resolves to two columns, which is the right
+    // number: four across 186mm of A4 gives each card about 45mm, and
+    // `1,234,567.89 SAR` at the card's figure size does not fit in 45mm — it
+    // would truncate, and a truncated figure on a management report is a wrong
+    // number rather than a tight one.
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 print:gap-2 [&>*]:break-inside-avoid">
       {children}
     </div>
   );
 }
 
-export function MonthlyReportView({ data, label }: { data: MonthlyData; label: string }) {
+export function MonthlyReportView({
+  data,
+  label,
+  /**
+   * True while the page is laid out at the paper's width for an export.
+   *
+   * Only the tables read it, and only to drop their horizontal-scroll floor:
+   * `AnalyticsTable` applies `minWidth` as an inline style, which no `print:`
+   * class can override, so a 760px floor inside a 703px page was a table sliced
+   * off at the right edge with a scrollbar printed under it. Nothing else about
+   * the report changes — the charts are handled by the container width alone.
+   */
+  printing = false,
+}: {
+  data: MonthlyData;
+  label: string;
+  printing?: boolean;
+}) {
   const { summary, teams, orderTypes, fulfillment, trendHighlights, calls, callCenter } = data;
   const [customerCare, telesales] = teams.rows;
+  /** Screen keeps its scroll floor; paper has nowhere to scroll to. */
+  const floor = (width: number) => (printing ? 0 : width);
 
   return (
     <div className="space-y-6 print:space-y-4">
@@ -144,7 +168,7 @@ export function MonthlyReportView({ data, label }: { data: MonthlyData; label: s
         {/* Completed performance per team, called out above the full table:
             these three figures per team are what a management summary quotes,
             and they are the same `orders_kpis` rows the table below expands. */}
-        <div className="grid gap-3 lg:grid-cols-2 print:grid-cols-2 print:gap-2">
+        <div className="grid gap-3 lg:grid-cols-2 print:gap-2">
           {[customerCare, telesales].map((row) => (
             <AnalyticsCard
               key={row.team}
@@ -169,10 +193,16 @@ export function MonthlyReportView({ data, label }: { data: MonthlyData; label: s
           flush
           className="mt-3 break-inside-avoid"
         >
-          {/* `print:min-w-0` releases the scroll floor on paper: a 760px table in
-              a 700px printable column is exactly the horizontal overflow the PDF
-              was clipping. On screen the floor stays and the card scrolls. */}
-          <AnalyticsTable minWidth={760} className="print:[&_table]:min-w-0 print:text-[10px]">
+          {/* Ten columns of currency is the one table that cannot hold its
+              screen size on A4. Printing drops the 760px scroll floor and takes
+              the type down a step; on screen both stay as they were and the card
+              scrolls. */}
+          <AnalyticsTable
+            minWidth={floor(760)}
+            className={
+              printing ? "overflow-visible [&_table]:text-[10px] [&_th]:text-[9px]" : undefined
+            }
+          >
             <Thead>
               <tr>
                 <Th>Team</Th>
@@ -233,6 +263,7 @@ export function MonthlyReportView({ data, label }: { data: MonthlyData; label: s
           }
         >
           <MonthlyCharts
+            printing={printing}
             data={{
               teamRevenue: data.teamRevenue,
               trend: data.trend,
@@ -331,7 +362,7 @@ export function MonthlyReportView({ data, label }: { data: MonthlyData; label: s
       <ReportSection title="Order mix" icon={Banknote} breakBefore>
         {/* Cash vs Wasfaty and how orders reached the customer, side by side:
             they answer the same question about the same completed population. */}
-        <div className="grid min-w-0 gap-3 lg:grid-cols-2 print:grid-cols-2 print:gap-2">
+        <div className="grid min-w-0 gap-3 lg:grid-cols-2 print:gap-2">
           <AnalyticsCard
             title="Cash vs Wasfaty"
             subtitle="Completed orders"
@@ -339,7 +370,10 @@ export function MonthlyReportView({ data, label }: { data: MonthlyData; label: s
             flush
             className="break-inside-avoid"
           >
-            <AnalyticsTable minWidth={400} className="print:[&_table]:min-w-0">
+            <AnalyticsTable
+              minWidth={floor(400)}
+              className={printing ? "overflow-visible" : undefined}
+            >
               <Thead>
                 <tr>
                   <Th>Type</Th>
@@ -384,7 +418,10 @@ export function MonthlyReportView({ data, label }: { data: MonthlyData; label: s
             flush
             className="break-inside-avoid"
           >
-            <AnalyticsTable minWidth={400} className="print:[&_table]:min-w-0">
+            <AnalyticsTable
+              minWidth={floor(400)}
+              className={printing ? "overflow-visible" : undefined}
+            >
               <Thead>
                 <tr>
                   <Th>Fulfillment</Th>
@@ -454,14 +491,17 @@ export function MonthlyReportView({ data, label }: { data: MonthlyData; label: s
       {/* Branch and geography                                               */}
       {/* ------------------------------------------------------------------ */}
       <ReportSection title="Branch & geography" icon={PackageCheck} breakBefore>
-        <div className="grid min-w-0 gap-3 lg:grid-cols-2 print:grid-cols-2 print:gap-2">
+        <div className="grid min-w-0 gap-3 lg:grid-cols-2 print:gap-2">
           <AnalyticsCard
             title="Top cities by revenue"
             icon={PackageCheck}
             flush
             className="break-inside-avoid"
           >
-            <AnalyticsTable minWidth={320} className="print:[&_table]:min-w-0">
+            <AnalyticsTable
+              minWidth={floor(320)}
+              className={printing ? "overflow-visible" : undefined}
+            >
               <Thead>
                 <tr>
                   <Th>City</Th>
@@ -486,7 +526,10 @@ export function MonthlyReportView({ data, label }: { data: MonthlyData; label: s
             flush
             className="break-inside-avoid"
           >
-            <AnalyticsTable minWidth={320} className="print:[&_table]:min-w-0">
+            <AnalyticsTable
+              minWidth={floor(320)}
+              className={printing ? "overflow-visible" : undefined}
+            >
               <Thead>
                 <tr>
                   <Th>Branch</Th>

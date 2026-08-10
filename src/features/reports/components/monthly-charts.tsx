@@ -19,6 +19,7 @@ import { AnalyticsCard } from "@/features/dashboard/components/analytics-card";
 import { HorizontalBarPanel } from "@/features/dashboard/components/horizontal-bar-panel";
 import { COLORS, STATUS_COLORS } from "@/features/dashboard/constants";
 import { fmtAxisSAR } from "@/features/dashboard/chart-format";
+import { useChartMotion } from "@/features/dashboard/chart-motion";
 import {
   AXIS_TICK,
   BAR_CURSOR,
@@ -96,7 +97,23 @@ function EmptyPanel() {
   );
 }
 
-export function MonthlyCharts({ data }: { data: MonthlyChartData }) {
+export function MonthlyCharts({
+  data,
+  /**
+   * True while the report is laid out for the PDF export.
+   *
+   * Forces every series still. Recharts drives its enter animation from the
+   * baseline, and a print is one instant — it captures whichever frame the
+   * animation was on, which for a bar starting at zero is a chart with axes, a
+   * grid, a legend and no data in it. That is what the first export produced.
+   */
+  printing = false,
+}: {
+  data: MonthlyChartData;
+  printing?: boolean;
+}) {
+  const motion = useChartMotion(printing);
+
   return (
     <div className="grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2 print:grid-cols-1 print:gap-3">
       {/* 1 — Revenue by team ------------------------------------------------ */}
@@ -142,12 +159,14 @@ export function MonthlyCharts({ data }: { data: MonthlyChartData }) {
                 name="Total revenue"
                 fill="var(--color-chart-1)"
                 radius={[6, 6, 0, 0]}
+                {...motion.bar}
               />
               <Bar
                 dataKey="completed"
                 name="Completed revenue"
                 fill="var(--positive)"
                 radius={[6, 6, 0, 0]}
+                {...motion.bar}
               />
             </BarChart>
           </ResponsiveContainer>
@@ -210,6 +229,7 @@ export function MonthlyCharts({ data }: { data: MonthlyChartData }) {
                 stroke="var(--color-chart-1)"
                 fill="url(#monthlyAll)"
                 strokeWidth={2}
+                {...motion.area}
               />
               <Area
                 type="monotone"
@@ -218,6 +238,7 @@ export function MonthlyCharts({ data }: { data: MonthlyChartData }) {
                 stroke="var(--positive)"
                 fill="url(#monthlyCompleted)"
                 strokeWidth={2}
+                {...motion.area}
               />
             </AreaChart>
           </ResponsiveContainer>
@@ -263,6 +284,7 @@ export function MonthlyCharts({ data }: { data: MonthlyChartData }) {
                 label={PIE_LABEL}
                 stroke="var(--color-card)"
                 strokeWidth={2}
+                {...motion.bar}
               >
                 {/* The status names and their colours are the Dashboard's own
                     mapping. Completed, Pending and Cancelled are the three the
@@ -303,6 +325,7 @@ export function MonthlyCharts({ data }: { data: MonthlyChartData }) {
                 label={PIE_LABEL}
                 stroke="var(--color-card)"
                 strokeWidth={2}
+                {...motion.bar}
               >
                 {data.deliveryRevenue.map((slice, index) => (
                   <Cell key={slice.name} fill={COLORS[index % COLORS.length]} />
@@ -355,7 +378,7 @@ export function MonthlyCharts({ data }: { data: MonthlyChartData }) {
                 cursor={BAR_CURSOR}
                 wrapperStyle={TOOLTIP_WRAPPER}
               />
-              <Bar dataKey="sales" name="Completed revenue" radius={[6, 6, 0, 0]}>
+              <Bar dataKey="sales" name="Completed revenue" radius={[6, 6, 0, 0]} {...motion.bar}>
                 {data.orderTypeRevenue.map((row, index) => (
                   <Cell key={row.name} fill={COLORS[index % COLORS.length]} />
                 ))}
