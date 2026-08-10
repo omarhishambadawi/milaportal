@@ -256,9 +256,13 @@ export function MonthlyReportView({
       <ReportSection title="Charts" icon={BarChart3} breakBefore>
         <Suspense
           fallback={
-            <div className="grid gap-3 sm:gap-4 lg:grid-cols-2">
-              <div className="h-[344px] animate-pulse rounded-xl bg-muted/40" />
-              <div className="h-[344px] animate-pulse rounded-xl bg-muted/40" />
+            // Same grid and roughly the same heights as the real thing — a
+            // full-width trend over two paired rows — so nothing reflows when
+            // the Recharts chunk lands.
+            <div className="grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
+              <div className="h-80 animate-pulse rounded-xl bg-muted/40 lg:col-span-2" />
+              <div className="h-80 animate-pulse rounded-xl bg-muted/40" />
+              <div className="h-80 animate-pulse rounded-xl bg-muted/40" />
             </div>
           }
         >

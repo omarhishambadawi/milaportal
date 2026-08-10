@@ -56,6 +56,15 @@ const MIN_AXIS_WIDTH = 64;
 /** Per-bar vertical rhythm — bar plus the gap under it. */
 const ROW_HEIGHT = 34;
 
+/**
+ * The same rhythm, tightened for a panel that is sharing a row on A4.
+ *
+ * The Dashboard's 34px assumes a half-width card on a wide monitor. The Monthly
+ * Report puts the same panel in a ~345px column on paper, where ten rows at the
+ * full rhythm is a card taller than it is wide and mostly gap.
+ */
+const COMPACT_ROW_HEIGHT = 26;
+
 /** Chart chrome that is not plot area: the value axis and its labels. */
 const CHART_CHROME = 56;
 
@@ -93,6 +102,9 @@ function HorizontalBarPanelImpl({
   data,
   color,
   barName = "Completed sales",
+  className,
+  compact = false,
+  stillMotion = false,
 }: {
   title: string;
   subtitle?: string;
@@ -100,9 +112,15 @@ function HorizontalBarPanelImpl({
   data: Row[];
   color: string;
   barName?: string;
+  /** Card-level classes — the Monthly Report uses it for `break-inside-avoid`. */
+  className?: string;
+  /** Tighter row rhythm, for a panel sharing a row on A4. */
+  compact?: boolean;
+  /** No enter animation. The PDF export prints one instant; see `chart-motion`. */
+  stillMotion?: boolean;
 }) {
   const { ref, width } = usePanelWidth();
-  const motion = useChartMotion();
+  const motion = useChartMotion(stillMotion);
 
   const axisWidth = useMemo(() => {
     const widest = widestLabel(
@@ -123,10 +141,11 @@ function HorizontalBarPanelImpl({
    * is what made these panels read as compressed. Growing with the data keeps
    * the bar rhythm constant whether there are three rows or ten.
    */
-  const height = Math.max(232, data.length * ROW_HEIGHT + CHART_CHROME);
+  const rowHeight = compact ? COMPACT_ROW_HEIGHT : ROW_HEIGHT;
+  const height = Math.max(compact ? 180 : 232, data.length * rowHeight + CHART_CHROME);
 
   return (
-    <AnalyticsCard title={title} subtitle={subtitle} icon={icon}>
+    <AnalyticsCard title={title} subtitle={subtitle} icon={icon} className={className}>
       <div ref={ref} className="w-full" style={{ height }}>
         {data.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">

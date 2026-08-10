@@ -14,9 +14,11 @@ import {
   YAxis,
 } from "recharts";
 import { Banknote, Building2, ChartColumn, ChartPie, MapPinned, Truck, Users } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { fmtSAR } from "@/lib/branches";
 import { AnalyticsCard } from "@/features/dashboard/components/analytics-card";
 import { HorizontalBarPanel } from "@/features/dashboard/components/horizontal-bar-panel";
+import { CHART_PANEL_HEIGHT } from "@/features/dashboard/components/sales-charts-skeleton";
 import { COLORS, STATUS_COLORS } from "@/features/dashboard/constants";
 import { fmtAxisSAR } from "@/features/dashboard/chart-format";
 import { useChartMotion } from "@/features/dashboard/chart-motion";
@@ -67,24 +69,38 @@ export interface MonthlyChartData {
   orderTypeRevenue: (Named & { sales: number })[];
 }
 
-/** Fixed-height panel, for the charts whose height does not follow row count. */
+/**
+ * Fixed-height panel, for the charts whose height does not follow row count.
+ *
+ * `CHART_PANEL_HEIGHT` is the Dashboard's own plot height (`h-64`), imported
+ * rather than restated: these panels sit beside that page in the product and a
+ * second opinion about how tall a chart is would show up as two pages that
+ * nearly match. It replaces a local `h-[280px]`, which was exactly that.
+ */
 function ChartPanel({
   title,
   subtitle,
   icon,
+  className,
   children,
 }: {
   title: string;
   subtitle?: string;
   icon?: typeof ChartPie;
+  className?: string;
   children: React.ReactNode;
 }) {
   return (
-    <AnalyticsCard title={title} subtitle={subtitle} icon={icon} className="break-inside-avoid">
+    <AnalyticsCard
+      title={title}
+      subtitle={subtitle}
+      icon={icon}
+      className={cn("break-inside-avoid", className)}
+    >
       {/* `min-w-0` on the sizing wrapper is what stops a Recharts panel from
           refusing to shrink inside a grid track and pushing the page into a
           horizontal scroll. */}
-      <div className="h-[280px] w-full min-w-0">{children}</div>
+      <div className={cn("w-full min-w-0", CHART_PANEL_HEIGHT)}>{children}</div>
     </AnalyticsCard>
   );
 }
@@ -114,70 +130,29 @@ export function MonthlyCharts({
 }) {
   const motion = useChartMotion(printing);
 
-  return (
-    <div className="grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2 print:grid-cols-1 print:gap-3">
-      {/* 1 — Revenue by team ------------------------------------------------ */}
-      <ChartPanel
-        title="Revenue by team (SAR)"
-        subtitle="All orders against completed, with the month's total"
-        icon={Users}
-      >
-        {data.teamRevenue.length === 0 ? (
-          <EmptyPanel />
-        ) : (
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data.teamRevenue} margin={CHART_MARGIN} maxBarSize={48}>
-              <CartesianGrid
-                vertical={false}
-                strokeDasharray="3 3"
-                stroke={GRID_STROKE}
-                strokeOpacity={GRID_OPACITY}
-              />
-              <XAxis
-                dataKey="name"
-                tick={AXIS_TICK}
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-              />
-              <YAxis
-                tick={AXIS_TICK}
-                tickFormatter={fmtAxisSAR}
-                tickLine={false}
-                axisLine={false}
-                width={52}
-                tickMargin={6}
-              />
-              <Tooltip
-                content={<ChartTooltip format={fmtSAR} />}
-                cursor={BAR_CURSOR}
-                wrapperStyle={TOOLTIP_WRAPPER}
-              />
-              <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
-              <Bar
-                dataKey="total"
-                name="Total revenue"
-                fill="var(--color-chart-1)"
-                radius={[6, 6, 0, 0]}
-                {...motion.bar}
-              />
-              <Bar
-                dataKey="completed"
-                name="Completed revenue"
-                fill="var(--positive)"
-                radius={[6, 6, 0, 0]}
-                {...motion.bar}
-              />
-            </BarChart>
-          </ResponsiveContainer>
-        )}
-      </ChartPanel>
+  /**
+   * The Dashboard's own chart grid, with one difference that is load-bearing.
+   *
+   * On screen the second column arrives at `lg` exactly as it does on the
+   * Dashboard. For the export the columns are switched on *unconditionally*
+   * rather than through a `print:` variant, because the report is laid out at
+   * 703px while it is measured — below `lg` — and a `print:` variant would not
+   * apply until the media changed, i.e. after Recharts had already measured
+   * itself against a one-column layout. Measuring one geometry and printing
+   * another is precisely what clipped the first version of this PDF.
+   */
+  const grid = printing ? "grid-cols-2" : "lg:grid-cols-2";
+  /** A chart that needs the full width of the page, in either layout. */
+  const fullWidth = printing ? "col-span-2" : "lg:col-span-2";
 
-      {/* 2 — Daily revenue trend -------------------------------------------- */}
+  return (
+    <div className={cn("grid min-w-0 gap-3 sm:gap-4", grid)}>
+      {/* 1 — Daily revenue trend — full width ------------------------------------ */}
       <ChartPanel
         title="Daily revenue trend"
         subtitle="Total against completed, by day"
         icon={ChartColumn}
+        className={fullWidth}
       >
         {data.trend.length === 0 ? (
           <EmptyPanel />
@@ -245,7 +220,7 @@ export function MonthlyCharts({
         )}
       </ChartPanel>
 
-      {/* 3 — Revenue by city ------------------------------------------------ */}
+      {/* 2 — Revenue by city ----------------------------------------------------- */}
       <HorizontalBarPanel
         title="Revenue by city (top 10)"
         subtitle="Completed revenue per city"
@@ -253,9 +228,12 @@ export function MonthlyCharts({
         data={data.topCities}
         color="var(--color-chart-5)"
         barName="Completed revenue"
+        className="break-inside-avoid"
+        compact
+        stillMotion={printing}
       />
 
-      {/* 4 — Top branches --------------------------------------------------- */}
+      {/* 3 — Top branches -------------------------------------------------------- */}
       <HorizontalBarPanel
         title="Top branches (top 10)"
         subtitle="Completed revenue per branch"
@@ -263,9 +241,12 @@ export function MonthlyCharts({
         data={data.topBranches}
         color="var(--color-chart-4)"
         barName="Completed revenue"
+        className="break-inside-avoid"
+        compact
+        stillMotion={printing}
       />
 
-      {/* 5 — Order status distribution -------------------------------------- */}
+      {/* 4 — Order status distribution ------------------------------------------- */}
       <ChartPanel
         title="Order status distribution"
         subtitle="Orders in the month, by status"
@@ -305,7 +286,7 @@ export function MonthlyCharts({
         )}
       </ChartPanel>
 
-      {/* 6 — Revenue share by delivery company ------------------------------ */}
+      {/* 5 — Revenue share by delivery company ----------------------------------- */}
       <ChartPanel
         title="Revenue share by delivery company"
         subtitle="Completed revenue per delivery method"
@@ -341,7 +322,7 @@ export function MonthlyCharts({
         )}
       </ChartPanel>
 
-      {/* 7 — Cash vs Wasfaty ------------------------------------------------ */}
+      {/* 6 — Cash vs Wasfaty ----------------------------------------------------- */}
       <ChartPanel
         title="Cash vs Wasfaty revenue"
         subtitle="Completed revenue by order type"
@@ -383,6 +364,64 @@ export function MonthlyCharts({
                   <Cell key={row.name} fill={COLORS[index % COLORS.length]} />
                 ))}
               </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </ChartPanel>
+
+      {/* 7 — Revenue by team ----------------------------------------------------- */}
+      <ChartPanel
+        title="Revenue by team (SAR)"
+        // Short enough to survive a half-width card: the long form ellipsised.
+        subtitle="Total against completed"
+        icon={Users}
+      >
+        {data.teamRevenue.length === 0 ? (
+          <EmptyPanel />
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data.teamRevenue} margin={CHART_MARGIN} maxBarSize={48}>
+              <CartesianGrid
+                vertical={false}
+                strokeDasharray="3 3"
+                stroke={GRID_STROKE}
+                strokeOpacity={GRID_OPACITY}
+              />
+              <XAxis
+                dataKey="name"
+                tick={AXIS_TICK}
+                tickLine={false}
+                axisLine={false}
+                tickMargin={8}
+              />
+              <YAxis
+                tick={AXIS_TICK}
+                tickFormatter={fmtAxisSAR}
+                tickLine={false}
+                axisLine={false}
+                width={52}
+                tickMargin={6}
+              />
+              <Tooltip
+                content={<ChartTooltip format={fmtSAR} />}
+                cursor={BAR_CURSOR}
+                wrapperStyle={TOOLTIP_WRAPPER}
+              />
+              <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
+              <Bar
+                dataKey="total"
+                name="Total revenue"
+                fill="var(--color-chart-1)"
+                radius={[6, 6, 0, 0]}
+                {...motion.bar}
+              />
+              <Bar
+                dataKey="completed"
+                name="Completed revenue"
+                fill="var(--positive)"
+                radius={[6, 6, 0, 0]}
+                {...motion.bar}
+              />
             </BarChart>
           </ResponsiveContainer>
         )}
