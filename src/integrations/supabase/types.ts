@@ -220,6 +220,93 @@ export type Database = {
         }
         Relationships: []
       }
+      cdr_records: {
+        Row: {
+          business_day: string
+          call_from_number: string | null
+          call_id: string | null
+          call_to_number: string | null
+          raw: Json
+          row_id: string
+          synced_at: string
+          ts: number
+        }
+        Insert: {
+          business_day: string
+          call_from_number?: string | null
+          call_id?: string | null
+          call_to_number?: string | null
+          raw: Json
+          row_id: string
+          synced_at?: string
+          ts: number
+        }
+        Update: {
+          business_day?: string
+          call_from_number?: string | null
+          call_id?: string | null
+          call_to_number?: string | null
+          raw?: Json
+          row_id?: string
+          synced_at?: string
+          ts?: number
+        }
+        Relationships: []
+      }
+      cdr_sync_days: {
+        Row: {
+          business_day: string
+          row_count: number
+          synced_at: string
+        }
+        Insert: {
+          business_day: string
+          row_count?: number
+          synced_at?: string
+        }
+        Update: {
+          business_day?: string
+          row_count?: number
+          synced_at?: string
+        }
+        Relationships: []
+      }
+      cdr_sync_state: {
+        Row: {
+          id: number
+          last_days: number
+          last_error: string | null
+          last_rows: number
+          last_run_at: string | null
+          last_status: string
+          last_synced_epoch: number | null
+          lease_until: string | null
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          last_days?: number
+          last_error?: string | null
+          last_rows?: number
+          last_run_at?: string | null
+          last_status?: string
+          last_synced_epoch?: number | null
+          lease_until?: string | null
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          last_days?: number
+          last_error?: string | null
+          last_rows?: number
+          last_run_at?: string | null
+          last_status?: string
+          last_synced_epoch?: number | null
+          lease_until?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       complaint_activity: {
         Row: {
           action: string
@@ -965,6 +1052,17 @@ export type Database = {
           phone: string
           scooter: boolean
           working_hours: string
+        }[]
+      }
+      cdr_rows_by_number: {
+        Args: { p_from: string; p_numbers: string[]; p_to: string }
+        Returns: Json
+      }
+      cdr_window_rows: {
+        Args: { p_days: string[] }
+        Returns: {
+          business_day: string
+          rows: Json
         }[]
       }
       complaints_in_scope: {
