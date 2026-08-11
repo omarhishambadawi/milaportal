@@ -17,7 +17,7 @@ import {
   TOOLTIP_WRAPPER,
 } from "../chart-theme";
 import { fmtAxisSAR } from "../chart-format";
-import { useChartMotion } from "../chart-motion";
+import { useSettledChartMotion } from "../chart-motion";
 import { widestLabel } from "../text-metrics";
 
 /**
@@ -82,6 +82,13 @@ function usePanelWidth() {
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
+    // Measured synchronously, before the browser paints. A `ResizeObserver`
+    // delivers its first entry in a later task, so waiting for it meant the
+    // first painted frame used the 190px fallback ceiling and the axis — and
+    // with it the whole plot area — resized underneath the bars while their
+    // entrance was still running. That is a visible jump, not a resize.
+    setWidth(Math.round(el.getBoundingClientRect().width));
+
     const observer = new ResizeObserver((entries) => {
       const next = entries[0]?.contentRect.width ?? 0;
       // Whole pixels only: a fractional resize storm during a CSS transition
@@ -120,7 +127,7 @@ function HorizontalBarPanelImpl({
   stillMotion?: boolean;
 }) {
   const { ref, width } = usePanelWidth();
-  const motion = useChartMotion(stillMotion);
+  const motion = useSettledChartMotion(data, stillMotion);
 
   const axisWidth = useMemo(() => {
     const widest = widestLabel(

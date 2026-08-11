@@ -1015,6 +1015,38 @@ Provider-agnostic and pure. `index.ts` is the only import surface.
 
 **Route:** `/dashboard` · **Gate:** `view_dashboard`
 
+### Chart motion (`chart-motion.ts`)
+
+One module owns every Dashboard chart's enter animation: `ease-out`, 550–700ms,
+`animationBegin: 0`, nothing looping, bouncing or scaling. `buildChartMotion` is
+a pure function of `(reduced, forceStill)` so the contract is unit-tested rather
+than checked by eye; `usePrefersReducedMotion` makes reduced-motion still, and
+`forceStill` does the same for the PDF export.
+
+`animationBegin` is carried explicitly because **Recharts defaults it to 400 for
+`Pie` and 0 for everything else**. A preset that set only the duration therefore
+left the pie starting four tenths of a second after the rest of the page — the
+one panel that looked like it had stalled.
+
+`useSettledChartMotion(identity)` is what stops the restarts. Recharts wraps each
+series in `<Animate key={"bar-" + animationId}>`, and `animationId` is the
+chart's internal `updateId`, which `generateCategoricalChart` increments on any
+**width or height** change — not only on a data change. So every
+`ResponsiveContainer` measurement remounted the `<Animate>` at `t = 0`, and at
+`t = 0` a bar has zero height and `Rectangle` returns `null` outright: dragging a
+window edge blinked ten panels out and redrew them. `updateId` is internal and
+there is no prop to disable it.
+
+Instead, animation is treated as a property of *having just received data*. The
+presets are armed for one entrance after `identity` changes and then go still;
+once still, Recharts takes its static render path and draws the series at full
+size on every subsequent render, so a resize, a hover, a tooltip or a parent
+re-render repaints instantly and cannot restart anything. A later data change
+re-arms it, and because Recharts keeps the previous series as `prevData` that
+second animation interpolates old → new rather than from zero. `identity` must be
+the memoised series array — a fresh literal each render would re-arm every render
+and defeat the whole mechanism.
+
 Eleven independent aggregation queries plus an on-demand export dataset, all
 keyed under `queryKeys.dashboard.*` so one `dashboard.all()` invalidation sweeps
 them. Every aggregation is a Postgres RPC (`SECURITY INVOKER`, so RLS applies),

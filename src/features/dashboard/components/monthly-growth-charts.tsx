@@ -27,7 +27,7 @@ import {
   legendText,
 } from "../chart-theme";
 import { fmtAxisSAR } from "../chart-format";
-import { useChartMotion } from "../chart-motion";
+import { useSettledChartMotion } from "../chart-motion";
 import { formatCompactSAR, formatCount, formatGrowth } from "../format";
 import type { MonthRow } from "../monthly-growth";
 import { AnalyticsCard } from "./analytics-card";
@@ -95,8 +95,6 @@ function ChartPanel({
 const PARTIAL_OPACITY = 0.45;
 
 function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
-  const motion = useChartMotion();
-
   const data = useMemo(
     () =>
       rows.map((r, index) => {
@@ -126,6 +124,10 @@ function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
   );
 
   const growthData = useMemo(() => data.filter((d) => d.growth != null), [data]);
+
+  // All four panels are built from the same `rows`, so they arm and settle
+  // together — the section reads as one movement rather than four.
+  const motion = useSettledChartMotion(data);
 
   return (
     <div className="grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">

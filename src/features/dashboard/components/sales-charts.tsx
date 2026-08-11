@@ -33,7 +33,7 @@ import {
   legendText,
 } from "../chart-theme";
 import { fmtAxisSAR } from "../chart-format";
-import { useChartMotion } from "../chart-motion";
+import { useSettledChartMotion } from "../chart-motion";
 import { AnalyticsCard } from "./analytics-card";
 import { HorizontalBarPanel } from "./horizontal-bar-panel";
 import { CHART_PANEL_HEIGHT } from "./sales-charts-skeleton";
@@ -103,7 +103,9 @@ function ChartPanel({
  */
 function TeamBarChart({ data }: { data: (Named & { sales: number })[] }) {
   const [active, setActive] = useState<number | null>(null);
-  const motion = useChartMotion();
+  // Armed on `data`, so hovering a bar — which re-renders this component on
+  // every mouse-enter to repaint the `<Cell>`s — cannot restart the entrance.
+  const motion = useSettledChartMotion(data);
 
   return (
     <ResponsiveContainer width="100%" height="100%">
@@ -173,7 +175,11 @@ function TeamBarChart({ data }: { data: (Named & { sales: number })[] }) {
 }
 
 function SalesChartsImpl({ data }: { data: SalesChartsData }) {
-  const motion = useChartMotion();
+  // One arming per panel, on the series that panel actually draws. A shared
+  // preset would re-arm all six whenever any one of the dashboard's queries
+  // resolved, which on a staggered load is most of them.
+  const dailyMotion = useSettledChartMotion(data.dailyData);
+  const statusMotion = useSettledChartMotion(data.statusData);
 
   return (
     <div className="grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
@@ -230,7 +236,7 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
               strokeWidth={2}
               fill="url(#dailyAll)"
               activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--color-card)" }}
-              {...motion.area}
+              {...dailyMotion.area}
             />
             <Area
               type="monotone"
@@ -240,7 +246,7 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
               strokeWidth={2}
               fill="url(#dailyCompleted)"
               activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--color-card)" }}
-              {...motion.area}
+              {...dailyMotion.area}
             />
           </AreaChart>
         </ResponsiveContainer>
@@ -261,8 +267,10 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
               strokeWidth={2}
               // Recharts defaults a Pie to 1500ms behind a 400ms delay, which is
               // nearly two seconds of spinning wedge on a page of half-second
-              // panels. Same budget as everything else here.
-              {...motion.bar}
+              // panels. The `pie` preset caps BOTH — the delay was the half the
+              // old `motion.bar` spread did not carry, and it left this the one
+              // panel that started after all the others.
+              {...statusMotion.pie}
             >
               {data.statusData.map((s, i) => (
                 <Cell key={i} fill={STATUS_COLORS[s.name] ?? COLORS[i % COLORS.length]} />

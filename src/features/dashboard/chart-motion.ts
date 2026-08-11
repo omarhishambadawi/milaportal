@@ -1,4 +1,4 @@
-import { useMemo, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 /**
  * Enter animation for the Dashboard's charts, in one place.
@@ -57,6 +57,17 @@ export interface ChartMotion {
   isAnimationActive: boolean;
   animationDuration: number;
   animationEasing: "ease-out";
+  /**
+   * Always zero, and stated rather than left to the default.
+   *
+   * Recharts defaults `animationBegin` to 0 for Bar, Area and Line but to **400**
+   * for Pie. Spreading a preset that set only the duration therefore left the
+   * pie sitting still for four tenths of a second after every other panel on the
+   * page had started — the one panel that looked like it had stalled. Carrying
+   * the delay in the preset is what makes "they all start together" a property of
+   * this module instead of a per-series default nobody reads.
+   */
+  animationBegin: number;
 }
 
 /**
@@ -64,19 +75,57 @@ export interface ChartMotion {
  *
  * A line has further to travel than a bar and reads better slightly slower; a
  * stacked bar is the shortest because two segments animating in sequence would
- * otherwise add up.
+ * otherwise add up. A pie sweeps its slices round rather than up, which reads
+ * slower at the same duration, so it sits between the two.
  */
-const DURATION = { line: 700, area: 600, bar: 550 } as const;
+const DURATION = { line: 700, area: 600, bar: 550, pie: 600 } as const;
+
+/** How long after the entrance to keep animation armed before settling. */
+const SETTLE_SLACK_MS = 200;
 
 const STILL: ChartMotion = {
   isAnimationActive: false,
   animationDuration: 0,
   animationEasing: "ease-out",
+  animationBegin: 0,
 };
 
+const ALL_STILL: Record<keyof typeof DURATION, ChartMotion> = {
+  line: STILL,
+  area: STILL,
+  bar: STILL,
+  pie: STILL,
+};
+
+export type ChartMotionSet = Record<keyof typeof DURATION, ChartMotion>;
+
 /**
- * The three motion presets, memoised so spreading them cannot hand Recharts a
- * new prop object on every render.
+ * The presets themselves, as a pure function of the two things that decide them.
+ *
+ * Separated from the hook so the page's animation contract — every series starts
+ * at the same instant, none runs long enough to become a wait, and reduced
+ * motion means still — is assertable without a renderer. That contract is the
+ * whole point of this module and it was previously only checkable by eye.
+ */
+export function buildChartMotion(reduced: boolean, forceStill: boolean): ChartMotionSet {
+  if (reduced || forceStill) return ALL_STILL;
+  const moving = (duration: number): ChartMotion => ({
+    isAnimationActive: true,
+    animationDuration: duration,
+    animationEasing: "ease-out",
+    animationBegin: 0,
+  });
+  return {
+    line: moving(DURATION.line),
+    area: moving(DURATION.area),
+    bar: moving(DURATION.bar),
+    pie: moving(DURATION.pie),
+  };
+}
+
+/**
+ * The motion presets, memoised so spreading them cannot hand Recharts a new
+ * prop object on every render.
  */
 export function useChartMotion(
   /**
@@ -88,27 +137,65 @@ export function useChartMotion(
    * all. Paper has no motion to carry information anyway.
    */
   forceStill = false,
-): Record<keyof typeof DURATION, ChartMotion> {
+): ChartMotionSet {
   const reduced = usePrefersReducedMotion();
-
-  return useMemo(() => {
-    if (reduced || forceStill) return { line: STILL, area: STILL, bar: STILL };
-    return {
-      line: {
-        isAnimationActive: true,
-        animationDuration: DURATION.line,
-        animationEasing: "ease-out",
-      },
-      area: {
-        isAnimationActive: true,
-        animationDuration: DURATION.area,
-        animationEasing: "ease-out",
-      },
-      bar: {
-        isAnimationActive: true,
-        animationDuration: DURATION.bar,
-        animationEasing: "ease-out",
-      },
-    };
-  }, [reduced, forceStill]);
+  return useMemo(() => buildChartMotion(reduced, forceStill), [reduced, forceStill]);
 }
+
+/** Longest entrance on the page, plus slack. One timer length for every panel. */
+const SETTLE_MS = Math.max(...Object.values(DURATION)) + SETTLE_SLACK_MS;
+
+/**
+ * The presets, but ARMED only around a genuine data change.
+ *
+ * ---------------------------------------------------------------------------
+ * The restart this exists to stop
+ * ---------------------------------------------------------------------------
+ * Recharts wraps each animated series in `<Animate key={"bar-" + animationId}>`,
+ * and `animationId` is the chart's internal `updateId`. That counter is
+ * incremented by `generateCategoricalChart` whenever the chart's **width or
+ * height** changes, not only when its data does — so every `ResponsiveContainer`
+ * measurement replays the entrance. A new `key` unmounts the running `<Animate>`
+ * and mounts a fresh one at `t = 0`, and at `t = 0` a bar has zero height and
+ * `Rectangle` renders `null` outright. Dragging a window edge therefore made ten
+ * panels blink out and redraw themselves, which is the "restarts unexpectedly"
+ * and "jumps" this page was reported for.
+ *
+ * There is no prop that turns that off: `updateId` is internal.
+ *
+ * ---------------------------------------------------------------------------
+ * What this does instead
+ * ---------------------------------------------------------------------------
+ * Animation is a property of *having just received data*, not a standing state.
+ * The presets are live for one entrance after `identity` changes, then go still.
+ * Once still, Recharts takes its `renderRectanglesStatically` path and draws the
+ * series at full size on every subsequent render — so a resize, a hover, a
+ * tooltip or a parent re-render repaints instantly and cannot restart anything.
+ *
+ * The flip is invisible: it happens after the entrance has finished, and the
+ * static render's geometry is the frame the animation had already reached.
+ *
+ * A later data change re-arms it, and because Recharts holds the previous series
+ * as `prevData`, that second animation interpolates from the old values to the
+ * new ones rather than from zero — a transition, not a redraw.
+ *
+ * @param identity The data this panel draws. Compared by reference, so it must
+ *                 be the memoised array the chart is handed — a fresh literal
+ *                 every render would re-arm on every render and defeat this.
+ */
+export function useSettledChartMotion(identity: unknown, forceStill = false): ChartMotionSet {
+  const motion = useChartMotion(forceStill);
+  const [armed, setArmed] = useState(true);
+
+  useEffect(() => {
+    // Re-arming on mount is a no-op: React bails out of a set to the same value.
+    setArmed(true);
+    const timer = setTimeout(() => setArmed(false), SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [identity]);
+
+  return armed ? motion : ALL_STILL;
+}
+
+/** Test seam — the settle window and the per-series budget. */
+export const __motionTiming = { SETTLE_MS, SETTLE_SLACK_MS, DURATION };
