@@ -180,6 +180,13 @@ export interface SyncedDay {
  * A day that has ENDED is immutable on this PBX, so its age is irrelevant.
  * Today is still being written to, so it is trusted only while the sync is
  * recent — the same freshness contract the in-memory day cache applies.
+ *
+ * A day that has not STARTED is the third case, and leaving it out is what made
+ * a whole-month filter unusable. `day >= today` lumped tomorrow in with today
+ * and demanded a sync inside the live TTL for it — so every request for a range
+ * ending on the 31st found nineteen future days "stale" and swept the PBX for
+ * them, every five minutes, forever. A future day cannot have accrued a call, so
+ * it is complete by construction and needs neither a mirror row nor a fetch.
  */
 export function isSyncedDayUsable(
   day: string,
@@ -188,6 +195,7 @@ export function isSyncedDayUsable(
   today: string,
   liveTtlMs: number,
 ): boolean {
+  if (day > today) return true;
   if (!hit) return false;
   return day < today || now - hit.syncedAt < liveTtlMs;
 }

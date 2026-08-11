@@ -2212,6 +2212,24 @@ entries. `isSyncedDayUsable` is the one definition of that rule, because both th
 window store and Call Lookup ask it and a dashboard that trusted the mirror
 further than the lookup did would show two answers for the same calls.
 
+**Days that have not begun are a third case, and omitting it was a four-minute
+bug.** The date presets select a whole CALENDAR month, so "this month" on the
+12th requests the 1st to the 31st — nineteen days that do not exist yet. The rule
+split days into "ended" and "today or later", so those nineteen were held to the
+live-TTL freshness check, which nothing can ever satisfy for a day with no mirror
+row. They therefore landed on the missing list on **every** request, joined
+today's contiguous range, and turned a one-day live sweep into a twenty-day one.
+A measured cold Customer Care → August request took **263 seconds**; the second
+team's request then read the isolate's warmed day cache and returned in under a
+second, which is why the problem looked like a caching win rather than a defect.
+
+`getCdrWindow` now filters the requested range to days `<= today` before any tier
+is consulted — above the mirror deliberately, so it holds even when the mirror is
+unreachable — and reports the rest as `daysInFuture`. `isSyncedDayUsable` returns
+true for a future day for the same reason: it is complete by construction.
+`windowCacheState` excludes them too, or a current-month window would read
+"partial" for the rest of the month and Call Lookup could never take its free path.
+
 **What makes it incremental.** `cdr_sync_days`, not a timestamp cursor. Once a
 closed day is recorded it is never fetched again; the live tail (today and
 yesterday) is refetched every run. That is the finest granularity the PBX's own

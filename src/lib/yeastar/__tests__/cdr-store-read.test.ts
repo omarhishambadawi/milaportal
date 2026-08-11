@@ -186,3 +186,46 @@ describe("readCdrByNumber", () => {
     expect(recorded.selects).toHaveLength(0);
   });
 });
+
+/**
+ * Which days the mirror may answer for.
+ *
+ * Three cases, not two. The rule previously split days into "ended" and
+ * "today or later", which quietly demanded a fresh sync for days that had not
+ * happened — days that can never satisfy it, because nothing will ever write a
+ * row for them until they arrive.
+ */
+describe("isSyncedDayUsable", () => {
+  const TODAY = "2026-08-12";
+  const NOW = Date.parse(`${TODAY}T12:00:00Z`);
+  const TTL = 5 * 60_000;
+  const fresh = { rowCount: 10, syncedAt: NOW - 60_000 };
+  const stale = { rowCount: 10, syncedAt: NOW - 60 * 60_000 };
+
+  it("serves a day that has ENDED at any age — it cannot change", async () => {
+    const { isSyncedDayUsable } = await import("../cdr-store.server");
+    expect(isSyncedDayUsable("2026-08-01", stale, NOW, TODAY, TTL)).toBe(true);
+  });
+
+  it("serves TODAY only while the sync is recent — it is still accruing", async () => {
+    const { isSyncedDayUsable } = await import("../cdr-store.server");
+    expect(isSyncedDayUsable(TODAY, fresh, NOW, TODAY, TTL)).toBe(true);
+    expect(isSyncedDayUsable(TODAY, stale, NOW, TODAY, TTL)).toBe(false);
+  });
+
+  it("serves a FUTURE day unconditionally — it can hold no call", async () => {
+    // The regression this guards. A future day has no mirror row and never
+    // will, so requiring one put it on the missing list on every request; it
+    // then joined today's contiguous range and turned a one-day live sweep of
+    // the PBX into a twenty-day one for anyone viewing the current month.
+    const { isSyncedDayUsable } = await import("../cdr-store.server");
+    expect(isSyncedDayUsable("2026-08-13", undefined, NOW, TODAY, TTL)).toBe(true);
+    expect(isSyncedDayUsable("2026-08-31", stale, NOW, TODAY, TTL)).toBe(true);
+  });
+
+  it("still refuses a day that has ended and was never mirrored", async () => {
+    // Not-yet-synced history is a real gap and must still be fetched.
+    const { isSyncedDayUsable } = await import("../cdr-store.server");
+    expect(isSyncedDayUsable("2026-08-01", undefined, NOW, TODAY, TTL)).toBe(false);
+  });
+});

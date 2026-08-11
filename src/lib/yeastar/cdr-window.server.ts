@@ -140,6 +140,8 @@ function evict(now: number) {
 export interface CdrWindow extends Omit<FetchCdrResult, "fetchedRows" | "droppedOutOfWindow"> {
   /** Days answered from this isolate's day cache without touching the PBX. */
   daysFromCache: number;
+  /** Requested days that have not begun, and so were never fetched at all. */
+  daysInFuture: number;
   /** Days answered from the Supabase mirror instead of a live PBX sweep. */
   daysFromStore: number;
   /** Days that had to be fetched from the PBX. */
@@ -193,7 +195,26 @@ export async function getCdrWindow(from: string, to: string, jobId?: string): Pr
   evict(now);
 
   const today = businessDayOf(now, offsetMin);
-  const days = enumerateDays(from, to);
+
+  /**
+   * Days that have actually begun.
+   *
+   * The month presets select a whole CALENDAR month, so "this month" on the 12th
+   * asks for the 1st to the 31st — nineteen days that have not happened yet. A
+   * future day cannot contain a call, but it also has no mirror row and never
+   * will, so it counted as missing, joined the contiguous range with today, and
+   * turned a one-day live sweep into a twenty-day one. That sweep ran on every
+   * request once the five-minute live TTL lapsed, which is exactly the "first
+   * load of the current month never finishes" report.
+   *
+   * Dropping them here rather than in a lower tier is deliberate: it holds even
+   * when the mirror is unreachable, and it is the only place that knows the whole
+   * requested range.
+   */
+  const requestedDays = enumerateDays(from, to);
+  const days = requestedDays.filter((d) => d <= today);
+  const daysInFuture = requestedDays.length - days.length;
+
   const notInMemory = days.filter((d) => {
     const hit = dayCache.get(d);
     return !hit || !isFresh(hit, now);
@@ -314,6 +335,7 @@ export async function getCdrWindow(from: string, to: string, jobId?: string): Pr
     elapsedMs: Date.now() - started,
     truncated,
     daysFromCache: days.length - notInMemory.length,
+    daysInFuture,
     daysFromStore: fromStore.size,
     daysFetched: missing.length,
     sweeps,
@@ -326,7 +348,11 @@ export function windowCacheState(
   to: string,
 ): { status: "warm" | "partial" | "cold"; ageMs: number | null; daysCached: number; days: number } {
   const now = Date.now();
-  const days = enumerateDays(from, to);
+  // Future days are never cached because they are never fetched, so counting
+  // them would report a fully warm month as "partial" for the rest of the month
+  // — and Call Lookup only takes its free path on a warm window.
+  const today = businessDayOf(now, tzOffsetMinutes());
+  const days = enumerateDays(from, to).filter((d) => d <= today);
   let cached = 0;
   let oldest: number | null = null;
   for (const d of days) {

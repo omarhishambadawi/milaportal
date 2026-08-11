@@ -6,7 +6,7 @@
  * what it fetches (fewer requests, correct ranges) and what it returns (the
  * same rows, in the same order, as a single sweep would have produced).
  */
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 const fetchCdrRange = vi.fn();
 vi.mock("../cdr.server", () => ({
@@ -225,5 +225,96 @@ describe("getCdrWindow", () => {
     // The PBX only reported on the ten days actually asked for; presenting that
     // as the month's total would understate it.
     expect(res.totalReported).toBeNull();
+  });
+});
+
+/**
+ * Days that have not happened yet.
+ *
+ * The month presets select a whole CALENDAR month, so "this month" on the 12th
+ * asks for the 1st to the 31st. Nineteen of those days do not exist yet: they
+ * can hold no call, they have no mirror row and they never will. Treating them
+ * as merely "not synced recently" put them in the same contiguous range as
+ * today and turned a one-day live sweep into a twenty-day one — on every
+ * request, forever, because a future day can never satisfy a freshness check.
+ *
+ * That is what made the first load of the current month never finish.
+ */
+describe("getCdrWindow — days that have not begun", () => {
+  const TODAY = "2026-08-12";
+  // 21:00 in the business timezone (UTC+3) on the 12th. Late enough in the day
+  // that the clock can be pushed over the business-day boundary later in this
+  // block without ageing the cached days past their twelve-hour closed TTL —
+  // which would evict them for a reason that has nothing to do with the future.
+  const NOW = Date.parse(`${TODAY}T18:00:00Z`);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    __resetCdrWindowCache();
+    fetchCdrRange.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("never asks the PBX for a day that has not started", async () => {
+    const res = await getCdrWindow("2026-08-01", "2026-08-31");
+
+    // One sweep, ending TODAY — not on the 31st.
+    expect(askedRanges()).toEqual(["2026-08-01..2026-08-12"]);
+    expect(res.daysFetched).toBe(12);
+    expect(res.daysInFuture).toBe(19);
+  });
+
+  it("issues no request at all for a window entirely in the future", async () => {
+    const res = await getCdrWindow("2026-09-01", "2026-09-30");
+    expect(fetchCdrRange).not.toHaveBeenCalled();
+    expect(res.records).toEqual([]);
+    expect(res.daysInFuture).toBe(30);
+    expect(res.sweeps).toBe(0);
+  });
+
+  it("returns exactly the days that exist, and no placeholder rows for the rest", async () => {
+    const res = await getCdrWindow("2026-08-01", "2026-08-31");
+    expect(res.records.map((r) => r.new_id)).toEqual(
+      enumerateDays("2026-08-01", TODAY).map((d) => `r-${d}`),
+    );
+  });
+
+  it("counts a month-to-the-31st as WARM once its real days are cached", async () => {
+    // Previously impossible: the future days were never cached, so the window
+    // read "partial" for the rest of the month and Call Lookup could never take
+    // its free path on the current month.
+    await getCdrWindow("2026-08-01", "2026-08-31");
+    expect(windowCacheState("2026-08-01", "2026-08-31").status).toBe("warm");
+  });
+
+  it("costs nothing on the second request — the trap this whole layer exists for", async () => {
+    await getCdrWindow("2026-08-01", "2026-08-31");
+    fetchCdrRange.mockClear();
+
+    const res = await getCdrWindow("2026-08-01", "2026-08-31");
+    expect(fetchCdrRange).not.toHaveBeenCalled();
+    expect(res.sweeps).toBe(0);
+    expect(res.daysFromCache).toBe(12);
+  });
+
+  it("picks the new day up once it actually arrives", async () => {
+    await getCdrWindow("2026-08-01", "2026-08-31");
+    fetchCdrRange.mockClear();
+
+    // Tomorrow becomes today. The day that was skipped as future is now real,
+    // and must be fetched rather than assumed empty forever. Three and a half
+    // hours later, so the closed days stay cached and only the live tail moves.
+    vi.setSystemTime(Date.parse("2026-08-12T21:30:00Z"));
+    const res = await getCdrWindow("2026-08-01", "2026-08-31");
+
+    // The 12th is re-fetched because it was the live day when it was cached and
+    // its five-minute TTL has lapsed; the 13th because it has just begun.
+    expect(askedRanges()).toEqual(["2026-08-12..2026-08-13"]);
+    expect(res.daysInFuture).toBe(18);
+    expect(res.records.map((r) => r.new_id)).toContain("r-2026-08-13");
   });
 });
