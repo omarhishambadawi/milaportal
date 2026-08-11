@@ -1054,6 +1054,17 @@ export type Database = {
           working_hours: string
         }[]
       }
+      cdr_rows_by_number: {
+        Args: { p_from: string; p_numbers: string[]; p_to: string }
+        Returns: Json
+      }
+      cdr_window_rows: {
+        Args: { p_days: string[] }
+        Returns: {
+          business_day: string
+          rows: Json
+        }[]
+      }
       complaints_in_scope: {
         Args: { _agent?: string; _from: string; _mine?: boolean; _to: string }
         Returns: {
