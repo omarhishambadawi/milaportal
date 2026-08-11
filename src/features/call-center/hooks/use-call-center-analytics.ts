@@ -102,6 +102,9 @@ export function useCallCenterAnalytics({
     // The window's data is considered fresh until the next scheduled refresh,
     // so a remount inside that window reuses the cache instead of refetching.
     staleTime: policy.staleMs,
+    // Retention, not freshness — see `RefreshPolicy.gcMs`. A month left for the
+    // app-wide ten minutes was evicted and rebuilt from scratch on return.
+    gcTime: policy.gcMs,
     placeholderData: keepPreviousData,
     refetchInterval: policy.intervalMs,
     // Hidden tabs are not watching, so polling them is pure cost. Coming back

@@ -587,6 +587,10 @@ Indexes: `business_day`, `ts`, `call_id`, and `(call_from_number, business_day)`
 `(call_to_number, business_day)` — the two composites serve Call Lookup, which
 filters one subscriber over a trailing window.
 
+Read through `cdr_window_rows(date[])` and `cdr_rows_by_number(date, date,
+text[])`, both service-role only. They exist so a window is one round trip rather
+than ~16 pages of PostgREST offset paging — see "Window reads go through an RPC".
+
 ### `cdr_sync_days`
 
 `business_day` (PK), `row_count`, `synced_at`. Which days the mirror covers,
@@ -1979,6 +1983,18 @@ live (≤ `LIVE_WINDOW_MAX_DAYS = 2`, still accruing) polls; ≥
 proportionally. `SERVER_CACHE_TTL_MS = 5 min` matches the server's own CDR cache
 TTL — asking sooner cannot return newer rows.
 
+The policy also carries `gcMs` — **retention**, not freshness, and the one that
+decides what a user filtering around actually pays. Staleness only says whether a
+refetch is _allowed_, and these queries have already opted out of every automatic
+trigger (`refetchOnMount: false`, `refetchOnWindowFocus` only while live), so a
+window still in cache is reused whether it is stale or not. Eviction is what
+forces the full server-side cost again. A large or closed window is therefore
+retained for `CLOSED_WINDOW_GC_MS = 60 min` instead of the app-wide 10, because it
+is immutable (the PBX cannot add a call to a day that is over) and it is the
+expensive one to rebuild; live windows keep `LIVE_WINDOW_GC_MS = 10 min`. The
+payload is an aggregate — a few kilobytes whatever the window's size — so holding
+several costs nothing measurable, and the Refresh button ignores all of it.
+
 There is deliberately **no progress polling** on the dashboards: the previous
 800 ms poll rebuilt every chart array and replayed Recharts' enter animation,
 which is what made the pages appear to load, clear and reload on a loop.
@@ -2205,15 +2221,51 @@ were fully serial and both sit on the critical path of a user request:
   sweep. The chunks are disjoint by `row_id` (the `seen` set guarantees a key
   appears once across the payload), so no two can conflict on the same row, which
   is what makes running them together safe rather than merely faster.
-- _Read._ PostgREST caps a response at 1,000 rows, so the same month is fifteen
-  sequential `.range()` walks on every cold isolate. Days partition the rows
-  exactly, so `readCdrDays` splits the window into `READ_DAY_GROUP = 8`-day
-  groups and reads them concurrently; each still pages itself, and the groups are
-  disjoint by construction.
+- _Read._ Now a single round trip — see "Window reads go through an RPC" below.
+  The concurrent `READ_DAY_GROUP = 8` paging remains as the fallback for a
+  deployment whose migration has not landed yet.
 
 `pooled` stops taking new work on the first failure and re-throws it once the
 workers already in flight have settled — rejecting on the spot would leave the
 others running unobserved and surface a later rejection as an unhandled one.
+
+**Window reads go through an RPC (`cdr_window_rows`, `cdr_rows_by_number`).**
+Splitting the paging across day groups made it concurrent but did not make it
+cheaper, and paging was the dominant cost of a month-wide Calls filter. PostgREST
+paging asks for the rows themselves, so a month is ~16 requests capped at 1,000
+rows each, and each one re-executes the whole query:
+
+- `.order("row_id")` is not satisfiable from `cdr_records_business_day_idx`, so
+  every page re-scanned **and re-sorted** its day group — carrying the `raw`
+  jsonb (~600 bytes/row) through the sort, which is the expensive part.
+- `OFFSET n` then discarded the rows it had just materialised, so page 4 did four
+  pages of work to return one.
+- The ordering was never wanted. It existed only to make `.range()` stable;
+  callers bucket by `business_day` and `classifyRecords` groups by `call_id`.
+
+`cdr_window_rows(p_days date[])` returns one row **per business day** carrying
+that day's legs as `json_agg(raw)`. The response is then a few hundred rows at
+most however many legs it contains, so the 1,000-row cap stops being a
+constraint and the paging, the OFFSET and the sort all disappear together. Over a
+31-day window (~14,000 legs) that is **16 requests → 1**, and Postgres scans the
+window once instead of four times. `cdr_rows_by_number` does the same for Call
+Lookup, replacing two paged per-column walks and their client-side de-duplication
+with one `BitmapOr` over the existing composite indexes; it returns a single
+`json` value so no row cap can clip a subscriber's history.
+
+`json_agg`, not `jsonb_agg`: the input is already jsonb, so json_agg serialises
+each element straight to text rather than building a second binary container to
+serialise afterwards. **The rows are unchanged** — these functions re-shape the
+response envelope, never its contents, so `classifyRecords` still receives the
+byte-identical object and no KPI moves. No new indexes: what was slow was the
+paging and the sort it required, not the row selection.
+
+Both are service-role only (`REVOKE … FROM PUBLIC, anon, authenticated`), like
+`cdr_records` itself — these rows carry customer phone numbers and the rules for
+who may see which calls live in the Calls server functions. When a function is
+absent (code deployed ahead of its migration) the store logs once, latches a
+per-isolate flag and falls back to the paged path, so a deployment is never
+ordered.
 
 **Triggering.** `POST /api/cdr-sync` from any scheduler. With no scheduler
 configured the layer still works — it is then driven entirely by the read path

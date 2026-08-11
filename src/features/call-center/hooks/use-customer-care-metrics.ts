@@ -120,6 +120,9 @@ export function useCustomerCareMetrics({
       }),
     enabled: !authLoading && canView,
     staleTime: policy.staleMs,
+    // Retention, not freshness — see `RefreshPolicy.gcMs`. A month left for the
+    // app-wide ten minutes was evicted and rebuilt from scratch on return.
+    gcTime: policy.gcMs,
     placeholderData: keepPreviousData,
     refetchInterval: policy.intervalMs,
     refetchIntervalInBackground: false,

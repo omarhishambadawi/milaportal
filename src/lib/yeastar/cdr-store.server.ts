@@ -36,13 +36,15 @@ const UPSERT_CHUNK = 500;
 const DAY_FILTER_CHUNK = 45;
 
 /**
- * How many days one mirror READ covers, and therefore how the work is split.
+ * How many days one FALLBACK mirror read covers, and therefore how that work is
+ * split.
  *
+ * Only reached when `cdr_window_rows` is not deployed — see `readCdrDays`.
  * PostgREST caps a response at 1,000 rows, so a month (~14,000 mirrored rows)
- * is fifteen `.range()` requests — and walking them one after another is
- * fifteen serial round-trips on the critical path of every cold isolate. Days
- * partition the rows exactly, so splitting the window by day lets those groups
- * run concurrently while each still pages itself correctly.
+ * is fifteen `.range()` requests, and walking them one after another is fifteen
+ * serial round-trips on the critical path of every cold isolate. Days partition
+ * the rows exactly, so splitting the window by day lets those groups run
+ * concurrently while each still pages itself correctly.
  *
  * Eight days is roughly four pages per group on this deployment's volume: small
  * enough that a month becomes four short walks instead of one long one, large
@@ -113,6 +115,34 @@ async function admin() {
  *  adapter `progress.server.ts` uses. Confined to this one helper. */
 function table(db: any, name: "cdr_records" | "cdr_sync_days" | "cdr_sync_state") {
   return db.from(name as any) as any;
+}
+
+/**
+ * Is this error "that function does not exist", as opposed to a real failure?
+ *
+ * `PGRST202` is PostgREST failing to resolve the function against its schema
+ * cache; `42883` is Postgres's own undefined_function, which is what surfaces
+ * when the cache is stale rather than empty. Both mean the same thing to us: the
+ * migration has not reached this database yet, so the caller should fall back to
+ * the path that does not need it.
+ */
+function isMissingFunction(error: unknown): boolean {
+  const code = (error as { code?: unknown })?.code;
+  return code === "PGRST202" || code === "42883";
+}
+
+/**
+ * Set once a read RPC is found to be absent, so a deployment running ahead of
+ * its migration pays one failed round trip in total rather than one per request.
+ * Module scope, so it is per isolate and a redeploy re-tests.
+ */
+let windowRpcMissing = false;
+let byNumberRpcMissing = false;
+
+/** Test seam — forgets which RPCs were found to be absent. */
+export function __resetStoreRpcProbes() {
+  windowRpcMissing = false;
+  byNumberRpcMissing = false;
 }
 
 /**
@@ -225,6 +255,11 @@ export async function readCdrDays(days: string[]): Promise<Map<string, CdrRecord
   if (days.length === 0) return byDay;
 
   const db = await admin();
+
+  // One round trip for the whole window. See `cdr_window_rows` for why the paged
+  // path below was the dominant cost of a month-wide filter.
+  if (await readDaysViaRpc(db, days, byDay)) return byDay;
+
   // Groups are read concurrently; each still pages itself with `.range()`. Rows
   // are bucketed by their own `business_day`, so the groups are disjoint by
   // construction and the concurrency cannot duplicate or drop a row.
@@ -245,6 +280,42 @@ export async function readCdrDays(days: string[]): Promise<Map<string, CdrRecord
     }
   });
   return byDay;
+}
+
+/**
+ * Fill `byDay` from `cdr_window_rows`, or report that the RPC cannot answer.
+ *
+ * Returns false — leaving `byDay` untouched — only when the function is absent
+ * from the database, which happens in exactly one situation: application code
+ * deployed ahead of its migration. Every other error propagates, because a
+ * mirror that is reachable but broken must not be papered over by silently
+ * taking the slow path forever.
+ *
+ * Buckets are filled in one pass at the end rather than as each day arrives, so
+ * a failure mid-response cannot leave the caller holding a half-populated
+ * window it would then treat as complete.
+ */
+async function readDaysViaRpc(
+  db: any,
+  days: string[],
+  byDay: Map<string, CdrRecord[]>,
+): Promise<boolean> {
+  if (windowRpcMissing) return false;
+  const { data, error } = await db.rpc("cdr_window_rows", { p_days: days });
+  if (error) {
+    if (!isMissingFunction(error)) throw error;
+    // Latch it: without this every window read pays a failing round trip first.
+    windowRpcMissing = true;
+    console.warn("[yeastar cdr] cdr_window_rows is not deployed — using paged mirror reads");
+    return false;
+  }
+  const filled: Array<[CdrRecord[], CdrRecord[]]> = [];
+  for (const row of (data ?? []) as any[]) {
+    const bucket = byDay.get(String(row.business_day).slice(0, 10));
+    if (bucket) filled.push([bucket, (row.rows ?? []) as CdrRecord[]]);
+  }
+  for (const [bucket, rows] of filled) for (const r of rows) bucket.push(r);
+  return true;
 }
 
 /**
@@ -327,16 +398,39 @@ export async function readCdrByNumber(
   const wanted = variants.filter((v) => v && v.length > 0);
   if (wanted.length === 0) return [];
   const db = await admin();
+
+  // One query over both number columns. See `cdr_rows_by_number`.
+  if (!byNumberRpcMissing) {
+    // Same `as any` adapter the tables use: these functions are absent from the
+    // generated `types.ts` for the same reason `cdr_records` is.
+    const { data, error } = await (db as any).rpc("cdr_rows_by_number", {
+      p_from: from,
+      p_to: to,
+      p_numbers: wanted,
+    });
+    if (!error) return (data ?? []) as CdrRecord[];
+    if (!isMissingFunction(error)) throw error;
+    byNumberRpcMissing = true;
+    console.warn("[yeastar cdr] cdr_rows_by_number is not deployed — using paged mirror reads");
+  }
+
+  // Fallback: one paged walk per column, de-duplicated on `row_id` because a
+  // call between two known numbers matches both. The walks are independent, so
+  // they run together rather than one after the other.
   const byKey = new Map<string, CdrRecord>();
-  for (const column of ["call_from_number", "call_to_number"] as const) {
-    const rows = await fetchAllPaginated<any>(() =>
-      table(db, "cdr_records")
-        .select("row_id,raw")
-        .gte("business_day", from)
-        .lte("business_day", to)
-        .in(column, wanted)
-        .order("row_id", { ascending: true }),
-    );
+  const walks = await Promise.all(
+    (["call_from_number", "call_to_number"] as const).map((column) =>
+      fetchAllPaginated<any>(() =>
+        table(db, "cdr_records")
+          .select("row_id,raw")
+          .gte("business_day", from)
+          .lte("business_day", to)
+          .in(column, wanted)
+          .order("row_id", { ascending: true }),
+      ),
+    ),
+  );
+  for (const rows of walks) {
     for (const row of rows) byKey.set(String(row.row_id), row.raw as CdrRecord);
   }
   return [...byKey.values()];

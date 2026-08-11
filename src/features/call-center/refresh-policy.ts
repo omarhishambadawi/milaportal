@@ -26,6 +26,17 @@ export interface RefreshPolicy {
   intervalMs: number | false;
   /** How long a fetched window stays fresh. */
   staleMs: number;
+  /**
+   * How long the window is RETAINED after nothing is rendering it.
+   *
+   * Distinct from `staleMs`, and the one that decides what a user filtering
+   * around actually pays. Staleness only says whether a refetch is allowed; the
+   * Calls queries have already opted out of every automatic trigger, so a window
+   * still in cache is reused whether it is stale or not. Eviction is what forces
+   * the full server-side cost again — and a month is exactly the window a user
+   * leaves and comes back to.
+   */
+  gcMs: number;
   /** Human-readable, for the page header. */
   label: string;
 }
@@ -40,6 +51,27 @@ export const HISTORICAL_WINDOW_MIN_DAYS = 8;
  * costs a full re-aggregation.
  */
 export const SERVER_CACHE_TTL_MS = 5 * 60_000;
+
+/**
+ * How long a LIVE window is retained once unmounted. The app-wide default —
+ * these windows are cheap to rebuild and short-lived by nature.
+ */
+export const LIVE_WINDOW_GC_MS = 10 * 60_000;
+/**
+ * How long a window that has already ENDED is retained once unmounted.
+ *
+ * Such a window is immutable: the PBX cannot add a call to a day that is over,
+ * so re-fetching it can only ever return the same numbers. Re-deriving them costs
+ * a full mirror read and a full re-aggregation of every leg in the window, which
+ * on a month is the most expensive thing the Calls pages do — so the answer is
+ * kept for a working session's worth of filtering instead of ten minutes.
+ *
+ * The payload is an aggregate (totals, one row per agent, one per day, one per
+ * hour), a few kilobytes whatever the window's size, so retaining several of them
+ * costs nothing worth measuring. The Refresh button ignores all of this and
+ * always forces a fetch.
+ */
+export const CLOSED_WINDOW_GC_MS = 60 * 60_000;
 
 /** Inclusive day count between two `YYYY-MM-DD` keys. */
 export function windowDays(from: string, to: string): number {
@@ -75,6 +107,7 @@ export function resolveRefreshPolicy(
       windowDays: days,
       intervalMs: liveRefreshMs,
       staleMs: liveRefreshMs,
+      gcMs: LIVE_WINDOW_GC_MS,
       label: `Live · refreshing every ${Math.round(liveRefreshMs / 1000)}s`,
     };
   }
@@ -83,6 +116,7 @@ export function resolveRefreshPolicy(
       windowDays: days,
       intervalMs: SERVER_CACHE_TTL_MS,
       staleMs: SERVER_CACHE_TTL_MS,
+      gcMs: LIVE_WINDOW_GC_MS,
       label: "Refreshing every 5 min",
     };
   }
@@ -90,6 +124,11 @@ export function resolveRefreshPolicy(
     windowDays: days,
     intervalMs: false,
     staleMs: SERVER_CACHE_TTL_MS,
+    // A large window is retained for a long time whether or not it is still
+    // accruing: it is the expensive one to rebuild either way, and its tail is
+    // the only part that can move. `staleMs` still lets the Refresh button and a
+    // reconnect pick that up.
+    gcMs: CLOSED_WINDOW_GC_MS,
     label: live ? "Large window · refresh manually" : "Closed window · refresh manually",
   };
 }

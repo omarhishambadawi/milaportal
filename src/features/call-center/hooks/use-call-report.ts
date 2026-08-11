@@ -48,6 +48,10 @@ export function useCallReportQuery({
       callReportFn({ data: { from, to, ...(queue && queue !== "all" ? { queue } : {}) } }),
     enabled,
     staleTime: policy.staleMs,
+    // Follows the analytics query's retention for the same reason: the two are
+    // fetched together and rendered together, so evicting one of them on its own
+    // just re-loads half a page.
+    gcTime: policy.gcMs,
     placeholderData: keepPreviousData,
     // Two live PBX requests per miss, against a box that rate-limits its token
     // endpoint hard. It follows the same policy as the analytics query for the
