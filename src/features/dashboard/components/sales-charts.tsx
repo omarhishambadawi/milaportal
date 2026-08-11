@@ -33,7 +33,7 @@ import {
   legendText,
 } from "../chart-theme";
 import { fmtAxisSAR } from "../chart-format";
-import { useSettledChartMotion } from "../chart-motion";
+import { InViewChart } from "./in-view-chart";
 import { AnalyticsCard } from "./analytics-card";
 import { HorizontalBarPanel } from "./horizontal-bar-panel";
 import { CHART_PANEL_HEIGHT } from "./sales-charts-skeleton";
@@ -103,101 +103,21 @@ function ChartPanel({
  */
 function TeamBarChart({ data }: { data: (Named & { sales: number })[] }) {
   const [active, setActive] = useState<number | null>(null);
-  // Armed on `data`, so hovering a bar — which re-renders this component on
-  // every mouse-enter to repaint the `<Cell>`s — cannot restart the entrance.
-  const motion = useSettledChartMotion(data);
 
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <BarChart
-        data={data}
-        margin={CHART_MARGIN}
-        maxBarSize={64}
-        onMouseLeave={() => setActive(null)}
-      >
-        <defs>
-          <linearGradient id="teamBar" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="var(--color-chart-2)" stopOpacity={1} />
-            <stop offset="100%" stopColor="var(--color-chart-2)" stopOpacity={0.7} />
-          </linearGradient>
-        </defs>
-        <CartesianGrid
-          vertical={false}
-          strokeDasharray="3 3"
-          stroke={GRID_STROKE}
-          strokeOpacity={GRID_OPACITY}
-        />
-        <XAxis dataKey="name" tick={AXIS_TICK} tickLine={false} axisLine={false} tickMargin={8} />
-        <YAxis
-          tick={AXIS_TICK}
-          tickFormatter={fmtAxisSAR}
-          tickLine={false}
-          axisLine={false}
-          width={52}
-          tickMargin={6}
-        />
-        <Tooltip
-          content={<ChartTooltip format={fmtSAR} />}
-          cursor={BAR_CURSOR}
-          wrapperStyle={TOOLTIP_WRAPPER}
-        />
-        <Bar
-          dataKey="sales"
-          name="Completed sales"
-          fill="url(#teamBar)"
-          radius={[6, 6, 0, 0]}
-          {...motion.bar}
-          onMouseEnter={(_, index: number) => setActive(index)}
-        >
-          {data.map((t, i) => {
-            const isActive = active === i;
-            const dimmed = active !== null && !isActive;
-            return (
-              <Cell
-                key={t.name}
-                cursor="pointer"
-                fillOpacity={dimmed ? 0.35 : 1}
-                stroke={isActive ? "var(--color-chart-2)" : "transparent"}
-                strokeWidth={isActive ? 1.5 : 0}
-                style={{
-                  transition: "opacity 220ms ease, filter 220ms ease, transform 220ms ease",
-                  filter: isActive
-                    ? "brightness(1.12) drop-shadow(0 6px 14px color-mix(in oklab, var(--color-chart-2) 45%, transparent))"
-                    : "none",
-                }}
-              />
-            );
-          })}
-        </Bar>
-      </BarChart>
-    </ResponsiveContainer>
-  );
-}
-
-function SalesChartsImpl({ data }: { data: SalesChartsData }) {
-  // One arming per panel, on the series that panel actually draws. A shared
-  // preset would re-arm all six whenever any one of the dashboard's queries
-  // resolved, which on a staggered load is most of them.
-  const dailyMotion = useSettledChartMotion(data.dailyData);
-  const statusMotion = useSettledChartMotion(data.statusData);
-
-  return (
-    <div className="grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
-      <ChartPanel
-        title="Daily sales trend"
-        subtitle="All orders against completed"
-        icon={ChartColumn}
-      >
+    <InViewChart identity={data}>
+      {(motion) => (
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data.dailyData} margin={CHART_MARGIN}>
+          <BarChart
+            data={data}
+            margin={CHART_MARGIN}
+            maxBarSize={64}
+            onMouseLeave={() => setActive(null)}
+          >
             <defs>
-              <linearGradient id="dailyAll" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="var(--color-chart-1)" stopOpacity={0.35} />
-                <stop offset="100%" stopColor="var(--color-chart-1)" stopOpacity={0} />
-              </linearGradient>
-              <linearGradient id="dailyCompleted" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="var(--positive)" stopOpacity={0.4} />
-                <stop offset="100%" stopColor="var(--positive)" stopOpacity={0} />
+              <linearGradient id="teamBar" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--color-chart-2)" stopOpacity={1} />
+                <stop offset="100%" stopColor="var(--color-chart-2)" stopOpacity={0.7} />
               </linearGradient>
             </defs>
             <CartesianGrid
@@ -207,81 +127,170 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
               strokeOpacity={GRID_OPACITY}
             />
             <XAxis
-              dataKey="date"
+              dataKey="name"
               tick={AXIS_TICK}
-              tickMargin={8}
-              minTickGap={12}
-              axisLine={false}
               tickLine={false}
+              axisLine={false}
+              tickMargin={8}
             />
             <YAxis
               tick={AXIS_TICK}
               tickFormatter={fmtAxisSAR}
-              axisLine={false}
               tickLine={false}
+              axisLine={false}
               width={52}
               tickMargin={6}
             />
             <Tooltip
               content={<ChartTooltip format={fmtSAR} />}
-              cursor={POINT_CURSOR}
+              cursor={BAR_CURSOR}
               wrapperStyle={TOOLTIP_WRAPPER}
             />
-            <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
-            <Area
-              type="monotone"
-              dataKey="total"
-              name="All"
-              stroke="var(--color-chart-1)"
-              strokeWidth={2}
-              fill="url(#dailyAll)"
-              activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--color-card)" }}
-              {...dailyMotion.area}
-            />
-            <Area
-              type="monotone"
-              dataKey="completed"
-              name="Completed"
-              stroke="var(--positive)"
-              strokeWidth={2}
-              fill="url(#dailyCompleted)"
-              activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--color-card)" }}
-              {...dailyMotion.area}
-            />
-          </AreaChart>
+            <Bar
+              dataKey="sales"
+              name="Completed sales"
+              fill="url(#teamBar)"
+              radius={[6, 6, 0, 0]}
+              {...motion.bar}
+              onMouseEnter={(_, index: number) => setActive(index)}
+            >
+              {data.map((t, i) => {
+                const isActive = active === i;
+                const dimmed = active !== null && !isActive;
+                return (
+                  <Cell
+                    key={t.name}
+                    cursor="pointer"
+                    fillOpacity={dimmed ? 0.35 : 1}
+                    stroke={isActive ? "var(--color-chart-2)" : "transparent"}
+                    strokeWidth={isActive ? 1.5 : 0}
+                    style={{
+                      transition: "opacity 220ms ease, filter 220ms ease, transform 220ms ease",
+                      filter: isActive
+                        ? "brightness(1.12) drop-shadow(0 6px 14px color-mix(in oklab, var(--color-chart-2) 45%, transparent))"
+                        : "none",
+                    }}
+                  />
+                );
+              })}
+            </Bar>
+          </BarChart>
         </ResponsiveContainer>
+      )}
+    </InViewChart>
+  );
+}
+
+function SalesChartsImpl({ data }: { data: SalesChartsData }) {
+  return (
+    <div className="grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
+      <ChartPanel
+        title="Daily sales trend"
+        subtitle="All orders against completed"
+        icon={ChartColumn}
+      >
+        <InViewChart identity={data.dailyData}>
+          {(motion) => (
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={data.dailyData} margin={CHART_MARGIN}>
+                <defs>
+                  <linearGradient id="dailyAll" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--color-chart-1)" stopOpacity={0.35} />
+                    <stop offset="100%" stopColor="var(--color-chart-1)" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="dailyCompleted" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--positive)" stopOpacity={0.4} />
+                    <stop offset="100%" stopColor="var(--positive)" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid
+                  vertical={false}
+                  strokeDasharray="3 3"
+                  stroke={GRID_STROKE}
+                  strokeOpacity={GRID_OPACITY}
+                />
+                <XAxis
+                  dataKey="date"
+                  tick={AXIS_TICK}
+                  tickMargin={8}
+                  minTickGap={12}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <YAxis
+                  tick={AXIS_TICK}
+                  tickFormatter={fmtAxisSAR}
+                  axisLine={false}
+                  tickLine={false}
+                  width={52}
+                  tickMargin={6}
+                />
+                <Tooltip
+                  content={<ChartTooltip format={fmtSAR} />}
+                  cursor={POINT_CURSOR}
+                  wrapperStyle={TOOLTIP_WRAPPER}
+                />
+                <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
+                <Area
+                  type="monotone"
+                  dataKey="total"
+                  name="All"
+                  stroke="var(--color-chart-1)"
+                  strokeWidth={2}
+                  fill="url(#dailyAll)"
+                  activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--color-card)" }}
+                  {...motion.area}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="completed"
+                  name="Completed"
+                  stroke="var(--positive)"
+                  strokeWidth={2}
+                  fill="url(#dailyCompleted)"
+                  activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--color-card)" }}
+                  {...motion.area}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
+        </InViewChart>
       </ChartPanel>
 
       <ChartPanel title="Orders by status" subtitle="Share of orders in the period" icon={ChartPie}>
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
-            <Pie
-              data={data.statusData}
-              dataKey="value"
-              nameKey="name"
-              outerRadius={80}
-              label={PIE_LABEL}
-              // Separates a slice from its neighbour with the card colour rather
-              // than the default black hairline, which is a visible seam on dark.
-              stroke="var(--color-card)"
-              strokeWidth={2}
-              // Recharts defaults a Pie to 1500ms behind a 400ms delay, which is
-              // nearly two seconds of spinning wedge on a page of half-second
-              // panels. The `pie` preset caps BOTH — the delay was the half the
-              // old `motion.bar` spread did not carry, and it left this the one
-              // panel that started after all the others.
-              {...statusMotion.pie}
-            >
-              {data.statusData.map((s, i) => (
-                <Cell key={i} fill={STATUS_COLORS[s.name] ?? COLORS[i % COLORS.length]} />
-              ))}
-            </Pie>
-            <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
-            {/* No heading: a pie tooltip's label and its single row name the same
+        <InViewChart identity={data.statusData}>
+          {(motion) => (
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={data.statusData}
+                  dataKey="value"
+                  nameKey="name"
+                  outerRadius={80}
+                  label={PIE_LABEL}
+                  // Separates a slice from its neighbour with the card colour rather
+                  // than the default black hairline, which is a visible seam on dark.
+                  stroke="var(--color-card)"
+                  strokeWidth={2}
+                  // Recharts defaults a Pie to 1500ms behind a 400ms delay, which is
+                  // nearly two seconds of spinning wedge on a page of half-second
+                  // panels. The `pie` preset caps BOTH — the delay was the half the
+                  // old `motion.bar` spread did not carry, and it left this the one
+                  // panel that started after all the others.
+                  {...motion.pie}
+                >
+                  {data.statusData.map((s, i) => (
+                    <Cell key={i} fill={STATUS_COLORS[s.name] ?? COLORS[i % COLORS.length]} />
+                  ))}
+                </Pie>
+                <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
+                {/* No heading: a pie tooltip's label and its single row name the same
                 slice, so the heading was the word repeated twice. */}
-            <Tooltip content={<ChartTooltip hideLabel />} wrapperStyle={TOOLTIP_WRAPPER} />
-          </PieChart>
-        </ResponsiveContainer>
+                <Tooltip content={<ChartTooltip hideLabel />} wrapperStyle={TOOLTIP_WRAPPER} />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
+        </InViewChart>
       </ChartPanel>
 
       <ChartPanel title="Sales by team" subtitle="Completed sales per team" icon={Users}>

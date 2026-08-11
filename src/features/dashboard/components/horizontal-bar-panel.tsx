@@ -17,7 +17,7 @@ import {
   TOOLTIP_WRAPPER,
 } from "../chart-theme";
 import { fmtAxisSAR } from "../chart-format";
-import { useSettledChartMotion } from "../chart-motion";
+import { useInViewChartMotion } from "../chart-motion";
 import { widestLabel } from "../text-metrics";
 
 /**
@@ -127,7 +127,9 @@ function HorizontalBarPanelImpl({
   stillMotion?: boolean;
 }) {
   const { ref, width } = usePanelWidth();
-  const motion = useSettledChartMotion(data, stillMotion);
+  // The element this panel already measures is the one to watch, so the ranked
+  // charts need no extra wrapper of their own.
+  const motion = useInViewChartMotion(data, ref, stillMotion);
 
   const axisWidth = useMemo(() => {
     const widest = widestLabel(

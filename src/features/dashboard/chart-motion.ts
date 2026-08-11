@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, type RefObject } from "react";
 
 /**
  * Enter animation for the Dashboard's charts, in one place.
@@ -182,19 +182,102 @@ const SETTLE_MS = Math.max(...Object.values(DURATION)) + SETTLE_SLACK_MS;
  * @param identity The data this panel draws. Compared by reference, so it must
  *                 be the memoised array the chart is handed — a fresh literal
  *                 every render would re-arm on every render and defeat this.
+ * @param gate     Whether the panel may animate at all yet. False holds every
+ *                 preset still without starting the settle timer, so a panel
+ *                 that is not on screen keeps its entrance for when it is.
  */
-export function useSettledChartMotion(identity: unknown, forceStill = false): ChartMotionSet {
+export function useSettledChartMotion(
+  identity: unknown,
+  forceStill = false,
+  gate = true,
+): ChartMotionSet {
   const motion = useChartMotion(forceStill);
   const [armed, setArmed] = useState(true);
 
   useEffect(() => {
+    if (!gate) return;
     // Re-arming on mount is a no-op: React bails out of a set to the same value.
     setArmed(true);
     const timer = setTimeout(() => setArmed(false), SETTLE_MS);
     return () => clearTimeout(timer);
-  }, [identity]);
+  }, [identity, gate]);
 
-  return armed ? motion : ALL_STILL;
+  return gate && armed ? motion : ALL_STILL;
+}
+
+/**
+ * Has this element been on screen yet?
+ *
+ * ---------------------------------------------------------------------------
+ * Why the charts needed this
+ * ---------------------------------------------------------------------------
+ * Every panel animated on MOUNT, and the Dashboard is about four screens tall.
+ * So eight of the ten entrances played against a viewport nobody was looking at,
+ * finished long before the reader scrolled down, and the panels they belonged to
+ * were simply *there* when reached — which is why only the top two charts ever
+ * appeared to animate. The motion was not broken; it was spent off-screen.
+ *
+ * It also meant ten simultaneous Recharts animations on first paint, at exactly
+ * the moment the route is still resolving its queries and its lazy chunk.
+ *
+ * ---------------------------------------------------------------------------
+ * Once, and only once
+ * ---------------------------------------------------------------------------
+ * The observer disconnects on the first intersection, so scrolling back up
+ * cannot replay anything and there is no per-element listener left running for
+ * the rest of the session. One observer per panel, no scroll handler anywhere,
+ * and no state written while scrolling past an element that has already fired.
+ *
+ * `rootMargin` starts the entrance slightly before the panel's top edge appears,
+ * so the motion is already underway as it comes into view rather than beginning
+ * after it has arrived. The threshold is deliberately 0: a tall panel scrolled
+ * into view one row at a time should start when its first pixels land, not wait
+ * for a fraction of a chart that may be taller than the viewport.
+ *
+ * Returns true immediately where `IntersectionObserver` is unavailable — a
+ * chart that cannot be observed must animate, never stay frozen.
+ */
+export function useInViewOnce(target: RefObject<HTMLElement | null>): boolean {
+  const [seen, setSeen] = useState(false);
+
+  useEffect(() => {
+    if (seen) return;
+    const el = target.current;
+    if (!el) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setSeen(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setSeen(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "0px 0px -8% 0px", threshold: 0 },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [target, seen]);
+
+  return seen;
+}
+
+/**
+ * The whole lifecycle for one panel: still until seen, one entrance, then stable.
+ *
+ * Bundled because the three parts are only correct together — an observer whose
+ * result does not gate the presets is just a state update, and presets that arm
+ * on mount animate to an empty room.
+ */
+export function useInViewChartMotion(
+  identity: unknown,
+  target: RefObject<HTMLElement | null>,
+  forceStill = false,
+): ChartMotionSet {
+  const seen = useInViewOnce(target);
+  return useSettledChartMotion(identity, forceStill, seen);
 }
 
 /** Test seam — the settle window and the per-series budget. */

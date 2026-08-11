@@ -27,7 +27,7 @@ import {
   legendText,
 } from "../chart-theme";
 import { fmtAxisSAR } from "../chart-format";
-import { useSettledChartMotion } from "../chart-motion";
+import { InViewChart } from "./in-view-chart";
 import { formatCompactSAR, formatCount, formatGrowth } from "../format";
 import type { MonthRow } from "../monthly-growth";
 import { AnalyticsCard } from "./analytics-card";
@@ -125,10 +125,6 @@ function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
 
   const growthData = useMemo(() => data.filter((d) => d.growth != null), [data]);
 
-  // All four panels are built from the same `rows`, so they arm and settle
-  // together — the section reads as one movement rather than four.
-  const motion = useSettledChartMotion(data);
-
   return (
     <div className="grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
       <ChartPanel
@@ -136,68 +132,72 @@ function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
         subtitle="Completed revenue per team, month by month"
         icon={TrendingUp}
       >
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data} margin={CHART_MARGIN}>
-            <CartesianGrid
-              vertical={false}
-              strokeDasharray="3 3"
-              stroke={GRID_STROKE}
-              strokeOpacity={GRID_OPACITY}
-            />
-            <XAxis
-              dataKey="label"
-              tick={AXIS_TICK}
-              tickMargin={8}
-              minTickGap={8}
-              axisLine={false}
-              tickLine={false}
-            />
-            <YAxis
-              tick={AXIS_TICK}
-              tickFormatter={fmtAxisSAR}
-              axisLine={false}
-              tickLine={false}
-              width={52}
-              tickMargin={6}
-            />
-            <Tooltip
-              content={<ChartTooltip format={fmtTooltipSAR} footerKey="note" />}
-              cursor={POINT_CURSOR}
-              wrapperStyle={TOOLTIP_WRAPPER}
-            />
-            <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
-            {/* Dots small and unfilled-looking at rest, decisive on hover. A
-                3px dot at every month on two series is fourteen marks competing
-                with the two lines they belong to; the reader wants the shape,
-                and the exact point only where the pointer is. `activeDot` takes
-                a card-coloured ring so it reads as lifted off the line. */}
-            <Line
-              type="monotone"
-              dataKey="careRevenue"
-              name="Customer Care"
-              stroke="var(--color-chart-1)"
-              strokeWidth={2}
-              dot={{ r: 2, strokeWidth: 0, fill: "var(--color-chart-1)" }}
-              activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--color-card)" }}
-              connectNulls={false}
-              {...motion.line}
-            />
-            <Line
-              type="monotone"
-              dataKey="telesalesRevenue"
-              name="Telesales"
-              stroke="var(--color-chart-3)"
-              strokeWidth={2}
-              dot={{ r: 2, strokeWidth: 0, fill: "var(--color-chart-3)" }}
-              activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--color-card)" }}
-              // Off deliberately: Feb and Mar have no Telesales, and joining
-              // March to April would draw a line through months the team did
-              // not exist for.
-              connectNulls={false}
-              {...motion.line}
-            />
-          </LineChart>
-        </ResponsiveContainer>
+        <InViewChart identity={data}>
+          {(motion) => (
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={data} margin={CHART_MARGIN}>
+                <CartesianGrid
+                  vertical={false}
+                  strokeDasharray="3 3"
+                  stroke={GRID_STROKE}
+                  strokeOpacity={GRID_OPACITY}
+                />
+                <XAxis
+                  dataKey="label"
+                  tick={AXIS_TICK}
+                  tickMargin={8}
+                  minTickGap={8}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <YAxis
+                  tick={AXIS_TICK}
+                  tickFormatter={fmtAxisSAR}
+                  axisLine={false}
+                  tickLine={false}
+                  width={52}
+                  tickMargin={6}
+                />
+                <Tooltip
+                  content={<ChartTooltip format={fmtTooltipSAR} footerKey="note" />}
+                  cursor={POINT_CURSOR}
+                  wrapperStyle={TOOLTIP_WRAPPER}
+                />
+                <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
+                {/* Dots small and unfilled-looking at rest, decisive on hover. A
+                  3px dot at every month on two series is fourteen marks competing
+                  with the two lines they belong to; the reader wants the shape,
+                  and the exact point only where the pointer is. `activeDot` takes
+                  a card-coloured ring so it reads as lifted off the line. */}
+                <Line
+                  type="monotone"
+                  dataKey="careRevenue"
+                  name="Customer Care"
+                  stroke="var(--color-chart-1)"
+                  strokeWidth={2}
+                  dot={{ r: 2, strokeWidth: 0, fill: "var(--color-chart-1)" }}
+                  activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--color-card)" }}
+                  connectNulls={false}
+                  {...motion.line}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="telesalesRevenue"
+                  name="Telesales"
+                  stroke="var(--color-chart-3)"
+                  strokeWidth={2}
+                  dot={{ r: 2, strokeWidth: 0, fill: "var(--color-chart-3)" }}
+                  activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--color-card)" }}
+                  // Off deliberately: Feb and Mar have no Telesales, and joining
+                  // March to April would draw a line through months the team did
+                  // not exist for.
+                  connectNulls={false}
+                  {...motion.line}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </InViewChart>
       </ChartPanel>
 
       <ChartPanel
@@ -205,68 +205,72 @@ function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
         subtitle="Cash against Wasfaty, both teams combined"
         icon={Layers}
       >
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} margin={CHART_MARGIN} maxBarSize={44} barCategoryGap="24%">
-            <CartesianGrid
-              vertical={false}
-              strokeDasharray="3 3"
-              stroke={GRID_STROKE}
-              strokeOpacity={GRID_OPACITY}
-            />
-            <XAxis
-              dataKey="label"
-              tick={AXIS_TICK}
-              tickMargin={8}
-              minTickGap={8}
-              axisLine={false}
-              tickLine={false}
-            />
-            <YAxis
-              tick={AXIS_TICK}
-              tickFormatter={fmtAxisSAR}
-              axisLine={false}
-              tickLine={false}
-              width={52}
-              tickMargin={6}
-            />
-            <Tooltip
-              content={<ChartTooltip format={fmtTooltipSAR} footerKey="note" />}
-              cursor={BAR_CURSOR}
-              wrapperStyle={TOOLTIP_WRAPPER}
-            />
-            <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
-            <Bar
-              dataKey="cash"
-              name="Cash"
-              stackId="mix"
-              fill="var(--color-chart-4)"
-              {...motion.bar}
-            >
-              {data.map((d) => (
-                <Cell key={d.label} fillOpacity={d.partial ? PARTIAL_OPACITY : 1} />
-              ))}
-            </Bar>
-            {/* Cash and Wasfaty are the only order types there are
-                (`ORDER_TYPES`), so the mix is the whole of the mix. Where a
-                historical month's stated total exceeds its two channels, the
-                total stays authoritative everywhere it is reported and the
-                difference is simply not a segment — a bar labelled with a
-                category the business does not have is worse than a bar that is
-                marginally shorter than the total beside it. */}
-            <Bar
-              dataKey="wasfaty"
-              name="Wasfaty"
-              stackId="mix"
-              fill="var(--color-chart-1)"
-              radius={[6, 6, 0, 0]}
-              {...motion.bar}
-            >
-              {data.map((d) => (
-                <Cell key={d.label} fillOpacity={d.partial ? PARTIAL_OPACITY : 1} />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
+        <InViewChart identity={data}>
+          {(motion) => (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={data} margin={CHART_MARGIN} maxBarSize={44} barCategoryGap="24%">
+                <CartesianGrid
+                  vertical={false}
+                  strokeDasharray="3 3"
+                  stroke={GRID_STROKE}
+                  strokeOpacity={GRID_OPACITY}
+                />
+                <XAxis
+                  dataKey="label"
+                  tick={AXIS_TICK}
+                  tickMargin={8}
+                  minTickGap={8}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <YAxis
+                  tick={AXIS_TICK}
+                  tickFormatter={fmtAxisSAR}
+                  axisLine={false}
+                  tickLine={false}
+                  width={52}
+                  tickMargin={6}
+                />
+                <Tooltip
+                  content={<ChartTooltip format={fmtTooltipSAR} footerKey="note" />}
+                  cursor={BAR_CURSOR}
+                  wrapperStyle={TOOLTIP_WRAPPER}
+                />
+                <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
+                <Bar
+                  dataKey="cash"
+                  name="Cash"
+                  stackId="mix"
+                  fill="var(--color-chart-4)"
+                  {...motion.bar}
+                >
+                  {data.map((d) => (
+                    <Cell key={d.label} fillOpacity={d.partial ? PARTIAL_OPACITY : 1} />
+                  ))}
+                </Bar>
+                {/* Cash and Wasfaty are the only order types there are
+                  (`ORDER_TYPES`), so the mix is the whole of the mix. Where a
+                  historical month's stated total exceeds its two channels, the
+                  total stays authoritative everywhere it is reported and the
+                  difference is simply not a segment — a bar labelled with a
+                  category the business does not have is worse than a bar that is
+                  marginally shorter than the total beside it. */}
+                <Bar
+                  dataKey="wasfaty"
+                  name="Wasfaty"
+                  stackId="mix"
+                  fill="var(--color-chart-1)"
+                  radius={[6, 6, 0, 0]}
+                  {...motion.bar}
+                >
+                  {data.map((d) => (
+                    <Cell key={d.label} fillOpacity={d.partial ? PARTIAL_OPACITY : 1} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </InViewChart>
       </ChartPanel>
 
       <ChartPanel
@@ -274,64 +278,68 @@ function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
         subtitle="Combined completed revenue against the previous month"
         icon={ChartColumnIncreasing}
       >
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={growthData} margin={CHART_MARGIN} maxBarSize={48}>
-            <CartesianGrid
-              vertical={false}
-              strokeDasharray="3 3"
-              stroke={GRID_STROKE}
-              strokeOpacity={GRID_OPACITY}
-            />
-            <XAxis
-              dataKey="label"
-              tick={AXIS_TICK}
-              tickMargin={8}
-              minTickGap={8}
-              axisLine={false}
-              tickLine={false}
-            />
-            <YAxis
-              tick={AXIS_TICK}
-              tickFormatter={fmtAxisPct}
-              axisLine={false}
-              tickLine={false}
-              width={48}
-              tickMargin={6}
-            />
-            <Tooltip
-              content={<ChartTooltip format={fmtTooltipPct} footerKey="growthNote" />}
-              cursor={BAR_CURSOR}
-              wrapperStyle={TOOLTIP_WRAPPER}
-            />
-            {/* The zero line is the whole point of this panel: it is what makes
-                a bar below it read as a contraction rather than as a short bar. */}
-            <ReferenceLine y={0} stroke={GRID_STROKE} strokeOpacity={0.9} />
-            <Bar dataKey="growth" name="Revenue growth" radius={[4, 4, 0, 0]} {...motion.bar}>
-              {growthData.map((d) => (
-                <Cell
-                  key={d.label}
-                  fill={(d.growth ?? 0) >= 0 ? "var(--positive)" : "var(--negative)"}
-                  /* A month still running is being compared with a whole one,
-                     so its bar is the one figure on this panel that is not yet
-                     a fact. Drawn back and outlined rather than omitted: the
-                     month is genuinely there, it is just not finished, and the
-                     tooltip says so in words for anyone who cannot see the
-                     difference in tone. */
-                  fillOpacity={d.partial ? PARTIAL_OPACITY : 1}
-                  stroke={
-                    d.partial
-                      ? (d.growth ?? 0) >= 0
-                        ? "var(--positive)"
-                        : "var(--negative)"
-                      : undefined
-                  }
-                  strokeWidth={d.partial ? 1 : 0}
-                  strokeDasharray={d.partial ? "3 2" : undefined}
+        <InViewChart identity={growthData}>
+          {(motion) => (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={growthData} margin={CHART_MARGIN} maxBarSize={48}>
+                <CartesianGrid
+                  vertical={false}
+                  strokeDasharray="3 3"
+                  stroke={GRID_STROKE}
+                  strokeOpacity={GRID_OPACITY}
                 />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
+                <XAxis
+                  dataKey="label"
+                  tick={AXIS_TICK}
+                  tickMargin={8}
+                  minTickGap={8}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <YAxis
+                  tick={AXIS_TICK}
+                  tickFormatter={fmtAxisPct}
+                  axisLine={false}
+                  tickLine={false}
+                  width={48}
+                  tickMargin={6}
+                />
+                <Tooltip
+                  content={<ChartTooltip format={fmtTooltipPct} footerKey="growthNote" />}
+                  cursor={BAR_CURSOR}
+                  wrapperStyle={TOOLTIP_WRAPPER}
+                />
+                {/* The zero line is the whole point of this panel: it is what makes
+                  a bar below it read as a contraction rather than as a short bar. */}
+                <ReferenceLine y={0} stroke={GRID_STROKE} strokeOpacity={0.9} />
+                <Bar dataKey="growth" name="Revenue growth" radius={[4, 4, 0, 0]} {...motion.bar}>
+                  {growthData.map((d) => (
+                    <Cell
+                      key={d.label}
+                      fill={(d.growth ?? 0) >= 0 ? "var(--positive)" : "var(--negative)"}
+                      /* A month still running is being compared with a whole one,
+                       so its bar is the one figure on this panel that is not yet
+                       a fact. Drawn back and outlined rather than omitted: the
+                       month is genuinely there, it is just not finished, and the
+                       tooltip says so in words for anyone who cannot see the
+                       difference in tone. */
+                      fillOpacity={d.partial ? PARTIAL_OPACITY : 1}
+                      stroke={
+                        d.partial
+                          ? (d.growth ?? 0) >= 0
+                            ? "var(--positive)"
+                            : "var(--negative)"
+                          : undefined
+                      }
+                      strokeWidth={d.partial ? 1 : 0}
+                      strokeDasharray={d.partial ? "3 2" : undefined}
+                    />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </InViewChart>
       </ChartPanel>
 
       <ChartPanel
@@ -339,69 +347,73 @@ function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
         subtitle="Completed orders per team, month by month"
         icon={Coins}
       >
-        <ResponsiveContainer width="100%" height="100%">
-          {/* `barGap` pairs the two teams within a month and `barCategoryGap`
-              separates the months, so the eye compares the pair before it
-              compares the row — which is the question the panel is asked. */}
-          <BarChart
-            data={data}
-            margin={CHART_MARGIN}
-            maxBarSize={26}
-            barGap={3}
-            barCategoryGap="26%"
-          >
-            <CartesianGrid
-              vertical={false}
-              strokeDasharray="3 3"
-              stroke={GRID_STROKE}
-              strokeOpacity={GRID_OPACITY}
-            />
-            <XAxis
-              dataKey="label"
-              tick={AXIS_TICK}
-              tickMargin={8}
-              minTickGap={8}
-              axisLine={false}
-              tickLine={false}
-            />
-            <YAxis
-              tick={AXIS_TICK}
-              tickFormatter={fmtAxisCount}
-              axisLine={false}
-              tickLine={false}
-              width={48}
-              tickMargin={6}
-            />
-            <Tooltip
-              content={<ChartTooltip format={fmtTooltipCount} unit="orders" footerKey="note" />}
-              cursor={BAR_CURSOR}
-              wrapperStyle={TOOLTIP_WRAPPER}
-            />
-            <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
-            <Bar
-              dataKey="careOrders"
-              name="Customer Care"
-              fill="var(--color-chart-2)"
-              radius={[4, 4, 0, 0]}
-              {...motion.bar}
-            >
-              {data.map((d) => (
-                <Cell key={d.label} fillOpacity={d.partial ? PARTIAL_OPACITY : 1} />
-              ))}
-            </Bar>
-            <Bar
-              dataKey="telesalesOrders"
-              name="Telesales"
-              fill="var(--color-chart-5)"
-              radius={[4, 4, 0, 0]}
-              {...motion.bar}
-            >
-              {data.map((d) => (
-                <Cell key={d.label} fillOpacity={d.partial ? PARTIAL_OPACITY : 1} />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
+        <InViewChart identity={data}>
+          {(motion) => (
+            <ResponsiveContainer width="100%" height="100%">
+              {/* `barGap` pairs the two teams within a month and `barCategoryGap`
+                separates the months, so the eye compares the pair before it
+                compares the row — which is the question the panel is asked. */}
+              <BarChart
+                data={data}
+                margin={CHART_MARGIN}
+                maxBarSize={26}
+                barGap={3}
+                barCategoryGap="26%"
+              >
+                <CartesianGrid
+                  vertical={false}
+                  strokeDasharray="3 3"
+                  stroke={GRID_STROKE}
+                  strokeOpacity={GRID_OPACITY}
+                />
+                <XAxis
+                  dataKey="label"
+                  tick={AXIS_TICK}
+                  tickMargin={8}
+                  minTickGap={8}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <YAxis
+                  tick={AXIS_TICK}
+                  tickFormatter={fmtAxisCount}
+                  axisLine={false}
+                  tickLine={false}
+                  width={48}
+                  tickMargin={6}
+                />
+                <Tooltip
+                  content={<ChartTooltip format={fmtTooltipCount} unit="orders" footerKey="note" />}
+                  cursor={BAR_CURSOR}
+                  wrapperStyle={TOOLTIP_WRAPPER}
+                />
+                <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
+                <Bar
+                  dataKey="careOrders"
+                  name="Customer Care"
+                  fill="var(--color-chart-2)"
+                  radius={[4, 4, 0, 0]}
+                  {...motion.bar}
+                >
+                  {data.map((d) => (
+                    <Cell key={d.label} fillOpacity={d.partial ? PARTIAL_OPACITY : 1} />
+                  ))}
+                </Bar>
+                <Bar
+                  dataKey="telesalesOrders"
+                  name="Telesales"
+                  fill="var(--color-chart-5)"
+                  radius={[4, 4, 0, 0]}
+                  {...motion.bar}
+                >
+                  {data.map((d) => (
+                    <Cell key={d.label} fillOpacity={d.partial ? PARTIAL_OPACITY : 1} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </InViewChart>
       </ChartPanel>
     </div>
   );
