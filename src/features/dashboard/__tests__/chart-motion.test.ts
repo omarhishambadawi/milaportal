@@ -29,20 +29,43 @@ describe("buildChartMotion", () => {
     }
   });
 
-  it("keeps every duration inside the 500-800ms band", () => {
-    // Below ~500ms the motion is a flicker rather than a direction; past ~800ms
-    // it stops being information and becomes a wait.
+  it("keeps every duration inside the 900-1200ms band", () => {
+    // Each panel now waits for the reader to scroll to it, so the entrance is
+    // the first thing they look at rather than something between them and the
+    // numbers. Below ~900ms it was over before the eye had settled; past
+    // ~1200ms it would stop being motion and become a wait.
     for (const key of SERIES) {
-      expect(moving[key].animationDuration, `${key} duration`).toBeGreaterThanOrEqual(500);
-      expect(moving[key].animationDuration, `${key} duration`).toBeLessThanOrEqual(800);
+      expect(moving[key].animationDuration, `${key} duration`).toBeGreaterThanOrEqual(900);
+      expect(moving[key].animationDuration, `${key} duration`).toBeLessThanOrEqual(1200);
     }
   });
 
-  it("eases out everywhere — no bounce, no spring, one curve", () => {
+  it("shares ONE easing curve, and one that decelerates into rest", () => {
+    // A single curve across every panel is what makes ten charts read as one
+    // system. It must also be asymmetric: react-smooth's own 'ease-out' is
+    // cubic-bezier(0.42, 0, 0.58, 1) — the same easing at both ends, so it
+    // arrives with speed still on it, which is what read as abrupt.
+    const curve = moving.line.animationEasing;
+    expect(curve).toBe("cubic-bezier(0.4, 0, 0.2, 1)");
     for (const key of SERIES) {
-      expect(moving[key].animationEasing).toBe("ease-out");
+      expect(moving[key].animationEasing, `${key} easing`).toBe(curve);
       expect(moving[key].isAnimationActive).toBe(true);
     }
+  });
+
+  it("spends most of the curve decelerating, and never overshoots", () => {
+    // y2 = 1 pins the curve to its endpoint, so nothing overshoots or bounces;
+    // x2 < 0.5 puts the bulk of the time in the tail rather than the attack.
+    const [x1, y1, x2, y2] = (moving.bar.animationEasing as string)
+      .replace(/cubic-bezier\(|\)/g, "")
+      .split(",")
+      .map((n) => Number(n));
+    expect(y2).toBe(1);
+    expect(x2).toBeLessThan(0.5);
+    expect(y1).toBe(0);
+    expect(x1).toBeGreaterThan(0);
+    for (const n of [x1, y1, x2, y2]) expect(n).toBeGreaterThanOrEqual(0);
+    for (const n of [x1, y1, x2, y2]) expect(n).toBeLessThanOrEqual(1);
   });
 
   it("goes completely still for prefers-reduced-motion", () => {
@@ -51,7 +74,7 @@ describe("buildChartMotion", () => {
       expect(reduced[key]).toEqual<ChartMotion>({
         isAnimationActive: false,
         animationDuration: 0,
-        animationEasing: "ease-out",
+        animationEasing: moving[key].animationEasing,
         animationBegin: 0,
       });
     }
@@ -84,6 +107,6 @@ describe("settle window", () => {
   });
 
   it("still settles promptly — the arm window is not a second animation budget", () => {
-    expect(__motionTiming.SETTLE_MS).toBeLessThanOrEqual(1200);
+    expect(__motionTiming.SETTLE_MS).toBeLessThanOrEqual(1800);
   });
 });

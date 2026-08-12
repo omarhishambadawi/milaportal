@@ -52,11 +52,38 @@ export function usePrefersReducedMotion(): boolean {
   return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
 
+/**
+ * The one easing curve every Dashboard series shares.
+ *
+ * `cubic-bezier(0.4, 0, 0.2, 1)` — eases gently out of rest, reaches speed
+ * early, then spends most of its time decelerating into the final value. That
+ * long tail is what reads as "settling" rather than "stopping", and the soft
+ * start is what stops a longer duration feeling like a lurch.
+ *
+ * Not one of react-smooth's named curves, deliberately. Its `'ease-out'` is
+ * `cubic-bezier(0.42, 0, 0.58, 1)` — symmetric, and the same amount of easing at
+ * both ends, so it decelerates no harder than it accelerates and arrives with
+ * speed still on it. That is the abruptness; the fix is the curve, not only the
+ * duration.
+ *
+ * Named curves and `cubic-bezier(...)` strings take the same path through
+ * react-smooth's `configEasing` (a bezier string is matched explicitly, ahead of
+ * the warning branch), so this costs nothing and logs nothing.
+ */
+const EASING = "cubic-bezier(0.4, 0, 0.2, 1)";
+
+/**
+ * Recharts types `animationEasing` as its five named curves, but react-smooth —
+ * which is what actually consumes the value — accepts a bezier string too. The
+ * cast is confined to this one line so no call site has to know.
+ */
+const CHART_EASING = EASING as unknown as ChartMotion["animationEasing"];
+
 /** Recharts animation props, ready to spread onto a series. */
 export interface ChartMotion {
   isAnimationActive: boolean;
   animationDuration: number;
-  animationEasing: "ease-out";
+  animationEasing: "ease" | "ease-in" | "ease-out" | "ease-in-out" | "linear";
   /**
    * Always zero, and stated rather than left to the default.
    *
@@ -73,20 +100,33 @@ export interface ChartMotion {
 /**
  * Per-series-type durations.
  *
- * A line has further to travel than a bar and reads better slightly slower; a
- * stacked bar is the shortest because two segments animating in sequence would
- * otherwise add up. A pie sweeps its slices round rather than up, which reads
- * slower at the same duration, so it sits between the two.
+ * The whole set was previously 550-700ms, which is the right budget for motion
+ * that fires on page load and must not delay reading. Once each panel waits for
+ * the reader to scroll to it, that constraint is gone: the entrance is the first
+ * thing they look at rather than something between them and the numbers, and at
+ * half a second it was over before the eye had settled on the card.
+ *
+ * So the band moves to 900-1200ms. The ordering is unchanged and for the same
+ * reasons: a line travels furthest and carries the slowest read; a pie sweeps
+ * round rather than up, which reads slower than it measures; a stacked bar is
+ * shortest because its segments animate in sequence and would otherwise add up.
  */
-const DURATION = { line: 700, area: 600, bar: 550, pie: 600 } as const;
+const DURATION = { line: 1200, area: 1100, bar: 950, pie: 1000 } as const;
 
-/** How long after the entrance to keep animation armed before settling. */
-const SETTLE_SLACK_MS = 200;
+/**
+ * How long after the entrance to keep animation armed before settling.
+ *
+ * Scales with the animation rather than staying at the old flat 200ms: the flip
+ * to static must land after the slowest series has finished, or it would snap a
+ * still-drawing chart to its final size — the exact glitch the settle exists to
+ * prevent.
+ */
+const SETTLE_SLACK_MS = 300;
 
 const STILL: ChartMotion = {
   isAnimationActive: false,
   animationDuration: 0,
-  animationEasing: "ease-out",
+  animationEasing: CHART_EASING,
   animationBegin: 0,
 };
 
@@ -112,7 +152,7 @@ export function buildChartMotion(reduced: boolean, forceStill: boolean): ChartMo
   const moving = (duration: number): ChartMotion => ({
     isAnimationActive: true,
     animationDuration: duration,
-    animationEasing: "ease-out",
+    animationEasing: CHART_EASING,
     animationBegin: 0,
   });
   return {
