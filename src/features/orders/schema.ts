@@ -16,4 +16,13 @@ export const orderFormSchema = z.object({
   ),
   notes: z.string().max(500).optional().nullable(),
   status: z.string().min(1),
+  /**
+   * Who the order belongs to.
+   *
+   * Optional because only the assignment control sets it, and only in edit mode:
+   * on insert, RLS requires `auth.uid() = agent_id`, so a new order is always
+   * the creator's. `prevent_order_reassignment` is what allows it to move later,
+   * and only for callers holding `edit_all_orders`.
+   */
+  agent_id: z.string().uuid().optional(),
 });

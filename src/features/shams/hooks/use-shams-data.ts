@@ -267,6 +267,39 @@ export function useInvoiceStock(lookup: InvoiceLookup | null, enabled = true) {
 }
 
 /**
+ * Several documents at one branch, each with its lines' availability.
+ *
+ * An order can carry more than one invoice number, so this is the shape the
+ * Orders panel actually needs. One query per number rather than one request per
+ * number: the keys are the same ones `useInvoiceStock` uses, so a number
+ * already resolved anywhere in the session is served from cache, and the server
+ * reads the same document and stock caches underneath.
+ *
+ * `useQueries` rather than a loop of `useInvoiceStock`, because the count is
+ * data — an order may have one invoice or four — and hooks cannot be called in
+ * a loop.
+ */
+export function useInvoiceStockMany(lookups: readonly InvoiceLookup[], enabled = true) {
+  const invoiceStockFn = useServerFn(shamsGetInvoiceStock);
+
+  return useQueries({
+    queries: lookups.map((lookup) => {
+      const branchCode = lookup.branchCode;
+      const docNo = stripLeadingZeros(lookup.docNo);
+      return {
+        queryKey: queryKeys.shams.invoiceStock(branchCode, docNo),
+        queryFn: ({ signal }: { signal: AbortSignal }) =>
+          invoiceStockFn({ data: { branchCode, docNo }, signal }),
+        enabled: enabled && Boolean(branchCode && docNo),
+        staleTime: STOCK_STALE_MS,
+        refetchOnWindowFocus: false,
+        retry: false,
+      };
+    }),
+  });
+}
+
+/**
  * Invoice lookup, only ever for a submitted pair.
  *
  * No date filter is offered: discovery marked the API's date parameters

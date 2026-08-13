@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { useAuth } from "@/lib/auth";
+import { isAdministrator, useAuth } from "@/lib/auth";
 import { toast } from "sonner";
 import { hasPerm } from "@/lib/permissions";
 import { queryKeys } from "@/lib/query-keys";
+import { useAgentDirectory } from "@/lib/directory";
 import { orderFormSchema } from "../schema";
 import { defaultTeam, parseInvoiceNumbers } from "../utils";
+import { useOrderInvoices } from "./use-order-invoices";
 
 /**
  * All state, data and side-effects for the order create/edit form.
@@ -48,7 +50,7 @@ export function useOrderForm(mode: "create" | "edit") {
 
   const [form, setForm] = useState({
     order_date: new Date().toISOString().slice(0, 10),
-    team: defaultTeam(role),
+    team: defaultTeam(role) as string,
     order_type: "Cash",
     customer_name: "",
     customer_phone: "",
@@ -57,6 +59,8 @@ export function useOrderForm(mode: "create" | "edit") {
     invoice_value: "",
     notes: "",
     status: "Pending",
+    /** Empty until an existing order loads; a new order is always the creator's. */
+    agent_id: "" as string,
   });
   const [invoices, setInvoices] = useState<string[]>([""]);
   const [busy, setBusy] = useState(false);
@@ -76,6 +80,15 @@ export function useOrderForm(mode: "create" | "edit") {
    * server re-checks it on every call; this only decides whether to ask.
    */
   const canViewShams = hasPerm(role, profile?.permissions as any, "view_shams_mis");
+  /**
+   * Who may move an order to another agent.
+   *
+   * Owner and Admin, per `isAdministrator`. Deliberately narrower than the
+   * database rule — `prevent_order_reassignment` permits any `edit_all_orders`
+   * holder, which includes Supervisor — so this control can never offer an
+   * ability the database would refuse, and the wider DB rule is left as it was.
+   */
+  const canAssign = isAdministrator(role);
   const isOwner = !!existing && !!user && existing.agent_id === user.id;
   const canEditThis = mode === "create" ? canCreate : canEditAll || (isOwner && canEditOwn);
   const readOnly = mode === "edit" && !canEditThis;
@@ -97,6 +110,7 @@ export function useOrderForm(mode: "create" | "edit") {
         invoice_value: existing.invoice_value?.toString() ?? "",
         notes: existing.notes ?? "",
         status: existing.status,
+        agent_id: existing.agent_id ?? "",
       });
       const parts = parseInvoiceNumbers(existing.invoice_no);
       setInvoices(parts.length > 0 ? parts : [""]);
@@ -111,6 +125,29 @@ export function useOrderForm(mode: "create" | "edit") {
     () => (b: string | null) => branches?.find((x) => x.branch_no === b)?.city ?? "",
     [branches],
   );
+
+  /**
+   * The shared agent directory, for the assignment control.
+   *
+   * The same hook and key the Orders list and the Dashboard read, so opening a
+   * form costs no extra fetch. Non-administrators still load it — it is what
+   * resolves the assigned agent's *name* for the read-only display.
+   */
+  const { data: agents } = useAgentDirectory();
+
+  /**
+   * The order's invoices in Shams: state, totals, and the automatic recording.
+   *
+   * Edit mode only and gated on `view_shams_mis`, so an agent without Shams
+   * access issues no request. Driven by the **stored** `invoice_no` rather than
+   * the inputs, because a half-typed number is not yet a fact about the order.
+   */
+  const shamsInvoices = useOrderInvoices({
+    orderId: id,
+    invoiceNo: existing?.invoice_no,
+    branchNo: existing?.branch_no,
+    enabled: mode === "edit" && canViewShams && !!existing,
+  });
 
   const invoicesJoined = invoices
     .map((s) => s.trim())
@@ -134,11 +171,19 @@ export function useOrderForm(mode: "create" | "edit") {
         invoice_no: invoicesJoined || null,
         notes: form.notes || null,
         status: mode === "create" ? "Pending" : form.status,
+        // Only sent when this caller may actually reassign; everyone else's
+        // update leaves `agent_id` out entirely rather than writing back the
+        // value it happens to be holding.
+        agent_id: mode === "edit" && canAssign && form.agent_id ? form.agent_id : undefined,
       });
       if (mode === "create") {
+        // Always the creator's: the INSERT policy requires `auth.uid() =
+        // agent_id`, so a new order cannot be filed under someone else. An
+        // administrator who needs it elsewhere reassigns it after saving.
+        const { agent_id: _ignored, ...insertable } = parsed;
         const { error } = await supabase
           .from("orders")
-          .insert({ ...parsed, agent_id: user.id } as any);
+          .insert({ ...insertable, agent_id: user.id } as any);
         if (error) throw error;
         toast.success("Order saved");
       } else {
@@ -190,6 +235,7 @@ export function useOrderForm(mode: "create" | "edit") {
   return {
     navigate,
     id,
+    userId: user?.id,
     branches,
     existing,
     form,
@@ -205,9 +251,13 @@ export function useOrderForm(mode: "create" | "edit") {
     canEditAll,
     canDelete,
     canViewShams,
+    canAssign,
     canEditThis,
     readOnly,
     submit,
     del,
+    // assignment + Shams
+    agents,
+    shamsInvoices,
   };
 }

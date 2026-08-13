@@ -2658,6 +2658,82 @@ it would put a round trip between the browser and something the server knew.
 invoice lookup is confined to its own panel row — the order form itself never
 depends on Shams.
 
+#### Invoice availability is asynchronous
+
+**The rule the whole feature is built around: a document does not appear in the
+MIS when the order is taken.** It can land an hour or two later. So a lookup
+that comes back empty is `pending`, never "no such invoice" — the order stays
+valid, nothing is marked failed, and when the document appears it attaches
+itself to the *existing* order. Nothing has to be recreated.
+
+`features/orders/invoice-verification.ts` (pure) holds the state model. Three
+states, and the distinction between the last two is the point: `verified` (Shams
+returned the document), `pending` (Shams answered, and has nothing yet),
+`unavailable` (Shams could not be reached — temporary by assumption, and
+deliberately not the same word as pending).
+
+`useOrderInvoices` resolves the order's numbers on open and on the panel's
+**Check again**. There is no polling: React Query's 60 s window plus the server's
+document and stock caches absorb repeats, and a 137-branch sweep is never run
+from here — the order names a branch and one request asks it. An order with no
+branch stays pending rather than triggering a sweep on page open.
+
+#### One order, many invoices
+
+`orders.invoice_no` holds one *or many* numbers, so nothing models "the"
+invoice. Identity is the number with leading zeros stripped (`invoiceKey`,
+matching `stripLeadingZeros` and the SQL's `ltrim(…, '0')`), which is what stops
+`022138` and `22138` counting as two documents. **Order value is the sum of the
+distinct verified totals** — never the first found, never a guess for a pending
+one. While any invoice is outstanding the panel labels the figure "Verified so
+far — n of m"; the field on the form carries a *Verified* badge only while it
+still equals that sum, so an agent who types over it is not told a number is
+verified when it is not.
+
+#### Automatic verification — `record_invoice_verification`
+
+One SECURITY DEFINER function (`20260814140000`) does three things atomically
+when Shams returns a document the order's timeline does not yet record: writes an
+`invoice_verified` activity row, sets `orders.invoice_value` to the recomputed
+verified total, and sets `call_center_verified`.
+
+It exists because **`order_activity` has no INSERT policy** — 20260624110517
+dropped it deliberately, so the table is written only by SECURITY DEFINER code —
+and because the three writes have to agree. Idempotence lives in the database,
+not the client: the guard is `CONTINUE WHEN EXISTS (… details->>'invoice_key' =
+key)`, and the total is recomputed from the log rather than accumulated, so a
+repeated call cannot inflate it. `is_active` + the UPDATE policy's own predicate
++ `view_shams_mis` are re-checked inside, since RLS does not run for a definer
+function. The flag is only ever **set**: a later MIS outage cannot un-verify an
+order.
+
+The Call Center checkbox is checked only when Shams actually returned a
+document — never because a number was typed, a lookup ran, one failed, or the
+order exists. `invoicesToRecord` filters to `verified` alone, and the client skips
+the call entirely when the timeline already holds every key.
+
+The timeline therefore reads as the real sequence — `invoice_verified` (number,
+branch, total, customer, `automated: true`, source), then the `edited` and
+`verification_changed` rows the orders trigger raises on the back of the same
+update. Machine-written rows are attributed to **MilaPortal**, not to whoever had
+the order open.
+
+#### Order form — assignment
+
+The **Team** selector is gone. It asked the question backwards: an order belongs
+to a person and the team is a fact about that person, so choosing "Telesales"
+and then a Customer Care agent was possible and filed the order under a team its
+agent is not in. `OrderAssignment` picks the **agent**, and `teamForAgent` reads
+the team off their `user_roles.role` — the same enum `orders.team` takes, so
+there is nothing to map.
+
+Owner and Admin only (`isAdministrator`), and edit-mode only: the INSERT policy
+requires `auth.uid() = agent_id`, so a new order is always the creator's and an
+administrator reassigns it after saving. The control is deliberately **narrower**
+than `prevent_order_reassignment`, which permits any `edit_all_orders` holder
+(including Supervisor) — a UI gate can never grant what the database refuses, and
+the database rule is unchanged.
+
 #### Wildcard product search
 
 `*` means "anything in between": `mou*n*j*2.5` finds Mounjaro 2.5,

@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/command";
 import {
   ArrowLeft,
+  BadgeCheck,
   Check,
   ChevronsUpDown,
   ClipboardList,
@@ -31,12 +32,14 @@ import {
   Store,
   Trash2,
   User,
+  UserCog,
   X,
 } from "lucide-react";
-import { ORDER_TYPES, DELIVERY_TYPES, TEAMS, CURRENCY, formatOrderNo } from "@/lib/branches";
+import { ORDER_TYPES, DELIVERY_TYPES, CURRENCY, formatOrderNo } from "@/lib/branches";
 import { cn } from "@/lib/utils";
 import { useOrderForm } from "@/features/orders/hooks/use-order-form";
 import { OrderActivityTimeline } from "@/features/orders/components/order-activity-timeline";
+import { OrderAssignment } from "@/features/orders/components/order-assignment";
 import { OrderInvoicePanel } from "@/features/orders/components/order-invoice-panel";
 import { BranchPreviewPanel } from "@/features/branches/components/branch-preview-panel";
 
@@ -157,9 +160,12 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
     cityFor,
     canView,
     canCreate,
-    canEditAll,
     canDelete,
     canViewShams,
+    canAssign,
+    userId,
+    agents,
+    shamsInvoices,
     readOnly,
     submit,
     del,
@@ -185,12 +191,28 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
     );
   }
 
+  /**
+   * Whether the value in the box is the one Shams verified.
+   *
+   * Compared against the field rather than assumed from the presence of a
+   * verified invoice: an agent who has since typed over it should not be told
+   * the number on screen is verified when it is not.
+   */
+  const valueIsVerified =
+    shamsInvoices.verified.length > 0 && Number(form.invoice_value) === shamsInvoices.verifiedTotal;
+
   const orderNo = formatOrderNo(existing?.team, existing?.display_no);
   const heading =
     mode === "create" ? "New order" : `${readOnly ? "View" : "Edit"} order ${orderNo}`;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5">
+    // Wider than the form alone needs. The page now carries the invoice
+    // findings and the timeline underneath it, both of which are records to
+    // scan rather than fields to fill, and 3xl forced an invoice's customer,
+    // branch and item lines into a column narrower than the table on the Orders
+    // list. Still a bounded measure, not full-bleed: a two-column form at
+    // browser width is harder to read, not easier.
+    <div className="mx-auto max-w-4xl space-y-5">
       {/* Page header. The title was inside the card, competing with the section
           headings for the same job; out here it is unambiguously the page. */}
       <div>
@@ -244,26 +266,12 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 />
               </Field>
 
-              <Field id="order-team" label="Team">
-                <Select
-                  value={form.team}
-                  onValueChange={(v) =>
-                    setForm({ ...form, team: v as (typeof TEAMS)[number]["value"] })
-                  }
-                  disabled={readOnly || (mode === "edit" && !canEditAll)}
-                >
-                  <SelectTrigger id="order-team">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {TEAMS.map((t) => (
-                      <SelectItem key={t.value} value={t.value}>
-                        {t.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
+              {/* The Team selector that stood here is gone. It asked the
+                  question backwards: an order belongs to a person, and the team
+                  is a fact about that person — so picking a team and then an
+                  agent from another one was possible, and filed the order under
+                  a team its agent is not in. The Assignment section below reads
+                  the team off the assigned agent instead. */}
 
               <Field id="order-type" label="Order type" required>
                 <Select
@@ -302,6 +310,35 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                   </SelectContent>
                 </Select>
               </Field>
+            </Section>
+
+            {/* ASSIGNMENT — who owns the order, and therefore which team it is
+                filed under. Agent first: the team is derived, never asked for
+                separately, so the two cannot disagree. The picker is Owner/Admin
+                only and edit-only — on insert RLS requires
+                `auth.uid() = agent_id`, so a new order is always the creator's
+                and an administrator reassigns it after saving. */}
+            <Section
+              icon={UserCog}
+              title="Assignment"
+              hint={
+                canAssign && mode === "edit"
+                  ? "Choose the agent; the team follows from who they are."
+                  : "Who this order belongs to, and the team that follows from it."
+              }
+            >
+              <div className="md:col-span-2">
+                <OrderAssignment
+                  agents={agents}
+                  agentId={mode === "create" ? userId : form.agent_id}
+                  team={form.team}
+                  canAssign={canAssign && mode === "edit"}
+                  disabled={readOnly}
+                  onAssign={({ agentId, team }) =>
+                    setForm((f) => ({ ...f, agent_id: agentId, team: team ?? f.team }))
+                  }
+                />
+              </div>
             </Section>
 
             <Section
@@ -417,17 +454,41 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
               title="Invoicing"
               hint="What the order is worth, the invoices it covers, and anything worth recording."
             >
-              <Field id="order-value" label={`Order value (${CURRENCY})`}>
-                <Input
-                  id="order-value"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={form.invoice_value}
-                  onChange={(e) => setForm({ ...form, invoice_value: e.target.value })}
-                  placeholder="0.00"
-                  className="tabular-nums"
-                />
+              {/* Order value. Typed by the agent until Shams returns a
+                  document, from which point the verified total is authoritative
+                  and is written to the order by `record_invoice_verification`.
+                  The field stays editable — a correction is still a legitimate
+                  act — but it says where the number came from, so an agent does
+                  not overwrite a verified figure without knowing they are. */}
+              <Field
+                id="order-value"
+                label={`Order value (${CURRENCY})`}
+                hint={
+                  valueIsVerified
+                    ? shamsInvoices.isMulti
+                      ? `Verified from ${shamsInvoices.verified.length} invoices in Shams.`
+                      : "Verified from the invoice in Shams."
+                    : undefined
+                }
+              >
+                <div className="relative">
+                  <Input
+                    id="order-value"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={form.invoice_value}
+                    onChange={(e) => setForm({ ...form, invoice_value: e.target.value })}
+                    placeholder="0.00"
+                    className={cn("tabular-nums", valueIsVerified && "pr-24")}
+                  />
+                  {valueIsVerified && (
+                    <span className="pointer-events-none absolute right-2 top-1/2 inline-flex -translate-y-1/2 items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-success">
+                      <BadgeCheck className="h-3 w-3" aria-hidden="true" />
+                      Verified
+                    </span>
+                  )}
+                </div>
               </Field>
 
               <div className="min-w-0 space-y-1.5 md:col-span-2">
@@ -494,19 +555,6 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 </div>
               </div>
 
-              {/* What Shams knows about the invoices already saved on this
-                  order — which branch actually raised each one, and what that
-                  branch still holds of its lines. Driven by the stored value,
-                  not the inputs above: an unsaved edit is not yet a fact about
-                  the order, and looking one up per keystroke is exactly the
-                  traffic the Invoices tab is built to avoid. */}
-              {mode === "edit" && canViewShams && existing?.invoice_no && (
-                <OrderInvoicePanel
-                  invoiceNo={existing.invoice_no}
-                  orderBranchNo={existing.branch_no}
-                />
-              )}
-
               <Field
                 id="order-notes"
                 label="Notes"
@@ -548,6 +596,13 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
           </div>
         </form>
       </Card>
+
+      {/* Invoice information sits outside the form card, as its own section of
+          the page. It is not a field an agent fills in — it is what the portal
+          found — and putting read-only findings inside a `fieldset` that gets
+          disabled for a read-only role would hide them from exactly the people
+          reviewing the order. */}
+      {mode === "edit" && canViewShams && <OrderInvoicePanel invoices={shamsInvoices} />}
 
       {mode === "edit" && id && <OrderActivityTimeline orderId={id} />}
     </div>

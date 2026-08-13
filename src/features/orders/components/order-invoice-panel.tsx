@@ -1,295 +1,261 @@
 /**
- * An order's invoices in Shams, and what the issuing branch still holds.
+ * Invoice information — an order's invoices in Shams, and the branch stock behind them.
  *
- * This is the Order → Invoice → Branch → Stock chain on the order itself:
- * `orders.invoice_no` carries the numbers, Shams says where each one actually
- * lives, the document carries its item lines, and `product/stock` says what that
- * branch has of them now.
+ * ## The rule this panel is built around
+ *
+ * A document does not appear in the MIS when the order is taken. It can land an
+ * hour or two later. So "not found" is rendered as **Pending**, in plain words,
+ * with the reason — never as an error, a failure, or a reason to doubt the
+ * order. The order is valid without an invoice, and when the document does
+ * appear the panel picks it up on the next open and records it against the
+ * existing order. Nothing has to be recreated and nothing polls.
  *
  * ## The order's branch is a lead, not an answer
  *
- * `orders.branch_no` is the branch an agent picked while taking the call. Nothing
- * guarantees it is where the invoice was raised — an order can be moved, split or
- * mis-keyed — so it is never *equated* with the invoice's branch. It is used as
- * the first place to look, which is a different thing: one `sales/details` call
- * asks that branch directly, and the branch is reported as the invoice's only
- * because Shams returned the document for it. When it does not, the panel says so
- * and offers the authoritative chain-wide sweep rather than guessing.
+ * `orders.branch_no` is what an agent picked while taking the call; nothing
+ * guarantees the invoice was raised there. It is used as the *first place to
+ * look* — one request — and a branch is reported as the invoice's only because
+ * Shams returned the document for it. Where the order names no branch, there is
+ * nowhere cheap to look and the invoice simply stays pending: discovering it
+ * would mean sweeping all 137 branches, which is not something a page does on
+ * open.
  *
- * That ordering is the whole performance story. Discovery is a sweep of all 137
- * branches; checking one costs a single request, and it is right most of the
- * time. So the cheap, usually-correct question is asked on open, and the
- * expensive, always-correct one is one click away.
+ * ## One order, many invoices
  *
- * ## Saved numbers only
- *
- * Driven by what is stored on the order, never by the invoice inputs above it.
- * Looking up a half-typed number is the per-keystroke traffic the Invoices tab
- * exists to avoid, and an unsaved edit is not yet a fact about the order.
+ * Always a collection. A single invoice renders as one plain block rather than a
+ * list of one, but nothing here holds "the" invoice, and the verified total is
+ * the sum of the distinct verified documents — never the first one found.
  */
 
-import { useState } from "react";
-import { Building2, Loader2, PackageSearch, Search } from "lucide-react";
+import { AlertTriangle, Bot, Clock3, PackageSearch, RefreshCw } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fmtSAR } from "@/lib/branches";
 import { cn } from "@/lib/utils";
-import { failureMessage } from "@/features/shams/constants";
-import {
-  useBranchLabels,
-  useInvoiceBranches,
-  useInvoiceStock,
-  type BranchLabel,
-} from "@/features/shams/hooks/use-shams-data";
-import { parseInvoiceNumbers } from "@/features/orders/utils";
+import { useBranchLabels, type BranchLabel } from "@/features/shams/hooks/use-shams-data";
 import type { ItemAvailability, StockState } from "@/lib/shams/availability";
-import type { InvoiceBranchMatch } from "@/lib/shams/types";
+import type { OrderInvoice } from "../invoice-verification";
+import type { OrderInvoicesResult } from "../hooks/use-order-invoices";
 
-export function OrderInvoicePanel({
-  invoiceNo,
-  orderBranchNo,
-}: {
-  invoiceNo: string | null | undefined;
-  orderBranchNo: string | null | undefined;
-}) {
-  const numbers = parseInvoiceNumbers(invoiceNo);
+export function OrderInvoicePanel({ invoices }: { invoices: OrderInvoicesResult }) {
   const { data: branchLabels } = useBranchLabels();
+  const { invoices: rows, verified, verifiedTotal, allVerified, isMulti, isLoading } = invoices;
 
-  if (numbers.length === 0) return null;
+  if (rows.length === 0) {
+    return (
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+            <PackageSearch className="h-4 w-4 text-muted-foreground" /> Invoice information
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0 text-sm text-muted-foreground">
+          No invoice number recorded on this order yet.
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
-    <div className="min-w-0 space-y-2 md:col-span-2">
-      <div className="flex items-center gap-1.5">
-        <PackageSearch className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
-        <h3 className="text-xs font-medium">In Shams</h3>
-        <span className="text-[11px] font-normal text-muted-foreground/80">
-          &mdash; where each invoice was raised, and what that branch holds now
-        </span>
-      </div>
-      {numbers.map((docNo) => (
-        <InvoiceRow
-          key={docNo}
-          docNo={docNo}
-          orderBranchNo={orderBranchNo?.trim() || null}
-          labels={branchLabels}
-        />
-      ))}
-    </div>
+    <Card>
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-x-4 gap-y-2 pb-3">
+        <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+          <PackageSearch className="h-4 w-4 text-muted-foreground" /> Invoice information
+          {isMulti && (
+            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+              {verified.length}/{rows.length} verified
+            </span>
+          )}
+        </CardTitle>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-xs"
+          onClick={invoices.refresh}
+          disabled={invoices.isFetching}
+        >
+          <RefreshCw className={cn("mr-1.5 h-3 w-3", invoices.isFetching && "animate-spin")} />
+          Check again
+        </Button>
+      </CardHeader>
+
+      <CardContent className="space-y-3 pt-0">
+        {/* The verified total, and how complete it is. Labelled "so far" while
+            anything is outstanding, because a partial sum presented as the order
+            value would be a figure nobody could reconcile. */}
+        {verified.length > 0 && (
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-lg border border-border/60 bg-muted/25 px-3 py-2">
+            <span className="text-xs text-muted-foreground">
+              {allVerified
+                ? isMulti
+                  ? `Verified total — ${verified.length} invoices`
+                  : "Verified total"
+                : `Verified so far — ${verified.length} of ${rows.length}`}
+            </span>
+            <span className="text-base font-semibold tabular-nums">{fmtSAR(verifiedTotal)}</span>
+          </div>
+        )}
+
+        {isLoading && rows.length > 0 && verified.length === 0 && (
+          <Skeleton className="h-16 w-full" />
+        )}
+
+        <div className="space-y-2">
+          {rows.map((invoice) => (
+            <InvoiceBlock key={invoice.key} invoice={invoice} labels={branchLabels} />
+          ))}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
 /* -------------------------------------------------------------------------- */
-/* One invoice number                                                          */
+/* One invoice                                                                 */
 /* -------------------------------------------------------------------------- */
 
-function InvoiceRow({
-  docNo,
-  orderBranchNo,
+function InvoiceBlock({
+  invoice,
   labels,
 }: {
-  docNo: string;
-  orderBranchNo: string | null;
+  invoice: OrderInvoice;
   labels: Map<string, BranchLabel> | undefined;
 }) {
-  /**
-   * The branch being shown. Null until something confirms one — either the
-   * order's branch answering, or the agent picking from a sweep. It is never
-   * seeded from the order.
-   */
-  const [chosen, setChosen] = useState<string | null>(null);
-  /** Whether the agent has asked for the chain-wide sweep. */
-  const [sweeping, setSweeping] = useState(false);
-
-  // The cheap first question: does the order's own branch hold this document?
-  // Skipped entirely when the order names no branch.
-  const atOrderBranch = useInvoiceStock(
-    orderBranchNo && !chosen ? { branchCode: orderBranchNo, docNo } : null,
-  );
-  const picked = useInvoiceStock(chosen ? { branchCode: chosen, docNo } : null);
-
-  const active = chosen ? picked : atOrderBranch;
-  const result = active.data;
-  const branchCode = chosen ?? orderBranchNo;
-
-  const notConfigured = result?.configured === false;
-  const failed = active.isError || (result && result.configured && !result.ok);
-  const missingHere = Boolean(result?.ok && !result.invoice);
+  const city = invoice.branchCode
+    ? (labels?.get(invoice.branchCode)?.cityEnglish ??
+      labels?.get(invoice.branchCode)?.city ??
+      null)
+    : null;
 
   return (
-    <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
+    <div className="rounded-lg border border-border/60 p-3">
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
         <span className="flex min-w-0 items-center gap-2">
           <span className="font-mono text-sm font-semibold" dir="ltr">
-            {docNo}
+            #{invoice.invoiceNo}
           </span>
-          {result?.invoice && branchCode && (
-            <BranchTag code={branchCode} labels={labels} confirmed />
+          <StateTag state={invoice.state} />
+          {invoice.cancelled && (
+            <span className="rounded-full bg-destructive/10 px-1.5 py-0.5 text-[10px] font-semibold text-destructive">
+              Cancelled
+            </span>
           )}
         </span>
-        {result?.invoice && (
-          <span className="flex shrink-0 items-center gap-2">
-            <CallCentreTag isCallCentre={result.invoice.isCallCentre} />
-            <span className="text-sm font-semibold tabular-nums">
-              {fmtSAR(result.invoice.grandTotal)}
-            </span>
-          </span>
+        {invoice.total !== null && (
+          <span className="text-sm font-semibold tabular-nums">{fmtSAR(invoice.total)}</span>
         )}
       </div>
 
-      {active.isFetching && !result && <Skeleton className="mt-2 h-8 w-full" />}
+      {invoice.state === "verified" && (
+        <dl className="mt-2 grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
+          {/* The MIS customer label, verbatim and never truncated: the suffix
+              that decides the Call Centre classification lives at its end, and
+              Arabic account names are long. `Customer_Name` (falling back to
+              `CusName`) is the field the MIS portal itself displays — the other
+              customer-ish fields are dropped at the normalization boundary and
+              never reach the browser. */}
+          <Detail label="Customer">
+            {invoice.customer ? (
+              <span className="break-words" dir="auto">
+                {invoice.customer}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">Not provided by MIS</span>
+            )}
+          </Detail>
+          <Detail label="Branch">
+            {invoice.branchCode ? (
+              <span className="flex items-baseline gap-1.5">
+                <span className="font-mono">{invoice.branchCode}</span>
+                {city && (
+                  <span className="truncate text-xs text-muted-foreground" dir="auto">
+                    {city}
+                  </span>
+                )}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">—</span>
+            )}
+          </Detail>
+          <Detail label="Channel">
+            <span
+              className={cn(
+                "inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+                invoice.isCallCentre
+                  ? "bg-success/10 text-success"
+                  : "bg-destructive/10 text-destructive",
+              )}
+            >
+              {invoice.isCallCentre ? "Call Centre" : "Non Call Centre"}
+            </span>
+          </Detail>
+          <Detail label="Document date">{formatDocDate(invoice.docDate)}</Detail>
+        </dl>
+      )}
 
-      {notConfigured && (
-        <p className="mt-1.5 text-[11px] text-muted-foreground">
-          Shams MIS is not configured for this deployment.
+      {invoice.state === "pending" && (
+        <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+          Not in Shams yet. An invoice can take an hour or two to appear after the order is taken —
+          the order is fine, and this will attach itself once the document lands.
         </p>
       )}
 
-      {failed && (
-        <p className="mt-1.5 text-[11px] text-muted-foreground">
-          {failureMessage(result?.error?.kind)}{" "}
-          <button
-            type="button"
-            onClick={() => active.refetch()}
-            className="font-medium text-primary underline-offset-2 hover:underline"
-          >
-            Retry
-          </button>
+      {invoice.state === "unavailable" && (
+        <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+          Shams could not be reached, so this invoice could not be checked. Nothing is wrong with
+          the order; try again shortly.
         </p>
       )}
 
-      {/* The lead did not pay off: the branch on the order does not hold this
-          number. Said plainly, because it is a real discrepancy worth an
-          agent's attention and not a loading state. The sweep is the
-          authoritative answer, and it is one click away rather than automatic —
-          it asks all 137 branches. */}
-      {missingHere && !chosen && !sweeping && (
-        <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-          <span>Not at {branchCode}, the branch on this order.</span>
-          <button
-            type="button"
-            onClick={() => setSweeping(true)}
-            className="inline-flex items-center gap-1 font-medium text-primary underline-offset-2 hover:underline"
-          >
-            <Search className="h-3 w-3" aria-hidden="true" />
-            Search all branches
-          </button>
-        </p>
+      {invoice.state === "verified" && invoice.items.length > 0 && (
+        <ItemLines items={invoice.items} />
       )}
-
-      {/* The branch the sweep offered no longer answers for the document — its
-          five-minute window lapsed between the choice and the read. */}
-      {missingHere && chosen && (
-        <p className="mt-1.5 text-[11px] text-muted-foreground">
-          {chosen} no longer returns this document.{" "}
-          <button
-            type="button"
-            onClick={() => active.refetch()}
-            className="font-medium text-primary underline-offset-2 hover:underline"
-          >
-            Retry
-          </button>
-        </p>
-      )}
-
-      {!orderBranchNo && !chosen && !sweeping && (
-        <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-          <span>This order names no branch, so there is nowhere to check first.</span>
-          <button
-            type="button"
-            onClick={() => setSweeping(true)}
-            className="inline-flex items-center gap-1 font-medium text-primary underline-offset-2 hover:underline"
-          >
-            <Search className="h-3 w-3" aria-hidden="true" />
-            Search all branches
-          </button>
-        </p>
-      )}
-
-      {sweeping && !chosen && <BranchSweep docNo={docNo} labels={labels} onChoose={setChosen} />}
-
-      {result?.invoice && <ItemTable items={result.items} skipped={result.stockSkipped} />}
     </div>
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Chain-wide discovery, on request                                            */
-/* -------------------------------------------------------------------------- */
-
-/**
- * The authoritative answer: every branch that holds this number.
- *
- * Reuses the Invoices tab's own hook, so it is the same four-part parallel
- * sweep against the same server-side cache — an agent who looked this number up
- * there pays nothing for it here, and the document it finds is already in
- * `sweptDocuments` when the branch below is picked.
- */
-function BranchSweep({
-  docNo,
-  labels,
-  onChoose,
-}: {
-  docNo: string;
-  labels: Map<string, BranchLabel> | undefined;
-  onChoose: (branchCode: string) => void;
-}) {
-  const discovery = useInvoiceBranches(docNo);
-  const matches = discovery.matches;
-
+function Detail({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="mt-2 space-y-1.5">
-      <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-        {!discovery.done && <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />}
-        {discovery.done
-          ? `Found in ${matches.length} ${matches.length === 1 ? "branch" : "branches"}.`
-          : "Searching every Shams branch…"}
-      </p>
-
-      {discovery.failed && (
-        <p className="text-[11px] text-muted-foreground">{failureMessage(discovery.error?.kind)}</p>
-      )}
-
-      {discovery.done && matches.length === 0 && !discovery.failed && (
-        <p className="text-[11px] text-muted-foreground">No branch holds this document number.</p>
-      )}
-
-      {/* Every match, always — a number can legitimately exist in several
-          branches and mean several different sales. */}
-      {matches.map((match: InvoiceBranchMatch) => (
-        <button
-          key={match.branchCode}
-          type="button"
-          onClick={() => onChoose(match.branchCode)}
-          className={cn(
-            "flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-md border border-border/60 px-2.5 py-2 text-left transition-colors hover:bg-muted/60",
-            match.isCallCentre && "border-l-2 border-l-success bg-success/5",
-          )}
-        >
-          <span className="flex min-w-0 items-center gap-2">
-            <Building2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-            <BranchTag code={match.branchCode} labels={labels} />
-          </span>
-          <span className="flex shrink-0 items-center gap-2">
-            <CallCentreTag isCallCentre={match.isCallCentre} />
-            <span className="text-xs font-semibold tabular-nums">{fmtSAR(match.grandTotal)}</span>
-          </span>
-        </button>
-      ))}
+    <div className="min-w-0">
+      <dt className="text-[10.5px] uppercase tracking-wide text-muted-foreground">{label}</dt>
+      <dd className="mt-0.5 text-sm font-medium">{children}</dd>
     </div>
   );
 }
 
+function StateTag({ state }: { state: OrderInvoice["state"] }) {
+  if (state === "verified") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-success">
+        <Bot className="h-3 w-3" aria-hidden="true" />
+        Verified
+      </span>
+    );
+  }
+  if (state === "unavailable") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+        <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+        Unavailable
+      </span>
+    );
+  }
+  // Deliberately neutral, not destructive: pending is the expected state for a
+  // fresh order and must not read as something the agent got wrong.
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+      <Clock3 className="h-3 w-3" aria-hidden="true" />
+      Pending
+    </span>
+  );
+}
+
 /* -------------------------------------------------------------------------- */
-/* Item lines and their availability                                           */
+/* Branch stock for the invoice's lines                                        */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Copy and tone per state.
- *
- * Four entries rather than a number and a blank, because "none left" and "we
- * could not find out" are different facts and showing either as `0` would tell
- * an agent something false. Only the disqualifying answer is loud.
- */
 const STOCK_LABEL: Record<StockState, string> = {
   in_stock: "in stock",
   out_of_stock: "Out of stock",
@@ -297,97 +263,71 @@ const STOCK_LABEL: Record<StockState, string> = {
   unknown: "Stock unavailable",
 };
 
-function ItemTable({ items, skipped }: { items: ItemAvailability[]; skipped: boolean }) {
-  if (items.length === 0) {
-    return (
-      <p className="mt-2 text-[11px] text-muted-foreground">
-        This document returned no item lines.
+function ItemLines({ items }: { items: ItemAvailability[] }) {
+  return (
+    <div className="mt-2.5">
+      <p className="mb-1 text-[10.5px] uppercase tracking-wide text-muted-foreground">
+        Items &amp; branch stock
       </p>
-    );
-  }
-
-  return (
-    <ul className="mt-2 divide-y divide-border/40 border-t border-border/40">
-      {items.map((item, i) => (
-        <li
-          key={`${item.itemCode}-${i}`}
-          className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 py-1.5"
-        >
-          <span className="flex min-w-0 flex-1 items-baseline gap-2">
-            <span className="truncate text-xs">{item.itemName || item.itemCode}</span>
-            <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-              &times;{item.invoiced}
+      <ul className="divide-y divide-border/40 border-t border-border/40">
+        {items.map((item, i) => (
+          <li
+            key={`${item.itemCode}-${i}`}
+            className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 py-1.5"
+          >
+            <span className="flex min-w-0 flex-1 items-baseline gap-2">
+              <span className="truncate text-xs">{item.itemName || item.itemCode}</span>
+              <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                &times;{item.invoiced}
+              </span>
             </span>
-          </span>
-          {skipped ? (
-            <span className="shrink-0 text-[11px] text-muted-foreground">—</span>
-          ) : item.state === "in_stock" ? (
-            <span className="shrink-0 text-[11px] text-muted-foreground">
-              <span className="font-semibold tabular-nums text-foreground">{item.quantity}</span>{" "}
-              {STOCK_LABEL.in_stock}
-            </span>
-          ) : (
-            <span
-              className={cn(
-                "shrink-0 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
-                item.state === "out_of_stock"
-                  ? "bg-destructive/10 text-destructive"
-                  : "bg-muted text-muted-foreground",
-              )}
-            >
-              {STOCK_LABEL[item.state]}
-            </span>
-          )}
-        </li>
-      ))}
-    </ul>
+            {item.state === "in_stock" ? (
+              <span className="shrink-0 text-[11px] text-muted-foreground">
+                <span className="font-semibold tabular-nums text-foreground">{item.quantity}</span>{" "}
+                {STOCK_LABEL.in_stock}
+              </span>
+            ) : (
+              <span
+                className={cn(
+                  "shrink-0 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+                  item.state === "out_of_stock"
+                    ? "bg-destructive/10 text-destructive"
+                    : "bg-muted text-muted-foreground",
+                )}
+              >
+                {STOCK_LABEL[item.state]}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Small shared bits                                                           */
-/* -------------------------------------------------------------------------- */
-
-/** A branch code with whatever the portal knows it is called. */
-function BranchTag({
-  code,
-  labels,
-  confirmed,
-}: {
-  code: string;
-  labels: Map<string, BranchLabel> | undefined;
-  confirmed?: boolean;
-}) {
-  const label = labels?.get(code);
-  const city = label?.cityEnglish ?? label?.city ?? null;
-  return (
-    <span className="flex min-w-0 items-baseline gap-1.5">
-      <span
-        className="font-mono text-xs font-medium"
-        // Stated rather than implied: this branch is where Shams returned the
-        // document, which is not necessarily the branch on the order.
-        title={confirmed ? "Where Shams holds this invoice" : undefined}
-      >
-        {code}
-      </span>
-      {city && (
-        <span className="truncate text-[11px] text-muted-foreground" dir="auto">
-          {city}
-        </span>
-      )}
-    </span>
-  );
-}
-
-function CallCentreTag({ isCallCentre }: { isCallCentre: boolean }) {
-  return (
-    <span
-      className={cn(
-        "whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
-        isCallCentre ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive",
-      )}
-    >
-      {isCallCentre ? "Call Centre" : "Non Call Centre"}
-    </span>
-  );
+/**
+ * `"2026-08-13T00:00:00"` → `"13 Aug 2026"`.
+ *
+ * By string, not through `Date`: the API supplies no timezone, so parsing to an
+ * instant and reformatting would shift a midnight document onto the day before.
+ */
+function formatDocDate(value: string | null): string {
+  if (!value) return "—";
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!match) return value;
+  const MONTHS = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  return `${Number(match[3])} ${MONTHS[Number(match[2]) - 1] ?? match[2]} ${match[1]}`;
 }
