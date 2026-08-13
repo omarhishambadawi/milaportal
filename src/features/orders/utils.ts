@@ -38,6 +38,26 @@ export const fmtOrderDate = (iso: string | null | undefined) => {
   }
 };
 
+/**
+ * The invoice numbers recorded on an order.
+ *
+ * `orders.invoice_no` is one text column holding one *or many* numbers — the
+ * form joins them with `", "`, and older rows separate them with newlines — so
+ * every reader has to split it, and the separator set is the thing they must
+ * agree on. This was open-coded identically in three places (the form's load,
+ * the list's `InvoiceCell`, and now the Shams panel); it is one function so that
+ * a number saved by the form is the same number the panel looks up.
+ *
+ * Order is preserved and blanks are dropped: a trailing separator, or a row the
+ * agent cleared without removing, is not an invoice number.
+ */
+export function parseInvoiceNumbers(raw: string | null | undefined): string[] {
+  return String(raw ?? "")
+    .split(/[,\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 /** Build an .or() filter string for PostgREST across searchable columns. */
 export function buildSearchOr(term: string): string {
   // PostgREST .or() needs values with commas escaped; we already normalised

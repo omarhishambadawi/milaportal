@@ -37,6 +37,7 @@ import { ORDER_TYPES, DELIVERY_TYPES, TEAMS, CURRENCY, formatOrderNo } from "@/l
 import { cn } from "@/lib/utils";
 import { useOrderForm } from "@/features/orders/hooks/use-order-form";
 import { OrderActivityTimeline } from "@/features/orders/components/order-activity-timeline";
+import { OrderInvoicePanel } from "@/features/orders/components/order-invoice-panel";
 import { BranchPreviewPanel } from "@/features/branches/components/branch-preview-panel";
 
 export const Route = createFileRoute("/_app/orders/new")({
@@ -158,6 +159,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
     canCreate,
     canEditAll,
     canDelete,
+    canViewShams,
     readOnly,
     submit,
     del,
@@ -491,6 +493,19 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                   ))}
                 </div>
               </div>
+
+              {/* What Shams knows about the invoices already saved on this
+                  order — which branch actually raised each one, and what that
+                  branch still holds of its lines. Driven by the stored value,
+                  not the inputs above: an unsaved edit is not yet a fact about
+                  the order, and looking one up per keystroke is exactly the
+                  traffic the Invoices tab is built to avoid. */}
+              {mode === "edit" && canViewShams && existing?.invoice_no && (
+                <OrderInvoicePanel
+                  invoiceNo={existing.invoice_no}
+                  orderBranchNo={existing.branch_no}
+                />
+              )}
 
               <Field
                 id="order-notes"

@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { hasPerm } from "@/lib/permissions";
 import { queryKeys } from "@/lib/query-keys";
 import { orderFormSchema } from "../schema";
-import { defaultTeam } from "../utils";
+import { defaultTeam, parseInvoiceNumbers } from "../utils";
 
 /**
  * All state, data and side-effects for the order create/edit form.
@@ -67,6 +67,15 @@ export function useOrderForm(mode: "create" | "edit") {
   const canEditAll = hasPerm(role, profile?.permissions as any, "edit_all_orders");
   const canEditOwn = hasPerm(role, profile?.permissions as any, "edit_orders");
   const canDelete = hasPerm(role, profile?.permissions as any, "delete_orders");
+  /**
+   * Whether this agent may see the order's invoices in Shams.
+   *
+   * The same page-level key the `/shams` route and every Shams server function
+   * gate on — the panel is a second window onto that data, not a new capability,
+   * so it must not be reachable by anyone who cannot open the page itself. The
+   * server re-checks it on every call; this only decides whether to ask.
+   */
+  const canViewShams = hasPerm(role, profile?.permissions as any, "view_shams_mis");
   const isOwner = !!existing && !!user && existing.agent_id === user.id;
   const canEditThis = mode === "create" ? canCreate : canEditAll || (isOwner && canEditOwn);
   const readOnly = mode === "edit" && !canEditThis;
@@ -89,11 +98,7 @@ export function useOrderForm(mode: "create" | "edit") {
         notes: existing.notes ?? "",
         status: existing.status,
       });
-      const raw = (existing.invoice_no ?? "").toString();
-      const parts = raw
-        .split(/[,\n]+/)
-        .map((s) => s.trim())
-        .filter(Boolean);
+      const parts = parseInvoiceNumbers(existing.invoice_no);
       setInvoices(parts.length > 0 ? parts : [""]);
     }
   }, [existing]);
@@ -199,6 +204,7 @@ export function useOrderForm(mode: "create" | "edit") {
     canCreate,
     canEditAll,
     canDelete,
+    canViewShams,
     canEditThis,
     readOnly,
     submit,

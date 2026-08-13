@@ -183,6 +183,70 @@ export async function getProductStock(itemCode: string): Promise<ShamsBranchStoc
 }
 
 /**
+ * Items resolved at once by `getStockForItems`.
+ *
+ * `product/stock` takes exactly one `itemcode` — the portal's own bundle builds
+ * `/product/stock?itemcode=` and nothing else — so there is no batch form to
+ * reach for and a document's lines cost one request each. Six at a time is the
+ * middle ground: a typical invoice of three or four items resolves in a single
+ * wave, and a long one cannot open dozens of upstream connections at once. It
+ * is deliberately far below the branch sweep's 24, because this runs *after* a
+ * sweep rather than instead of one.
+ */
+const STOCK_CONCURRENCY = 6;
+
+/**
+ * Ceiling on items one call will resolve.
+ *
+ * A guard, not a product decision: no captured document comes close, and the
+ * cost of a pathological one is bounded rather than discovered in production.
+ * Items past the cap are simply absent from the map, which reads as `unknown`.
+ */
+const MAX_STOCK_ITEMS = 40;
+
+/**
+ * Branch availability for several items, keyed by item code.
+ *
+ * Built on `getProductStock`, so every item goes through the same 60 s cache as
+ * the Branch Stock tab: an item already looked at there costs nothing here, and
+ * two invoices sharing a product cost one request between them.
+ *
+ * **A failure is an omission, not an exception.** One item the MIS will not
+ * answer for must not cost the caller the other four — the map simply has no
+ * entry for it, which `branchStockState` reads as `unknown` rather than as zero.
+ * Only the caller's own decision to ask can fail this function, and it cannot.
+ */
+export async function getStockForItems(
+  itemCodes: readonly string[],
+): Promise<Map<string, ShamsBranchStock[]>> {
+  const codes = [...new Set(itemCodes.map((c) => c.trim()).filter(Boolean))].slice(
+    0,
+    MAX_STOCK_ITEMS,
+  );
+  const out = new Map<string, ShamsBranchStock[]>();
+  if (codes.length === 0) return out;
+
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const index = cursor++;
+      if (index >= codes.length) return;
+      const code = codes[index];
+      try {
+        out.set(code, await getProductStock(code));
+      } catch {
+        // Left out of the map on purpose — see the note above.
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(STOCK_CONCURRENCY, codes.length) }, () => worker()),
+  );
+  return out;
+}
+
+/**
  * Detail plus availability for one item, in parallel.
  *
  * The pairing the UI actually wants when a user opens a product. Kept here so

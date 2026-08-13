@@ -2479,6 +2479,7 @@ src/lib/shams/client.server.ts   Bearer auth + token cache, transport: timeout (
 src/lib/shams/types.ts           wire shapes + normalized models
 src/lib/shams/normalize.ts       PURE: numeric parsing, invoice grouping, Call Centre rule
 src/lib/shams/search.ts          PURE: wildcard product matching, branch filter, stock summary
+src/lib/shams/availability.ts    PURE: invoice line ↔ branch stock join, the four stock states
 src/lib/shams/catalog.server.ts  product search (wildcards applied here) / info / stock + caches
 src/lib/shams/sales.server.ts    invoice lookup + query validation + branch discovery fan-out
 src/lib/shams.functions.ts       authenticated, RBAC-gated server functions
@@ -2583,7 +2584,8 @@ In-memory and
 per-isolate — no migration and no table of third-party catalog data, since the
 payloads refetch in well under a second. The caches exist mainly to absorb
 per-keystroke search traffic. Stock is never fetched for a whole search result
-set; callers request it for the one item a user opened.
+set; callers request it for the one item a user opened, or for the items on one
+document (`getStockForItems`, which reuses the same 60 s entries).
 
 ### UI — `/shams`
 
@@ -2601,6 +2603,60 @@ Branch Stock.
 Sidebar entry **Shams MIS** (`PackageSearch`) and the route both gate on the
 single page permission `view_shams_mis`. The server re-checks it in every
 handler.
+
+### Orders ↔ Invoices ↔ Branch Stock
+
+An order's invoices, where Shams actually raised them, and what those branches
+still hold. Rendered by `features/orders/components/order-invoice-panel.tsx` in
+the order form's **Invoicing** section — edit mode only, gated on
+`view_shams_mis` (the panel is a second window onto Shams, not a new
+capability), and driven by the **stored** `invoice_no` rather than the inputs
+above it, because an unsaved edit is not yet a fact about the order.
+
+**No schema change.** The relationship is resolved dynamically from columns that
+already exist:
+
+```text
+orders.invoice_no  ──parseInvoiceNumbers──▶  document number(s)
+orders.branch_no   ──────────────────────▶  where to look first
+        │
+        ▼  sales/details (wh_cd = branch, doc_no = number)
+   ShamsInvoice ──▶ items[].itemCode ──▶ product/stock ──▶ quantity at that branch
+```
+
+**The order's branch is a lead, not an answer.** `orders.branch_no` is what an
+agent picked while taking the call; nothing guarantees the invoice was raised
+there. So it is used as the *first place to look* — one `sales/details` request,
+against a branch that is right most of the time — and the branch is reported as
+the invoice's only because Shams returned the document for it. When it does not,
+the panel says "Not at P0221, the branch on this order" and offers the
+chain-wide sweep, which stays the authoritative answer. Every matching branch is
+listed; a number living in two warehouses is two different sales.
+
+**Four stock states, never two** (`lib/shams/availability.ts`, pure):
+`in_stock` (branch listed, quantity > 0) · `out_of_stock` (branch listed, zero —
+a real answer, since the stock response covers all 137 branches) · `not_found`
+(empty response: the MIS knows no such item code) · `unknown` (the lookup failed,
+or the response did not mention this branch). Rendering `unknown` as `0` would
+tell an agent something false, which is why this is a named type rather than
+`number | null`.
+
+**Request budget.** Opening an order with one invoice costs **one** upstream
+request when the order's branch holds it, plus one per *distinct* item code
+(`invoiceItemCodes` dedupes lines; `getStockForItems` runs them 6 at a time,
+capped at 40). Both halves read caches that already existed: `getInvoices`
+answers from `sweptDocuments` when discovery has run, so picking a branch off a
+sweep costs **zero** further document requests, and stock goes through the same
+60 s `stockCache` the Branch Stock tab fills — two invoices sharing a product
+cost one request between them. `shamsGetInvoiceStock` does the whole chain in
+one server call, because the item codes come out of the document and splitting
+it would put a round trip between the browser and something the server knew.
+
+**Degrading.** A stock failure is an omission, not an exception:
+`getStockForItems` leaves the failed code out of the map and it renders as
+`unknown`, so one dead endpoint never costs the agent the document. A failed
+invoice lookup is confined to its own panel row — the order form itself never
+depends on Shams.
 
 #### Wildcard product search
 

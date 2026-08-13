@@ -1,3 +1,5 @@
+import { parseInvoiceNumbers } from "../utils";
+
 /**
  * Every invoice number on the order, one per line.
  *
@@ -16,10 +18,7 @@
 export function InvoiceCell({ value }: { value: string | null | undefined }) {
   if (!value) return <span className="text-muted-foreground font-sans">—</span>;
 
-  const parts = String(value)
-    .split(/[,\n]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const parts = parseInvoiceNumbers(value);
   if (parts.length === 0) return <span className="text-muted-foreground font-sans">—</span>;
 
   return (

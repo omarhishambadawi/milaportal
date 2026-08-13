@@ -22,10 +22,12 @@ import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
 import { queryKeys } from "@/lib/query-keys";
 import { mergeInvoiceBranchMatches } from "@/lib/shams/search";
+import { stripLeadingZeros } from "@/lib/shams/normalize";
 import { cityEnglish } from "@/features/branches/normalize";
 import {
   shamsFindInvoiceBranches,
   shamsGetInvoices,
+  shamsGetInvoiceStock,
   shamsGetProduct,
   shamsSearchProducts,
 } from "@/lib/shams.functions";
@@ -42,6 +44,8 @@ const DEBOUNCE_MS = 350;
  */
 const SEARCH_STALE_MS = 5 * 60_000;
 const PRODUCT_STALE_MS = 60_000;
+/** Matches the server's stock cache — the half of an invoice+stock read that moves. */
+const STOCK_STALE_MS = 60_000;
 /**
  * Branch discovery is the most expensive call on the page — one sweep of every
  * branch — and its answer (which branches ever held document N) does not move
@@ -231,6 +235,35 @@ export function useInvoiceBranches(docNo: string | null, enabled = true) {
       },
     };
   }, [parts, active]);
+}
+
+/**
+ * One document at one branch, with what that branch still holds of each line.
+ *
+ * The Orders panel's read, and the whole Order → Invoice → Branch → Stock chain
+ * in a single round trip: the server resolves the document, pulls the item codes
+ * off it and asks stock for them under bounded concurrency, all against caches
+ * that live server-side. Splitting it would put a second round trip between the
+ * agent and an answer the server already had.
+ *
+ * `staleTime` is the stock cache's 60 s rather than the document's, because
+ * stock is the half that moves — a quantity is what goes out of date here, not
+ * a document that has already been issued. Keyed on the zero-stripped number so
+ * an order writing `022138` and a document numbered `22138` share one entry.
+ */
+export function useInvoiceStock(lookup: InvoiceLookup | null, enabled = true) {
+  const invoiceStockFn = useServerFn(shamsGetInvoiceStock);
+  const branchCode = lookup?.branchCode ?? "";
+  const docNo = lookup ? stripLeadingZeros(lookup.docNo) : "";
+
+  return useQuery({
+    queryKey: queryKeys.shams.invoiceStock(branchCode, docNo),
+    queryFn: ({ signal }) => invoiceStockFn({ data: { branchCode, docNo }, signal }),
+    enabled: enabled && Boolean(branchCode && docNo),
+    staleTime: STOCK_STALE_MS,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
 }
 
 /**

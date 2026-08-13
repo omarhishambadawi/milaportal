@@ -251,6 +251,18 @@ export const queryKeys = {
      *  parallel and are cached independently, so a repeat lookup is free. */
     invoiceBranches: (docNo: string, part: number, parts: number) =>
       ["shams", "invoice-branches", docNo, part, parts] as const,
+    /**
+     * One document at one branch **with** its lines' branch availability — the
+     * Orders panel's read.
+     *
+     * Separate from `invoices` because it is a different payload, not a
+     * different copy: both resolve through the same server-side document and
+     * stock caches, so holding both keys never costs a second upstream request.
+     * `docNo` must be passed zero-stripped, so `22138` and `022138` share one
+     * entry the way they share one document.
+     */
+    invoiceStock: (branchCode: string, docNo: string) =>
+      ["shams", "invoice-stock", branchCode, docNo] as const,
   },
 
   /**
