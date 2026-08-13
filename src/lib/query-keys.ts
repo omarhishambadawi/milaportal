@@ -229,6 +229,27 @@ export const queryKeys = {
   },
 
   /**
+   * Shams Pharmacy MIS reads.
+   *
+   * Three separate leaves rather than one keyed blob, because they age at very
+   * different rates and the server caches them accordingly: a catalog search
+   * holds for minutes, branch stock for a minute, an invoice not at all.
+   * Nesting them under one root still gives `all()` as a real invalidation
+   * boundary if the MIS connection is ever reconfigured.
+   */
+  shams: {
+    all: () => ["shams"] as const,
+    /** Catalog search, keyed on the debounced term actually sent. */
+    productSearch: (q: string) => ["shams", "product-search", q] as const,
+    /** One item's detail + branch stock, fetched together by the server fn. */
+    product: (itemCode: string) => ["shams", "product", itemCode] as const,
+    /** One document lookup. Branch is part of the identity — document numbers
+     *  repeat across warehouses. */
+    invoices: (branchCode: string, docNo: string) =>
+      ["shams", "invoices", branchCode, docNo] as const,
+  },
+
+  /**
    * Reference/directory data (profiles, roles, branches for dropdowns).
    * Kept off the entity roots on purpose: an order write must not invalidate
    * the agent directory. Each entry keeps its own cache slot, matching the

@@ -16,6 +16,7 @@ import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiCspReportRouteImport } from './routes/api/csp-report'
 import { Route as ApiCdrSyncRouteImport } from './routes/api/cdr-sync'
+import { Route as AppShamsRouteImport } from './routes/_app.shams'
 import { Route as AppReportsRouteImport } from './routes/_app.reports'
 import { Route as AppProfileRouteImport } from './routes/_app.profile'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
@@ -81,6 +82,11 @@ const ApiCdrSyncRoute = ApiCdrSyncRouteImport.update({
   id: '/api/cdr-sync',
   path: '/api/cdr-sync',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AppShamsRoute = AppShamsRouteImport.update({
+  id: '/shams',
+  path: '/shams',
+  getParentRoute: () => AppRoute,
 } as any)
 const AppReportsRoute = AppReportsRouteImport.update({
   id: '/reports',
@@ -255,6 +261,7 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof AppDashboardRoute
   '/profile': typeof AppProfileRoute
   '/reports': typeof AppReportsRoute
+  '/shams': typeof AppShamsRoute
   '/api/cdr-sync': typeof ApiCdrSyncRoute
   '/api/csp-report': typeof ApiCspReportRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
@@ -294,6 +301,7 @@ export interface FileRoutesByTo {
   '/dashboard': typeof AppDashboardRoute
   '/profile': typeof AppProfileRoute
   '/reports': typeof AppReportsRoute
+  '/shams': typeof AppShamsRoute
   '/api/cdr-sync': typeof ApiCdrSyncRoute
   '/api/csp-report': typeof ApiCspReportRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
@@ -335,6 +343,7 @@ export interface FileRoutesById {
   '/_app/dashboard': typeof AppDashboardRoute
   '/_app/profile': typeof AppProfileRoute
   '/_app/reports': typeof AppReportsRoute
+  '/_app/shams': typeof AppShamsRoute
   '/api/cdr-sync': typeof ApiCdrSyncRoute
   '/api/csp-report': typeof ApiCspReportRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
@@ -376,6 +385,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/profile'
     | '/reports'
+    | '/shams'
     | '/api/cdr-sync'
     | '/api/csp-report'
     | '/.lovable/oauth/consent'
@@ -415,6 +425,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/profile'
     | '/reports'
+    | '/shams'
     | '/api/cdr-sync'
     | '/api/csp-report'
     | '/.lovable/oauth/consent'
@@ -455,6 +466,7 @@ export interface FileRouteTypes {
     | '/_app/dashboard'
     | '/_app/profile'
     | '/_app/reports'
+    | '/_app/shams'
     | '/api/cdr-sync'
     | '/api/csp-report'
     | '/.lovable/oauth/consent'
@@ -552,6 +564,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/cdr-sync'
       preLoaderRoute: typeof ApiCdrSyncRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_app/shams': {
+      id: '/_app/shams'
+      path: '/shams'
+      fullPath: '/shams'
+      preLoaderRoute: typeof AppShamsRouteImport
+      parentRoute: typeof AppRoute
     }
     '/_app/reports': {
       id: '/_app/reports'
@@ -778,6 +797,7 @@ interface AppRouteChildren {
   AppDashboardRoute: typeof AppDashboardRoute
   AppProfileRoute: typeof AppProfileRoute
   AppReportsRoute: typeof AppReportsRoute
+  AppShamsRoute: typeof AppShamsRoute
   AppAdminBranchesRoute: typeof AppAdminBranchesRoute
   AppAdminUsersRoute: typeof AppAdminUsersRoute
   AppAdminYeastarRoute: typeof AppAdminYeastarRoute
@@ -804,6 +824,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppDashboardRoute: AppDashboardRoute,
   AppProfileRoute: AppProfileRoute,
   AppReportsRoute: AppReportsRoute,
+  AppShamsRoute: AppShamsRoute,
   AppAdminBranchesRoute: AppAdminBranchesRoute,
   AppAdminUsersRoute: AppAdminUsersRoute,
   AppAdminYeastarRoute: AppAdminYeastarRoute,

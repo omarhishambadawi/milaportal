@@ -18,6 +18,7 @@ import {
   Settings2,
   LayoutList,
   Search,
+  PackageSearch,
 } from "lucide-react";
 import { hasPerm, canViewCallCenter } from "@/lib/permissions";
 import { callsTeamForRole } from "@/lib/calls-access";
@@ -87,6 +88,14 @@ function AppLayout() {
    * neither agent role does — so the page needed no new permission.
    */
   const canReports = hasPerm(role, profile?.permissions as any, "view_reports");
+  /**
+   * Shams MIS. Mirrors the two gates the Shams server functions already
+   * enforce — the catalog behind `view_orders`, invoices behind
+   * `view_invoice_analytics` — rather than minting a permission for the page.
+   */
+  const canShams =
+    hasPerm(role, profile?.permissions as any, "view_orders") ||
+    hasPerm(role, profile?.permissions as any, "view_invoice_analytics");
   // Team agents get one Calls page and no module landing page, so the parent
   // entry points straight at it and the sibling pages are never rendered.
   const callsTeam = callsTeamForRole(role);
@@ -153,6 +162,11 @@ function AppLayout() {
             },
           ]
         : []),
+      // Shams MIS reads the pharmacy's own system. It appears for anyone who can
+      // reach either half of it — the catalog (`view_orders`) or invoices
+      // (`view_invoice_analytics`) — and the page itself shows only the tabs the
+      // holder's permissions can actually fetch.
+      ...(canShams ? [{ to: "/shams", label: "Shams MIS", icon: PackageSearch }] : []),
       ...(canUsers ? [{ to: "/admin/users", label: "Users", icon: Users }] : []),
       ...(canBranches ? [{ to: "/branches", label: "Branches", icon: MapPin }] : []),
     ],
@@ -164,6 +178,7 @@ function AppLayout() {
       canComplaints,
       canCallCenter,
       callsTeam,
+      canShams,
       canUsers,
       canBranches,
       role,

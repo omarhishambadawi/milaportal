@@ -2502,6 +2502,44 @@ payloads refetch in well under a second. The caches exist mainly to absorb
 per-keystroke search traffic. Stock is never fetched for a whole search result
 set; callers request it for the one item a user opened.
 
+### UI — `/shams`
+
+Route `src/routes/_app.shams.tsx`, feature module `src/features/shams/`
+(`components/`, `hooks/use-shams-data.ts`, `constants.ts`). Three tabs —
+Products, Branch Stock, Invoices — reading exclusively through the three server
+functions; no Shams request is ever made from the browser.
+
+Sidebar entry **Shams MIS** (`PackageSearch`) appears for anyone holding
+`view_orders` **or** `view_invoice_analytics`, and the page renders only the
+tabs the holder can actually fetch, mirroring the server gates rather than
+restating them. The server re-checks regardless.
+
+Decisions worth keeping:
+
+- **Search is debounced 350 ms and floored at 2 characters.** The MIS portal
+  itself fires a request per keystroke; this one does not.
+- **Stock loads only for a selected product.** Availability for a twelve-row
+  result set would be twelve requests of ~136 rows each.
+- **Detail and stock are one query.** The server function already overlaps them,
+  so "View branch stock" reads a warm cache entry.
+- **No date filter on invoices.** The API's date parameters are NOT VERIFIED —
+  the MIS frontend only ever sends them empty.
+- **Branch is required for an invoice lookup.** A document number is unique only
+  within a warehouse, so `(branch, docNo)` is the identity and the server
+  rejects anything less.
+- **No stock thresholds.** The application defines none. Zero renders as "Out of
+  stock" (a fact); every other quantity renders as itself.
+- **`totalCost` / `profit` are not rendered.** Margin is not needed to read a
+  document. Customer identifiers never reach the client at all — they are
+  dropped in `normalize.ts`.
+- **Failure copy is chosen by `kind`, not printed from the server**, so no
+  upstream string can surface in a browser.
+
+Tables render twice — a real `<table>` from `md` up, the same rows as cards
+below — so a phone never scrolls sideways. Branch labels come from
+`branches.branch_no` via the portal's own directory, because the MIS's
+`branchName` only ever duplicates its `branchCode`.
+
 ---
 
 ## Business Rules
