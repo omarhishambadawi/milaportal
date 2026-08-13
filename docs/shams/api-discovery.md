@@ -13,34 +13,28 @@ identifiers.
 
 ---
 
-## 0. The security finding — read this first
+## 0. Status — the API is now authenticated
 
-**The MIS data API performs no authentication of any kind.**
+**Superseded, 2026-08-13.** A second capture (27 requests) shows the MIS API is
+now **Bearer-authenticated**, and the live data endpoints answer `401
+Unauthorized` without a token.
 
-This is not an inference from an undocumented scheme. It is what all 21 requests
-show:
+The first capture recorded genuinely anonymous access: no request carried an
+`Authorization` header or cookie, `Set-Cookie` appeared nowhere, and responses
+were served with `Access-Control-Allow-Origin: *`. That window is closed. The
+finding is kept here rather than deleted because it explains a real exposure that
+existed, and because one detail from it predicted the change: **every response
+already carried `Vary: Authorization`** — the auth layer was installed and
+dormant, not absent.
 
-| Evidence | Observation |
-| --- | --- |
-| `POST /api/v2/auth/login` response body | `{success, user, permissions, needsPasswordReset}` — **no token, no session id, no expiry** |
-| `POST /api/v2/auth/login` response headers | **no `Set-Cookie`** |
-| All 20 subsequent requests | **no `Authorization`, no `Cookie`, no session parameter** |
-| Union of request headers, whole capture | `Accept`, `Content-Type`, `DNT`, `Referer`, `User-Agent`, `sec-ch-ua*` — nothing else |
-| Response headers | `Access-Control-Allow-Origin: *` |
-| Server banner | `Apache/2.4.62 (Win64) OpenSSL/3.1.7 PHP/8.3.14` |
+Two things still follow for this integration:
 
-The practical consequence: **anyone who knows the URL can read the entire product
-catalog, every branch's stock, sales documents including cost and margin, and the
-CRM customer lookup — with no credential.** The login endpoint is a front-door
-formality that gates the portal's UI, not its data.
-
-This is Shams's system to fix, not MilaServ's, but it must be reported to them.
-Two things follow for this integration:
-
-1. MilaServ's own auth is the **only** access control in the path, so every
-   Shams read is behind `requireSupabaseAuth` plus a permission check.
-2. `authHeaders()` in `client.server.ts` is the single seam where a real scheme
-   gets added when Shams closes this.
+1. MilaServ's own gate remains the access control for *portal* users: every Shams
+   read sits behind `requireSupabaseAuth` plus a permission check.
+2. The MIS portal ships its own `account_identifier` and `api_key` in its public
+   browser bundle, so those credentials are readable by anyone who loads the
+   portal. That is Shams's to fix; on our side the key is a server-only secret
+   and never reaches a browser.
 
 ---
 
@@ -52,9 +46,13 @@ Two things follow for this integration:
 - **Envelope:** every response is a JSON object with `success: true`. List
   endpoints add `count`; `sales/details` and `crm/data` also echo a `parameters`
   object naming the arguments they understood.
-- **Errors:** `NOT VERIFIED` — every captured response was `HTTP 200`, including
-  for a document number that does not exist. No 4xx or 5xx was observed, so the
-  error body shape is unknown. The client therefore treats any non-2xx as opaque.
+- **Errors:** every captured response in both HARs was `HTTP 200`, including for
+  a document number that does not exist. `401` is confirmed from live behaviour
+  (an unauthenticated `product/search` now returns it), but its **body shape is
+  `NOT VERIFIED`**; no 5xx has ever been observed. The client therefore treats
+  any non-2xx as opaque and never echoes an upstream body.
+- **`auth/permissions/{userId}`:** present in the second capture, called after
+  the token exchange. Not used by this integration; contents `NOT VERIFIED`.
 - **Rate limits:** `NOT VERIFIED` — no `X-RateLimit-*`, `Retry-After` or similar
   header appears, and no request was throttled. Absence of evidence only.
 - **Latency (observed):** 347 ms – 2 218 ms; slowest were `crm/data` (~1.8–2.2 s)
@@ -63,35 +61,66 @@ Two things follow for this integration:
 
 ---
 
-## 2. Authentication
+## 2. Authentication — Bearer token
+
+There are **two separate mechanisms**, and conflating them is the trap:
+
+| Endpoint | Purpose | Issues an API token? |
+| --- | --- | --- |
+| `POST /api/v2/auth/token` | **Machine authentication.** What the API requires. | **Yes** |
+| `POST /api/v2/auth/login` | MIS **portal user** login — returns a profile and UI nav permissions | **No** |
+
+Only the first matters to this integration. The portal-user login is not called
+by MilaServ at all, and no MIS username/password is configured.
+
+### 2.1 Token exchange
 
 ```
-POST /api/v2/auth/login
+POST /api/v2/auth/token
 Content-Type: application/json
 
-{ "username": "...", "password": "..." }
+{ "account_identifier": "…", "api_key": "…" }
 ```
 
-Response:
+Response (`200`):
 
 ```jsonc
 {
   "success": true,
-  "user": {
-    "id": "...", "username": "<redacted>", "email": "...", "fullName": "...",
-    "userType": "normal", "isActive": "1",
-    "createdAt": "...", "updatedAt": "...", "last_login": "...",
-    "resetPasswordOnLogin": "0"
-  },
-  "permissions": [ { "id": "3", "path": "/operation-report", "label": "...", "icon": "...", "order": "2", "parent": null } ],
-  "needsPasswordReset": false
+  "token_type": "Bearer",
+  "access_token": "…",          // opaque, 80 chars in the capture
+  "expires_in": 1800,            // seconds — 30 minutes
+  "expires_at": "2026-08-13T14:06:00+03:00",
+  "account_identifier": "…"
 }
 ```
 
-`permissions[]` drives the MIS portal's own navigation. It has no bearing on API
-access — see §0.
+No `Set-Cookie`. The token is bearer-only. `auth/token` is also the one API
+response **without** `Vary: Authorization` — correct, since it is the endpoint
+that issues the token rather than consuming it.
 
-**Failure shape:** `NOT VERIFIED`. Only a successful login was captured.
+The client keys expiry off `expires_in` rather than `expires_at`: a duration
+cannot drift with clock skew between our server and the MIS.
+
+### 2.2 How the token is used
+
+The capture was taken with Chrome's **"Export HAR (Sanitized)"**, which strips
+`Authorization` from every request — so the header's absence in the HAR proves
+nothing. The mechanism is instead established from the MIS portal's own shipped
+bundle (`/mis/assets/index-*.js`), which implements:
+
+- `Authorization: Bearer <token>` on every request **except** `/auth/token`.
+- A **60-second refresh skew**: a token is treated as stale once it is within
+  60 s of `expires_at`.
+- On `401` (and not already retried): force a new token, then retry the request
+  **once**.
+- Request timeouts of 120 s, or 180 s for `/dashboard/*`.
+
+Our client implements the same contract; see §9.
+
+**Failure shape of a rejected token exchange:** `NOT VERIFIED` — only successful
+exchanges were captured. The client treats any non-success or missing
+`access_token` as `auth_failed`.
 
 ---
 
@@ -337,13 +366,21 @@ values: `NOT VERIFIED`.
 
 | Concern | File |
 | --- | --- |
-| Transport, timeout, retry, errors, cache primitive, `login()` | `src/lib/shams/client.server.ts` |
+| Bearer auth, token cache, transport, timeout, retry, errors, cache primitive | `src/lib/shams/client.server.ts` |
 | Wire + normalized types | `src/lib/shams/types.ts` |
 | Pure normalization, invoice grouping | `src/lib/shams/normalize.ts` |
 | Product search / info / stock + caching | `src/lib/shams/catalog.server.ts` |
 | Invoice lookup + query validation | `src/lib/shams/sales.server.ts` |
 | Authenticated, RBAC-gated server functions | `src/lib/shams.functions.ts` |
 | Tests against captured payloads | `src/lib/shams/__tests__/normalize.test.ts` |
+
+**Auth:** module-scoped token cache with single-flight, a 60 s refresh skew, and
+on 401 a forced refresh plus one retry (a second 401 raises `auth_failed` rather
+than looping). Deliberately **no Supabase L2 tier** like the Yeastar client's:
+that exists because the PBX rate-limits token issuance hard enough to lock the
+integration out (`errcode 60002`), which is evidenced. Nothing here evidences a
+rate limit, and an L2 tier would mean a migration and a table holding a live
+bearer token.
 
 **Cache TTLs:** search 5 min, info 15 min, stock 60 s, invoices uncached.
 In-memory and per-isolate — no migration, no table of third-party data.

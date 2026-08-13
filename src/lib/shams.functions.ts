@@ -232,20 +232,20 @@ export const shamsGetInvoices = createServerFn({ method: "POST" })
 
 export interface ShamsStatusResult {
   ok: boolean;
+  /** Base URL + account identifier + API key all present — never their values. */
   configured: boolean;
-  /** Whether MIS credentials are present — never their values. */
-  credentialsConfigured: boolean;
-  /** Result of an actual `auth/login` round trip, when credentials are set. */
-  credentialCheck: { ok: boolean; username: string | null; needsPasswordReset: boolean } | null;
+  /** Result of a real `auth/token` exchange. Carries no token. */
+  auth: { ok: boolean; tokenType: string; expiresInSec: number | null } | null;
   error: ShamsFailure | null;
 }
 
 /**
  * Administrator-only connectivity check.
  *
- * The one place `auth/login` is called. It confirms the credentials still work;
- * it does not gate any of the reads above, because the MIS data endpoints do not
- * consult it.
+ * Exercises the exact credential path every read depends on: it forces a fresh
+ * `auth/token` exchange rather than reporting on a cached token, so a pass here
+ * means the API credentials genuinely work right now. It returns the token's
+ * lifetime and type — never the identifier, the key, or the token itself.
  */
 export const shamsStatus = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -255,37 +255,15 @@ export const shamsStatus = createServerFn({ method: "POST" })
 
     const { isConfigured } = await import("@/lib/shams/client.server");
     const configured = isConfigured();
-    const credentialsConfigured = Boolean(
-      process.env.SHAMS_MIS_USERNAME?.trim() && process.env.SHAMS_MIS_PASSWORD,
-    );
 
-    if (!configured || !credentialsConfigured) {
-      return {
-        ok: configured,
-        configured,
-        credentialsConfigured,
-        credentialCheck: null,
-        error: null,
-      };
+    if (!configured) {
+      return { ok: false, configured, auth: null, error: null };
     }
 
     try {
-      const { login } = await import("@/lib/shams/client.server");
-      const check = await login();
-      return {
-        ok: true,
-        configured,
-        credentialsConfigured,
-        credentialCheck: check,
-        error: null,
-      };
+      const { checkAuth } = await import("@/lib/shams/client.server");
+      return { ok: true, configured, auth: await checkAuth(), error: null };
     } catch (err) {
-      return {
-        ok: false,
-        configured,
-        credentialsConfigured,
-        credentialCheck: null,
-        error: await toFailure(err),
-      };
+      return { ok: false, configured, auth: null, error: await toFailure(err) };
     }
   });

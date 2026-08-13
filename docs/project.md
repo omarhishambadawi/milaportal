@@ -2416,31 +2416,47 @@ and sales documents. Discovery evidence and the full field-by-field schema are i
 capture of the live portal (2026-08-13, 21 requests). The HAR is **not** in the
 repository and must never be committed.
 
-### The finding that shapes the design
+### Authentication — Bearer token
 
-**The MIS data API performs no authentication.** `POST /api/v2/auth/login`
-returns a user profile and the MIS portal's own nav permissions — no token, no
-session id, no `Set-Cookie` — and all 20 subsequent requests in the capture send
-no `Authorization`, no `Cookie` and no session parameter, against responses
-carrying `Access-Control-Allow-Origin: *`.
+The API is Bearer-authenticated. A machine credential pair is exchanged for a
+short-lived token, which is attached to every data request:
 
-Two consequences:
+```
+POST /api/v2/auth/token   {account_identifier, api_key}
+  -> {success, token_type: "Bearer", access_token, expires_in: 1800, expires_at, account_identifier}
+GET  /api/v2/product/...  Authorization: Bearer <token>
+```
 
-1. **There is no token cache**, unlike Yeastar. No L1/L2 tiers, no refresh, no
-   single-flight — that machinery exists for Yeastar because its PBX issues and
-   rate-limits real tokens. Here it would be ceremony around a credential the
-   server never sends. `authHeaders()` in `client.server.ts` is the one seam to
-   fill if Shams closes this.
-2. **MilaServ's own gate is the only access control in the path**, so every read
-   sits behind `requireSupabaseAuth` plus a permission check.
+**Two endpoints, two purposes — do not conflate them.** `POST /api/v2/auth/login`
+is the MIS *portal user's* login; it returns a profile and UI nav permissions and
+issues no API token. MilaServ never calls it, and no MIS username/password is
+configured.
 
-`login()` exists only so an administrator can confirm the credentials still work
-via `shamsStatus`. No read path calls it, because it authorizes nothing.
+An earlier capture showed the data endpoints answering anonymously; that window
+is closed and they now return `401` without a token. One detail from that capture
+predicted the change — every response already carried `Vary: Authorization`, so
+the auth layer was installed and dormant rather than absent.
+
+Token handling is **module-scoped memory with single-flight**, a 60 s refresh
+skew, and on 401 a forced refresh plus exactly one retry (a second 401 raises
+`auth_failed` rather than looping). These parameters are not invented: they are
+the contract the MIS portal's own shipped bundle implements.
+
+Deliberately **no Supabase L2 tier** like the Yeastar client's. That exists
+because the PBX rate-limits token issuance hard enough to lock the integration
+out (`errcode 60002`), which is evidenced. Nothing evidences a rate limit here,
+and an L2 tier would mean a migration plus a table holding a live bearer token.
+If Shams turns out to throttle `/auth/token`, that is when to add one.
+
+MilaServ's own gate still governs *portal* users: every read sits behind
+`requireSupabaseAuth` plus a permission check. `shamsStatus` (administrator only)
+forces a real token exchange and reports lifetime and type — never the
+identifier, key or token.
 
 ### Layering
 
 ```
-src/lib/shams/client.server.ts   transport: timeout (15 s), 1 transient retry, error taxonomy, TtlCache, login()
+src/lib/shams/client.server.ts   Bearer auth + token cache, transport: timeout (30 s), 1 transient retry, error taxonomy, TtlCache
 src/lib/shams/types.ts           wire shapes + normalized models
 src/lib/shams/normalize.ts       PURE: numeric parsing, invoice grouping
 src/lib/shams/catalog.server.ts  product search / info / stock + caches
@@ -2672,7 +2688,13 @@ configured" and every read falls back to the live PBX path.
 | Variable                                     | Notes                                                                                                                                                                                                                                                                                              |
 | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SHAMS_MIS_BASE_URL`                         | **Server only.** Origin of the MIS API, no trailing slash or path. Absent → the Shams module reports "not configured" and every server function returns an empty result; nothing else breaks.                                                                                                     |
-| `SHAMS_MIS_USERNAME` / `SHAMS_MIS_PASSWORD` | **Server only, and NOT required for the integration to function.** The MIS data endpoints authenticate nothing (see the integration section), so no read path calls `login()`. These exist solely so an administrator can verify the account via `shamsStatus`. Never `VITE_`-prefixed, never committed. |
+| `SHAMS_MIS_ACCOUNT_IDENTIFIER` / `SHAMS_MIS_API_KEY` | **Server only, and REQUIRED.** The machine credentials exchanged at `POST /api/v2/auth/token` for the Bearer token every data request carries. The API key is a secret — treat it like `SUPABASE_SERVICE_ROLE_KEY`: never `VITE_`-prefixed, never logged, never committed, never sent to a browser. |
+
+All three Shams variables are required **together**; any one missing is treated
+as "not configured" rather than failing later with a 401 that would look like a
+Shams-side outage. `SHAMS_MIS_USERNAME` / `SHAMS_MIS_PASSWORD` were removed —
+the portal-user login they fed is not part of the API auth path, so configuring
+a password bought nothing and stored a credential for no reason.
 
 **`SHAMS_MIS_BASE_URL` must be set in the deployment, not only in a local `.env`.**
 `.env` is git-ignored and never ships, so a value present locally does not reach

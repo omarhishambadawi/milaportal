@@ -27,38 +27,35 @@ export interface RawEnvelope {
 /* -------------------------------------------------------------------------- */
 
 /**
- * `POST /api/v2/auth/login` response.
+ * `POST /api/v2/auth/token` response — the API's machine authentication.
  *
- * Note what is NOT here: no token, no session id, no expiry — and the response
- * carries no `Set-Cookie`. This endpoint verifies a credential and returns the
- * portal's own navigation permissions; it does not authorize anything.
+ * Exchanged for `{account_identifier, api_key}`. No cookie is set; the token
+ * travels in the `Authorization` header on every subsequent request.
+ *
+ * `expires_at` is an absolute ISO-8601 instant *with* offset (observed
+ * `+03:00`). The client keys off `expires_in` instead — a duration cannot drift
+ * with clock skew between this server and the MIS.
  */
-export interface RawLoginResponse extends RawEnvelope {
-  user?: {
-    id?: string;
-    username?: string;
-    email?: string;
-    fullName?: string;
-    userType?: string;
-    isActive?: string;
-    last_login?: string;
-  };
-  permissions?: { id?: string; path?: string; label?: string }[];
-  needsPasswordReset?: boolean;
+export interface RawTokenResponse extends RawEnvelope {
+  /** Observed: `"Bearer"`. */
+  token_type?: string;
+  access_token?: string;
+  /** Seconds. Observed: 1800. */
+  expires_in?: number;
+  expires_at?: string;
+  account_identifier?: string;
 }
 
 /**
- * The safe shape a credential check returns.
+ * The safe shape a credential/auth check returns.
  *
- * Deliberately narrow: the raw response embeds an email address and the MIS
- * user's navigation permissions, none of which the portal needs in order to
- * answer "do these credentials still work?".
+ * Carries no identifier, key or token — only whether the exchange worked and
+ * how long the resulting token lasts.
  */
-export interface ShamsCredentialCheck {
+export interface ShamsAuthStatus {
   ok: boolean;
-  /** MIS username echoed back, for confirming which account was tested. */
-  username: string | null;
-  needsPasswordReset: boolean;
+  tokenType: string;
+  expiresInSec: number | null;
 }
 
 /* -------------------------------------------------------------------------- */
