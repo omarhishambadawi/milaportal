@@ -437,12 +437,31 @@ Additional refusals: an Owner's role cannot be changed; an Owner cannot be
 deactivated or deleted; you cannot delete your own account; you cannot issue
 yourself a temporary password; an Agent Code is refused for non-agent roles.
 
+### Auditor: allowed is wider than defaults
+
+Every other role's `_allowed` and `_defaults` differ only where a permission is
+grantable but off by default. The auditor's two lists used to be the *same*
+array, which made "an administrator may grant this to one auditor" impossible to
+express — anything grantable was automatic.
+
+`20260813120000_shams_mis_permission.sql` splits them: `_auditor_safe` is the
+ceiling, `_auditor_defaults` is what an auditor holds without an explicit grant.
+`view_shams_mis` is the first key in the gap. In TypeScript the same split is
+`AUDITOR_SAFE_READ_PERMS` (ceiling) vs `AUDITOR_PERMS` (defaults). Nothing else
+about any role changed, and no table or policy was touched — the migration
+replaces one function body.
+
+The grant itself uses the existing mechanism: an explicit array on
+`profiles.permissions`, edited in the Rules/Permissions UI. There is no list of
+user ids anywhere.
+
 ### Parity guard
 
 `npm run check:permissions` text-parses the newest migration that redefines
 `has_permission()` and `src/lib/permissions.ts`, and asserts the per-role
 permission _sets_ are identical for `supervisor`, `customer_care`, `telesales`,
-`auditor`. It runs in CI between lint and tests.
+`auditor` — including the auditor's ceiling and defaults as **two** comparisons.
+It runs in CI between lint and tests.
 
 ---
 
@@ -2458,19 +2477,29 @@ identifier, key or token.
 ```
 src/lib/shams/client.server.ts   Bearer auth + token cache, transport: timeout (30 s), 1 transient retry, error taxonomy, TtlCache
 src/lib/shams/types.ts           wire shapes + normalized models
-src/lib/shams/normalize.ts       PURE: numeric parsing, invoice grouping
-src/lib/shams/catalog.server.ts  product search / info / stock + caches
-src/lib/shams/sales.server.ts    invoice lookup + query validation
+src/lib/shams/normalize.ts       PURE: numeric parsing, invoice grouping, Call Centre rule
+src/lib/shams/search.ts          PURE: wildcard product matching, branch filter, stock summary
+src/lib/shams/catalog.server.ts  product search (wildcards applied here) / info / stock + caches
+src/lib/shams/sales.server.ts    invoice lookup + query validation + branch discovery fan-out
 src/lib/shams.functions.ts       authenticated, RBAC-gated server functions
 ```
 
-### RBAC — existing permissions, reused
+### RBAC — one page-level permission
 
-`view_orders` gates the catalog and stock; `view_invoice_analytics` gates
-invoices, which carry `TotalCost` and `Profit`. `shamsStatus` is administrator
-only. No permission key was minted: a new key must be added to both
-`lib/permissions.ts` and a SQL migration or `npm run check:permissions` fails,
-and the existing keys already mean what is needed.
+`view_shams_mis` gates every Shams server function, the `/shams` route and the
+sidebar entry. `shamsStatus` additionally requires an administrator.
+
+It replaced the earlier arrangement of borrowing `view_orders` for the catalog
+and `view_invoice_analytics` for invoices. Borrowing was cheaper but said the
+wrong thing once the page became an operational tool: Shams access could not be
+granted or withdrawn without also changing someone's Orders or Invoice
+Verification rights, and an auditor — who holds both borrowed keys — could not be
+kept out of it.
+
+Defaults: owner, admin, supervisor, customer_care, telesales. **Auditor: not by
+default, but grantable per user** — see "Auditor: allowed is wider than
+defaults" in the RBAC section. One key, not one per tab: the page is a single
+read-only window, and gating its halves against each other served nobody.
 
 ### Branch identity — a direct join, verified
 
@@ -2557,14 +2586,67 @@ set; callers request it for the one item a user opened.
 ### UI — `/shams`
 
 Route `src/routes/_app.shams.tsx`, feature module `src/features/shams/`
-(`components/`, `hooks/use-shams-data.ts`, `constants.ts`). Three tabs —
-Products, Branch Stock, Invoices — reading exclusively through the three server
-functions; no Shams request is ever made from the browser.
+(`components/`, `hooks/use-shams-data.ts`, `constants.ts`). **Two** tabs —
+Branch Stock and Invoices — reading exclusively through the server functions in
+`lib/shams.functions.ts`; no Shams request is ever made from the browser.
 
-Sidebar entry **Shams MIS** (`PackageSearch`) appears for anyone holding
-`view_orders` **or** `view_invoice_analytics`, and the page renders only the
-tabs the holder can actually fetch, mirroring the server gates rather than
-restating them. The server re-checks regardless.
+The standalone **Products** tab was removed: Branch Stock already opens with the
+same `product/search` lookup, and an agent who finds a product almost always
+wants to know where it is. `products-tab.tsx` and `product-detail-dialog.tsx`
+are gone; the catalog server functions they used are unchanged and still serve
+Branch Stock.
+
+Sidebar entry **Shams MIS** (`PackageSearch`) and the route both gate on the
+single page permission `view_shams_mis`. The server re-checks it in every
+handler.
+
+#### Wildcard product search
+
+`*` means "anything in between": `mou*n*j*2.5` finds Mounjaro 2.5,
+`*26*gold*3*1800` finds S-26 Gold 3 1800. Fragments are all required and must
+appear **in order**; matching is case-insensitive, whitespace-tolerant, and runs
+over item name **and** item code. A query with no `*` behaves exactly as before.
+
+The MIS API has no wildcard syntax — its only parameter is `q`, matched as a
+plain substring — so the expression is split in `catalog.server.ts`: the longest
+fragment goes upstream as an ordinary term (ties to the earliest), and the full
+ordered match is applied to the rows that come back, **before** the result cap.
+That is exact rather than approximate, because any product satisfying the whole
+expression must contain every individual fragment, so one fragment always
+retrieves a superset. The rule itself is pure and lives in `lib/shams/search.ts`.
+
+#### Branch Stock table
+
+Filter box over the loaded rows — code (`P0221`), bare number (`0221`), English
+city (`Jeddah`), Arabic city (`جدة`) or MIS area — filtered client-side with no
+request, through `filterBranchStock`. **The summary recomputes from the rows on
+screen** (`summariseStock` takes an array, so a filtered table and its counts
+cannot disagree); when a filter is active the chain-wide figure stays visible
+beside it, labelled, rather than being replaced.
+
+`LZ Quantity` was removed — semantics were never verified and it was zero in all
+275 captured rows. The table is `table-fixed` with declared column widths so the
+quantity column sits narrow against the right edge instead of floating in
+whitespace, and zero renders as a **destructive** `Out of Stock` badge. Still no
+"low stock" band: the application defines no threshold.
+
+#### Invoice lookup — number first, branch discovered
+
+`Invoice number` → *find matching branches* → `agent picks` → `invoice details`.
+One match skips the chooser; none is an empty state, not an error.
+
+A document number is unique only within a warehouse, and **the MIS has no
+cross-branch lookup**: its complete endpoint inventory (read from the portal's
+shipped bundle) is `product/{search,info,stock}`, `sales/details`, `crm/data`,
+four `dashboard/*` reports and auth/users, and `sales/details` always takes one
+`wh_cd`. So `findInvoiceBranches` asks each branch, server-side, eight at a time.
+MilaServ's branch table supplies only the list of places to look — a branch
+appears in the result solely because Shams returned a document for it. A branch
+that fails is skipped; a total failure raises, because "nothing matched" and
+"nothing answered" are different facts.
+
+One sweep is ~137 upstream requests, so it runs **only on submit**, never per
+keystroke, and its answer is held for 10 minutes (`invoiceBranches` query key).
 
 Decisions worth keeping:
 

@@ -40,6 +40,7 @@ const CUSTOMER_CARE_DEFAULTS = [
   "view_team_analytics",
   "verify_own_orders",
   "view_branches",
+  "view_shams_mis",
 ];
 
 const TELESALES_DEFAULTS = [
@@ -49,6 +50,7 @@ const TELESALES_DEFAULTS = [
   "view_dashboard",
   "verify_own_orders",
   "view_branches",
+  "view_shams_mis",
 ];
 
 /** Read-only by construction: nothing here creates, edits, resolves or deletes. */
@@ -89,7 +91,17 @@ const SUPERVISOR_SET = [
   "view_reports",
   "manage_users",
   "admin_access",
+  "view_shams_mis",
 ];
+
+/**
+ * The auditor is the one role whose ceiling is wider than its defaults.
+ *
+ * `view_shams_mis` is grantable to an individual auditor but held by none of
+ * them automatically — the mechanism behind "this auditor may see Shams MIS,
+ * auditors may not".
+ */
+const AUDITOR_CEILING = [...AUDITOR_SET, "view_shams_mis"];
 
 const EXPECTED: Record<Exclude<AppRole, "owner" | "admin">, RoleExpectation> = {
   supervisor: { allowed: SUPERVISOR_SET, defaults: SUPERVISOR_SET },
@@ -106,7 +118,7 @@ const EXPECTED: Record<Exclude<AppRole, "owner" | "admin">, RoleExpectation> = {
     ],
     defaults: TELESALES_DEFAULTS,
   },
-  auditor: { allowed: AUDITOR_SET, defaults: AUDITOR_SET },
+  auditor: { allowed: AUDITOR_CEILING, defaults: AUDITOR_SET },
 };
 
 const ADMINISTRATORS: AppRole[] = ["owner", "admin"];
@@ -209,7 +221,7 @@ describe("hasPerm — escalation regressions", () => {
   });
 
   it("keeps the auditor read-only whatever is stored on the account", () => {
-    const mutating = ALL_KEYS.filter((k) => !AUDITOR_SET.includes(k));
+    const mutating = ALL_KEYS.filter((k) => !AUDITOR_CEILING.includes(k));
     expect(mutating.length).toBeGreaterThan(0);
     for (const key of mutating) {
       expect(hasPerm("auditor", [key], key), `auditor → ${key}`).toBe(false);
@@ -225,6 +237,38 @@ describe("hasPerm — escalation regressions", () => {
     // but absent from the array is not held.
     expect(hasPerm("customer_care", ["view_orders"], "view_orders")).toBe(true);
     expect(hasPerm("customer_care", ["view_orders"], "create_orders")).toBe(false);
+  });
+
+  /**
+   * The Shams MIS page. Operational roles get it; the auditor does not, but one
+   * auditor can be handed it through the same per-user permission array every
+   * other grant uses — no list of user ids, no second mechanism.
+   */
+  it("gives Shams MIS to the operational roles by default", () => {
+    for (const role of ["owner", "admin", "supervisor", "customer_care", "telesales"] as const) {
+      expect(hasPerm(role, null, "view_shams_mis"), `${role} → shams`).toBe(true);
+    }
+  });
+
+  it("denies Shams MIS to an auditor by default", () => {
+    expect(hasPerm("auditor", null, "view_shams_mis")).toBe(false);
+    expect(hasPerm("auditor", [], "view_shams_mis")).toBe(false);
+  });
+
+  it("grants Shams MIS to an auditor whose account lists it explicitly", () => {
+    expect(hasPerm("auditor", ["view_shams_mis"], "view_shams_mis")).toBe(true);
+    expect(hasPerm("auditor", ["view_orders", "view_shams_mis"], "view_shams_mis")).toBe(true);
+  });
+
+  it("does not give one granted auditor's access to the next", () => {
+    // The grant lives on the account, not on the role.
+    expect(hasPerm("auditor", ["view_shams_mis"], "view_shams_mis")).toBe(true);
+    expect(hasPerm("auditor", ["view_orders"], "view_shams_mis")).toBe(false);
+  });
+
+  it("refuses Shams MIS to a role that has no entry at all", () => {
+    expect(hasPerm(null, ["view_shams_mis"], "view_shams_mis")).toBe(false);
+    expect(hasPerm("call_center" as never, ["view_shams_mis"], "view_shams_mis")).toBe(false);
   });
 
   it("grants an in-ceiling permission that is not a default when stored explicitly", () => {

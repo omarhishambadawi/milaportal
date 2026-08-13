@@ -1,28 +1,23 @@
 /**
- * Invoices — look one document up.
+ * Invoices — find a document by number, then read it.
  *
- * ## Branch is required, not optional
+ * ## Why there is a branch step at all
  *
- * The brief lists Branch as optional, but it cannot be: a Shams document number
- * is unique only *within* a warehouse, so `(branch, docNo)` is the identity, and
- * the server function rejects a query without a valid branch code. Making it
- * optional here would only produce a validation error a step later. It is
- * therefore a required field, labelled as part of the document's identity.
+ * A Shams document number is unique only *within* a warehouse, so `(branch,
+ * docNo)` is the identity — `22138` can exist in several branches and mean
+ * several different sales. The old form made the agent supply both, which meant
+ * knowing the branch before looking anything up.
  *
- * ## No date filter
+ * So the number is asked for alone and the branch is *discovered*: the server
+ * asks every branch whether it holds that number and returns the ones that do.
+ * The MIS has no cross-branch lookup — `sales/details` takes exactly one
+ * `wh_cd`, which is also why its own Sales Register demands a store code — so a
+ * sweep is the only honest answer, and it runs once per submission, never while
+ * typing.
  *
- * Discovery marked the API's date parameters NOT VERIFIED — the MIS frontend
- * sends them empty on every captured request, so nobody has seen them filter
- * anything. Offering a date range would promise behaviour that has never been
- * observed.
- *
- * ## What is deliberately not shown
- *
- * The normalized invoice carries `totalCost` and `profit`. Both are omitted:
- * margin is not needed to read a document, and this milestone shows only what
- * the task requires. Patient identifiers never reach the client at all — they
- * are dropped server-side in `normalize.ts`, so there is nothing to filter out
- * here.
+ * One match skips the chooser entirely; several present a short list; none is an
+ * empty state, not an error, because a document that does not exist is a fact
+ * the API reports with `200`.
  *
  * ## Customer and Call Centre status
  *
@@ -32,63 +27,79 @@
  * `CALL CENTER SALES` versus `CALL CENTER SALES-Call Centre` — is invisible if
  * only the badge is rendered. The rule itself lives in `normalize.ts`; this file
  * reads `invoice.isCallCentre` and never re-derives it.
+ *
+ * `Non Call Centre` is destructive-toned on purpose: it is the state that makes
+ * an invoice ineligible, and an agent needs to see that without reading.
  */
 
-import { useMemo, useState, type FormEvent } from "react";
-import { Check, ChevronsUpDown, FileText, Search } from "lucide-react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { ArrowLeft, Building2, FileText, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
+import { Skeleton } from "@/components/ui/skeleton";
 import { fmtSAR } from "@/lib/branches";
 import { cn } from "@/lib/utils";
 import type { ShamsInvoice } from "@/lib/shams/types";
+import type { InvoiceBranchMatch } from "@/lib/shams/sales.server";
 import {
   useBranchLabels,
+  useInvoiceBranches,
   useInvoiceLookup,
-  type InvoiceLookup,
+  type BranchLabel,
 } from "@/features/shams/hooks/use-shams-data";
 import { TD, TH } from "@/features/shams/constants";
-import { EmptyState, ErrorState, NotConfiguredState, TableSkeleton } from "./states";
+import { EmptyState, ErrorState, NotConfiguredState } from "./states";
 
 export function InvoicesTab() {
-  const [branchCode, setBranchCode] = useState("");
-  const [branchOpen, setBranchOpen] = useState(false);
   const [docNo, setDocNo] = useState("");
-  // Only a submitted pair is ever queried — typing never triggers a lookup.
-  const [submitted, setSubmitted] = useState<InvoiceLookup | null>(null);
+  /** The number actually searched for. Typing never triggers a sweep. */
+  const [submitted, setSubmitted] = useState<string | null>(null);
+  const [branchCode, setBranchCode] = useState<string | null>(null);
 
   const { data: branchLabels } = useBranchLabels();
-  const branches = useMemo(
-    () => [...(branchLabels?.values() ?? [])].sort((a, b) => a.branchNo.localeCompare(b.branchNo)),
-    [branchLabels],
+
+  const discovery = useInvoiceBranches(submitted);
+  const discovered = discovery.data;
+  const matches = useMemo(() => discovered?.matches ?? [], [discovered]);
+
+  /**
+   * One match needs no chooser.
+   *
+   * In an effect rather than during render because it is a state change, and
+   * keyed on the number so a second lookup re-runs it.
+   */
+  useEffect(() => {
+    if (discovered?.ok && matches.length === 1) setBranchCode(matches[0].branchCode);
+  }, [discovered, matches]);
+
+  const invoiceQuery = useInvoiceLookup(
+    branchCode && submitted ? { branchCode, docNo: submitted } : null,
   );
-  const selectedBranch = branchCode ? (branchLabels?.get(branchCode) ?? null) : null;
+  const invoiceResult = invoiceQuery.data;
+  const invoices = useMemo(() => invoiceResult?.invoices ?? [], [invoiceResult]);
 
-  const query = useInvoiceLookup(submitted);
-  const result = query.data;
-  const invoices = useMemo(() => result?.invoices ?? [], [result]);
-
-  const canSubmit = branchCode !== "" && docNo.trim() !== "";
+  const canSubmit = docNo.trim() !== "";
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
-    setSubmitted({ branchCode, docNo: docNo.trim() });
+    setBranchCode(null);
+    setSubmitted(docNo.trim());
   };
+
+  const reset = () => {
+    setBranchCode(null);
+  };
+
+  const searching = discovery.isFetching;
 
   return (
     <div className="space-y-4">
       <Card>
         <CardContent className="p-4">
+          {/* A form, so Enter submits — the agent's hands never leave the
+              number field. */}
           <form onSubmit={submit} className="flex flex-col gap-3 sm:flex-row sm:items-end">
             <label className="flex min-w-0 flex-1 flex-col gap-1">
               <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -102,135 +113,169 @@ export function InvoicesTab() {
                 <Input
                   value={docNo}
                   onChange={(e) => setDocNo(e.target.value)}
-                  placeholder="e.g. 75181"
+                  placeholder="e.g. 22138"
                   inputMode="numeric"
                   autoComplete="off"
-                  className="h-10 pl-9 font-mono"
+                  autoFocus
+                  className="h-11 pl-9 font-mono text-base"
                 />
               </div>
             </label>
 
-            <div className="flex flex-col gap-1 sm:w-56">
-              <span
-                id="shams-branch-label"
-                className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
-              >
-                Branch
-              </span>
-              {/* Searchable, because 137 branches is too many to scroll. Same
-                  Popover + Command pattern the order form's branch picker uses,
-                  over the same branch directory — no second data source. */}
-              <Popover open={branchOpen} onOpenChange={setBranchOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    role="combobox"
-                    aria-expanded={branchOpen}
-                    aria-labelledby="shams-branch-label"
-                    className="h-10 w-full justify-between font-normal"
-                  >
-                    {selectedBranch ? (
-                      <span className="flex min-w-0 items-center gap-2">
-                        <span className="font-mono text-xs">{selectedBranch.branchNo}</span>
-                        <span className="truncate text-muted-foreground" dir="auto">
-                          {selectedBranch.cityEnglish ?? selectedBranch.city}
-                        </span>
-                      </span>
-                    ) : (
-                      <span className="text-muted-foreground">Select branch</span>
-                    )}
-                    <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" aria-hidden="true" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  align="start"
-                  className="w-[var(--radix-popover-trigger-width)] p-0"
-                >
-                  <Command>
-                    <CommandInput placeholder="Search code, name or city…" />
-                    <CommandList>
-                      <CommandEmpty>No branch.</CommandEmpty>
-                      <CommandGroup>
-                        {branches.map((b) => (
-                          <CommandItem
-                            key={b.branchNo}
-                            // What the search matches on: code, English name and
-                            // the Arabic city, so "P0221", "0221", "Jeddah" and
-                            // "جدة" all find the same branch.
-                            value={`${b.branchNo} ${b.cityEnglish ?? ""} ${b.city}`}
-                            onSelect={() => {
-                              setBranchCode(b.branchNo);
-                              setBranchOpen(false);
-                            }}
-                          >
-                            <Check
-                              className={cn(
-                                "mr-2 h-4 w-4",
-                                branchCode === b.branchNo ? "opacity-100" : "opacity-0",
-                              )}
-                              aria-hidden="true"
-                            />
-                            <span className="mr-2 font-mono text-xs">{b.branchNo}</span>
-                            <span className="truncate text-muted-foreground" dir="auto">
-                              {b.cityEnglish ?? b.city}
-                            </span>
-                          </CommandItem>
-                        ))}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-            </div>
-
-            <Button type="submit" disabled={!canSubmit || query.isFetching} className="h-10">
+            <Button type="submit" disabled={!canSubmit || searching} className="h-11 sm:w-40">
               <Search className="mr-1.5 h-4 w-4" aria-hidden="true" />
-              {query.isFetching ? "Looking up…" : "Look up"}
+              {searching ? "Searching…" : "Find invoice"}
             </Button>
           </form>
 
-          <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
-            A document number identifies an invoice only within its branch, so both are required.
+          <p className="mt-2 text-xs leading-snug text-muted-foreground">
+            Enter the number alone. The same number can exist in several branches, so the portal
+            checks which branches hold it and asks only if there is a choice.
           </p>
         </CardContent>
       </Card>
 
-      {query.isError && <ErrorState onRetry={() => query.refetch()} />}
+      {discovery.isError && <ErrorState onRetry={() => discovery.refetch()} />}
 
-      {result && !result.configured && <NotConfiguredState />}
+      {discovered && !discovered.configured && <NotConfiguredState />}
 
-      {result && result.configured && !result.ok && (
-        <ErrorState kind={result.error?.kind} onRetry={() => query.refetch()} />
+      {discovered && discovered.configured && !discovered.ok && (
+        <ErrorState kind={discovered.error?.kind} onRetry={() => discovery.refetch()} />
       )}
 
-      {query.isFetching && !result && <TableSkeleton rows={5} />}
+      {searching && <DiscoverySkeleton docNo={submitted} />}
 
-      {result?.ok && invoices.length === 0 && !query.isFetching && (
+      {discovered?.ok && matches.length === 0 && !searching && (
         <EmptyState icon={<FileText className="h-8 w-8 opacity-40" aria-hidden="true" />}>
-          No invoice found for document {submitted?.docNo} at {submitted?.branchCode}.
+          No invoice found for this document number.
         </EmptyState>
       )}
+
+      {/* The chooser: only when the answer is genuinely ambiguous. */}
+      {discovered?.ok && matches.length > 1 && !branchCode && (
+        <BranchChoice matches={matches} labels={branchLabels} onChoose={setBranchCode} />
+      )}
+
+      {branchCode && matches.length > 1 && (
+        <button
+          type="button"
+          onClick={reset}
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+          Back to the {matches.length} matching branches
+        </button>
+      )}
+
+      {invoiceQuery.isError && <ErrorState onRetry={() => invoiceQuery.refetch()} />}
+
+      {invoiceResult && invoiceResult.configured && !invoiceResult.ok && (
+        <ErrorState kind={invoiceResult.error?.kind} onRetry={() => invoiceQuery.refetch()} />
+      )}
+
+      {branchCode && invoiceQuery.isFetching && !invoiceResult && <InvoiceSkeleton />}
 
       {invoices.map((invoice) => (
         <InvoiceCard
           key={`${invoice.branchCode}-${invoice.docNo}`}
           invoice={invoice}
-          branchCity={
-            invoice.branchCode
-              ? (branchLabels?.get(invoice.branchCode)?.cityEnglish ??
-                branchLabels?.get(invoice.branchCode)?.city ??
-                null)
-              : null
-          }
+          branchCity={invoice.branchCode ? branchCityOf(branchLabels, invoice.branchCode) : null}
         />
       ))}
 
-      {!submitted && !query.isFetching && (
+      {!submitted && !searching && (
         <EmptyState icon={<FileText className="h-8 w-8 opacity-40" aria-hidden="true" />}>
-          Enter a document number and branch to look up a Shams invoice.
+          Enter an invoice number to look it up across all Shams branches.
         </EmptyState>
       )}
     </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Branch discovery                                                            */
+/* -------------------------------------------------------------------------- */
+
+function branchCityOf(labels: Map<string, BranchLabel> | undefined, code: string): string | null {
+  const hit = labels?.get(code);
+  if (!hit) return null;
+  return hit.cityEnglish ?? hit.city ?? null;
+}
+
+/**
+ * The sweep takes a few seconds — every branch is asked — so it says what it is
+ * doing rather than showing an anonymous spinner.
+ */
+function DiscoverySkeleton({ docNo }: { docNo: string | null }) {
+  return (
+    <Card>
+      <CardContent className="space-y-3 p-4">
+        <p className="text-sm text-muted-foreground">
+          Searching Shams branches for document{" "}
+          <span className="font-mono font-medium text-foreground">{docNo}</span>…
+        </p>
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+      </CardContent>
+    </Card>
+  );
+}
+
+function InvoiceSkeleton() {
+  return (
+    <Card>
+      <CardContent className="space-y-3 p-4">
+        <Skeleton className="h-6 w-1/3" />
+        <Skeleton className="h-4 w-1/2" />
+        <Skeleton className="h-24 w-full" />
+      </CardContent>
+    </Card>
+  );
+}
+
+function BranchChoice({
+  matches,
+  labels,
+  onChoose,
+}: {
+  matches: InvoiceBranchMatch[];
+  labels: Map<string, BranchLabel> | undefined;
+  onChoose: (branchCode: string) => void;
+}) {
+  return (
+    <Card className="overflow-hidden">
+      <CardContent className="p-0">
+        <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-4 py-2.5">
+          <Building2 className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+          <p className="text-sm font-medium">Found in {matches.length} branches — choose one</p>
+        </div>
+        <ul className="divide-y divide-border/40">
+          {matches.map((match) => (
+            <li key={match.branchCode}>
+              <button
+                type="button"
+                onClick={() => onChoose(match.branchCode)}
+                className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-muted/50 focus:bg-muted/50 focus:outline-none"
+              >
+                <span className="flex min-w-0 items-center gap-3">
+                  <span className="font-mono text-sm font-semibold">{match.branchCode}</span>
+                  <span className="truncate text-sm text-muted-foreground" dir="auto">
+                    {branchCityOf(labels, match.branchCode) ?? "—"}
+                  </span>
+                  {match.cancelled && <CancelledBadge />}
+                </span>
+                <span className="flex shrink-0 items-center gap-3">
+                  <CallCentreBadge isCallCentre={match.isCallCentre} compact />
+                  <span className="text-sm font-semibold tabular-nums">
+                    {fmtSAR(match.grandTotal)}
+                  </span>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -268,6 +313,35 @@ function formatDocDate(value: string | null): string {
   return `${Number(match[3])} ${month} ${match[1]}`;
 }
 
+function CancelledBadge() {
+  return (
+    <span className="inline-flex shrink-0 rounded-full bg-destructive/10 px-2 py-0.5 text-[11px] font-semibold text-destructive">
+      Cancelled
+    </span>
+  );
+}
+
+/**
+ * Call Centre status.
+ *
+ * Both states are deliberately loud. `Non Call Centre` is destructive-toned
+ * because it is the disqualifying answer, and an agent scanning a screen should
+ * not have to read a neutral grey chip to learn that.
+ */
+function CallCentreBadge({ isCallCentre, compact }: { isCallCentre: boolean; compact?: boolean }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex whitespace-nowrap rounded-full font-semibold",
+        compact ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-xs",
+        isCallCentre ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive",
+      )}
+    >
+      {isCallCentre ? "Call Centre" : "Non Call Centre"}
+    </span>
+  );
+}
+
 function InvoiceCard({
   invoice,
   branchCity,
@@ -276,16 +350,12 @@ function InvoiceCard({
   branchCity: string | null;
 }) {
   return (
-    <Card className={cn(invoice.cancelled && "border-destructive/50")}>
+    <Card className={cn("overflow-hidden", invoice.cancelled && "border-destructive/50")}>
       <CardContent className="p-0">
         <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3 border-b border-border/60 p-4">
           <Meta label="Document">
             <span className="font-mono">{invoice.docNo}</span>
-            {invoice.cancelled && (
-              <span className="ml-2 inline-flex rounded-full bg-destructive/10 px-2 py-0.5 text-[11px] font-semibold text-destructive">
-                Cancelled
-              </span>
-            )}
+            {invoice.cancelled && <span className="ml-2 align-middle">{<CancelledBadge />}</span>}
           </Meta>
           <Meta label="Branch">
             <span className="font-mono">{invoice.branchCode ?? "—"}</span>
@@ -302,19 +372,12 @@ function InvoiceCard({
           <Meta label="Customer">
             {/* Never truncated: the suffix that decides the status lives at the
                 end of the label, and Arabic account names are long. */}
-            <span className="break-words">{invoice.customer ?? "—"}</span>
+            <span className="break-words" dir="auto">
+              {invoice.customer ?? "—"}
+            </span>
           </Meta>
           <Meta label="Status">
-            <span
-              className={cn(
-                "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                invoice.isCallCentre
-                  ? "bg-primary/10 text-primary"
-                  : "bg-muted text-muted-foreground",
-              )}
-            >
-              {invoice.isCallCentre ? "Call Centre" : "Non Call Centre"}
-            </span>
+            <CallCentreBadge isCallCentre={invoice.isCallCentre} />
           </Meta>
         </div>
 
@@ -334,9 +397,16 @@ function InvoiceCard({
           <p className="p-4 text-sm text-muted-foreground">This document returned no item lines.</p>
         ) : (
           <>
-            <table className="hidden w-full text-sm md:table">
+            <table className="hidden w-full table-fixed text-sm md:table">
+              <colgroup>
+                <col />
+                <col className="w-[14%]" />
+                <col className="w-[9%]" />
+                <col className="w-[15%]" />
+                <col className="w-[17%]" />
+              </colgroup>
               <thead>
-                <tr className="border-b border-border/60 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                <tr className="border-b border-border/60 bg-muted/30 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                   <th className={TH}>Item</th>
                   <th className={TH}>Code</th>
                   <th className={cn(TH, "text-right")}>Qty</th>
@@ -350,13 +420,15 @@ function InvoiceCard({
                     key={`${item.itemCode}-${i}`}
                     className="border-b border-border/40 last:border-0"
                   >
-                    <td className={cn(TD, "font-medium")}>{item.itemName}</td>
-                    <td className={cn(TD, "font-mono text-xs text-muted-foreground")}>
+                    <td className={cn(TD, "py-2.5 font-medium")}>{item.itemName}</td>
+                    <td className={cn(TD, "py-2.5 font-mono text-xs text-muted-foreground")}>
                       {item.itemCode}
                     </td>
-                    <td className={cn(TD, "text-right tabular-nums")}>{item.quantity}</td>
-                    <td className={cn(TD, "text-right tabular-nums")}>{fmtSAR(item.unitRate)}</td>
-                    <td className={cn(TD, "text-right font-medium tabular-nums")}>
+                    <td className={cn(TD, "py-2.5 text-right tabular-nums")}>{item.quantity}</td>
+                    <td className={cn(TD, "py-2.5 text-right tabular-nums")}>
+                      {fmtSAR(item.unitRate)}
+                    </td>
+                    <td className={cn(TD, "py-2.5 text-right font-semibold tabular-nums")}>
                       {fmtSAR(item.netAmount)}
                     </td>
                   </tr>
@@ -399,9 +471,9 @@ function Meta({
   return (
     <div className="min-w-0">
       <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className={cn("mt-0.5 text-sm", emphasis ? "text-base font-semibold" : "font-medium")}>
+      <div className={cn("mt-0.5 text-sm", emphasis ? "text-base font-semibold" : "font-medium")}>
         {children}
-      </p>
+      </div>
     </div>
   );
 }

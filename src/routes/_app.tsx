@@ -89,13 +89,11 @@ function AppLayout() {
    */
   const canReports = hasPerm(role, profile?.permissions as any, "view_reports");
   /**
-   * Shams MIS. Mirrors the two gates the Shams server functions already
-   * enforce — the catalog behind `view_orders`, invoices behind
-   * `view_invoice_analytics` — rather than minting a permission for the page.
+   * Shams MIS. One page-level permission, the same key every Shams server
+   * function checks — so the entry appears exactly when the page would work.
+   * Auditors do not hold it by default but can be granted it individually.
    */
-  const canShams =
-    hasPerm(role, profile?.permissions as any, "view_orders") ||
-    hasPerm(role, profile?.permissions as any, "view_invoice_analytics");
+  const canShams = hasPerm(role, profile?.permissions as any, "view_shams_mis");
   // Team agents get one Calls page and no module landing page, so the parent
   // entry points straight at it and the sibling pages are never rendered.
   const callsTeam = callsTeamForRole(role);
@@ -162,10 +160,8 @@ function AppLayout() {
             },
           ]
         : []),
-      // Shams MIS reads the pharmacy's own system. It appears for anyone who can
-      // reach either half of it — the catalog (`view_orders`) or invoices
-      // (`view_invoice_analytics`) — and the page itself shows only the tabs the
-      // holder's permissions can actually fetch.
+      // Shams MIS reads the pharmacy's own system, behind its own page-level
+      // permission so it can be granted or withdrawn on its own.
       ...(canShams ? [{ to: "/shams", label: "Shams MIS", icon: PackageSearch }] : []),
       ...(canUsers ? [{ to: "/admin/users", label: "Users", icon: Users }] : []),
       ...(canBranches ? [{ to: "/branches", label: "Branches", icon: MapPin }] : []),

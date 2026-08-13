@@ -9,6 +9,7 @@ export type PermissionGroup =
   | "Dashboard"
   | "Invoice Verification"
   | "Branches"
+  | "Shams MIS"
   | "Administration";
 
 export interface PermissionDef {
@@ -44,6 +45,10 @@ export const ALL_PERMISSIONS: PermissionDef[] = [
   { key: "view_invoice_analytics", label: "View Invoice Analytics", group: "Invoice Verification" },
   // Branches
   { key: "view_branches", label: "View Branches", group: "Branches" },
+  // Shams MIS — one page-level key. The page is a single read-only window onto
+  // the pharmacy's own system; splitting it per tab would gate parts of one
+  // screen against each other for no operational reason.
+  { key: "view_shams_mis", label: "View Shams MIS", group: "Shams MIS" },
   // Administration
   { key: "view_reports", label: "View All Reports", group: "Administration" },
   { key: "manage_users", label: "Manage Users", group: "Administration" },
@@ -72,7 +77,33 @@ const AUDITOR_PERMS: PermKey[] = [
   "view_branches",
 ];
 
-const AUDITOR_SAFE_READ_PERMS: PermKey[] = [...AUDITOR_PERMS];
+/**
+ * What an auditor may be *granted*, which is deliberately wider than what an
+ * auditor *gets*.
+ *
+ * Everything in `AUDITOR_PERMS` (their defaults) plus `view_shams_mis`. The gap
+ * is the point: an auditor has no Shams MIS access by default, and an
+ * administrator can grant it to one individual through the existing per-user
+ * permission list — no hardcoded user ids, no second mechanism. Any key here but
+ * not in `AUDITOR_PERMS` behaves that way.
+ *
+ * Must stay byte-identical to `_auditor_safe` in `has_permission()`; the
+ * defaults live in `_auditor_defaults`. `npm run check:permissions` compares
+ * both pairs.
+ */
+const AUDITOR_SAFE_READ_PERMS: PermKey[] = [
+  "view_orders",
+  "view_complaints",
+  "view_dashboard",
+  "view_team_analytics",
+  "view_all_agents",
+  "view_call_center",
+  "view_invoice_analytics",
+  "view_reports",
+  "export_reports",
+  "view_branches",
+  "view_shams_mis",
+];
 
 /**
  * Supervisor: everything except the destructive and owner-level surfaces.
@@ -121,6 +152,7 @@ const SUPERVISOR_ALLOWED_PERMS: PermKey[] = [
   "view_reports",
   "manage_users",
   "admin_access",
+  "view_shams_mis",
 ];
 
 const SUPERVISOR_DEFAULT_PERMS: PermKey[] = [
@@ -146,6 +178,7 @@ const SUPERVISOR_DEFAULT_PERMS: PermKey[] = [
   "view_reports",
   "manage_users",
   "admin_access",
+  "view_shams_mis",
 ];
 
 const ROLE_ALLOWED_PERMS: Record<Exclude<AppRole, "admin" | "owner">, PermKey[]> = {
@@ -164,6 +197,7 @@ const ROLE_ALLOWED_PERMS: Record<Exclude<AppRole, "admin" | "owner">, PermKey[]>
     "view_invoice_analytics",
     "view_branches",
     "export_reports",
+    "view_shams_mis",
   ],
   telesales: [
     "view_orders",
@@ -175,6 +209,7 @@ const ROLE_ALLOWED_PERMS: Record<Exclude<AppRole, "admin" | "owner">, PermKey[]>
     "view_invoice_analytics",
     "view_branches",
     "export_reports",
+    "view_shams_mis",
   ],
   auditor: AUDITOR_SAFE_READ_PERMS,
 };
@@ -195,6 +230,7 @@ const ROLE_DEFAULTS: Record<AppRole, PermKey[]> = {
     "view_team_analytics",
     "verify_own_orders",
     "view_branches",
+    "view_shams_mis",
   ],
   telesales: [
     "view_orders",
@@ -203,6 +239,7 @@ const ROLE_DEFAULTS: Record<AppRole, PermKey[]> = {
     "view_dashboard",
     "verify_own_orders",
     "view_branches",
+    "view_shams_mis",
   ],
   auditor: AUDITOR_PERMS,
 };
@@ -274,5 +311,6 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
   "Dashboard",
   "Invoice Verification",
   "Branches",
+  "Shams MIS",
   "Administration",
 ];

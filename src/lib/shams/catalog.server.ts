@@ -21,6 +21,12 @@
 
 import { shamsFetch, ShamsError, TtlCache } from "./client.server";
 import { normalizeProductDetail, normalizeProducts, normalizeStock } from "./normalize";
+import {
+  isWildcardQuery,
+  matchesProductWildcard,
+  parseWildcardQuery,
+  wildcardProbe,
+} from "./search";
 import type {
   RawProductInfoResponse,
   RawProductSearchResponse,
@@ -51,24 +57,52 @@ export function _clearCaches(): void {
 }
 
 /**
- * Free-text catalog search.
+ * Free-text catalog search, with `*` wildcards.
  *
- * Matching is the API's own and is substring-based over the item name — the
- * capture shows `q=moun` and the full name `mounjaro 2.5 mg 0.5ml pen, 4's`
+ * Without a `*` this is the API's own matching: substring over the item name —
+ * the capture shows `q=moun` and the full name `mounjaro 2.5 mg 0.5ml pen, 4's`
  * both resolving, the latter to a single row. Queries shorter than
  * `MIN_SEARCH_LENGTH` return empty without a request rather than sweeping the
  * catalog.
+ *
+ * ## Wildcards, and why they are applied here
+ *
+ * `mou*n*j*2.5` means "these fragments, in this order, anything in between".
+ * **The MIS API has no such syntax.** Its only search parameter is `q`, matched
+ * as a plain substring (verified against the portal's own bundle, which builds
+ * `/product/search?q=` and nothing else), so forwarding the asterisks literally
+ * would search for a product whose name contains a `*` and return nothing.
+ *
+ * So the expression is split: one fragment goes upstream as an ordinary term to
+ * pull candidates, and the full ordered match is applied to the rows that come
+ * back. That is correct rather than approximate — every product satisfying the
+ * whole expression must contain each individual fragment, so a single-fragment
+ * search is guaranteed to be a superset of the answer.
+ *
+ * Filtering happens **before** the result cap, so a wildcard match cannot be
+ * truncated away by candidates it was going to reject anyway.
  */
 export async function searchProducts(query: string): Promise<ShamsProduct[]> {
   const q = query.trim();
-  if (q.length < MIN_SEARCH_LENGTH) return [];
+  if (q === "") return [];
 
   const key = q.toLowerCase();
   const cached = searchCache.get(key);
   if (cached) return cached;
 
-  const body = await shamsFetch<RawProductSearchResponse>("/api/v2/product/search", { q });
-  const products = normalizeProducts(body?.data).slice(0, MAX_SEARCH_RESULTS);
+  const fragments = isWildcardQuery(q) ? parseWildcardQuery(q) : null;
+  // The upstream term: the whole query when it is plain, the most selective
+  // fragment when it is an expression.
+  const term = fragments ? wildcardProbe(fragments, MIN_SEARCH_LENGTH) : q;
+  if (term === null || term.length < MIN_SEARCH_LENGTH) return [];
+
+  const body = await shamsFetch<RawProductSearchResponse>("/api/v2/product/search", { q: term });
+  const candidates = normalizeProducts(body?.data);
+  const matched = fragments
+    ? candidates.filter((product) => matchesProductWildcard(product, fragments))
+    : candidates;
+
+  const products = matched.slice(0, MAX_SEARCH_RESULTS);
   searchCache.set(key, products);
   return products;
 }

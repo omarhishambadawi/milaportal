@@ -93,13 +93,22 @@ function parseSql(text, file) {
   if (!auditorSafeMatch) fail(`Could not find _auditor_safe ARRAY in SQL (${file}).`);
   const auditorSafe = keysIn(auditorSafeMatch[1]);
 
+  // The auditor's defaults are a SEPARATE array from what it may be granted:
+  // a key in `_auditor_safe` but not in `_auditor_defaults` is one an
+  // administrator can hand to one auditor without the role holding it. Older
+  // migrations assigned both from `_auditor_safe`, so its absence is not an
+  // error — it means the two lists are the same.
+  const auditorDefaultsMatch = text.match(
+    /_auditor_defaults\s+text\[\]\s*:=\s*ARRAY\[([\s\S]*?)\]/,
+  );
+  const auditorDefaults = auditorDefaultsMatch ? keysIn(auditorDefaultsMatch[1]) : auditorSafe;
+
   const allowed = {};
   const defaults = {};
   for (const role of ENUMERATED_ROLES) {
     if (role === "auditor") {
-      // auditor branch assigns _allowed := _auditor_safe; _defaults := _auditor_safe;
       allowed[role] = auditorSafe;
-      defaults[role] = auditorSafe;
+      defaults[role] = auditorDefaults;
       continue;
     }
     // The lookbehind matters: `_role` must be the whole variable, not the tail of
@@ -115,7 +124,7 @@ function parseSql(text, file) {
     allowed[role] = keysIn(m[1]);
     defaults[role] = keysIn(m[2]);
   }
-  return { allowed, defaults, auditorSafe };
+  return { allowed, defaults, auditorSafe, auditorDefaults };
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +165,7 @@ function inlineRoleArray(objBody, role, objName) {
 
 function parseTs(text) {
   const auditorPerms = namedArray(text, "AUDITOR_PERMS");
+  const auditorSafe = namedArray(text, "AUDITOR_SAFE_READ_PERMS");
   const supervisorAllowed = namedArray(text, "SUPERVISOR_ALLOWED_PERMS");
   const supervisorDefaults = namedArray(text, "SUPERVISOR_DEFAULT_PERMS");
 
@@ -166,8 +176,9 @@ function parseTs(text) {
   // SUPERVISOR_* arrays rather than inlining, so they are read from those.
   const allowed = {
     supervisor: supervisorAllowed,
-    // ROLE_ALLOWED_PERMS.auditor === AUDITOR_SAFE_READ_PERMS === [...AUDITOR_PERMS]
-    auditor: auditorPerms,
+    // ROLE_ALLOWED_PERMS.auditor === AUDITOR_SAFE_READ_PERMS — wider than the
+    // defaults, so an individual auditor can be granted a key the role lacks.
+    auditor: auditorSafe,
     customer_care: inlineRoleArray(allowedBody, "customer_care", "ROLE_ALLOWED_PERMS"),
     telesales: inlineRoleArray(allowedBody, "telesales", "ROLE_ALLOWED_PERMS"),
   };
@@ -177,7 +188,7 @@ function parseTs(text) {
     customer_care: inlineRoleArray(defaultsBody, "customer_care", "ROLE_DEFAULTS"),
     telesales: inlineRoleArray(defaultsBody, "telesales", "ROLE_DEFAULTS"),
   };
-  return { allowed, defaults, auditorSafe: auditorPerms };
+  return { allowed, defaults, auditorSafe, auditorDefaults: auditorPerms };
 }
 
 // ---------------------------------------------------------------------------
@@ -199,8 +210,9 @@ function main() {
     }
   };
 
-  // Shared auditor read list.
-  check("_auditor_safe  vs  AUDITOR_PERMS", sql.auditorSafe, ts.auditorSafe);
+  // Shared auditor read lists — grantable and automatic are separate sets.
+  check("_auditor_safe      vs  AUDITOR_SAFE_READ_PERMS", sql.auditorSafe, ts.auditorSafe);
+  check("_auditor_defaults  vs  AUDITOR_PERMS", sql.auditorDefaults, ts.auditorDefaults);
 
   for (const role of ENUMERATED_ROLES) {
     check(`${role}: _allowed  vs  ROLE_ALLOWED_PERMS`, sql.allowed[role], ts.allowed[role]);

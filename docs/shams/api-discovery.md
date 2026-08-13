@@ -136,6 +136,12 @@ Substring match over the item name; case-insensitive. Observed: `q=moun`,
 `q=mounj`, `q=mounjaro` (12 hits) and a full name `mounjaro 2.5 mg 0.5ml pen, 4's`
 (1 hit). Other parameters: `NOT VERIFIED` — only `q` was ever sent.
 
+**No wildcard syntax.** `q` is the only parameter the endpoint takes (the bundle
+builds `/product/search?q=` and nothing else), and it is matched literally — so
+an `*` would be searched for as a character. The portal's `mou*n*j*2.5` support
+is therefore applied on our side: one fragment is sent as an ordinary `q` and the
+ordered match is completed in `lib/shams/search.ts`. See `docs/project.md`.
+
 ```jsonc
 { "success": true, "count": 12, "search": "mounjaro",
   "data": [ { "itemCode": "10609670", "itemName": "MOUNJARO 2.5 MG 0.5ML PEN, 4'S", "retailPrice": 1261.4 } ] }
@@ -247,6 +253,23 @@ So **seven** parameters are recognised. Note:
 
 Document numbers are unique only **within a warehouse**, so `(wh_cd, doc_no)` is
 the identity.
+
+**There is no cross-branch document lookup.** `wh_cd` is always sent, and the
+portal's own Sales Register marks Store Code required. The complete endpoint
+inventory, read from the shipped bundle (`/mis/assets/index-*.js`), is:
+
+```
+auth/token · auth/login · auth/permissions/{id} · users · menus
+product/search · product/info · product/stock
+sales/details · crm/data
+dashboard/{sale-report, area-wise-sale-report, item-wise-sale-report, stock-distribution}
+```
+
+Nothing there answers "which branches hold document N", which is why
+`sales.server.ts:findInvoiceBranches` asks each branch in turn rather than
+inventing a query parameter. Whether an **empty** `wh_cd` would search every
+warehouse is `NOT VERIFIED` — the portal never sends one — so it is not relied
+on.
 
 ### 5.1 The row model — one document is several rows
 

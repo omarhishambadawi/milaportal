@@ -6,24 +6,29 @@
  * browser and no MIS detail — base URL, credentials, upstream errors — reaches
  * it; the page only ever sees normalized models and a `{kind}` failure code.
  *
- * ## Access mirrors the server, rather than restating it
+ * ## Access
  *
- * The two server-side gates are `view_orders` for the catalog and
- * `view_invoice_analytics` for invoices, so this page shows exactly the tabs a
- * user's permissions can actually fetch: someone with only invoice access never
- * sees a Products tab that would error, and someone with only catalog access
- * never sees Invoices. The server checks again regardless — this is which doors
- * are visible, not which are locked.
+ * One page-level permission, `view_shams_mis`, checked here and again in every
+ * server function. This page is a single read-only window onto the pharmacy's
+ * system, so gating its tabs against each other said nothing useful — and
+ * borrowing `view_orders`/`view_invoice_analytics`, as it did before, meant
+ * Shams access could not be granted or withdrawn on its own. The check here
+ * decides which doors are visible; the server decides which are locked.
+ *
+ * ## Two tabs, not three
+ *
+ * The standalone Products tab was removed: Branch Stock already begins with the
+ * same catalog search, and an agent looking a product up almost always wants to
+ * know where it is. One flow instead of two that overlapped.
  */
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { ShieldAlert } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/lib/auth";
 import { hasPerm } from "@/lib/permissions";
 import type { ShamsProduct } from "@/lib/shams/types";
-import { ProductsTab } from "@/features/shams/components/products-tab";
 import { StockTab } from "@/features/shams/components/stock-tab";
 import { InvoicesTab } from "@/features/shams/components/invoices-tab";
 
@@ -32,41 +37,19 @@ export const Route = createFileRoute("/_app/shams")({
   component: ShamsPage,
 });
 
-type TabId = "products" | "stock" | "invoices";
+type TabId = "stock" | "invoices";
 
 function ShamsPage() {
   const { role, profile, loading } = useAuth();
   const perms = profile?.permissions as string[] | null | undefined;
 
-  const canCatalog = hasPerm(role, perms, "view_orders");
-  const canInvoices = hasPerm(role, perms, "view_invoice_analytics");
+  const canShams = hasPerm(role, perms, "view_shams_mis");
 
-  const [tab, setTab] = useState<TabId>(canCatalog ? "products" : "invoices");
-  /**
-   * The product the Stock tab is about.
-   *
-   * Held here rather than inside the tab so that opening a product in Products
-   * and pressing "View branch stock" carries the selection across — and because
-   * both tabs then read the same React Query entry, the stock is already loaded
-   * when the user arrives.
-   */
+  const [tab, setTab] = useState<TabId>("stock");
+  /** The product Branch Stock is about, held across tab switches. */
   const [stockProduct, setStockProduct] = useState<ShamsProduct | null>(null);
 
-  const tabs = useMemo(
-    () =>
-      [
-        ...(canCatalog
-          ? ([
-              { id: "products", label: "Products" },
-              { id: "stock", label: "Branch Stock" },
-            ] as const)
-          : []),
-        ...(canInvoices ? ([{ id: "invoices", label: "Invoices" }] as const) : []),
-      ] as { id: TabId; label: string }[],
-    [canCatalog, canInvoices],
-  );
-
-  if (!loading && !canCatalog && !canInvoices) {
+  if (!loading && !canShams) {
     return (
       <div className="py-16 text-center">
         <ShieldAlert className="mx-auto h-10 w-10 text-destructive" aria-hidden="true" />
@@ -86,35 +69,17 @@ function ShamsPage() {
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as TabId)} className="space-y-4">
         <TabsList>
-          {tabs.map((t) => (
-            <TabsTrigger key={t.id} value={t.id}>
-              {t.label}
-            </TabsTrigger>
-          ))}
+          <TabsTrigger value="stock">Branch Stock</TabsTrigger>
+          <TabsTrigger value="invoices">Invoices</TabsTrigger>
         </TabsList>
 
-        {canCatalog && (
-          <>
-            <TabsContent value="products" className="space-y-4">
-              <ProductsTab
-                onViewStock={(product) => {
-                  setStockProduct(product);
-                  setTab("stock");
-                }}
-              />
-            </TabsContent>
+        <TabsContent value="stock" className="space-y-4">
+          <StockTab selected={stockProduct} onSelect={setStockProduct} />
+        </TabsContent>
 
-            <TabsContent value="stock" className="space-y-4">
-              <StockTab selected={stockProduct} onSelect={setStockProduct} />
-            </TabsContent>
-          </>
-        )}
-
-        {canInvoices && (
-          <TabsContent value="invoices" className="space-y-4">
-            <InvoicesTab />
-          </TabsContent>
-        )}
+        <TabsContent value="invoices" className="space-y-4">
+          <InvoicesTab />
+        </TabsContent>
       </Tabs>
     </div>
   );

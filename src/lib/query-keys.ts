@@ -247,6 +247,8 @@ export const queryKeys = {
      *  repeat across warehouses. */
     invoices: (branchCode: string, docNo: string) =>
       ["shams", "invoices", branchCode, docNo] as const,
+    /** Which branches hold a document number — one sweep of the chain. */
+    invoiceBranches: (docNo: string) => ["shams", "invoice-branches", docNo] as const,
   },
 
   /**

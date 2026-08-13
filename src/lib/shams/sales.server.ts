@@ -19,7 +19,7 @@
  * the per-keystroke traffic that justifies the catalog caches.
  */
 
-import { shamsFetch } from "./client.server";
+import { shamsFetch, ShamsError } from "./client.server";
 import { groupInvoices, stripLeadingZeros } from "./normalize";
 import type { RawSalesResponse, ShamsInvoice } from "./types";
 
@@ -128,4 +128,105 @@ export async function getInvoices(query: InvoiceQuery): Promise<ShamsInvoice[]> 
 export async function getInvoice(branchCode: string, docNo: string): Promise<ShamsInvoice | null> {
   const invoices = await getInvoices({ branchCode, docNoStart: docNo });
   return invoices[0] ?? null;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Branch discovery                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How many branches are probed at once.
+ *
+ * The MIS answers a document lookup in 0.4–2.3 s. Eight in flight keeps a
+ * whole-chain sweep inside a few seconds without turning one agent's lookup
+ * into a burst the MIS could reasonably call abuse.
+ */
+const DISCOVERY_CONCURRENCY = 8;
+
+/** A branch that genuinely holds the document. */
+export interface InvoiceBranchMatch {
+  branchCode: string;
+  /** The document's date, so a chooser can tell two same-numbered docs apart. */
+  docDate: string | null;
+  grandTotal: number;
+  cancelled: boolean;
+  /** Carried through so the chooser can show the status without a second read. */
+  isCallCentre: boolean;
+  customer: string | null;
+}
+
+/**
+ * Which branches hold a document with this number?
+ *
+ * ## Why this is a fan-out
+ *
+ * A document number identifies an invoice only *within* a warehouse, and the
+ * MIS offers no way to ask about a number across the chain. Its entire API
+ * surface is known — `product/{search,info,stock}`, `sales/details`,
+ * `crm/data`, four `dashboard/*` reports, and auth/users — read from the
+ * portal's own shipped bundle, which builds every `sales/details` call with a
+ * single `wh_cd`. The MIS's own Sales Register requires a store code for the
+ * same reason.
+ *
+ * So the only honest way to answer "where does 22138 exist?" is to ask each
+ * branch. Nothing here infers existence from MilaServ's branch table: that list
+ * is only the set of places to *look*, and a branch appears in the result solely
+ * because Shams returned a document for it.
+ *
+ * A branch that fails to answer is skipped rather than failing the sweep — one
+ * unreachable warehouse should not hide the nine that replied — but a total
+ * failure surfaces as one, since "no branches match" and "nothing answered" are
+ * different facts and only the first is a legitimate empty state.
+ */
+export async function findInvoiceBranches(
+  docNo: string,
+  branchCodes: string[],
+): Promise<{ matches: InvoiceBranchMatch[]; probed: number; failed: number }> {
+  const doc = docNo.trim();
+  if (!DOC_NO_PATTERN.test(doc)) {
+    throw new ShamsQueryError("Document number must be numeric.");
+  }
+
+  const candidates = branchCodes
+    .map((code) => code.trim().toUpperCase())
+    .filter((code) => BRANCH_CODE_PATTERN.test(code));
+  const unique = [...new Set(candidates)].sort((a, b) => a.localeCompare(b));
+
+  const matches: InvoiceBranchMatch[] = [];
+  let failed = 0;
+  let cursor = 0;
+
+  async function worker(): Promise<void> {
+    for (;;) {
+      const index = cursor++;
+      if (index >= unique.length) return;
+      const branchCode = unique[index];
+      try {
+        const invoices = await getInvoices({ branchCode, docNoStart: doc });
+        for (const invoice of invoices) {
+          matches.push({
+            branchCode,
+            docDate: invoice.docDate,
+            grandTotal: invoice.grandTotal,
+            cancelled: invoice.cancelled,
+            isCallCentre: invoice.isCallCentre,
+            customer: invoice.customer,
+          });
+        }
+      } catch {
+        failed++;
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(DISCOVERY_CONCURRENCY, unique.length) }, () => worker()),
+  );
+
+  if (unique.length > 0 && failed === unique.length) {
+    throw new ShamsError("unavailable", "Shams MIS did not answer the branch search.");
+  }
+
+  matches.sort((a, b) => a.branchCode.localeCompare(b.branchCode));
+  return { matches, probed: unique.length, failed };
 }

@@ -11,15 +11,16 @@
  * `lib/shams/client.server.ts`), so MilaServ's own gate is the only access
  * control in the path. Nothing in this file is reachable anonymously.
  *
- * ## Permissions, reused rather than minted
+ * ## Permissions — one page-level key
  *
- * `view_orders` for the catalog and `view_invoice_analytics` for sales. Both
- * already exist in `lib/permissions.ts` and in `has_permission()`, and both
- * already mean what is needed: agents who take orders look products up, and the
- * "Invoice Verification" group is exactly the population that reconciles
- * documents. A new permission key would have to be added to the TypeScript
- * source *and* to a SQL migration or `npm run check:permissions` fails — an
- * expensive way to say something the existing keys already say.
+ * `view_shams_mis`, on every handler. This replaces the earlier arrangement of
+ * borrowing `view_orders` for the catalog and `view_invoice_analytics` for
+ * sales, which had two problems now that the page is an operational tool rather
+ * than a milestone: access to Shams could not be granted or revoked without also
+ * changing someone's Orders or Invoice Verification rights, and an auditor —
+ * who holds both borrowed keys — could not be kept out. One key, declared in
+ * `lib/permissions.ts` and in `has_permission()`, says exactly the thing that is
+ * meant. `npm run check:permissions` fails if the two ever drift.
  */
 
 import { createServerFn } from "@tanstack/react-start";
@@ -31,6 +32,7 @@ import type {
   ShamsProduct,
   ShamsProductDetail,
 } from "@/lib/shams/types";
+import type { InvoiceBranchMatch } from "@/lib/shams/sales.server";
 
 /* -------------------------------------------------------------------------- */
 /* Gates                                                                       */
@@ -101,6 +103,7 @@ async function toFailure(err: unknown): Promise<ShamsFailure> {
 
 const searchInput = z.object({ q: z.string().max(120) });
 const itemInput = z.object({ itemCode: z.string().min(1).max(40) });
+const docNoInput = z.object({ docNo: z.string().min(1).max(12) });
 const invoiceInput = z.object({
   branchCode: z.string().min(1).max(16),
   docNoStart: z.string().min(1).max(12),
@@ -125,7 +128,7 @@ export const shamsSearchProducts = createServerFn({ method: "POST" })
   .inputValidator((d) => searchInput.parse(d))
   .handler(async ({ context, data }): Promise<ShamsSearchResult> => {
     const { supabase, userId } = context as { supabase: any; userId: string };
-    await assertPermission(supabase, userId, "view_orders");
+    await assertPermission(supabase, userId, "view_shams_mis");
 
     const { isConfigured } = await import("@/lib/shams/client.server");
     if (!isConfigured()) {
@@ -159,7 +162,7 @@ export const shamsGetProduct = createServerFn({ method: "POST" })
   .inputValidator((d) => itemInput.parse(d))
   .handler(async ({ context, data }): Promise<ShamsProductResult> => {
     const { supabase, userId } = context as { supabase: any; userId: string };
-    await assertPermission(supabase, userId, "view_orders");
+    await assertPermission(supabase, userId, "view_shams_mis");
 
     const { isConfigured } = await import("@/lib/shams/client.server");
     if (!isConfigured()) {
@@ -204,7 +207,7 @@ export const shamsGetInvoices = createServerFn({ method: "POST" })
   .inputValidator((d) => invoiceInput.parse(d))
   .handler(async ({ context, data }): Promise<ShamsInvoiceResult> => {
     const { supabase, userId } = context as { supabase: any; userId: string };
-    await assertPermission(supabase, userId, "view_invoice_analytics");
+    await assertPermission(supabase, userId, "view_shams_mis");
 
     const { isConfigured } = await import("@/lib/shams/client.server");
     if (!isConfigured()) {
@@ -223,6 +226,59 @@ export const shamsGetInvoices = createServerFn({ method: "POST" })
       return { ok: true, configured: true, invoices, error: null };
     } catch (err) {
       return { ok: false, configured: true, invoices: [], error: await toFailure(err) };
+    }
+  });
+
+export interface ShamsInvoiceBranchesResult {
+  ok: boolean;
+  configured: boolean;
+  /** Branches Shams actually returned this document for. */
+  matches: InvoiceBranchMatch[];
+  /** How many branches were asked, so the UI can say "searched N branches". */
+  probed: number;
+  error: ShamsFailure | null;
+}
+
+/**
+ * Which branches hold a given document number?
+ *
+ * The MIS has no cross-branch lookup — `sales/details` takes exactly one
+ * `wh_cd` — so this asks each branch in turn (bounded concurrency, server-side).
+ * The candidate list is MilaServ's own branch directory, which discovery
+ * established shares an identifier space with Shams `Whouse`; a branch reaches
+ * the result only because Shams returned a document for it, never because the
+ * portal knows the branch exists.
+ *
+ * Deliberately not exposed as a per-keystroke search: one call is one sweep of
+ * the chain, and it runs when an agent submits.
+ */
+export const shamsFindInvoiceBranches = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => docNoInput.parse(d))
+  .handler(async ({ context, data }): Promise<ShamsInvoiceBranchesResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertPermission(supabase, userId, "view_shams_mis");
+
+    const { isConfigured } = await import("@/lib/shams/client.server");
+    if (!isConfigured()) {
+      return { ok: false, configured: false, matches: [], probed: 0, error: null };
+    }
+
+    try {
+      const { data: rows } = await supabase.from("branches").select("branch_no").order("branch_no");
+      const branchCodes = ((rows ?? []) as { branch_no: string }[]).map((b) => b.branch_no);
+
+      const { findInvoiceBranches } = await import("@/lib/shams/sales.server");
+      const { matches, probed } = await findInvoiceBranches(data.docNo, branchCodes);
+      return { ok: true, configured: true, matches, probed, error: null };
+    } catch (err) {
+      return {
+        ok: false,
+        configured: true,
+        matches: [],
+        probed: 0,
+        error: await toFailure(err),
+      };
     }
   });
 

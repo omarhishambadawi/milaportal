@@ -22,7 +22,12 @@ import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
 import { queryKeys } from "@/lib/query-keys";
 import { cityEnglish } from "@/features/branches/normalize";
-import { shamsGetInvoices, shamsGetProduct, shamsSearchProducts } from "@/lib/shams.functions";
+import {
+  shamsFindInvoiceBranches,
+  shamsGetInvoices,
+  shamsGetProduct,
+  shamsSearchProducts,
+} from "@/lib/shams.functions";
 
 /** Matches `MIN_SEARCH_LENGTH` server-side — below it the server returns []. */
 export const MIN_QUERY_LENGTH = 2;
@@ -36,6 +41,12 @@ const DEBOUNCE_MS = 350;
  */
 const SEARCH_STALE_MS = 5 * 60_000;
 const PRODUCT_STALE_MS = 60_000;
+/**
+ * Branch discovery is the most expensive call on the page — one sweep of every
+ * branch — and its answer (which branches ever held document N) does not move
+ * within a shift. Held long enough that going back to a number is free.
+ */
+const DISCOVERY_STALE_MS = 10 * 60_000;
 
 /** Trailing-edge debounce over a text input. */
 export function useDebounced(value: string, delayMs = DEBOUNCE_MS): string {
@@ -148,6 +159,27 @@ export function useProductDetail(itemCode: string | null, enabled = true) {
 export interface InvoiceLookup {
   branchCode: string;
   docNo: string;
+}
+
+/**
+ * Which branches hold a document number.
+ *
+ * One call sweeps the chain server-side (the MIS has no cross-branch lookup), so
+ * it is deliberately keyed on a **submitted** number and never runs while
+ * typing. Kept for the session: re-checking the same number a minute later would
+ * repeat 137 upstream requests to learn the same thing.
+ */
+export function useInvoiceBranches(docNo: string | null, enabled = true) {
+  const findFn = useServerFn(shamsFindInvoiceBranches);
+
+  return useQuery({
+    queryKey: queryKeys.shams.invoiceBranches(docNo ?? ""),
+    queryFn: ({ signal }) => findFn({ data: { docNo: docNo as string }, signal }),
+    enabled: enabled && Boolean(docNo),
+    staleTime: DISCOVERY_STALE_MS,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
 }
 
 /**

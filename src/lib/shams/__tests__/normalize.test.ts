@@ -31,11 +31,8 @@ import { validateInvoiceQuery, ShamsQueryError } from "@/lib/shams/sales.server"
 import { ALL_PERMISSIONS } from "@/lib/permissions";
 import type { RawSalesRow } from "@/lib/shams/types";
 
-/** The permission keys `shams.functions.ts` gates its handlers on. */
-const SHAMS_GATES = {
-  catalog: "view_orders",
-  invoices: "view_invoice_analytics",
-} as const;
+/** The permission key `shams.functions.ts` gates every handler on. */
+const SHAMS_GATE = "view_shams_mis";
 
 /* -------------------------------------------------------------------------- */
 /* Fixtures                                                                    */
@@ -597,19 +594,17 @@ describe("Shams server-function gates", () => {
    * false for the rest — so a renamed or mistyped key fails quietly, as a
    * feature that "only works for admins". This pins the names instead.
    */
-  it("gates on permission keys that actually exist", () => {
+  it("gates on a permission key that actually exists", () => {
     const keys = new Set(ALL_PERMISSIONS.map((p) => p.key));
-    for (const gate of Object.values(SHAMS_GATES)) {
-      expect(keys.has(gate)).toBe(true);
-    }
+    expect(keys.has(SHAMS_GATE)).toBe(true);
   });
 
-  it("gates invoices more narrowly than the catalog, because invoices carry margin", () => {
-    // Not the same key: ShamsInvoice exposes totalCost and profit, which is a
-    // smaller audience than product availability.
-    expect(SHAMS_GATES.invoices).not.toBe(SHAMS_GATES.catalog);
-    expect(ALL_PERMISSIONS.find((p) => p.key === SHAMS_GATES.invoices)?.group).toBe(
-      "Invoice Verification",
-    );
+  it("gates the page on its own key rather than borrowing another feature's", () => {
+    // Borrowing view_orders / view_invoice_analytics meant Shams access could
+    // not be granted or withdrawn without changing someone's Orders or Invoice
+    // Verification rights — and left no way to keep an auditor out.
+    expect(SHAMS_GATE).not.toBe("view_orders");
+    expect(SHAMS_GATE).not.toBe("view_invoice_analytics");
+    expect(ALL_PERMISSIONS.find((p) => p.key === SHAMS_GATE)?.group).toBe("Shams MIS");
   });
 });
