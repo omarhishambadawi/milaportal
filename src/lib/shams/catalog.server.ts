@@ -25,7 +25,8 @@ import {
   isWildcardQuery,
   matchesProductWildcard,
   parseWildcardQuery,
-  wildcardProbe,
+  rankProducts,
+  wildcardProbes,
 } from "./search";
 import type {
   RawProductInfoResponse,
@@ -44,6 +45,15 @@ const STOCK_TTL_MS = 60_000;
 export const MIN_SEARCH_LENGTH = 2;
 /** Cap on rows handed back to a caller, whatever the catalog returns. */
 export const MAX_SEARCH_RESULTS = 100;
+/**
+ * Upstream requests one wildcard search may issue.
+ *
+ * Three, because the point is insurance against a server-side result cap
+ * nobody has been able to measure — the endpoint exposes no `limit`, `page` or
+ * `offset` — not breadth for its own sake. A plain search still costs exactly
+ * one request, and no query can cost more than this however many `*` it carries.
+ */
+export const MAX_SEARCH_PROBES = 3;
 
 const searchCache = new TtlCache<ShamsProduct[]>(SEARCH_TTL_MS);
 const infoCache = new TtlCache<ShamsProductDetail | null>(INFO_TTL_MS);
@@ -90,19 +100,41 @@ export async function searchProducts(query: string): Promise<ShamsProduct[]> {
   const cached = searchCache.get(key);
   if (cached) return cached;
 
-  const fragments = isWildcardQuery(q) ? parseWildcardQuery(q) : null;
-  // The upstream term: the whole query when it is plain, the most selective
-  // fragment when it is an expression.
-  const term = fragments ? wildcardProbe(fragments, MIN_SEARCH_LENGTH) : q;
-  if (term === null || term.length < MIN_SEARCH_LENGTH) return [];
+  const fragments = isWildcardQuery(q) ? parseWildcardQuery(q) : [];
+  const wildcard = fragments.length > 0;
 
-  const body = await shamsFetch<RawProductSearchResponse>("/api/v2/product/search", { q: term });
-  const candidates = normalizeProducts(body?.data);
-  const matched = fragments
+  // The upstream terms: the whole query when it is plain, the most selective
+  // fragments when it is an expression.
+  const probes = wildcard
+    ? wildcardProbes(fragments, MIN_SEARCH_LENGTH, MAX_SEARCH_PROBES)
+    : q.length >= MIN_SEARCH_LENGTH
+      ? [q]
+      : [];
+  if (probes.length === 0) return [];
+
+  // Probes run together — they are independent, and a wildcard search should
+  // not cost the agent one round trip per fragment.
+  const responses = await Promise.all(
+    probes.map((term) =>
+      shamsFetch<RawProductSearchResponse>("/api/v2/product/search", { q: term }),
+    ),
+  );
+
+  // Union, de-duplicated by item code. First sighting wins, so the most
+  // selective probe's ordering survives into the ranking below.
+  const byCode = new Map<string, ShamsProduct>();
+  for (const body of responses) {
+    for (const product of normalizeProducts(body?.data)) {
+      if (!byCode.has(product.itemCode)) byCode.set(product.itemCode, product);
+    }
+  }
+
+  const candidates = [...byCode.values()];
+  const matched = wildcard
     ? candidates.filter((product) => matchesProductWildcard(product, fragments))
     : candidates;
 
-  const products = matched.slice(0, MAX_SEARCH_RESULTS);
+  const products = rankProducts(matched, q, fragments).slice(0, MAX_SEARCH_RESULTS);
   searchCache.set(key, products);
   return products;
 }

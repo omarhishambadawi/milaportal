@@ -19,9 +19,10 @@
  * the per-keystroke traffic that justifies the catalog caches.
  */
 
-import { shamsFetch, ShamsError } from "./client.server";
+import { shamsFetch, ShamsError, TtlCache } from "./client.server";
 import { groupInvoices, stripLeadingZeros } from "./normalize";
-import type { RawSalesResponse, ShamsInvoice } from "./types";
+import { sortInvoiceBranchMatches } from "./search";
+import type { InvoiceBranchMatch, RawSalesResponse, ShamsInvoice } from "./types";
 
 /** Branch/warehouse codes are `P` + four digits, e.g. `P0304`. */
 const BRANCH_CODE_PATTERN = /^[A-Z]\d{4}$/i;
@@ -46,6 +47,13 @@ export interface InvoiceQuery {
    */
   startDate?: string;
   endDate?: string;
+  /**
+   * Override the transport's 30 s default.
+   *
+   * Used by the branch sweep, where one slow warehouse out of 137 must not hold
+   * everything else up. A single deliberate lookup leaves this unset.
+   */
+  timeoutMs?: number;
 }
 
 export class ShamsQueryError extends Error {
@@ -107,15 +115,19 @@ export function validateInvoiceQuery(query: InvoiceQuery): {
 export async function getInvoices(query: InvoiceQuery): Promise<ShamsInvoice[]> {
   const { branchCode, docNoStart, docNoEnd, startDate, endDate } = validateInvoiceQuery(query);
 
-  const body = await shamsFetch<RawSalesResponse>("/api/v2/sales/details", {
-    // Sent even when empty: this is exactly what the MIS frontend sends, and the
-    // endpoint's parameter echo shows it expects the keys to be present.
-    start_date: startDate,
-    end_date: endDate,
-    doc_no_start: docNoStart,
-    doc_no_end: docNoEnd,
-    wh_cd: branchCode,
-  });
+  const body = await shamsFetch<RawSalesResponse>(
+    "/api/v2/sales/details",
+    {
+      // Sent even when empty: this is exactly what the MIS frontend sends, and
+      // the endpoint's parameter echo shows it expects the keys to be present.
+      start_date: startDate,
+      end_date: endDate,
+      doc_no_start: docNoStart,
+      doc_no_end: docNoEnd,
+      wh_cd: branchCode,
+    },
+    query.timeoutMs ? { timeoutMs: query.timeoutMs } : {},
+  );
 
   return groupInvoices(body?.data);
 }
@@ -135,24 +147,68 @@ export async function getInvoice(branchCode: string, docNo: string): Promise<Sha
 /* -------------------------------------------------------------------------- */
 
 /**
- * How many branches are probed at once.
+ * How many branches are probed at once, within one part of the sweep.
  *
- * The MIS answers a document lookup in 0.4–2.3 s. Eight in flight keeps a
- * whole-chain sweep inside a few seconds without turning one agent's lookup
- * into a burst the MIS could reasonably call abuse.
+ * Was 8, which was the whole performance problem: 137 branches at 8 in flight
+ * is ~17 waves, and at the observed 0.4–2.3 s per document lookup that is a
+ * ten-to-forty-second wait on an operational screen.
+ *
+ * 24 is chosen against what is actually known. No rate limit has ever been
+ * observed — no `X-RateLimit-*`, no `Retry-After`, no throttled request across
+ * two captures — but absence of evidence is not a licence, so this stays in the
+ * range a browser would itself produce (Chrome allows 6 per host and the MIS
+ * portal happily fires a request per keystroke) rather than being raised until
+ * something breaks. Combined with the client running parts in parallel, a sweep
+ * is ~6 waves instead of ~17.
  */
-const DISCOVERY_CONCURRENCY = 8;
+const DISCOVERY_CONCURRENCY = 24;
 
-/** A branch that genuinely holds the document. */
-export interface InvoiceBranchMatch {
-  branchCode: string;
-  /** The document's date, so a chooser can tell two same-numbered docs apart. */
-  docDate: string | null;
-  grandTotal: number;
-  cancelled: boolean;
-  /** Carried through so the chooser can show the status without a second read. */
-  isCallCentre: boolean;
-  customer: string | null;
+/**
+ * Per-branch timeout during a sweep.
+ *
+ * The transport's default is 30 s, which is right for a lookup a user is
+ * waiting on but wrong for one branch out of 137: a single slow warehouse could
+ * hold a worker for half a minute while the other 136 sat finished. A branch
+ * that has not answered in 6 s is treated as a failure and skipped — the sweep
+ * reports how many did that, and the agent is not made to wait for it.
+ */
+const DISCOVERY_TIMEOUT_MS = 6_000;
+
+/**
+ * Sweep results, cached server-side.
+ *
+ * Which branches hold document N does not change minute to minute, and the
+ * question is expensive enough — one whole-chain sweep — that answering it twice
+ * for two agents on the same document is waste. Per-isolate and in-memory, like
+ * every other cache here; nothing is persisted.
+ */
+const DISCOVERY_TTL_MS = 5 * 60_000;
+const discoveryCache = new TtlCache<InvoiceBranchSweep>(DISCOVERY_TTL_MS);
+
+export interface InvoiceBranchSweep {
+  matches: InvoiceBranchMatch[];
+  probed: number;
+  failed: number;
+}
+
+/** Test seam; also lets a diagnostic force a cold sweep. */
+export function _clearDiscoveryCache(): void {
+  discoveryCache.clear();
+}
+
+/**
+ * Split the chain into `parts` interleaved groups.
+ *
+ * Round-robin rather than contiguous blocks, and that is the point: branch codes
+ * are regional (`P00xx` Riyadh, `P02xx` Jeddah…), so contiguous slices would put
+ * one region's branches — and any regional slowness — entirely inside one part,
+ * making that part the one everybody waits for. Interleaving gives every part
+ * the same mix, so the parts finish at roughly the same time and a progressive
+ * UI fills in evenly.
+ */
+export function partitionBranches(codes: string[], part: number, parts: number): string[] {
+  if (parts <= 1) return codes;
+  return codes.filter((_, index) => index % parts === part);
 }
 
 /**
@@ -181,16 +237,27 @@ export interface InvoiceBranchMatch {
 export async function findInvoiceBranches(
   docNo: string,
   branchCodes: string[],
-): Promise<{ matches: InvoiceBranchMatch[]; probed: number; failed: number }> {
+  options: { part?: number; parts?: number } = {},
+): Promise<InvoiceBranchSweep> {
   const doc = docNo.trim();
   if (!DOC_NO_PATTERN.test(doc)) {
     throw new ShamsQueryError("Document number must be numeric.");
   }
 
+  const parts = Math.max(1, Math.floor(options.parts ?? 1));
+  const part = Math.min(Math.max(0, Math.floor(options.part ?? 0)), parts - 1);
+
   const candidates = branchCodes
     .map((code) => code.trim().toUpperCase())
     .filter((code) => BRANCH_CODE_PATTERN.test(code));
+  // Sorted before partitioning so the split is deterministic: the same branch
+  // always lands in the same part, which is what makes the cache key honest.
   const unique = [...new Set(candidates)].sort((a, b) => a.localeCompare(b));
+  const mine = partitionBranches(unique, part, parts);
+
+  const cacheKey = `${doc}::${part}/${parts}::${mine.length}`;
+  const cached = discoveryCache.get(cacheKey);
+  if (cached) return cached;
 
   const matches: InvoiceBranchMatch[] = [];
   let failed = 0;
@@ -199,10 +266,14 @@ export async function findInvoiceBranches(
   async function worker(): Promise<void> {
     for (;;) {
       const index = cursor++;
-      if (index >= unique.length) return;
-      const branchCode = unique[index];
+      if (index >= mine.length) return;
+      const branchCode = mine[index];
       try {
-        const invoices = await getInvoices({ branchCode, docNoStart: doc });
+        const invoices = await getInvoices({
+          branchCode,
+          docNoStart: doc,
+          timeoutMs: DISCOVERY_TIMEOUT_MS,
+        });
         for (const invoice of invoices) {
           matches.push({
             branchCode,
@@ -220,13 +291,20 @@ export async function findInvoiceBranches(
   }
 
   await Promise.all(
-    Array.from({ length: Math.min(DISCOVERY_CONCURRENCY, unique.length) }, () => worker()),
+    Array.from({ length: Math.min(DISCOVERY_CONCURRENCY, mine.length) }, () => worker()),
   );
 
-  if (unique.length > 0 && failed === unique.length) {
+  if (mine.length > 0 && failed === mine.length) {
+    // Not cached: a total failure is a transient condition, and caching it would
+    // make a retry report the same nothing for five minutes.
     throw new ShamsError("unavailable", "Shams MIS did not answer the branch search.");
   }
 
-  matches.sort((a, b) => a.branchCode.localeCompare(b.branchCode));
-  return { matches, probed: unique.length, failed };
+  const sweep: InvoiceBranchSweep = {
+    matches: sortInvoiceBranchMatches(matches),
+    probed: mine.length,
+    failed,
+  };
+  discoveryCache.set(cacheKey, sweep);
+  return sweep;
 }

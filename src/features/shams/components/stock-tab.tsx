@@ -25,8 +25,15 @@
  * agent can still see the chain-wide picture.
  */
 
-import { memo, useDeferredValue, useMemo, useState } from "react";
-import { Boxes, PackageX, Search, X } from "lucide-react";
+import {
+  memo,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
+import { Boxes, Loader2, PackageX, Search, X } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { fmtSAR } from "@/lib/branches";
@@ -54,11 +61,13 @@ import { EmptyState, ErrorState, NotConfiguredState, TableSkeleton } from "./sta
 export function ProductSearchField({
   value,
   onChange,
+  onKeyDown,
   placeholder,
   autoFocus,
 }: {
   value: string;
   onChange: (next: string) => void;
+  onKeyDown?: (e: ReactKeyboardEvent<HTMLInputElement>) => void;
   placeholder: string;
   autoFocus?: boolean;
 }) {
@@ -71,6 +80,7 @@ export function ProductSearchField({
       <Input
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onKeyDown={onKeyDown}
         placeholder={placeholder}
         aria-label="Search Shams products"
         autoComplete="off"
@@ -104,7 +114,38 @@ export function StockTab({
   // The picker only runs while no product is chosen — once one is, this tab is
   // about its stock, and there is nothing to search for.
   const searchQuery = useProductSearch(term, !selected);
-  const matches = searchQuery.data?.products ?? [];
+  const matches = useMemo(() => searchQuery.data?.products ?? [], [searchQuery.data]);
+
+  /** Highlighted row, for arrow-key navigation of the result list. */
+  const [activeIndex, setActiveIndex] = useState(0);
+  // A new result set invalidates the old highlight; without this, Enter after a
+  // re-search picks whatever now sits at a stale index.
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [matches]);
+
+  /**
+   * Keyboard control from the search box, so a fast agent never leaves it:
+   * ↑ ↓ move, Enter picks the highlighted row, Escape clears the search.
+   */
+  const onSearchKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") {
+      setDraft("");
+      return;
+    }
+    if (matches.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIndex((i) => (i + 1) % matches.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIndex((i) => (i - 1 + matches.length) % matches.length);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const picked = matches[activeIndex] ?? matches[0];
+      if (picked) onSelect(picked);
+    }
+  };
 
   const stockQuery = useProductDetail(selected?.itemCode ?? null, Boolean(selected));
   const result = stockQuery.data;
@@ -134,14 +175,19 @@ export function StockTab({
           <CardContent className="p-4">
             <ProductSearchField
               value={draft}
-              onChange={setDraft}
+              onChange={(next) => {
+                setDraft(next);
+                setActiveIndex(0);
+              }}
+              onKeyDown={onSearchKeyDown}
               placeholder="Search a product — try mou*n*j*2.5"
               autoFocus
             />
             <p className="mt-2 text-xs leading-snug text-muted-foreground">
-              Type any part of a name or item code.{" "}
+              Type any part of a name, strength, pack size or item code.{" "}
               <span className="font-medium text-foreground">*</span> stands for anything in between,
-              so <span className="font-mono">mou*n*j*2.5</span> finds Mounjaro 2.5.
+              so <span className="font-mono">mou*n*j*2.5</span> finds Mounjaro 2.5. Use ↑ ↓ and
+              Enter to pick.
             </p>
           </CardContent>
         </Card>
@@ -161,34 +207,13 @@ export function StockTab({
         )}
 
         {matches.length > 0 && (
-          <Card className="overflow-hidden">
-            <CardContent className="p-0">
-              <ul className="divide-y divide-border/40">
-                {matches.map((p) => (
-                  <li key={p.itemCode}>
-                    <button
-                      type="button"
-                      onClick={() => onSelect(p)}
-                      className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-muted/50 focus:bg-muted/50 focus:outline-none"
-                    >
-                      <span className="min-w-0">
-                        {/* The full name carries strength and pack size — the
-                            catalog exposes no separate field for either, so it
-                            is never truncated. */}
-                        <span className="block text-sm font-medium leading-snug">{p.itemName}</span>
-                        <span className="mt-0.5 block font-mono text-xs text-muted-foreground">
-                          {p.itemCode}
-                        </span>
-                      </span>
-                      <span className="shrink-0 text-sm font-semibold tabular-nums">
-                        {fmtSAR(p.retailPrice)}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </CardContent>
-          </Card>
+          <ProductResults
+            products={matches}
+            activeIndex={activeIndex}
+            onHover={setActiveIndex}
+            onSelect={onSelect}
+            busy={searchQuery.isFetching}
+          />
         )}
 
         {term.trim().length < MIN_QUERY_LENGTH && !searchQuery.isFetching && (
@@ -251,7 +276,7 @@ export function StockTab({
                 <Input
                   value={branchFilter}
                   onChange={(e) => setBranchFilter(e.target.value)}
-                  placeholder="Filter branches — code, city or area"
+                  placeholder="Filter branches — code or city"
                   aria-label="Filter branches"
                   autoComplete="off"
                   className="h-10 pl-9 pr-9"
@@ -268,22 +293,26 @@ export function StockTab({
                 )}
               </div>
 
-              {/* Counts for what is on screen. When a filter is active the
-                  chain-wide figure is kept beside it rather than replaced, so
-                  neither number can be mistaken for the other. */}
+              {/* Counts for what is on screen, always. When a filter is active
+                  it says so, and the chain-wide figure is kept beside it rather
+                  than replacing it, so neither number can be read as the other. */}
               <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm">
-                <Stat label="Branches" value={summary.branches} />
-                <Stat label="In stock" value={summary.withStock} tone="good" />
-                <Stat label="Out of stock" value={summary.without} tone="muted" />
-                <Stat label="Units" value={summary.units} />
-                {filtering && (
-                  <span className="text-xs text-muted-foreground">
-                    filtered from {totalSummary.branches} branches ·{" "}
-                    <span className="tabular-nums">{totalSummary.withStock}</span> in stock ·{" "}
-                    <span className="tabular-nums">{totalSummary.units}</span> units
-                  </span>
-                )}
+                <Stat
+                  label={filtering ? "matching branches" : "branches"}
+                  value={summary.branches}
+                />
+                <Stat label="in stock" value={summary.withStock} tone="good" />
+                <Stat label="out of stock" value={summary.without} tone="muted" />
+                <Stat label="units" value={summary.units} />
               </div>
+              {filtering && (
+                <p className="text-xs text-muted-foreground">
+                  Summary is for the filtered results. All branches:{" "}
+                  <span className="tabular-nums">{totalSummary.branches}</span> branches ·{" "}
+                  <span className="tabular-nums">{totalSummary.withStock}</span> in stock ·{" "}
+                  <span className="tabular-nums">{totalSummary.units}</span> units.
+                </p>
+              )}
             </CardContent>
           </Card>
 
@@ -297,6 +326,79 @@ export function StockTab({
     </div>
   );
 }
+
+/**
+ * The product result list.
+ *
+ * A single bordered surface with plain rows rather than a card each: an agent is
+ * scanning a list, and a border around every row is noise that makes the list
+ * harder to read, not easier. Name leads at readable size; code and price are
+ * secondary and right-aligned so the eye can run down one column.
+ *
+ * The catalog exposes exactly three fields (name, code, price), and strength and
+ * pack size live *inside* the name — `MOUNJARO 2.5 MG 0.5ML PEN, 4'S` — so the
+ * name is never truncated and nothing is invented to fill a column.
+ */
+const ProductResults = memo(function ProductResults({
+  products,
+  activeIndex,
+  onHover,
+  onSelect,
+  busy,
+}: {
+  products: ShamsProduct[];
+  activeIndex: number;
+  onHover: (index: number) => void;
+  onSelect: (product: ShamsProduct) => void;
+  busy: boolean;
+}) {
+  return (
+    <Card className="overflow-hidden">
+      <CardContent className="p-0">
+        <div className="flex items-center justify-between gap-3 border-b border-border/60 px-4 py-2 text-xs text-muted-foreground">
+          <span>
+            {products.length} {products.length === 1 ? "product" : "products"}
+          </span>
+          {/* Subtle, and only while a newer search is in flight — the list
+              below stays readable rather than being replaced by a skeleton. */}
+          {busy && (
+            <span className="inline-flex items-center gap-1.5">
+              <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+              searching
+            </span>
+          )}
+        </div>
+        <ul role="listbox" aria-label="Product results">
+          {products.map((p, index) => (
+            <li key={p.itemCode} role="option" aria-selected={index === activeIndex}>
+              <button
+                type="button"
+                onClick={() => onSelect(p)}
+                onMouseEnter={() => onHover(index)}
+                className={cn(
+                  "flex w-full items-baseline justify-between gap-4 border-l-2 px-4 py-2.5 text-left transition-colors",
+                  index === activeIndex
+                    ? "border-l-primary bg-muted/60"
+                    : "border-l-transparent hover:bg-muted/40",
+                )}
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[15px] font-medium leading-snug">{p.itemName}</span>
+                  <span className="mt-0.5 block font-mono text-xs text-muted-foreground">
+                    {p.itemCode}
+                  </span>
+                </span>
+                <span className="shrink-0 text-sm font-semibold tabular-nums">
+                  {fmtSAR(p.retailPrice)}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+});
 
 function Stat({
   label,
@@ -349,40 +451,44 @@ const StockTable = memo(function StockTable({
     <>
       <Card className="hidden overflow-hidden md:block">
         <CardContent className="p-0">
-          <table className="w-full table-fixed text-sm">
+          <table className="w-full table-fixed text-[15px]">
             <colgroup>
-              <col className="w-[22%]" />
-              <col />
-              <col className="w-[22%]" />
               <col className="w-[16%]" />
+              <col />
+              <col className="w-[14%]" />
+              <col className="w-[20%]" />
             </colgroup>
             <thead>
               <tr className="border-b border-border/60 bg-muted/30 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                 <th className={TH}>Branch</th>
                 <th className={TH}>City</th>
-                <th className={TH}>Area</th>
-                <th className={cn(TH, "text-right")}>Quantity</th>
+                <th className={cn(TH, "text-right")}>Qty</th>
+                <th className={cn(TH, "text-right")}>Status</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((row) => {
                 const city = branchCity(labels, row.branchCode);
+                const out = row.quantity <= 0;
                 return (
                   <tr
                     key={row.branchCode}
-                    className="border-b border-border/40 transition-colors last:border-0 hover:bg-muted/40"
+                    className="border-b border-border/30 transition-colors last:border-0 hover:bg-muted/40"
                   >
-                    <td className={cn(TD, "py-2.5 font-mono text-sm font-semibold")}>
-                      {row.branchCode}
-                    </td>
-                    <td className={cn(TD, "py-2.5 truncate font-medium")} dir="auto">
+                    <td className={cn(TD, "py-2.5 font-mono font-semibold")}>{row.branchCode}</td>
+                    <td className={cn(TD, "truncate py-2.5")} dir="auto">
                       {city ?? <span className="text-muted-foreground">—</span>}
                     </td>
-                    <td className={cn(TD, "py-2.5 truncate text-xs text-muted-foreground")}>
-                      {row.areaName || "—"}
+                    <td
+                      className={cn(
+                        "px-3 py-2.5 text-right text-base font-semibold tabular-nums",
+                        out ? "text-muted-foreground" : "text-foreground",
+                      )}
+                    >
+                      {out ? "0" : row.quantity}
                     </td>
                     <td className={cn(TD, "py-2.5 text-right")}>
-                      <QuantityCell quantity={row.quantity} />
+                      <StockStatus quantity={row.quantity} />
                     </td>
                   </tr>
                 );
@@ -392,10 +498,10 @@ const StockTable = memo(function StockTable({
         </CardContent>
       </Card>
 
-      {/* Mobile: the same rows as cards, so nothing scrolls sideways. */}
+      {/* Mobile: the same rows as a list, so nothing scrolls sideways. */}
       <Card className="overflow-hidden md:hidden">
         <CardContent className="p-0">
-          <ul className="divide-y divide-border/40">
+          <ul className="divide-y divide-border/30">
             {rows.map((row) => {
               const city = branchCity(labels, row.branchCode);
               return (
@@ -405,14 +511,16 @@ const StockTable = memo(function StockTable({
                 >
                   <div className="min-w-0">
                     <p className="font-mono text-sm font-semibold">{row.branchCode}</p>
-                    <p className="mt-0.5 truncate text-sm" dir="auto">
+                    <p className="mt-0.5 truncate text-[15px]" dir="auto">
                       {city ?? <span className="text-muted-foreground">—</span>}
-                      <span className="ml-1.5 text-xs text-muted-foreground">
-                        {row.areaName || ""}
-                      </span>
                     </p>
                   </div>
-                  <QuantityCell quantity={row.quantity} />
+                  <div className="flex shrink-0 items-center gap-3">
+                    {row.quantity > 0 && (
+                      <span className="text-base font-semibold tabular-nums">{row.quantity}</span>
+                    )}
+                    <StockStatus quantity={row.quantity} />
+                  </div>
                 </li>
               );
             })}
@@ -424,14 +532,15 @@ const StockTable = memo(function StockTable({
 });
 
 /**
- * A quantity, or the fact that there is none.
+ * Whether a branch has the item.
  *
  * Zero is the answer agents are scanning for, so it is destructive-toned and
- * spelled out rather than shown as a `0` among numbers. Every positive value is
- * shown as itself — no banding, because the application defines no threshold to
- * band on.
+ * spelled out. A stocked branch gets a quiet success mark rather than a second
+ * loud badge — the quantity beside it is the number that matters, and two
+ * competing emphases in one row is one too many. No banding between them,
+ * because the application defines no "low stock" threshold to band on.
  */
-function QuantityCell({ quantity }: { quantity: number }) {
+function StockStatus({ quantity }: { quantity: number }) {
   if (quantity <= 0) {
     return (
       <span className="inline-flex whitespace-nowrap rounded-full bg-destructive/10 px-2.5 py-1 text-xs font-semibold text-destructive">
@@ -440,8 +549,8 @@ function QuantityCell({ quantity }: { quantity: number }) {
     );
   }
   return (
-    <span className="inline-flex whitespace-nowrap rounded-full bg-success/10 px-2.5 py-1 text-sm font-semibold tabular-nums text-success">
-      {quantity}
+    <span className="inline-flex whitespace-nowrap rounded-full bg-success/10 px-2.5 py-1 text-xs font-medium text-success">
+      In stock
     </span>
   );
 }

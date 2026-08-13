@@ -33,15 +33,14 @@
  */
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { ArrowLeft, Building2, FileText, Search } from "lucide-react";
+import { ArrowLeft, Building2, FileText, Loader2, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fmtSAR } from "@/lib/branches";
 import { cn } from "@/lib/utils";
-import type { ShamsInvoice } from "@/lib/shams/types";
-import type { InvoiceBranchMatch } from "@/lib/shams/sales.server";
+import type { InvoiceBranchMatch, ShamsInvoice } from "@/lib/shams/types";
 import {
   useBranchLabels,
   useInvoiceBranches,
@@ -60,18 +59,18 @@ export function InvoicesTab() {
   const { data: branchLabels } = useBranchLabels();
 
   const discovery = useInvoiceBranches(submitted);
-  const discovered = discovery.data;
-  const matches = useMemo(() => discovered?.matches ?? [], [discovered]);
+  const matches = discovery.matches;
 
   /**
-   * One match needs no chooser.
+   * One match needs no chooser — but only once the sweep is **finished**.
    *
-   * In an effect rather than during render because it is a state change, and
-   * keyed on the number so a second lookup re-runs it.
+   * Auto-selecting the first branch to answer would be wrong: a second branch
+   * may still be coming, and the agent would already be looking at a document
+   * they were never offered a choice about.
    */
   useEffect(() => {
-    if (discovered?.ok && matches.length === 1) setBranchCode(matches[0].branchCode);
-  }, [discovered, matches]);
+    if (discovery.done && matches.length === 1) setBranchCode(matches[0].branchCode);
+  }, [discovery.done, matches]);
 
   const invoiceQuery = useInvoiceLookup(
     branchCode && submitted ? { branchCode, docNo: submitted } : null,
@@ -92,7 +91,12 @@ export function InvoicesTab() {
     setBranchCode(null);
   };
 
-  const searching = discovery.isFetching;
+  const searching = discovery.searching;
+  /**
+   * Show the chooser while the sweep is still running, as soon as there is
+   * anything to show. It only disappears once a branch is picked.
+   */
+  const showChoice = matches.length > 1 || (matches.length > 0 && !discovery.done);
 
   return (
     <div className="space-y-4">
@@ -135,25 +139,30 @@ export function InvoicesTab() {
         </CardContent>
       </Card>
 
-      {discovery.isError && <ErrorState onRetry={() => discovery.refetch()} />}
+      {!discovery.configured && <NotConfiguredState />}
 
-      {discovered && !discovered.configured && <NotConfiguredState />}
-
-      {discovered && discovered.configured && !discovered.ok && (
-        <ErrorState kind={discovered.error?.kind} onRetry={() => discovery.refetch()} />
+      {discovery.failed && (
+        <ErrorState kind={discovery.error?.kind} onRetry={() => discovery.refetch()} />
       )}
 
-      {searching && <DiscoverySkeleton docNo={submitted} />}
+      {/* Progressive: the chooser appears as soon as a branch answers, and says
+          for itself that more may still arrive. Only a sweep with nothing to
+          show yet gets a skeleton. */}
+      {searching && matches.length === 0 && <DiscoverySkeleton docNo={submitted} />}
 
-      {discovered?.ok && matches.length === 0 && !searching && (
+      {discovery.done && !discovery.failed && matches.length === 0 && (
         <EmptyState icon={<FileText className="h-8 w-8 opacity-40" aria-hidden="true" />}>
           No invoice found for this document number.
         </EmptyState>
       )}
 
-      {/* The chooser: only when the answer is genuinely ambiguous. */}
-      {discovered?.ok && matches.length > 1 && !branchCode && (
-        <BranchChoice matches={matches} labels={branchLabels} onChoose={setBranchCode} />
+      {showChoice && !branchCode && (
+        <BranchChoice
+          matches={matches}
+          labels={branchLabels}
+          onChoose={setBranchCode}
+          searching={!discovery.done}
+        />
       )}
 
       {branchCode && matches.length > 1 && (
@@ -233,21 +242,41 @@ function InvoiceSkeleton() {
   );
 }
 
+/**
+ * The branch chooser.
+ *
+ * Ordered Call Centre first (`sortInvoiceBranchMatches`, applied server-side and
+ * again over the merged client list), and call-centre rows carry a left rule and
+ * a tint so the row the agent wants is found by shape, before any reading.
+ * Everything else stays plain: one emphasised row among five is a signal, five
+ * emphasised rows are wallpaper.
+ */
 function BranchChoice({
   matches,
   labels,
   onChoose,
+  searching,
 }: {
   matches: InvoiceBranchMatch[];
   labels: Map<string, BranchLabel> | undefined;
   onChoose: (branchCode: string) => void;
+  searching: boolean;
 }) {
   return (
     <Card className="overflow-hidden">
       <CardContent className="p-0">
-        <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-4 py-2.5">
-          <Building2 className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-          <p className="text-sm font-medium">Found in {matches.length} branches — choose one</p>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border/60 bg-muted/30 px-4 py-2.5">
+          <Building2 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <p className="text-sm font-medium">
+            Found in {matches.length} {matches.length === 1 ? "branch" : "branches"}
+            {matches.length > 1 ? " — choose one" : ""}
+          </p>
+          {searching && (
+            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+              still searching the remaining branches…
+            </span>
+          )}
         </div>
         <ul className="divide-y divide-border/40">
           {matches.map((match) => (
@@ -255,11 +284,14 @@ function BranchChoice({
               <button
                 type="button"
                 onClick={() => onChoose(match.branchCode)}
-                className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-muted/50 focus:bg-muted/50 focus:outline-none"
+                className={cn(
+                  "flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-1.5 border-l-2 px-4 py-3 text-left transition-colors hover:bg-muted/50 focus:bg-muted/50 focus:outline-none",
+                  match.isCallCentre ? "border-l-success bg-success/5" : "border-l-transparent",
+                )}
               >
                 <span className="flex min-w-0 items-center gap-3">
                   <span className="font-mono text-sm font-semibold">{match.branchCode}</span>
-                  <span className="truncate text-sm text-muted-foreground" dir="auto">
+                  <span className="truncate text-sm" dir="auto">
                     {branchCityOf(labels, match.branchCode) ?? "—"}
                   </span>
                   {match.cancelled && <CancelledBadge />}

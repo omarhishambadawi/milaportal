@@ -211,6 +211,24 @@ export interface ShamsBranchStock {
   lzQuantity: number;
 }
 
+/**
+ * A branch that genuinely holds a given document number.
+ *
+ * Lives here rather than beside the fan-out that produces it because the
+ * chooser UI consumes both this shape and the comparator that orders it, and
+ * neither should drag a `.server` module into the client bundle.
+ */
+export interface InvoiceBranchMatch {
+  branchCode: string;
+  /** The document's date, so a chooser can tell two same-numbered docs apart. */
+  docDate: string | null;
+  grandTotal: number;
+  cancelled: boolean;
+  /** Carried through so the chooser can show the status without a second read. */
+  isCallCentre: boolean;
+  customer: string | null;
+}
+
 /** One line of an invoice. */
 export interface ShamsInvoiceItem {
   itemCode: string;

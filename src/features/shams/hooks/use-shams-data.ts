@@ -16,11 +16,12 @@
  *   3. An invoice lookup runs only once submitted, never while typing.
  */
 
-import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
 import { queryKeys } from "@/lib/query-keys";
+import { mergeInvoiceBranchMatches } from "@/lib/shams/search";
 import { cityEnglish } from "@/features/branches/normalize";
 import {
   shamsFindInvoiceBranches,
@@ -162,24 +163,74 @@ export interface InvoiceLookup {
 }
 
 /**
- * Which branches hold a document number.
+ * How many parts a branch sweep is split into.
  *
- * One call sweeps the chain server-side (the MIS has no cross-branch lookup), so
- * it is deliberately keyed on a **submitted** number and never runs while
- * typing. Kept for the session: re-checking the same number a minute later would
- * repeat 137 upstream requests to learn the same thing.
+ * The MIS has no cross-branch lookup, so finding a document means asking every
+ * branch. Splitting that into four requests that run at once does two things a
+ * single request cannot: the sweep finishes in roughly a quarter of the waves,
+ * and each part **resolves on its own**, so matches can be shown as they are
+ * found instead of after the last branch replies.
+ *
+ * Four rather than more: each part carries its own upstream concurrency, and the
+ * product of the two is what the MIS actually sees.
+ */
+export const DISCOVERY_PARTS = 4;
+
+/**
+ * Which branches hold a document number, discovered progressively.
+ *
+ * One query per part, all in flight together. `matches` is the merged, sorted
+ * union of whatever has arrived — Call Centre first — and `done` says whether
+ * every part has finished, so the UI can show real results while still telling
+ * the agent the search is running. Nothing is auto-selected on the strength of a
+ * partial answer.
+ *
+ * Deliberately keyed on a **submitted** number: this never runs while typing.
+ * Parts are cached independently, so re-checking the same number inside the
+ * window costs nothing.
  */
 export function useInvoiceBranches(docNo: string | null, enabled = true) {
   const findFn = useServerFn(shamsFindInvoiceBranches);
+  const active = enabled && Boolean(docNo);
 
-  return useQuery({
-    queryKey: queryKeys.shams.invoiceBranches(docNo ?? ""),
-    queryFn: ({ signal }) => findFn({ data: { docNo: docNo as string }, signal }),
-    enabled: enabled && Boolean(docNo),
-    staleTime: DISCOVERY_STALE_MS,
-    refetchOnWindowFocus: false,
-    retry: false,
+  const parts = useQueries({
+    queries: Array.from({ length: DISCOVERY_PARTS }, (_, part) => ({
+      queryKey: queryKeys.shams.invoiceBranches(docNo ?? "", part, DISCOVERY_PARTS),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        findFn({
+          data: { docNo: docNo as string, part, parts: DISCOVERY_PARTS },
+          signal,
+        }),
+      enabled: active,
+      staleTime: DISCOVERY_STALE_MS,
+      refetchOnWindowFocus: false,
+      retry: false,
+    })),
   });
+
+  return useMemo(() => {
+    const settled = parts.filter((p) => !p.isPending);
+    const answered = parts.filter((p) => p.data?.ok);
+    const configured = parts.every((p) => p.data?.configured !== false);
+
+    return {
+      /** Everything found so far, merged and Call-Centre-first. */
+      matches: mergeInvoiceBranchMatches(parts.map((p) => p.data?.matches)),
+      /** Branches asked so far, across the parts that have answered. */
+      probed: answered.reduce((sum, p) => sum + (p.data?.probed ?? 0), 0),
+      /** True only once every part has finished. */
+      done: active && settled.length === parts.length,
+      searching: active && parts.some((p) => p.isPending || p.isFetching),
+      /** A sweep is a failure only when no part produced an answer. */
+      failed: active && settled.length === parts.length && answered.length === 0,
+      configured,
+      error: parts.find((p) => p.data?.error)?.data?.error ?? null,
+      started: active,
+      refetch: () => {
+        for (const p of parts) void p.refetch();
+      },
+    };
+  }, [parts, active]);
 }
 
 /**

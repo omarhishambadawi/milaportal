@@ -23,7 +23,8 @@ vi.mock("@/lib/shams/client.server", async () => {
   return { ...actual, shamsFetch: (...args: unknown[]) => fetchMock(...args) };
 });
 
-const { findInvoiceBranches } = await import("@/lib/shams/sales.server");
+const { findInvoiceBranches, partitionBranches, _clearDiscoveryCache } =
+  await import("@/lib/shams/sales.server");
 
 /** A header row for one document in one warehouse. */
 function header(docNo: string, whouse: string, customer: string, total: string): RawSalesRow {
@@ -53,6 +54,7 @@ const CHAIN = ["P0001", "P0034", "P0221", "P0505"];
 
 beforeEach(() => {
   fetchMock.mockReset();
+  _clearDiscoveryCache();
 });
 
 describe("findInvoiceBranches", () => {
@@ -66,7 +68,9 @@ describe("findInvoiceBranches", () => {
     const { matches, probed } = await findInvoiceBranches("22138", CHAIN);
 
     expect(probed).toBe(4);
-    expect(matches.map((m) => m.branchCode)).toEqual(["P0034", "P0221", "P0505"]);
+    // Call Centre first (P0221, P0505 — both suffixed), then the walk-in
+    // account; branch code orders within each group.
+    expect(matches.map((m) => m.branchCode)).toEqual(["P0221", "P0505", "P0034"]);
   });
 
   it("keeps the same number in different branches separate", async () => {
@@ -78,20 +82,21 @@ describe("findInvoiceBranches", () => {
     const { matches } = await findInvoiceBranches("22138", CHAIN);
 
     // Different documents that happen to share a number: different totals,
-    // different customers, different Call Centre status.
+    // different customers, different Call Centre status. The call-centre one
+    // leads, which is the row an agent is nearly always after.
     expect(matches).toHaveLength(2);
-    const [riyadh, jeddah] = matches;
-    expect(riyadh).toMatchObject({
-      branchCode: "P0034",
-      grandTotal: 99,
-      isCallCentre: false,
-      customer: "CASH SALES",
-    });
+    const [jeddah, riyadh] = matches;
     expect(jeddah).toMatchObject({
       branchCode: "P0221",
       grandTotal: 230,
       isCallCentre: true,
       customer: "HOME DELIVERY-Call Centre",
+    });
+    expect(riyadh).toMatchObject({
+      branchCode: "P0034",
+      grandTotal: 99,
+      isCallCentre: false,
+      customer: "CASH SALES",
     });
   });
 
@@ -156,5 +161,106 @@ describe("findInvoiceBranches", () => {
   it("rejects a document number that is not numeric before any request", async () => {
     await expect(findInvoiceBranches("22138; DROP", CHAIN)).rejects.toThrow();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns Call Centre branches first", async () => {
+    respondWith({
+      P0100: [header("22138", "P0100", "CASH SALES", "10.00")],
+      P0221: [header("22138", "P0221", "HOME DELIVERY-Call Centre", "230.00")],
+      P0505: [header("22138", "P0505", "NUPCO / …", "50.00")],
+    });
+
+    const { matches } = await findInvoiceBranches("22138", ["P0100", "P0221", "P0505"]);
+
+    expect(matches.map((m) => m.branchCode)).toEqual(["P0221", "P0100", "P0505"]);
+    expect(matches[0].isCallCentre).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Partitioning and caching — what makes the sweep fast                        */
+/* -------------------------------------------------------------------------- */
+
+describe("partitionBranches", () => {
+  const CODES = ["P0001", "P0002", "P0003", "P0004", "P0005"];
+
+  it("interleaves rather than slicing contiguously", () => {
+    // Contiguous slices would put a whole region — and its latency — in one
+    // part; interleaving gives every part the same mix.
+    expect(partitionBranches(CODES, 0, 2)).toEqual(["P0001", "P0003", "P0005"]);
+    expect(partitionBranches(CODES, 1, 2)).toEqual(["P0002", "P0004"]);
+  });
+
+  it("covers every branch exactly once across the parts", () => {
+    const parts = 4;
+    const seen = Array.from({ length: parts }, (_, p) => partitionBranches(CODES, p, parts)).flat();
+    expect(seen.sort()).toEqual([...CODES].sort());
+  });
+
+  it("returns everything when the sweep is not split", () => {
+    expect(partitionBranches(CODES, 0, 1)).toEqual(CODES);
+  });
+});
+
+describe("findInvoiceBranches — parts", () => {
+  it("asks only its own share of the chain", async () => {
+    respondWith({});
+
+    const { probed } = await findInvoiceBranches("22138", CHAIN, { part: 0, parts: 4 });
+
+    expect(probed).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("finds a branch wherever in the chain it falls", async () => {
+    respondWith({ P0505: [header("22138", "P0505", "HOME DELIVERY-Call Centre", "230.00")] });
+
+    const sweeps = await Promise.all(
+      [0, 1, 2, 3].map((part) => findInvoiceBranches("22138", CHAIN, { part, parts: 4 })),
+    );
+
+    const found = sweeps.flatMap((s) => s.matches).map((m) => m.branchCode);
+    expect(found).toEqual(["P0505"]);
+    // Every branch was asked exactly once, across the four parts.
+    expect(fetchMock).toHaveBeenCalledTimes(CHAIN.length);
+  });
+
+  it("clamps an out-of-range part rather than sweeping nothing", async () => {
+    respondWith({});
+    const { probed } = await findInvoiceBranches("22138", CHAIN, { part: 99, parts: 4 });
+    expect(probed).toBeGreaterThan(0);
+  });
+});
+
+describe("findInvoiceBranches — cache", () => {
+  it("answers a repeated sweep without asking the MIS again", async () => {
+    respondWith({ P0221: [header("22138", "P0221", "HOME DELIVERY-Call Centre", "230.00")] });
+
+    const first = await findInvoiceBranches("22138", CHAIN);
+    const callsAfterFirst = fetchMock.mock.calls.length;
+    const second = await findInvoiceBranches("22138", CHAIN);
+
+    expect(second.matches).toEqual(first.matches);
+    expect(fetchMock).toHaveBeenCalledTimes(callsAfterFirst);
+  });
+
+  it("does not answer one document from another document's sweep", async () => {
+    respondWith({ P0221: [header("22138", "P0221", "HOME DELIVERY-Call Centre", "230.00")] });
+
+    await findInvoiceBranches("22138", CHAIN);
+    const callsAfterFirst = fetchMock.mock.calls.length;
+    await findInvoiceBranches("87578", CHAIN);
+
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(callsAfterFirst);
+  });
+
+  it("does not cache a total failure, so a retry can succeed", async () => {
+    fetchMock.mockRejectedValue(new Error("MIS unreachable"));
+    await expect(findInvoiceBranches("22138", CHAIN)).rejects.toThrow();
+
+    respondWith({ P0221: [header("22138", "P0221", "HOME DELIVERY-Call Centre", "230.00")] });
+    const { matches } = await findInvoiceBranches("22138", CHAIN);
+
+    expect(matches.map((m) => m.branchCode)).toEqual(["P0221"]);
   });
 });

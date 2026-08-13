@@ -14,12 +14,16 @@ import {
   matchesBranchQuery,
   matchesProductWildcard,
   matchesWildcard,
+  mergeInvoiceBranchMatches,
   normalizeForSearch,
   parseWildcardQuery,
+  rankProducts,
+  sortInvoiceBranchMatches,
   summariseStock,
   wildcardProbe,
+  wildcardProbes,
 } from "@/lib/shams/search";
-import type { ShamsBranchStock, ShamsProduct } from "@/lib/shams/types";
+import type { InvoiceBranchMatch, ShamsBranchStock, ShamsProduct } from "@/lib/shams/types";
 
 const product = (itemName: string, itemCode = "10609670"): ShamsProduct => ({
   itemCode,
@@ -148,13 +152,173 @@ describe("normalizeForSearch", () => {
   });
 });
 
+describe("wildcardProbes", () => {
+  /**
+   * One probe is logically sufficient but only if the API returns everything it
+   * matched — and it exposes no limit/page/offset, so a server-side cap cannot
+   * be ruled out. Several probes mean a product has to survive only one of them.
+   */
+  it("returns several probes, most selective first", () => {
+    expect(wildcardProbes(["26", "golden", "3", "1800"], 2, 3)).toEqual(["golden", "1800", "26"]);
+  });
+
+  it("is bounded by max", () => {
+    expect(wildcardProbes(["mounjaro", "kwikpen", "12.5", "0.6"], 2, 2)).toEqual([
+      "mounjaro",
+      "kwikpen",
+    ]);
+  });
+
+  it("skips fragments nested inside a probe already chosen", () => {
+    // "gold" inside "golden" retrieves a superset of the same rows.
+    expect(wildcardProbes(["golden", "gold"], 2, 3)).toEqual(["golden"]);
+  });
+
+  it("skips fragments too short to search with", () => {
+    expect(wildcardProbes(["a", "b", "gold"], 2, 3)).toEqual(["gold"]);
+  });
+
+  it("returns nothing when no fragment is long enough", () => {
+    expect(wildcardProbes(["a", "b"], 2, 3)).toEqual([]);
+  });
+
+  it("agrees with the single-probe helper on its first choice", () => {
+    const fragments = ["mou", "n", "j", "2.5"];
+    expect(wildcardProbe(fragments, 2)).toBe(wildcardProbes(fragments, 2, 3)[0]);
+  });
+});
+
+describe("rankProducts", () => {
+  const EXACT = product("MOUNJARO", "1");
+  const PREFIX = product("MOUNJARO 2.5 MG 0.5ML PEN, 4'S", "2");
+  const CONTAINS = product("PEN NEEDLE FOR MOUNJARO", "3");
+  const UNRELATED = product("PANADOL 500MG", "4");
+
+  it("puts an exact name match first, then prefix, then contains", () => {
+    const ranked = rankProducts([UNRELATED, CONTAINS, PREFIX, EXACT], "mounjaro", []);
+    expect(ranked.map((p) => p.itemName)).toEqual([
+      "MOUNJARO",
+      "MOUNJARO 2.5 MG 0.5ML PEN, 4'S",
+      "PEN NEEDLE FOR MOUNJARO",
+      "PANADOL 500MG",
+    ]);
+  });
+
+  it("ranks an item-code match highly when the code was typed", () => {
+    const ranked = rankProducts([UNRELATED, PREFIX], "2", []);
+    expect(ranked[0].itemCode).toBe("2");
+  });
+
+  it("ranks by the first fragment for a wildcard query", () => {
+    const fragments = parseWildcardQuery("mounjaro*2.5");
+    const ranked = rankProducts([CONTAINS, PREFIX], "mounjaro*2.5", fragments);
+    expect(ranked[0].itemName).toBe("MOUNJARO 2.5 MG 0.5ML PEN, 4'S");
+  });
+
+  it("is stable: equal scores keep their original order", () => {
+    const a = product("SAME NAME", "a");
+    const b = product("SAME NAME", "b");
+    expect(rankProducts([a, b], "zzz", []).map((p) => p.itemCode)).toEqual(["a", "b"]);
+    expect(rankProducts([b, a], "zzz", []).map((p) => p.itemCode)).toEqual(["b", "a"]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Invoice branch ordering                                                     */
+/* -------------------------------------------------------------------------- */
+
+const match = (branchCode: string, isCallCentre: boolean): InvoiceBranchMatch => ({
+  branchCode,
+  docDate: "2026-08-13T00:00:00",
+  grandTotal: 230,
+  cancelled: false,
+  isCallCentre,
+  customer: isCallCentre ? "HOME DELIVERY-Call Centre" : "CASH SALES",
+});
+
+describe("sortInvoiceBranchMatches", () => {
+  it("puts the Call Centre branch first", () => {
+    const sorted = sortInvoiceBranchMatches([
+      match("P0100", false),
+      match("P0221", true),
+      match("P0505", false),
+    ]);
+    expect(sorted.map((m) => m.branchCode)).toEqual(["P0221", "P0100", "P0505"]);
+  });
+
+  it("orders within each group by branch code, not by arrival", () => {
+    const sorted = sortInvoiceBranchMatches([
+      match("P0505", false),
+      match("P0100", false),
+      match("P0900", true),
+      match("P0221", true),
+    ]);
+    expect(sorted.map((m) => m.branchCode)).toEqual(["P0221", "P0900", "P0100", "P0505"]);
+  });
+
+  it("is deterministic whatever order the branches answered in", () => {
+    const rows = [match("P0505", false), match("P0221", true), match("P0100", false)];
+    const forwards = sortInvoiceBranchMatches(rows).map((m) => m.branchCode);
+    const backwards = sortInvoiceBranchMatches([...rows].reverse()).map((m) => m.branchCode);
+    expect(forwards).toEqual(backwards);
+  });
+
+  it("does not order by total or city", () => {
+    const cheapCallCentre = { ...match("P0900", true), grandTotal: 1 };
+    const dearWalkIn = { ...match("P0100", false), grandTotal: 9999 };
+    expect(sortInvoiceBranchMatches([dearWalkIn, cheapCallCentre])[0].branchCode).toBe("P0900");
+  });
+
+  it("leaves the input array untouched", () => {
+    const rows = [match("P0505", false), match("P0221", true)];
+    sortInvoiceBranchMatches(rows);
+    expect(rows.map((m) => m.branchCode)).toEqual(["P0505", "P0221"]);
+  });
+});
+
+describe("mergeInvoiceBranchMatches", () => {
+  it("merges partial sweep results and sorts the union", () => {
+    const merged = mergeInvoiceBranchMatches([
+      [match("P0505", false)],
+      undefined, // a part that has not answered yet
+      [match("P0221", true)],
+    ]);
+    expect(merged.map((m) => m.branchCode)).toEqual(["P0221", "P0505"]);
+  });
+
+  it("keeps earlier results when a later part arrives", () => {
+    // The regression progressive rendering invites: a row must not vanish
+    // because another part resolved after it.
+    const first = mergeInvoiceBranchMatches([[match("P0100", false)], undefined]);
+    const second = mergeInvoiceBranchMatches([[match("P0100", false)], [match("P0221", true)]]);
+    expect(first.map((m) => m.branchCode)).toEqual(["P0100"]);
+    expect(second.map((m) => m.branchCode)).toEqual(["P0221", "P0100"]);
+  });
+
+  it("promotes a late Call Centre match to the top rather than appending it", () => {
+    const merged = mergeInvoiceBranchMatches([
+      [match("P0100", false), match("P0505", false)],
+      [match("P0900", true)],
+    ]);
+    expect(merged[0].branchCode).toBe("P0900");
+  });
+
+  it("keeps one row per branch", () => {
+    const merged = mergeInvoiceBranchMatches([[match("P0221", true)], [match("P0221", true)]]);
+    expect(merged).toHaveLength(1);
+  });
+
+  it("returns nothing when no part has answered", () => {
+    expect(mergeInvoiceBranchMatches([undefined, undefined])).toEqual([]);
+  });
+});
+
 /* -------------------------------------------------------------------------- */
 /* Branch filtering                                                            */
 /* -------------------------------------------------------------------------- */
 
 const ROW = {
   branchCode: "P0221",
-  areaName: "JEDDAH",
   city: "جدة",
   cityEnglish: "Jeddah",
 };
@@ -176,8 +340,22 @@ describe("matchesBranchQuery", () => {
     expect(matchesBranchQuery(ROW, "جدة")).toBe(true);
   });
 
-  it("matches the MIS area", () => {
-    expect(matchesBranchQuery({ ...ROW, city: null, cityEnglish: null }, "jeddah")).toBe(true);
+  /**
+   * Area is not a search criterion. It is a coarse MIS region label that
+   * duplicates the city for most branches and disagrees with it for others, so
+   * searching it matched rows whose visible text had nothing to do with the
+   * query. It is no longer displayed either.
+   */
+  it("does not match on the MIS area", () => {
+    expect(matchesBranchQuery({ branchCode: "P0304", cityEnglish: "Buraydah" }, "QASIM")).toBe(
+      false,
+    );
+  });
+
+  it("has no area field to search at all", () => {
+    // Passing one is a type error; this pins the runtime behaviour too.
+    const withArea = { ...ROW, areaName: "MAKKAH" } as never;
+    expect(matchesBranchQuery(withArea, "MAKKAH")).toBe(false);
   });
 
   it("is case-insensitive", () => {
@@ -222,6 +400,15 @@ describe("filterBranchStock", () => {
   it("narrows the rows to one city", () => {
     const rows = filterBranchStock(STOCK, "Jeddah", labelsFor);
     expect(rows.map((r) => r.branchCode)).toEqual(["P0221", "P0222"]);
+  });
+
+  it("ignores the area on the row", () => {
+    // P0304's area is QASIM; its city is Buraydah. Searching the area finds
+    // nothing, searching the city finds it.
+    expect(filterBranchStock(STOCK, "QASIM", labelsFor)).toEqual([]);
+    expect(filterBranchStock(STOCK, "Buraydah", labelsFor).map((r) => r.branchCode)).toEqual([
+      "P0304",
+    ]);
   });
 
   it("narrows to a single branch by code", () => {

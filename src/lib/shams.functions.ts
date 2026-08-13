@@ -32,7 +32,7 @@ import type {
   ShamsProduct,
   ShamsProductDetail,
 } from "@/lib/shams/types";
-import type { InvoiceBranchMatch } from "@/lib/shams/sales.server";
+import type { InvoiceBranchMatch } from "@/lib/shams/types";
 
 /* -------------------------------------------------------------------------- */
 /* Gates                                                                       */
@@ -103,7 +103,17 @@ async function toFailure(err: unknown): Promise<ShamsFailure> {
 
 const searchInput = z.object({ q: z.string().max(120) });
 const itemInput = z.object({ itemCode: z.string().min(1).max(40) });
-const docNoInput = z.object({ docNo: z.string().min(1).max(12) });
+/**
+ * One part of a branch sweep.
+ *
+ * `parts` is bounded here rather than trusted: it decides how many concurrent
+ * sweeps the browser can ask for, and each one costs upstream requests.
+ */
+const docNoInput = z.object({
+  docNo: z.string().min(1).max(12),
+  part: z.number().int().min(0).max(7).optional(),
+  parts: z.number().int().min(1).max(8).optional(),
+});
 const invoiceInput = z.object({
   branchCode: z.string().min(1).max(16),
   docNoStart: z.string().min(1).max(12),
@@ -269,7 +279,10 @@ export const shamsFindInvoiceBranches = createServerFn({ method: "POST" })
       const branchCodes = ((rows ?? []) as { branch_no: string }[]).map((b) => b.branch_no);
 
       const { findInvoiceBranches } = await import("@/lib/shams/sales.server");
-      const { matches, probed } = await findInvoiceBranches(data.docNo, branchCodes);
+      const { matches, probed } = await findInvoiceBranches(data.docNo, branchCodes, {
+        part: data.part,
+        parts: data.parts,
+      });
       return { ok: true, configured: true, matches, probed, error: null };
     } catch (err) {
       return {

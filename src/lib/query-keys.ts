@@ -247,8 +247,10 @@ export const queryKeys = {
      *  repeat across warehouses. */
     invoices: (branchCode: string, docNo: string) =>
       ["shams", "invoices", branchCode, docNo] as const,
-    /** Which branches hold a document number — one sweep of the chain. */
-    invoiceBranches: (docNo: string) => ["shams", "invoice-branches", docNo] as const,
+    /** One part of the branch sweep for a document number. Parts run in
+     *  parallel and are cached independently, so a repeat lookup is free. */
+    invoiceBranches: (docNo: string, part: number, parts: number) =>
+      ["shams", "invoice-branches", docNo, part, parts] as const,
   },
 
   /**

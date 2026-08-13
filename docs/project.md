@@ -2608,27 +2608,47 @@ appear **in order**; matching is case-insensitive, whitespace-tolerant, and runs
 over item name **and** item code. A query with no `*` behaves exactly as before.
 
 The MIS API has no wildcard syntax — its only parameter is `q`, matched as a
-plain substring — so the expression is split in `catalog.server.ts`: the longest
-fragment goes upstream as an ordinary term (ties to the earliest), and the full
-ordered match is applied to the rows that come back, **before** the result cap.
-That is exact rather than approximate, because any product satisfying the whole
-expression must contain every individual fragment, so one fragment always
-retrieves a superset. The rule itself is pure and lives in `lib/shams/search.ts`.
+plain substring — so the expression is split in `catalog.server.ts`: fragments go
+upstream as ordinary terms and the full ordered match is applied to the rows that
+come back, **before** the result cap. The rule itself is pure and lives in
+`lib/shams/search.ts`.
+
+**Up to `MAX_SEARCH_PROBES` (3) probes per wildcard query, not one.** One probe
+is logically sufficient — every match contains every fragment, so a
+single-fragment search returns a superset — but only if the API returns
+everything it matched. It exposes no `limit`, `page` or `offset` (the whole
+signature is `?q=`), so a server-side cap cannot be ruled out from the client,
+and a truncated superset is not a superset: the wanted product can be cut off
+before local matching sees it. Several probes mean a product only has to survive
+*one* probe's truncation. The union is de-duplicated by item code, filtered, then
+ranked. A plain query still costs exactly **one** request.
+
+Results are ranked (`rankProducts`), not returned in API order: exact name, then
+prefix, then contains, then item-code match, with a nudge for names where the
+match sits early. Ties keep catalog order, so a repeated search does not
+reshuffle under the agent's cursor.
 
 #### Branch Stock table
 
 Filter box over the loaded rows — code (`P0221`), bare number (`0221`), English
-city (`Jeddah`), Arabic city (`جدة`) or MIS area — filtered client-side with no
-request, through `filterBranchStock`. **The summary recomputes from the rows on
-screen** (`summariseStock` takes an array, so a filtered table and its counts
-cannot disagree); when a filter is active the chain-wide figure stays visible
-beside it, labelled, rather than being replaced.
+city (`Jeddah`) or Arabic city (`جدة`) — filtered client-side with no request,
+through `filterBranchStock`. **The summary recomputes from the rows on screen**
+(`summariseStock` takes an array, so a filtered table and its counts cannot
+disagree); when a filter is active the first count reads "matching branches" and
+a line beneath gives the chain-wide figures, so neither can be read as the other.
 
-`LZ Quantity` was removed — semantics were never verified and it was zero in all
-275 captured rows. The table is `table-fixed` with declared column widths so the
-quantity column sits narrow against the right edge instead of floating in
-whitespace, and zero renders as a **destructive** `Out of Stock` badge. Still no
-"low stock" band: the application defines no threshold.
+**`areaName` is not searched and not displayed.** It is a coarse MIS region label
+that duplicates the city for most branches and disagrees with it for others, so
+searching it matched rows whose visible text had nothing to do with the query.
+The field stays on `ShamsBranchStock` because it is what the API returns; nothing
+in the UI reads it. `LZ Quantity` was removed earlier for the same kind of
+reason — never verified, zero in all 275 captured rows.
+
+Four columns, `table-fixed`: Branch (mono) · City · Qty (right, `text-base`
+tabular) · Status. Quantity is the number being scanned so it carries the weight;
+zero renders as a **destructive** `Out of Stock` badge and a stocked branch gets
+a quiet `In stock` mark rather than a second loud badge. Still no "low stock"
+band: the application defines no threshold.
 
 #### Invoice lookup — number first, branch discovered
 
@@ -2639,14 +2659,40 @@ A document number is unique only within a warehouse, and **the MIS has no
 cross-branch lookup**: its complete endpoint inventory (read from the portal's
 shipped bundle) is `product/{search,info,stock}`, `sales/details`, `crm/data`,
 four `dashboard/*` reports and auth/users, and `sales/details` always takes one
-`wh_cd`. So `findInvoiceBranches` asks each branch, server-side, eight at a time.
-MilaServ's branch table supplies only the list of places to look — a branch
-appears in the result solely because Shams returned a document for it. A branch
-that fails is skipped; a total failure raises, because "nothing matched" and
-"nothing answered" are different facts.
+`wh_cd`. So `findInvoiceBranches` asks each branch, server-side. MilaServ's branch table
+supplies only the list of places to look — a branch appears in the result solely
+because Shams returned a document for it. A branch that fails is skipped; a total
+failure raises, because "nothing matched" and "nothing answered" are different
+facts.
 
-One sweep is ~137 upstream requests, so it runs **only on submit**, never per
-keystroke, and its answer is held for 10 minutes (`invoiceBranches` query key).
+**What makes it fast enough to use:**
+
+- **Concurrency 24** per part, up from 8. 137 branches at 8 in flight is ~17
+  waves; at the observed 0.4–2.3 s per lookup that was a 10–40 s wait. No rate
+  limit has ever been observed on this API, but absence of evidence is not a
+  licence, so this stays in the range a browser would itself produce.
+- **6 s per-branch timeout** (`DISCOVERY_TIMEOUT_MS`) instead of the transport's
+  30 s. One slow warehouse out of 137 must not hold a worker for half a minute.
+- **Four parts, run in parallel by the client** (`DISCOVERY_PARTS`). Each part is
+  its own server call over an **interleaved** slice (`partitionBranches` — round
+  robin, not contiguous, because branch codes are regional and a contiguous slice
+  would concentrate one region's latency in one part).
+- **Progressive results.** Each part resolves independently, so matches render as
+  they are found. `mergeInvoiceBranchMatches` unions the parts, keeps one row per
+  branch and re-sorts, so a late Call Centre match still lands at the top and no
+  earlier row disappears. The chooser says "still searching the remaining
+  branches…" until every part is done, and **nothing is auto-selected until the
+  sweep is complete** — a lone first answer is not proof it is the only one.
+- **Server-side sweep cache**, 5 min per `(docNo, part)`, on top of the existing
+  10-minute React Query window. Two agents looking up the same document cost one
+  sweep. A total failure is never cached.
+
+It still runs **only on submit**, never per keystroke.
+
+**Call Centre matches sort first** (`sortInvoiceBranchMatches`), then branch code
+— deterministic, and deliberately not by city, total or arrival order. The
+chooser marks those rows with a left rule and a tint; everything else stays
+plain.
 
 Decisions worth keeping:
 
