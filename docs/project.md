@@ -2497,13 +2497,37 @@ zero-padded number on input while returning it unpadded, so both are reconciled
 via `stripLeadingZeros`. Every numeric arrives as a string in inconsistent
 notation (`".000"`, `"806.22000000000003"`) and is rounded to two decimals.
 
+### Call Centre classification
+
+A Shams invoice header carries `Customer`, a **sales-channel account label** —
+`HOME DELIVERY-Call Centre`, `CALL CENTER SALES`, `NUPCO / …`. It is the only
+signal in the payload that says which channel a document came through, so it is
+normalized onto `ShamsInvoice` as `customer` (verbatim, trimmed) plus the derived
+`isCallCentre`.
+
+The rule lives in one place, `normalize.ts:isCallCentreCustomer`, and is a
+**suffix** test: `/-\s*call\s+centre\s*$/i`. Case, whitespace around the hyphen
+and trailing whitespace are tolerated; the hyphen and the terminal position are
+not negotiable. That narrowness is the point — `CALL CENTER SALES` is a walk-in
+account whose *name* mentions a call center, while `CALL CENTER SALES-Call
+Centre` is the call-centre account, and a substring match would merge the two.
+An absent or blank customer is not Call Centre.
+
+The UI reads `isCallCentre`; it does not restate the rule. `customer` is kept
+alongside the derived flag rather than replaced by it, both because the label is
+what a human reconciling a document reads and because matching Shams invoices to
+MilaServ orders will need the label itself.
+
 ### Privacy
 
-`sales/details` returns `PatCd`, `Customer`, `Customer_Name`, `Customer_Code` and
+`sales/details` returns `PatCd`, `CusName`, `Customer_Name`, `Customer_Code` and
 `Cus_Cd`. They are dropped in `normalize.ts` — at the boundary, not in the UI —
 so they cannot reach a cache, a log, an export or the browser; `ShamsInvoice` has
 no field for them and a test asserts none leaks. The client logs path, status and
 duration only, never query values, because `crm/data` carries a mobile number.
+
+`Customer` is the deliberate exception: an account label, not a person, retained
+for the classification above.
 
 `GET /api/v2/crm/data` was discovered and is **deliberately not implemented**: it
 is unnecessary for this objective, all three captured calls returned zero rows so
@@ -2546,8 +2570,11 @@ Decisions worth keeping:
 - **No stock thresholds.** The application defines none. Zero renders as "Out of
   stock" (a fact); every other quantity renders as itself.
 - **`totalCost` / `profit` are not rendered.** Margin is not needed to read a
-  document. Customer identifiers never reach the client at all — they are
-  dropped in `normalize.ts`.
+  document. Patient identifiers never reach the client at all — they are dropped
+  in `normalize.ts`.
+- **An invoice shows its `Customer` label *and* its Call Centre status**, never
+  the badge alone. The suffix the rule turns on sits at the end of the label, so
+  hiding the label hides the evidence. The label is not truncated.
 - **Failure copy is chosen by `kind`, not printed from the server**, so no
   upstream string can surface in a browser.
 

@@ -128,7 +128,9 @@ export interface RawSalesRow {
   Doc_Dt?: string;
   Doc_type?: string;
   /** Customer / patient identifiers. Read off the wire, never normalized out
-   *  of this module — see the privacy note in `normalize.ts`. */
+   *  of this module — see the privacy note in `normalize.ts`. `Customer` is the
+   *  one that survives normalization: it is a sales-channel account label, not a
+   *  person. */
   PatCd?: string;
   CusName?: string;
   Customer?: string;
@@ -225,9 +227,10 @@ export interface ShamsInvoiceItem {
 /**
  * A document assembled from its header row and its item rows.
  *
- * Customer and patient identifiers present on the wire are deliberately absent:
- * nothing in the portal's current use case needs them, and dropping them at the
- * normalization boundary means they cannot reach a cache, a log or the browser.
+ * The patient identifiers present on the wire are deliberately absent: nothing
+ * in the portal's use case needs them, and dropping them at the normalization
+ * boundary means they cannot reach a cache, a log or the browser. `customer` is
+ * kept — it names a sales-channel account, not a person.
  */
 export interface ShamsInvoice {
   /** Unpadded, as returned. The API accepts a zero-padded number on input. */
@@ -240,6 +243,24 @@ export interface ShamsInvoice {
   branchCode: string | null;
   division: string | null;
   cancelled: boolean;
+  /**
+   * The header's `Customer` value, verbatim apart from trimming.
+   *
+   * An account label — `HOME DELIVERY-Call Centre`, `CALL CENTER SALES`,
+   * `NUPCO / …` — not a patient name. Kept unmodified because it is the raw
+   * evidence behind `isCallCentre`, and because matching Shams documents to
+   * MilaServ orders will need the label itself, not just the derived flag.
+   */
+  customer: string | null;
+  /**
+   * Did this document come through the call centre?
+   *
+   * Derived from `customer` alone, by the `-Call Centre` suffix rule in
+   * `normalize.ts`. Consume this rather than re-reading the label: the rule is
+   * narrower than it looks, and `CALL CENTER SALES` is *not* a call-centre
+   * account.
+   */
+  isCallCentre: boolean;
   cashAmount: number;
   cashTax: number;
   creditAmount: number;

@@ -283,8 +283,15 @@ everything else as an item, which holds regardless of how the sequence numbers.
 `Credit_Amt`, `Credit_Tax`, `Discount`, `TotalCost`, `Profit`, `TotalTax`,
 `GrandAmt`, `Usr_ID`.
 
-**Customer (deliberately dropped — see §7):** `PatCd`, `CusName`, `Customer`,
+**Patient identifiers (deliberately dropped — see §7):** `PatCd`, `CusName`,
 `Customer_Name`, `Customer_Code`, `Cus_Cd`.
+
+**`Customer` (retained — see §7):** the sales-channel account label, e.g.
+`HOME DELIVERY-Call Centre`, `CALL CENTER SALES`, `NUPCO / …-Call Centre`. A
+document is a call-centre document when this value **ends with** `-Call Centre`;
+the words alone do not qualify it (`CALL CENTER SALES` is a walk-in account).
+Normalized to `ShamsInvoice.customer` + `isCallCentre`. The full set of labels in
+use is `NOT VERIFIED` — only the suffix convention is.
 
 **Item:** `ItmCd`, `ItmName`, `Qty`, `LzQty`, `FocQty` (free-of-charge),
 `FocLzQty`, `Rate`, `ItmGrossAmt`, `ItmDiscAmt`, `Amt`, `ItemTax`, `Item_NetAmt`.
@@ -331,9 +338,15 @@ separate, deliberate decision.
 ## 7. Privacy decisions
 
 `sales/details` returns patient and customer identifiers on every header row.
-They are dropped in `normalize.ts`, at the boundary — not in the UI — so they
-cannot reach a cache, a log, an XLSX export or the browser. `ShamsInvoice` has no
-field for them, and a test asserts none leaks into the serialized model.
+`PatCd`, `CusName`, `Customer_Name`, `Customer_Code` and `Cus_Cd` are dropped in
+`normalize.ts`, at the boundary — not in the UI — so they cannot reach a cache, a
+log, an XLSX export or the browser. `ShamsInvoice` has no field for them, and a
+test asserts none leaks into the serialized model.
+
+`Customer` is the exception, retained deliberately: observed values name a sales
+channel (`HOME DELIVERY-Call Centre`) rather than a person, and it is the only
+field that identifies a call-centre document. If a payload ever puts a patient
+name in it, this decision has to be revisited — the field is shown in the UI.
 
 The client logs method, path, status and duration only. **Query values are never
 logged**, because `crm/data` carries a mobile number and `sales/details` echoes

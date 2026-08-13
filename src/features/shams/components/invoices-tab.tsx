@@ -20,9 +20,18 @@
  *
  * The normalized invoice carries `totalCost` and `profit`. Both are omitted:
  * margin is not needed to read a document, and this milestone shows only what
- * the task requires. Customer and patient identifiers never reach the client at
- * all — they are dropped server-side in `normalize.ts`, so there is nothing to
- * filter out here.
+ * the task requires. Patient identifiers never reach the client at all — they
+ * are dropped server-side in `normalize.ts`, so there is nothing to filter out
+ * here.
+ *
+ * ## Customer and Call Centre status
+ *
+ * Both are shown, and the raw `customer` label is shown *unaltered* next to the
+ * derived status rather than being replaced by it. The label is what a person
+ * reconciling a document reads, and the distinction the rule turns on —
+ * `CALL CENTER SALES` versus `CALL CENTER SALES-Call Centre` — is invisible if
+ * only the badge is rendered. The rule itself lives in `normalize.ts`; this file
+ * reads `invoice.isCallCentre` and never re-derives it.
  */
 
 import { useMemo, useState, type FormEvent } from "react";
@@ -228,6 +237,26 @@ function InvoiceCard({
           <Meta label="Type">{invoice.docType ?? "—"}</Meta>
           <Meta label="Total" emphasis>
             {fmtSAR(invoice.grandTotal)}
+          </Meta>
+        </div>
+
+        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3 border-b border-border/60 px-4 py-3">
+          <Meta label="Customer">
+            {/* Never truncated: the suffix that decides the status lives at the
+                end of the label, and Arabic account names are long. */}
+            <span className="break-words">{invoice.customer ?? "—"}</span>
+          </Meta>
+          <Meta label="Status">
+            <span
+              className={cn(
+                "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                invoice.isCallCentre
+                  ? "bg-primary/10 text-primary"
+                  : "bg-muted text-muted-foreground",
+              )}
+            >
+              {invoice.isCallCentre ? "Call Centre" : "Non Call Centre"}
+            </span>
           </Meta>
         </div>
 

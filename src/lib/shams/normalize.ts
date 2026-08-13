@@ -6,12 +6,19 @@
  *
  * ## Privacy
  *
- * `sales/details` returns customer and patient identifiers (`PatCd`, `Customer`,
+ * `sales/details` returns customer and patient identifiers (`PatCd`, `CusName`,
  * `Customer_Name`, `Customer_Code`, `Cus_Cd`) alongside the amounts. They are
  * dropped **here**, at the boundary, rather than in the UI: a field that never
  * leaves this function cannot reach a cache, a log line, an XLSX export or the
  * browser. Nothing in the current use case — looking up a document's totals and
  * lines — needs to know who the patient was.
+ *
+ * `Customer` is the one exception, and it is deliberate. Observed values are
+ * *account* labels, not people — `HOME DELIVERY-Call Centre`, `CALL CENTER
+ * SALES`, `NUPCO / …` — and the label is the only signal in the payload that
+ * says which sales channel a document came through. It is retained so the
+ * portal can tell a Call Centre invoice from a walk-in one; the fields that
+ * name a patient are still dropped.
  */
 
 import type {
@@ -193,6 +200,39 @@ export function stripLeadingZeros(value: string): string {
   return stripped === "" ? (value === "" ? "" : "0") : stripped;
 }
 
+/**
+ * The Call Centre indicator, as it appears at the **end** of a `Customer` value.
+ *
+ * The suffix is the whole rule. Shams uses one account label per channel, and
+ * the channel is expressed by appending `-Call Centre` — so `CALL CENTER SALES`
+ * is a walk-in account whose *name* mentions a call center, while `CALL CENTER
+ * SALES-Call Centre` is the call-centre account. Matching on the words alone
+ * would classify the first as the second, which is the exact mistake this
+ * pattern exists to avoid.
+ *
+ * What is tolerated is formatting only:
+ * - case (`-CALL CENTRE`, `-call centre`),
+ * - whitespace around the hyphen (`HOME DELIVERY - Call Centre`),
+ * - trailing whitespace.
+ *
+ * What is not: the hyphen is required (so a bare `CALL CENTER` is not a match),
+ * and the suffix must terminate the value (so `…-Call Centre Riyadh` is not).
+ */
+const CALL_CENTRE_SUFFIX = /-\s*call\s+centre\s*$/i;
+
+/**
+ * Is this `Customer` value a Call Centre account?
+ *
+ * The single home of the rule. Callers — server functions, the invoice UI, and
+ * whatever Phase 2 matching needs — read `ShamsInvoice.isCallCentre` rather than
+ * re-deriving it, so the business rule cannot drift between layers.
+ */
+export function isCallCentreCustomer(customer: unknown): boolean {
+  const text = toText(customer);
+  if (!text) return false;
+  return CALL_CENTRE_SUFFIX.test(text);
+}
+
 function toInvoiceItem(row: RawSalesRow): ShamsInvoiceItem | null {
   const itemCode = toText(row?.ItmCd);
   if (!itemCode) return null;
@@ -266,6 +306,10 @@ export function groupInvoices(rows: RawSalesRow[] | undefined | null): ShamsInvo
       if (item) items.push(item);
     }
 
+    // Only the header row carries a customer — item rows blank the field — so a
+    // header-less bucket yields a null customer rather than a wrong one.
+    const customer = toText(h?.Customer ?? identity.Customer);
+
     invoices.push({
       docNo: stripLeadingZeros(toText(identity.Doc_No) ?? ""),
       docDate: toIsoDateTime(identity.Doc_Dt),
@@ -273,6 +317,8 @@ export function groupInvoices(rows: RawSalesRow[] | undefined | null): ShamsInvo
       branchCode: toText(identity.Whouse),
       division: toText(identity.Division),
       cancelled: toText(h?.Doc_Cancelled ?? identity.Doc_Cancelled) === "1",
+      customer,
+      isCallCentre: isCallCentreCustomer(customer),
       cashAmount: toMoney(h?.Cash_Amt),
       cashTax: toMoney(h?.Cash_Tax),
       creditAmount: toMoney(h?.Credit_Amt),

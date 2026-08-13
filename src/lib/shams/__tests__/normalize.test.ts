@@ -4,9 +4,12 @@
  * Fixtures are copied verbatim from the 2026-08-13 HAR capture — including its
  * awkward numeric spellings (`".000"`, `"806.22000000000003"`), because those
  * are precisely what the parsing exists to survive. The one departure from the
- * capture: the customer and patient identifiers on the invoice header are
- * replaced with `"REDACTED"` placeholders. Their *presence* is what the privacy
- * assertions test; their values have no business being in a repository.
+ * capture: the patient identifiers on the invoice header are replaced with
+ * `"REDACTED"` placeholders. Their *presence* is what the privacy assertions
+ * test; their values have no business being in a repository.
+ *
+ * `Customer` is not redacted, because it is not a person — it is the
+ * sales-channel account label the Call Centre classification reads.
  */
 
 import { describe, expect, it } from "vitest";
@@ -17,6 +20,7 @@ import {
   normalizeProductDetail,
   normalizeProducts,
   normalizeStock,
+  isCallCentreCustomer,
   stripLeadingZeros,
   toIsoDateTime,
   toMoney,
@@ -68,7 +72,7 @@ const HEADER_ROW: RawSalesRow = {
   Doc_type: "Credit",
   PatCd: "REDACTED",
   CusName: "",
-  Customer: "REDACTED",
+  Customer: "HOME DELIVERY-Call Centre",
   Customer_Name: "REDACTED",
   Customer_Code: "REDACTED",
   Whouse: "P0304",
@@ -375,13 +379,15 @@ describe("groupInvoices", () => {
     expect(groupInvoices([null as never, undefined as never])).toEqual([]);
   });
 
-  it("carries no customer or patient identifier into the normalized model", () => {
+  it("carries no patient identifier into the normalized model", () => {
     const [invoice] = groupInvoices([HEADER_ROW, ITEM_ROW]);
     const serialized = JSON.stringify(invoice);
+    // Every redacted field is a patient/user identifier; `Customer` is the one
+    // header field deliberately kept, and it is not redacted in the fixture.
     expect(serialized).not.toContain("REDACTED");
     for (const leaked of [
       "PatCd",
-      "Customer",
+      "CusName",
       "Customer_Name",
       "Customer_Code",
       "Cus_Cd",
@@ -389,6 +395,99 @@ describe("groupInvoices", () => {
     ]) {
       expect(serialized).not.toContain(leaked);
     }
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Invoices — Call Centre classification                                       */
+/* -------------------------------------------------------------------------- */
+
+describe("isCallCentreCustomer", () => {
+  it("classifies a customer that ends with the -Call Centre suffix", () => {
+    expect(isCallCentreCustomer("NUPCO / الشركة الوطنية للشراء الموحد (نوبكو)-Call Centre")).toBe(
+      true,
+    );
+    expect(isCallCentreCustomer("HOME DELIVERY-Call Centre")).toBe(true);
+    expect(isCallCentreCustomer("CALL CENTER SALES-Call Centre")).toBe(true);
+  });
+
+  it("tolerates case and whitespace around the suffix", () => {
+    expect(isCallCentreCustomer("home delivery-call centre")).toBe(true);
+    expect(isCallCentreCustomer("HOME DELIVERY - Call Centre")).toBe(true);
+    expect(isCallCentreCustomer("HOME DELIVERY-CALL CENTRE")).toBe(true);
+    expect(isCallCentreCustomer("  HOME DELIVERY-Call Centre  ")).toBe(true);
+  });
+
+  it("does not classify the same accounts without the suffix", () => {
+    expect(isCallCentreCustomer("NUPCO / الشركة الوطنية للشراء الموحد (نوبكو)")).toBe(false);
+    expect(isCallCentreCustomer("HOME DELIVERY")).toBe(false);
+    expect(isCallCentreCustomer("CALL CENTER")).toBe(false);
+  });
+
+  /**
+   * The distinction the whole rule exists for. `CALL CENTER SALES` is a walk-in
+   * account whose *name* mentions a call center; matching on the words rather
+   * than the suffix would silently reclassify every one of its invoices.
+   */
+  it("does not classify CALL CENTER SALES, which merely contains the words", () => {
+    expect(isCallCentreCustomer("CALL CENTER SALES")).toBe(false);
+    expect(isCallCentreCustomer("call center sales")).toBe(false);
+  });
+
+  it("requires the suffix to terminate the value", () => {
+    expect(isCallCentreCustomer("HOME DELIVERY-Call Centre Riyadh")).toBe(false);
+    expect(isCallCentreCustomer("Call Centre-HOME DELIVERY")).toBe(false);
+  });
+
+  it("requires the hyphen, not just the words at the end", () => {
+    expect(isCallCentreCustomer("HOME DELIVERY CALL CENTRE")).toBe(false);
+  });
+
+  it("treats an absent or blank customer as not Call Centre", () => {
+    expect(isCallCentreCustomer(null)).toBe(false);
+    expect(isCallCentreCustomer(undefined)).toBe(false);
+    expect(isCallCentreCustomer("")).toBe(false);
+    expect(isCallCentreCustomer("   ")).toBe(false);
+    expect(isCallCentreCustomer(42)).toBe(false);
+  });
+});
+
+describe("groupInvoices — customer and Call Centre status", () => {
+  it("takes the customer from the header row, trimmed but otherwise verbatim", () => {
+    const [invoice] = groupInvoices([
+      { ...HEADER_ROW, Customer: "  HOME DELIVERY-Call Centre  " },
+      ITEM_ROW,
+    ]);
+    expect(invoice.customer).toBe("HOME DELIVERY-Call Centre");
+    expect(invoice.isCallCentre).toBe(true);
+  });
+
+  it("derives the status from the customer, not from branch, type or items", () => {
+    const [nonCallCentre] = groupInvoices([
+      { ...HEADER_ROW, Customer: "CALL CENTER SALES" },
+      ITEM_ROW,
+    ]);
+    expect(nonCallCentre.customer).toBe("CALL CENTER SALES");
+    expect(nonCallCentre.isCallCentre).toBe(false);
+
+    const [callCentre] = groupInvoices([
+      { ...HEADER_ROW, Customer: "CALL CENTER SALES-Call Centre" },
+      ITEM_ROW,
+    ]);
+    expect(callCentre.isCallCentre).toBe(true);
+  });
+
+  it("reports no customer, and no Call Centre status, when the header is absent", () => {
+    // Item rows blank the customer field, so there is nothing to read.
+    const [invoice] = groupInvoices([ITEM_ROW]);
+    expect(invoice.customer).toBeNull();
+    expect(invoice.isCallCentre).toBe(false);
+  });
+
+  it("reports a blank customer as null rather than an empty string", () => {
+    const [invoice] = groupInvoices([{ ...HEADER_ROW, Customer: "" }, ITEM_ROW]);
+    expect(invoice.customer).toBeNull();
+    expect(invoice.isCallCentre).toBe(false);
   });
 });
 
