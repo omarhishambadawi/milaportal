@@ -2408,6 +2408,102 @@ layer: it changes only where the rows they consume come from.
 
 ---
 
+## Shams Pharmacy MIS Integration
+
+Read access to the pharmacy chain's own MIS: product catalog, per-branch stock,
+and sales documents. Discovery evidence and the full field-by-field schema are in
+[`docs/shams/api-discovery.md`](./shams/api-discovery.md), derived from a HAR
+capture of the live portal (2026-08-13, 21 requests). The HAR is **not** in the
+repository and must never be committed.
+
+### The finding that shapes the design
+
+**The MIS data API performs no authentication.** `POST /api/v2/auth/login`
+returns a user profile and the MIS portal's own nav permissions — no token, no
+session id, no `Set-Cookie` — and all 20 subsequent requests in the capture send
+no `Authorization`, no `Cookie` and no session parameter, against responses
+carrying `Access-Control-Allow-Origin: *`.
+
+Two consequences:
+
+1. **There is no token cache**, unlike Yeastar. No L1/L2 tiers, no refresh, no
+   single-flight — that machinery exists for Yeastar because its PBX issues and
+   rate-limits real tokens. Here it would be ceremony around a credential the
+   server never sends. `authHeaders()` in `client.server.ts` is the one seam to
+   fill if Shams closes this.
+2. **MilaServ's own gate is the only access control in the path**, so every read
+   sits behind `requireSupabaseAuth` plus a permission check.
+
+`login()` exists only so an administrator can confirm the credentials still work
+via `shamsStatus`. No read path calls it, because it authorizes nothing.
+
+### Layering
+
+```
+src/lib/shams/client.server.ts   transport: timeout (15 s), 1 transient retry, error taxonomy, TtlCache, login()
+src/lib/shams/types.ts           wire shapes + normalized models
+src/lib/shams/normalize.ts       PURE: numeric parsing, invoice grouping
+src/lib/shams/catalog.server.ts  product search / info / stock + caches
+src/lib/shams/sales.server.ts    invoice lookup + query validation
+src/lib/shams.functions.ts       authenticated, RBAC-gated server functions
+```
+
+### RBAC — existing permissions, reused
+
+`view_orders` gates the catalog and stock; `view_invoice_analytics` gates
+invoices, which carry `TotalCost` and `Profit`. `shamsStatus` is administrator
+only. No permission key was minted: a new key must be added to both
+`lib/permissions.ts` and a SQL migration or `npm run check:permissions` fails,
+and the existing keys already mean what is needed.
+
+### Branch identity — a direct join, verified
+
+Shams `branchCode` (stock) and `Whouse` (sales) are the **same identifier space
+as `branches.branch_no`**: of MilaServ's 137 seeded branches, 137 appear in the
+Shams stock response with identical codes and 0 are missing. Shams additionally
+reports `P0310` and `P0311`, which MilaServ's branch directory does not yet have.
+**No mapping layer exists or is needed.** Shams `branchName` always duplicates
+`branchCode` and carries no display name, so branch names must come from the
+`branches` table.
+
+### The invoice row model
+
+`GET /api/v2/sales/details` returns **one flat row shape (35 keys) for both
+document headers and item lines**, discriminated by `Prior`: `"0"` is the header
+(totals + customer identity, item fields blank), anything else is an item line
+(item fields set, totals zeroed). Rows are bucketed by `(Whouse, Doc_No)` in
+`groupInvoices`. Treating each row as an invoice double-counts every document —
+the captured document carries `GrandAmt "806.220"` on its header and
+`Amt "806.22000000000003"` on its single item.
+
+Document numbers are unique only within a warehouse, and the API accepts a
+zero-padded number on input while returning it unpadded, so both are reconciled
+via `stripLeadingZeros`. Every numeric arrives as a string in inconsistent
+notation (`".000"`, `"806.22000000000003"`) and is rounded to two decimals.
+
+### Privacy
+
+`sales/details` returns `PatCd`, `Customer`, `Customer_Name`, `Customer_Code` and
+`Cus_Cd`. They are dropped in `normalize.ts` — at the boundary, not in the UI —
+so they cannot reach a cache, a log, an export or the browser; `ShamsInvoice` has
+no field for them and a test asserts none leaks. The client logs path, status and
+duration only, never query values, because `crm/data` carries a mobile number.
+
+`GET /api/v2/crm/data` was discovered and is **deliberately not implemented**: it
+is unnecessary for this objective, all three captured calls returned zero rows so
+its schema is unverified, and it is a bulk lookup of identifiable customer data
+behind an unauthenticated endpoint.
+
+### Caching
+
+Search 5 min · info 15 min · stock 60 s · invoices uncached. In-memory and
+per-isolate — no migration and no table of third-party catalog data, since the
+payloads refetch in well under a second. The caches exist mainly to absorb
+per-keystroke search traffic. Stock is never fetched for a whole search result
+set; callers request it for the one item a user opened.
+
+---
+
 ## Business Rules
 
 ### Orders
@@ -2532,6 +2628,13 @@ service-role key is not among them and must never be.
 The synchronization layer additionally needs `SUPABASE_SERVICE_ROLE_KEY` — the
 mirrored tables are `service_role` only. Without it the layer reports "not
 configured" and every read falls back to the live PBX path.
+
+### Shams Pharmacy MIS
+
+| Variable                                     | Notes                                                                                                                                                                                                                                                                                              |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SHAMS_MIS_BASE_URL`                         | **Server only.** Origin of the MIS API, no trailing slash or path. Absent → the Shams module reports "not configured" and every server function returns an empty result; nothing else breaks.                                                                                                     |
+| `SHAMS_MIS_USERNAME` / `SHAMS_MIS_PASSWORD` | **Server only, and NOT required for the integration to function.** The MIS data endpoints authenticate nothing (see the integration section), so no read path calls `login()`. These exist solely so an administrator can verify the account via `shamsStatus`. Never `VITE_`-prefixed, never committed. |
 
 ### Build
 

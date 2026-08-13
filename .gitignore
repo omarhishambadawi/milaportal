@@ -39,6 +39,12 @@ dist-ssr
 .env.*
 !.env.example
 
+# Network captures. A HAR of an authenticated portal holds the credential
+# exchange, session headers and whatever customer data was on screen — the
+# Shams MIS discovery capture holds all three. Useful to keep locally, never
+# to commit.
+*.har
+
 # Supabase CLI local link state (project ref, pooler URL, server versions).
 # Machine-local and re-created by `supabase link` — never commit it.
 supabase/.temp/
