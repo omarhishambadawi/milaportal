@@ -4,12 +4,13 @@
  * Fixtures are copied verbatim from the 2026-08-13 HAR capture — including its
  * awkward numeric spellings (`".000"`, `"806.22000000000003"`), because those
  * are precisely what the parsing exists to survive. The one departure from the
- * capture: the patient identifiers on the invoice header are replaced with
- * `"REDACTED"` placeholders. Their *presence* is what the privacy assertions
- * test; their values have no business being in a repository.
+ * capture: the identifiers on the invoice header are replaced with `"REDACTED"`
+ * placeholders. Their *presence* is what the privacy assertions test; their
+ * values have no business being in a repository.
  *
- * `Customer` is not redacted, because it is not a person — it is the
- * sales-channel account label the Call Centre classification reads.
+ * The customer *label* fields are not redacted, because they are not people —
+ * they carry the sales-channel account name the Call Centre classification
+ * reads, and the point of several tests is which of them wins.
  */
 
 import { describe, expect, it } from "vitest";
@@ -72,8 +73,11 @@ const HEADER_ROW: RawSalesRow = {
   Doc_type: "Credit",
   PatCd: "REDACTED",
   CusName: "",
-  Customer: "HOME DELIVERY-Call Centre",
-  Customer_Name: "REDACTED",
+  // The two disagree on the wire, which is the whole bug: `Customer` is the
+  // bare account name, `Customer_Name` carries the channel suffix and is what
+  // the MIS portal displays.
+  Customer: "HOME DELIVERY",
+  Customer_Name: "HOME DELIVERY-Call Centre",
   Customer_Code: "REDACTED",
   Whouse: "P0304",
   Division: "##",
@@ -379,20 +383,13 @@ describe("groupInvoices", () => {
     expect(groupInvoices([null as never, undefined as never])).toEqual([]);
   });
 
-  it("carries no patient identifier into the normalized model", () => {
+  it("carries no identifier into the normalized model", () => {
     const [invoice] = groupInvoices([HEADER_ROW, ITEM_ROW]);
     const serialized = JSON.stringify(invoice);
-    // Every redacted field is a patient/user identifier; `Customer` is the one
+    // Every redacted field is an identifier; the customer *label* is the one
     // header field deliberately kept, and it is not redacted in the fixture.
     expect(serialized).not.toContain("REDACTED");
-    for (const leaked of [
-      "PatCd",
-      "CusName",
-      "Customer_Name",
-      "Customer_Code",
-      "Cus_Cd",
-      "Usr_ID",
-    ]) {
+    for (const leaked of ["PatCd", "Customer_Code", "Cus_Cd", "Usr_ID"]) {
       expect(serialized).not.toContain(leaked);
     }
   });
@@ -453,9 +450,61 @@ describe("isCallCentreCustomer", () => {
 });
 
 describe("groupInvoices — customer and Call Centre status", () => {
+  /**
+   * The regression. Document P0221/22138 is a real call-centre invoice whose
+   * `Customer` and `Customer_Name` disagree: reading `Customer` drops the
+   * `-Call Centre` suffix and reports a call-centre document as a walk-in one.
+   * The MIS portal's own Sales Register renders `Customer_Name ?? CusName`.
+   */
+  it("reads the label the MIS portal displays, not the bare Customer field", () => {
+    const header: RawSalesRow = {
+      ...HEADER_ROW,
+      Doc_No: "22138",
+      Whouse: "P0221",
+      Customer: "NUPCO / الشركة الوطنية للشراء الموحد (نوبكو)",
+      Customer_Name: "NUPCO / الشركة الوطنية للشراء الموحد (نوبكو)-Call Centre",
+      CusName: "",
+    };
+    const [invoice] = groupInvoices([header, { ...ITEM_ROW, Doc_No: "22138", Whouse: "P0221" }]);
+    expect(invoice.customer).toBe("NUPCO / الشركة الوطنية للشراء الموحد (نوبكو)-Call Centre");
+    expect(invoice.isCallCentre).toBe(true);
+  });
+
+  it("still reports no Call Centre status when that label has no suffix", () => {
+    const [invoice] = groupInvoices([
+      {
+        ...HEADER_ROW,
+        Customer_Name: "NUPCO / الشركة الوطنية للشراء الموحد (نوبكو)",
+      },
+      ITEM_ROW,
+    ]);
+    expect(invoice.customer).toBe("NUPCO / الشركة الوطنية للشراء الموحد (نوبكو)");
+    expect(invoice.isCallCentre).toBe(false);
+  });
+
+  it("falls back to CusName when Customer_Name is blank", () => {
+    // `??` alone would settle on the empty string and never reach the fallback,
+    // because the API spells a missing field "" rather than null.
+    const [invoice] = groupInvoices([
+      { ...HEADER_ROW, Customer_Name: "", CusName: "HOME DELIVERY-Call Centre" },
+      ITEM_ROW,
+    ]);
+    expect(invoice.customer).toBe("HOME DELIVERY-Call Centre");
+    expect(invoice.isCallCentre).toBe(true);
+  });
+
+  it("does not fall back to the Customer field, which disagrees with the portal", () => {
+    const [invoice] = groupInvoices([
+      { ...HEADER_ROW, Customer_Name: "", CusName: "", Customer: "HOME DELIVERY-Call Centre" },
+      ITEM_ROW,
+    ]);
+    expect(invoice.customer).toBeNull();
+    expect(invoice.isCallCentre).toBe(false);
+  });
+
   it("takes the customer from the header row, trimmed but otherwise verbatim", () => {
     const [invoice] = groupInvoices([
-      { ...HEADER_ROW, Customer: "  HOME DELIVERY-Call Centre  " },
+      { ...HEADER_ROW, Customer_Name: "  HOME DELIVERY-Call Centre  " },
       ITEM_ROW,
     ]);
     expect(invoice.customer).toBe("HOME DELIVERY-Call Centre");
@@ -464,28 +513,28 @@ describe("groupInvoices — customer and Call Centre status", () => {
 
   it("derives the status from the customer, not from branch, type or items", () => {
     const [nonCallCentre] = groupInvoices([
-      { ...HEADER_ROW, Customer: "CALL CENTER SALES" },
+      { ...HEADER_ROW, Customer_Name: "CALL CENTER SALES" },
       ITEM_ROW,
     ]);
     expect(nonCallCentre.customer).toBe("CALL CENTER SALES");
     expect(nonCallCentre.isCallCentre).toBe(false);
 
     const [callCentre] = groupInvoices([
-      { ...HEADER_ROW, Customer: "CALL CENTER SALES-Call Centre" },
+      { ...HEADER_ROW, Customer_Name: "CALL CENTER SALES-Call Centre" },
       ITEM_ROW,
     ]);
     expect(callCentre.isCallCentre).toBe(true);
   });
 
   it("reports no customer, and no Call Centre status, when the header is absent", () => {
-    // Item rows blank the customer field, so there is nothing to read.
+    // Item rows blank the customer fields, so there is nothing to read.
     const [invoice] = groupInvoices([ITEM_ROW]);
     expect(invoice.customer).toBeNull();
     expect(invoice.isCallCentre).toBe(false);
   });
 
   it("reports a blank customer as null rather than an empty string", () => {
-    const [invoice] = groupInvoices([{ ...HEADER_ROW, Customer: "" }, ITEM_ROW]);
+    const [invoice] = groupInvoices([{ ...HEADER_ROW, Customer_Name: "", CusName: "" }, ITEM_ROW]);
     expect(invoice.customer).toBeNull();
     expect(invoice.isCallCentre).toBe(false);
   });

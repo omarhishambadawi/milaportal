@@ -127,10 +127,14 @@ export interface RawSalesRow {
   Doc_No?: string;
   Doc_Dt?: string;
   Doc_type?: string;
-  /** Customer / patient identifiers. Read off the wire, never normalized out
-   *  of this module — see the privacy note in `normalize.ts`. `Customer` is the
-   *  one that survives normalization: it is a sales-channel account label, not a
-   *  person. */
+  /**
+   * Customer / patient identifiers — see the privacy note in `normalize.ts`.
+   *
+   * These do **not** agree with each other. `Customer_Name` is the label the MIS
+   * portal itself displays as "Customer", and the only one carrying the
+   * `-Call Centre` channel suffix; `Customer` holds a bare account name. Only
+   * `Customer_Name` (falling back to `CusName`) survives normalization.
+   */
   PatCd?: string;
   CusName?: string;
   Customer?: string;
@@ -227,10 +231,10 @@ export interface ShamsInvoiceItem {
 /**
  * A document assembled from its header row and its item rows.
  *
- * The patient identifiers present on the wire are deliberately absent: nothing
- * in the portal's use case needs them, and dropping them at the normalization
- * boundary means they cannot reach a cache, a log or the browser. `customer` is
- * kept — it names a sales-channel account, not a person.
+ * The identifiers present on the wire are deliberately absent: nothing in the
+ * portal's use case needs them, and dropping them at the normalization boundary
+ * means they cannot reach a cache, a log or the browser. `customer` is kept — it
+ * is the account label the MIS portal itself displays for the document.
  */
 export interface ShamsInvoice {
   /** Unpadded, as returned. The API accepts a zero-padded number on input. */
@@ -244,12 +248,13 @@ export interface ShamsInvoice {
   division: string | null;
   cancelled: boolean;
   /**
-   * The header's `Customer` value, verbatim apart from trimming.
+   * The customer label the MIS portal shows for this document, verbatim apart
+   * from trimming — read from `Customer_Name`, falling back to `CusName`.
    *
    * An account label — `HOME DELIVERY-Call Centre`, `CALL CENTER SALES`,
-   * `NUPCO / …` — not a patient name. Kept unmodified because it is the raw
-   * evidence behind `isCallCentre`, and because matching Shams documents to
-   * MilaServ orders will need the label itself, not just the derived flag.
+   * `NUPCO / …-Call Centre`. Kept unmodified because it is the raw evidence
+   * behind `isCallCentre`, and because matching Shams documents to MilaServ
+   * orders will need the label itself, not just the derived flag.
    */
   customer: string | null;
   /**

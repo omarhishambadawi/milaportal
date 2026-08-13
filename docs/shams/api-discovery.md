@@ -283,15 +283,39 @@ everything else as an item, which holds regardless of how the sequence numbers.
 `Credit_Amt`, `Credit_Tax`, `Discount`, `TotalCost`, `Profit`, `TotalTax`,
 `GrandAmt`, `Usr_ID`.
 
-**Patient identifiers (deliberately dropped — see §7):** `PatCd`, `CusName`,
-`Customer_Name`, `Customer_Code`, `Cus_Cd`.
+**Identifiers (deliberately dropped — see §7):** `PatCd`, `Customer`,
+`Customer_Code`, `Cus_Cd`.
 
-**`Customer` (retained — see §7):** the sales-channel account label, e.g.
-`HOME DELIVERY-Call Centre`, `CALL CENTER SALES`, `NUPCO / …-Call Centre`. A
-document is a call-centre document when this value **ends with** `-Call Centre`;
-the words alone do not qualify it (`CALL CENTER SALES` is a walk-in account).
-Normalized to `ShamsInvoice.customer` + `isCallCentre`. The full set of labels in
-use is `NOT VERIFIED` — only the suffix convention is.
+### 5.2.1 The customer label — which field, and why it matters
+
+The response carries several customer-ish fields and **they do not agree**.
+Verified against document `wh_cd=P0221, doc_no=22138`:
+
+| field | value |
+| --- | --- |
+| `Customer` | `NUPCO / …(نوبكو)` |
+| `Customer_Name` | `NUPCO / …(نوبكو)`**`-Call Centre`** |
+
+Only `Customer_Name` carries the `-Call Centre` channel suffix. Reading
+`Customer` loses it and reports a call-centre document as a walk-in one.
+
+**The MIS portal displays `Customer_Name`.** This is not inferred — it is read
+from the portal's own shipped bundle (`/mis/assets/index-*.js`), which builds the
+Sales Register header as:
+
+```js
+customer_name: A.Customer_Name ?? A.CusName ?? "",
+customer_code: A.Customer_Code ?? "",
+```
+
+where `A` is the header row. The portal never reads `Customer` at all.
+
+`Customer_Name` → `CusName` is therefore what `normalize.ts` reads, mirroring
+that precedence, and it becomes `ShamsInvoice.customer` + the derived
+`isCallCentre`. A document is a call-centre document when the label **ends with**
+`-Call Centre`; the words alone do not qualify it (`CALL CENTER SALES` is a
+walk-in account). The full set of labels in use is `NOT VERIFIED` — only the
+suffix convention and the field precedence are.
 
 **Item:** `ItmCd`, `ItmName`, `Qty`, `LzQty`, `FocQty` (free-of-charge),
 `FocLzQty`, `Rate`, `ItmGrossAmt`, `ItmDiscAmt`, `Amt`, `ItemTax`, `Item_NetAmt`.
@@ -338,15 +362,20 @@ separate, deliberate decision.
 ## 7. Privacy decisions
 
 `sales/details` returns patient and customer identifiers on every header row.
-`PatCd`, `CusName`, `Customer_Name`, `Customer_Code` and `Cus_Cd` are dropped in
-`normalize.ts`, at the boundary — not in the UI — so they cannot reach a cache, a
-log, an XLSX export or the browser. `ShamsInvoice` has no field for them, and a
-test asserts none leaks into the serialized model.
+`PatCd`, `Customer`, `Customer_Code` and `Cus_Cd` are dropped in `normalize.ts`,
+at the boundary — not in the UI — so they cannot reach a cache, a log, an XLSX
+export or the browser. `ShamsInvoice` has no field for them, and a test asserts
+none leaks into the serialized model.
 
-`Customer` is the exception, retained deliberately: observed values name a sales
-channel (`HOME DELIVERY-Call Centre`) rather than a person, and it is the only
-field that identifies a call-centre document. If a payload ever puts a patient
-name in it, this decision has to be revisited — the field is shown in the UI.
+**`Customer_Name` (falling back to `CusName`) is the deliberate exception.** It
+is the label the MIS portal itself displays as "Customer" (§5.2.1), and the only
+field carrying the sales-channel suffix that identifies a call-centre document.
+
+The residual risk is stated rather than hidden: every observed value names an
+*account* (`HOME DELIVERY-Call Centre`, `NUPCO / …-Call Centre`), but no capture
+proves what this field holds for a **cash walk-in** document, where a pharmacy
+system could plausibly put a person's name. If one ever does, it is now visible
+in the portal UI, and this decision has to be revisited.
 
 The client logs method, path, status and duration only. **Query values are never
 logged**, because `crm/data` carries a mobile number and `sales/details` echoes

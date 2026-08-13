@@ -35,17 +35,19 @@
  */
 
 import { useMemo, useState, type FormEvent } from "react";
-import { FileText, Search } from "lucide-react";
+import { Check, ChevronsUpDown, FileText, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { fmtSAR } from "@/lib/branches";
 import { cn } from "@/lib/utils";
 import type { ShamsInvoice } from "@/lib/shams/types";
@@ -59,6 +61,7 @@ import { EmptyState, ErrorState, NotConfiguredState, TableSkeleton } from "./sta
 
 export function InvoicesTab() {
   const [branchCode, setBranchCode] = useState("");
+  const [branchOpen, setBranchOpen] = useState(false);
   const [docNo, setDocNo] = useState("");
   // Only a submitted pair is ever queried — typing never triggers a lookup.
   const [submitted, setSubmitted] = useState<InvoiceLookup | null>(null);
@@ -68,6 +71,7 @@ export function InvoicesTab() {
     () => [...(branchLabels?.values() ?? [])].sort((a, b) => a.branchNo.localeCompare(b.branchNo)),
     [branchLabels],
   );
+  const selectedBranch = branchCode ? (branchLabels?.get(branchCode) ?? null) : null;
 
   const query = useInvoiceLookup(submitted);
   const result = query.data;
@@ -106,24 +110,78 @@ export function InvoicesTab() {
               </div>
             </label>
 
-            <label className="flex flex-col gap-1 sm:w-56">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="flex flex-col gap-1 sm:w-56">
+              <span
+                id="shams-branch-label"
+                className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
+              >
                 Branch
               </span>
-              <Select value={branchCode} onValueChange={setBranchCode}>
-                <SelectTrigger className="h-10">
-                  <SelectValue placeholder="Select branch" />
-                </SelectTrigger>
-                <SelectContent>
-                  {branches.map((b) => (
-                    <SelectItem key={b.branchNo} value={b.branchNo}>
-                      <span className="font-mono text-xs">{b.branchNo}</span>
-                      <span className="ml-2 text-muted-foreground">{b.cityEnglish ?? b.city}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </label>
+              {/* Searchable, because 137 branches is too many to scroll. Same
+                  Popover + Command pattern the order form's branch picker uses,
+                  over the same branch directory — no second data source. */}
+              <Popover open={branchOpen} onOpenChange={setBranchOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={branchOpen}
+                    aria-labelledby="shams-branch-label"
+                    className="h-10 w-full justify-between font-normal"
+                  >
+                    {selectedBranch ? (
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="font-mono text-xs">{selectedBranch.branchNo}</span>
+                        <span className="truncate text-muted-foreground" dir="auto">
+                          {selectedBranch.cityEnglish ?? selectedBranch.city}
+                        </span>
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">Select branch</span>
+                    )}
+                    <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" aria-hidden="true" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent
+                  align="start"
+                  className="w-[var(--radix-popover-trigger-width)] p-0"
+                >
+                  <Command>
+                    <CommandInput placeholder="Search code, name or city…" />
+                    <CommandList>
+                      <CommandEmpty>No branch.</CommandEmpty>
+                      <CommandGroup>
+                        {branches.map((b) => (
+                          <CommandItem
+                            key={b.branchNo}
+                            // What the search matches on: code, English name and
+                            // the Arabic city, so "P0221", "0221", "Jeddah" and
+                            // "جدة" all find the same branch.
+                            value={`${b.branchNo} ${b.cityEnglish ?? ""} ${b.city}`}
+                            onSelect={() => {
+                              setBranchCode(b.branchNo);
+                              setBranchOpen(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4",
+                                branchCode === b.branchNo ? "opacity-100" : "opacity-0",
+                              )}
+                              aria-hidden="true"
+                            />
+                            <span className="mr-2 font-mono text-xs">{b.branchNo}</span>
+                            <span className="truncate text-muted-foreground" dir="auto">
+                              {b.cityEnglish ?? b.city}
+                            </span>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            </div>
 
             <Button type="submit" disabled={!canSubmit || query.isFetching} className="h-10">
               <Search className="mr-1.5 h-4 w-4" aria-hidden="true" />

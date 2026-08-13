@@ -2499,11 +2499,20 @@ notation (`".000"`, `"806.22000000000003"`) and is rounded to two decimals.
 
 ### Call Centre classification
 
-A Shams invoice header carries `Customer`, a **sales-channel account label** —
-`HOME DELIVERY-Call Centre`, `CALL CENTER SALES`, `NUPCO / …`. It is the only
-signal in the payload that says which channel a document came through, so it is
-normalized onto `ShamsInvoice` as `customer` (verbatim, trimmed) plus the derived
-`isCallCentre`.
+A Shams invoice header carries a **sales-channel account label** —
+`HOME DELIVERY-Call Centre`, `CALL CENTER SALES`, `NUPCO / …-Call Centre`. It is
+the only signal in the payload that says which channel a document came through,
+so it is normalized onto `ShamsInvoice` as `customer` (verbatim, trimmed) plus
+the derived `isCallCentre`.
+
+**It is read from `Customer_Name`, falling back to `CusName` — not from
+`Customer`.** The response carries several customer-ish fields and they do not
+agree: for document P0221/22138 `Customer` is `NUPCO / …(نوبكو)` while
+`Customer_Name` is `NUPCO / …(نوبكو)-Call Centre`. The precedence mirrors the MIS
+portal's own shipped bundle, which renders its Sales Register "Customer" line as
+`Customer_Name ?? CusName ?? ""`. Blank counts as absent, which `??` alone does
+not do — the API spells a missing field `""`. Reading `Customer` was a real bug:
+it silently dropped the suffix and reported call-centre invoices as walk-ins.
 
 The rule lives in one place, `normalize.ts:isCallCentreCustomer`, and is a
 **suffix** test: `/-\s*call\s+centre\s*$/i`. Case, whitespace around the hyphen
@@ -2520,14 +2529,17 @@ MilaServ orders will need the label itself.
 
 ### Privacy
 
-`sales/details` returns `PatCd`, `CusName`, `Customer_Name`, `Customer_Code` and
-`Cus_Cd`. They are dropped in `normalize.ts` — at the boundary, not in the UI —
-so they cannot reach a cache, a log, an export or the browser; `ShamsInvoice` has
-no field for them and a test asserts none leaks. The client logs path, status and
-duration only, never query values, because `crm/data` carries a mobile number.
+`sales/details` returns `PatCd`, `Customer`, `Customer_Code` and `Cus_Cd`. They
+are dropped in `normalize.ts` — at the boundary, not in the UI — so they cannot
+reach a cache, a log, an export or the browser; `ShamsInvoice` has no field for
+them and a test asserts none leaks. The client logs path, status and duration
+only, never query values, because `crm/data` carries a mobile number.
 
-`Customer` is the deliberate exception: an account label, not a person, retained
-for the classification above.
+`Customer_Name` (fallback `CusName`) is the deliberate exception: it is the label
+the MIS portal itself displays as "Customer", and the classification above cannot
+be done without it. Every observed value names an account rather than a person,
+but no capture proves what it holds for a cash walk-in — see the risk note in
+`docs/shams/api-discovery.md` §7.
 
 `GET /api/v2/crm/data` was discovered and is **deliberately not implemented**: it
 is unnecessary for this objective, all three captured calls returned zero rows so
@@ -2567,6 +2579,11 @@ Decisions worth keeping:
 - **Branch is required for an invoice lookup.** A document number is unique only
   within a warehouse, so `(branch, docNo)` is the identity and the server
   rejects anything less.
+- **The invoice branch picker is searchable** — Popover + `Command`, the same
+  pattern as the order form's picker, matching on branch code, English name and
+  Arabic city (`P0221`, `0221`, `Jeddah`, `جدة` all find the same branch). 137
+  branches is past the point where a plain dropdown is usable. It reads the same
+  `useBranchLabels` directory as before; no second branch source.
 - **No stock thresholds.** The application defines none. Zero renders as "Out of
   stock" (a fact); every other quantity renders as itself.
 - **`totalCost` / `profit` are not rendered.** Margin is not needed to read a

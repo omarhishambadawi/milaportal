@@ -6,19 +6,14 @@
  *
  * ## Privacy
  *
- * `sales/details` returns customer and patient identifiers (`PatCd`, `CusName`,
- * `Customer_Name`, `Customer_Code`, `Cus_Cd`) alongside the amounts. They are
- * dropped **here**, at the boundary, rather than in the UI: a field that never
- * leaves this function cannot reach a cache, a log line, an XLSX export or the
- * browser. Nothing in the current use case — looking up a document's totals and
- * lines — needs to know who the patient was.
+ * `sales/details` returns identifiers (`PatCd`, `Customer`, `Customer_Code`,
+ * `Cus_Cd`) alongside the amounts. They are dropped **here**, at the boundary,
+ * rather than in the UI: a field that never leaves this function cannot reach a
+ * cache, a log line, an XLSX export or the browser. Nothing in the current use
+ * case — looking up a document's totals and lines — needs them.
  *
- * `Customer` is the one exception, and it is deliberate. Observed values are
- * *account* labels, not people — `HOME DELIVERY-Call Centre`, `CALL CENTER
- * SALES`, `NUPCO / …` — and the label is the only signal in the payload that
- * says which sales channel a document came through. It is retained so the
- * portal can tell a Call Centre invoice from a walk-in one; the fields that
- * name a patient are still dropped.
+ * The customer *label* is the deliberate exception, because it carries the sales
+ * channel. See `groupInvoices` for which field that is and why.
  */
 
 import type {
@@ -81,6 +76,21 @@ function toText(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed === "" ? null : trimmed;
+}
+
+/**
+ * The first value that is present and not blank.
+ *
+ * Blank counts as absent, which is the difference between this and the `??`
+ * chain it replaces: the API spells a missing field `""` rather than `null`, so
+ * `a ?? b` would settle on an empty `a` and never reach `b`.
+ */
+function firstText(...values: unknown[]): string | null {
+  for (const value of values) {
+    const text = toText(value);
+    if (text) return text;
+  }
+  return null;
 }
 
 /**
@@ -267,6 +277,22 @@ function toInvoiceItem(row: RawSalesRow): ShamsInvoiceItem | null {
  *
  * Document order follows first appearance in the response; items keep their
  * given order, which is the only ordering the API expresses.
+ *
+ * ## Which field is "the customer"
+ *
+ * `Customer_Name`, falling back to `CusName` — **not** `Customer`. The response
+ * carries several customer-ish fields and they do not agree: for document
+ * P0221/22138, `Customer` holds the bare account name while `Customer_Name`
+ * holds `…-Call Centre`, the label that says which sales channel the document
+ * came through. Reading `Customer` therefore silently lost the suffix and
+ * classified a call-centre invoice as a walk-in one.
+ *
+ * The precedence is not a guess: the MIS portal's own shipped bundle builds the
+ * "Customer" line of its Sales Register as
+ * `Customer_Name ?? CusName ?? ""`, and its "Customer code" line from
+ * `Customer_Code`. Mirroring that is what makes the portal and MilaServ agree
+ * about who a document belongs to. Blank is treated as absent, which `??` alone
+ * does not do — the API spells a missing field `""`.
  */
 export function groupInvoices(rows: RawSalesRow[] | undefined | null): ShamsInvoice[] {
   if (!Array.isArray(rows)) return [];
@@ -306,9 +332,9 @@ export function groupInvoices(rows: RawSalesRow[] | undefined | null): ShamsInvo
       if (item) items.push(item);
     }
 
-    // Only the header row carries a customer — item rows blank the field — so a
-    // header-less bucket yields a null customer rather than a wrong one.
-    const customer = toText(h?.Customer ?? identity.Customer);
+    // The customer label lives on the header row only — item rows blank every
+    // customer field — so a header-less bucket has no customer to report.
+    const customer = firstText(h?.Customer_Name, h?.CusName);
 
     invoices.push({
       docNo: stripLeadingZeros(toText(identity.Doc_No) ?? ""),
