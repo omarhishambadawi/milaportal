@@ -2674,6 +2674,28 @@ configured" and every read falls back to the live PBX path.
 | `SHAMS_MIS_BASE_URL`                         | **Server only.** Origin of the MIS API, no trailing slash or path. Absent → the Shams module reports "not configured" and every server function returns an empty result; nothing else breaks.                                                                                                     |
 | `SHAMS_MIS_USERNAME` / `SHAMS_MIS_PASSWORD` | **Server only, and NOT required for the integration to function.** The MIS data endpoints authenticate nothing (see the integration section), so no read path calls `login()`. These exist solely so an administrator can verify the account via `shamsStatus`. Never `VITE_`-prefixed, never committed. |
 
+**`SHAMS_MIS_BASE_URL` must be set in the deployment, not only in a local `.env`.**
+`.env` is git-ignored and never ships, so a value present locally does not reach
+production — the deployed portal reports "Shams MIS is not configured for this
+deployment" until the variable exists in the hosting environment itself
+(Lovable's project environment settings for the Cloudflare Worker; project
+environment variables on Vercel). Set it as a plain **unprefixed** server
+variable — a `VITE_` copy would be inlined into the public bundle — then
+redeploy so the Worker picks it up.
+
+The value is `https://mis.shamspharmacy.com`: an origin only, no trailing slash
+and no `/api/v2` path, which `readEnv()` appends itself. It is not a credential,
+but it stays server-only to keep one configuration pattern for the module.
+
+That the unprefixed server-variable mechanism works on this deployment is not an
+assumption: the Yeastar client reads `YEASTAR_BASE_URL` / `_CLIENT_ID` /
+`_CLIENT_SECRET` off `process.env` in exactly the same way, and
+`public.yeastar_token_cache` carries tokens minted by the deployed Worker. The
+Worker build sets `nodejs_compat` (see `.output/server/wrangler.json`), which is
+what populates `process.env` from the Worker's own variables. So an absent Shams
+value is a missing setting, never a broken bridge — `hydrateServerEnv` does not
+need to carry it.
+
 ### Build
 
 `NITRO_PRESET` — set to `vercel` by `vercel.json`'s build command.
