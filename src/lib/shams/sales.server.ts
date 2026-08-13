@@ -14,9 +14,14 @@
  * exposed but documented as unverified, and the document-number path is the one
  * this module is built around, because it is the one with evidence behind it.
  *
- * Results are **not cached**. Invoices are transactional, a stale total is worse
- * than a slow one, and a lookup is a deliberate single-document act rather than
- * the per-keystroke traffic that justifies the catalog caches.
+ * A lookup is **not cached on its own account**. Invoices are transactional, a
+ * stale total is worse than a slow one, and a deliberate single-document read is
+ * not the per-keystroke traffic that justifies the catalog caches.
+ *
+ * The one exception is not a cache of lookups but of the sweep: finding a
+ * document already downloads it in full from every branch that holds it, so
+ * `sweptDocuments` keeps those payloads for the sweep's own TTL rather than
+ * re-requesting them when the agent opens the document a second later.
  */
 
 import { shamsFetch, ShamsError, TtlCache } from "./client.server";
@@ -54,6 +59,11 @@ export interface InvoiceQuery {
    * everything else up. A single deliberate lookup leaves this unset.
    */
   timeoutMs?: number;
+  /**
+   * Whether a transient failure is retried once. Defaults to the transport's
+   * `true`; the sweep sets it false. See `DISCOVERY_TIMEOUT_MS`.
+   */
+  retry?: boolean;
 }
 
 export class ShamsQueryError extends Error {
@@ -106,6 +116,48 @@ export function validateInvoiceQuery(query: InvoiceQuery): {
   return { branchCode, docNoStart, docNoEnd, startDate, endDate };
 }
 
+/* -------------------------------------------------------------------------- */
+/* Documents the sweep already downloaded                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How long a sweep's answer — and the documents it downloaded on the way —
+ * stay usable. Declared here because both caches share it; see `discoveryCache`
+ * for what makes five minutes the right window.
+ */
+const DISCOVERY_TTL_MS = 5 * 60_000;
+
+/**
+ * Zero-padding is an input convenience, not part of a document's identity —
+ * `022138` and `22138` are the same document — so the key is the stripped form.
+ */
+function documentKey(branchCode: string, docNo: string): string {
+  return `${branchCode}::${stripLeadingZeros(docNo)}`;
+}
+
+/**
+ * The documents branch discovery has already fetched, keyed `(branch, number)`.
+ *
+ * ## Why this exists
+ *
+ * Finding a document means asking every branch for it, and `sales/details`
+ * answers with the **whole document** — header and item lines. The sweep kept
+ * only a summary for the chooser and dropped the rest, so picking a branch
+ * (or having the single match picked automatically) sent the identical request
+ * a second time: same path, same `doc_no_start`, same `doc_no_end`, same
+ * `wh_cd`, seconds apart. The agent waited out a second upstream round trip for
+ * bytes the server had just thrown away — and it was the last thing standing
+ * between them and the invoice on screen.
+ *
+ * Only the sweep writes here, and only for branches that actually answered with
+ * a document; a lookup never caches itself. The TTL is the sweep's own, because
+ * this is the sweep's data: the chooser is already showing this document's date,
+ * total and Call Centre status from `discoveryCache`, so reading its lines from
+ * the same snapshot cannot show an agent anything staler than what they clicked
+ * on. Once the sweep expires, the next lookup goes to the network as before.
+ */
+const sweptDocuments = new TtlCache<ShamsInvoice[]>(DISCOVERY_TTL_MS);
+
 /**
  * Fetch and assemble the documents matching a query.
  *
@@ -114,6 +166,16 @@ export function validateInvoiceQuery(query: InvoiceQuery): {
  */
 export async function getInvoices(query: InvoiceQuery): Promise<ShamsInvoice[]> {
   const { branchCode, docNoStart, docNoEnd, startDate, endDate } = validateInvoiceQuery(query);
+
+  // A bare single-document lookup is byte for byte the request the sweep just
+  // issued for this branch, so when discovery has already downloaded the
+  // document its payload is here — see `sweptDocuments`. Anything else (a
+  // range, a date window) was never swept and always goes to the network.
+  const bare = docNoEnd === docNoStart && startDate === "" && endDate === "";
+  if (bare) {
+    const swept = sweptDocuments.get(documentKey(branchCode, docNoStart));
+    if (swept) return swept;
+  }
 
   const body = await shamsFetch<RawSalesResponse>(
     "/api/v2/sales/details",
@@ -126,7 +188,10 @@ export async function getInvoices(query: InvoiceQuery): Promise<ShamsInvoice[]> 
       doc_no_end: docNoEnd,
       wh_cd: branchCode,
     },
-    query.timeoutMs ? { timeoutMs: query.timeoutMs } : {},
+    {
+      ...(query.timeoutMs ? { timeoutMs: query.timeoutMs } : {}),
+      ...(query.retry === undefined ? {} : { retry: query.retry }),
+    },
   );
 
   return groupInvoices(body?.data);
@@ -171,6 +236,9 @@ const DISCOVERY_CONCURRENCY = 24;
  * hold a worker for half a minute while the other 136 sat finished. A branch
  * that has not answered in 6 s is treated as a failure and skipped — the sweep
  * reports how many did that, and the agent is not made to wait for it.
+ *
+ * This is a budget, so the probe also declines the transport's transient retry
+ * (`retry: false` below); with it, 6 s was really 6 s + 300 ms + 6 s.
  */
 const DISCOVERY_TIMEOUT_MS = 6_000;
 
@@ -182,7 +250,6 @@ const DISCOVERY_TIMEOUT_MS = 6_000;
  * for two agents on the same document is waste. Per-isolate and in-memory, like
  * every other cache here; nothing is persisted.
  */
-const DISCOVERY_TTL_MS = 5 * 60_000;
 const discoveryCache = new TtlCache<InvoiceBranchSweep>(DISCOVERY_TTL_MS);
 
 export interface InvoiceBranchSweep {
@@ -194,6 +261,9 @@ export interface InvoiceBranchSweep {
 /** Test seam; also lets a diagnostic force a cold sweep. */
 export function _clearDiscoveryCache(): void {
   discoveryCache.clear();
+  // Both, always: the documents are the sweep's, and leaving them behind would
+  // make a "cold" sweep answer a follow-up lookup from the run it just cleared.
+  sweptDocuments.clear();
 }
 
 /**
@@ -273,7 +343,19 @@ export async function findInvoiceBranches(
           branchCode,
           docNoStart: doc,
           timeoutMs: DISCOVERY_TIMEOUT_MS,
+          // A probe is not retried. The transport retries a transient failure
+          // once after a 300 ms backoff, which is right for a lookup someone is
+          // waiting on and wrong for one branch out of 137: it turned the 6 s
+          // budget above into 12.3 s, so a single unreachable warehouse held its
+          // whole part — and, because the chooser waits for every part before it
+          // settles, the agent — for twice as long as this file says it should.
+          // Skipping a branch that did not answer is the documented behaviour;
+          // this is what makes it true.
+          retry: false,
         });
+        // Keep what this probe already downloaded. Reading the document is the
+        // next thing the agent does, and it is the same request.
+        if (invoices.length > 0) sweptDocuments.set(documentKey(branchCode, doc), invoices);
         for (const invoice of invoices) {
           matches.push({
             branchCode,

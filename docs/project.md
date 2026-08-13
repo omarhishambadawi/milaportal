@@ -2475,7 +2475,7 @@ identifier, key or token.
 ### Layering
 
 ```
-src/lib/shams/client.server.ts   Bearer auth + token cache, transport: timeout (30 s), 1 transient retry, error taxonomy, TtlCache
+src/lib/shams/client.server.ts   Bearer auth + token cache, transport: timeout (30 s), 1 transient retry (opt-out via `retry`), error taxonomy, TtlCache
 src/lib/shams/types.ts           wire shapes + normalized models
 src/lib/shams/normalize.ts       PURE: numeric parsing, invoice grouping, Call Centre rule
 src/lib/shams/search.ts          PURE: wildcard product matching, branch filter, stock summary
@@ -2577,7 +2577,9 @@ behind an unauthenticated endpoint.
 
 ### Caching
 
-Search 5 min · info 15 min · stock 60 s · invoices uncached. In-memory and
+Search 5 min · info 15 min · stock 60 s · invoices uncached, except the copies
+branch discovery already downloaded (`sweptDocuments`, 5 min — see below).
+In-memory and
 per-isolate — no migration and no table of third-party catalog data, since the
 payloads refetch in well under a second. The caches exist mainly to absorb
 per-keystroke search traffic. Stock is never fetched for a whole search result
@@ -2673,6 +2675,10 @@ facts.
   licence, so this stays in the range a browser would itself produce.
 - **6 s per-branch timeout** (`DISCOVERY_TIMEOUT_MS`) instead of the transport's
   30 s. One slow warehouse out of 137 must not hold a worker for half a minute.
+  A probe also passes `retry: false`, so 6 s is the whole budget: the transport
+  retries a transient failure once after a 300 ms backoff, which made a dead
+  branch cost 12.3 s and — since the chooser waits for every part before it
+  settles — held the agent for twice as long as the timeout claims.
 - **Four parts, run in parallel by the client** (`DISCOVERY_PARTS`). Each part is
   its own server call over an **interleaved** slice (`partitionBranches` — round
   robin, not contiguous, because branch codes are regional and a contiguous slice
@@ -2686,6 +2692,15 @@ facts.
 - **Server-side sweep cache**, 5 min per `(docNo, part)`, on top of the existing
   10-minute React Query window. Two agents looking up the same document cost one
   sweep. A total failure is never cached.
+- **The sweep keeps the documents it downloads** (`sweptDocuments`, same 5 min).
+  `sales/details` answers a probe with the *whole* document — header and item
+  lines — and discovery used to keep only the chooser summary, so opening the
+  document sent the identical request again: same path, same `doc_no_start`,
+  same `wh_cd`, seconds apart. For the common single-match lookup that second
+  round trip was the last thing between the agent and the invoice, and it is now
+  a cache read. Only the sweep writes there, only for branches that answered with
+  a document, and only a *bare* single-document query reads it — a range or a
+  date window was never swept and always goes to the network.
 
 It still runs **only on submit**, never per keystroke.
 

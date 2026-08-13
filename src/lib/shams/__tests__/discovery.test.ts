@@ -23,7 +23,7 @@ vi.mock("@/lib/shams/client.server", async () => {
   return { ...actual, shamsFetch: (...args: unknown[]) => fetchMock(...args) };
 });
 
-const { findInvoiceBranches, partitionBranches, _clearDiscoveryCache } =
+const { findInvoiceBranches, getInvoices, partitionBranches, _clearDiscoveryCache } =
   await import("@/lib/shams/sales.server");
 
 /** A header row for one document in one warehouse. */
@@ -262,5 +262,105 @@ describe("findInvoiceBranches — cache", () => {
     const { matches } = await findInvoiceBranches("22138", CHAIN);
 
     expect(matches.map((m) => m.branchCode)).toEqual(["P0221"]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Reading the document the sweep already downloaded                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The step the agent actually waits on.
+ *
+ * Discovery fetches the *whole* document from every branch that holds it and
+ * used to keep only the chooser summary, so opening the document — which, for a
+ * single match, happens automatically the moment the sweep settles — repeated
+ * the identical upstream request. These pin the reuse and its limits.
+ */
+describe("the document a sweep found", () => {
+  /**
+   * An item line belonging to a document, so a full payload has lines to lose.
+   * `Prior` is the row discriminator — anything but `"0"` is an item line.
+   */
+  function line(docNo: string, whouse: string, itemCode: string): RawSalesRow {
+    return {
+      Doc_No: docNo,
+      Doc_Dt: "2026-08-13 00:00:00",
+      Whouse: whouse,
+      Prior: "1",
+      ItmCd: itemCode,
+      ItmName: `Item ${itemCode}`,
+      Qty: "2",
+      Rate: "50.00",
+      Item_NetAmt: "100.00",
+    };
+  }
+
+  it("is read back without asking the MIS a second time", async () => {
+    respondWith({
+      P0221: [
+        header("22138", "P0221", "HOME DELIVERY-Call Centre", "230.00"),
+        line("22138", "P0221", "SKU-1"),
+      ],
+    });
+
+    await findInvoiceBranches("22138", CHAIN);
+    const afterSweep = fetchMock.mock.calls.length;
+
+    const invoices = await getInvoices({ branchCode: "P0221", docNoStart: "22138" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(afterSweep);
+    expect(invoices).toHaveLength(1);
+    // The lines too, not just the summary the chooser showed.
+    expect(invoices[0].items).toHaveLength(1);
+    expect(invoices[0].grandTotal).toBe(230);
+  });
+
+  it("is keyed on the number, not on how it was padded", async () => {
+    respondWith({ P0221: [header("22138", "P0221", "HOME DELIVERY-Call Centre", "230.00")] });
+
+    await findInvoiceBranches("22138", CHAIN);
+    const afterSweep = fetchMock.mock.calls.length;
+
+    // `022138` is the same document; the API accepts either on input.
+    await getInvoices({ branchCode: "P0221", docNoStart: "022138" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(afterSweep);
+  });
+
+  it("is not confused with a branch that had no such document", async () => {
+    respondWith({ P0221: [header("22138", "P0221", "HOME DELIVERY-Call Centre", "230.00")] });
+
+    await findInvoiceBranches("22138", CHAIN);
+    const afterSweep = fetchMock.mock.calls.length;
+
+    // P0034 answered the sweep with nothing, so there is nothing to reuse and
+    // an explicit lookup must still go and ask.
+    await getInvoices({ branchCode: "P0034", docNoStart: "22138" });
+
+    expect(fetchMock.mock.calls.length).toBe(afterSweep + 1);
+  });
+
+  it("is not reused for a query the sweep never made", async () => {
+    respondWith({ P0221: [header("22138", "P0221", "HOME DELIVERY-Call Centre", "230.00")] });
+
+    await findInvoiceBranches("22138", CHAIN);
+    const afterSweep = fetchMock.mock.calls.length;
+
+    // A range and a date window are different questions; only the bare
+    // single-document request is the one discovery already answered.
+    await getInvoices({ branchCode: "P0221", docNoStart: "22138", docNoEnd: "22140" });
+    await getInvoices({ branchCode: "P0221", docNoStart: "22138", startDate: "20260813" });
+
+    expect(fetchMock.mock.calls.length).toBe(afterSweep + 2);
+  });
+
+  it("probes without the transport's transient retry", async () => {
+    respondWith({});
+    await findInvoiceBranches("22138", CHAIN);
+
+    for (const call of fetchMock.mock.calls) {
+      expect(call[2]).toMatchObject({ retry: false });
+    }
   });
 });

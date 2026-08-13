@@ -359,4 +359,50 @@ describe("transient failures", () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  /**
+   * `retry: false` is what the branch sweep sets. Without it a probe's 6 s
+   * budget was really 6 s + 300 ms + 6 s, so one unreachable warehouse held its
+   * part of the sweep — and the agent waiting on it — for twice as long as
+   * intended.
+   */
+  describe("when the caller declines the retry", () => {
+    it("fails a 5xx on the first response", async () => {
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(tokenBody("tok-1")))
+        .mockResolvedValue(jsonResponse({ error: "boom" }, 502));
+
+      await expect(
+        shamsFetch("/api/v2/sales/details", { wh_cd: "P0221" }, { retry: false }),
+      ).rejects.toMatchObject({ kind: "http_error", httpStatus: 502 });
+      // Token, then one probe. Not two probes.
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("fails a network error on the first attempt", async () => {
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(tokenBody("tok-1")))
+        .mockRejectedValue(new TypeError("network down"));
+
+      await expect(
+        shamsFetch("/api/v2/sales/details", { wh_cd: "P0221" }, { retry: false }),
+      ).rejects.toMatchObject({ kind: "unavailable" });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("still refreshes the token on a 401 — that is correctness, not a retry", async () => {
+      // A token can expire mid-sweep. Declining the transient retry must not
+      // turn that into 137 failed probes.
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(tokenBody("tok-1")))
+        .mockResolvedValueOnce(jsonResponse({ error: "expired" }, 401))
+        .mockResolvedValueOnce(jsonResponse(tokenBody("tok-2")))
+        .mockResolvedValueOnce(jsonResponse({ success: true, data: [] }));
+
+      await expect(
+        shamsFetch("/api/v2/sales/details", { wh_cd: "P0221" }, { retry: false }),
+      ).resolves.toMatchObject({ success: true });
+      expect(authHeaderOf(3)).toBe("Bearer tok-2");
+    });
+  });
 });

@@ -328,15 +328,19 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  *                 **once**. A second 401 is a credential problem, not a stale
  *                 token, and is reported as `auth_failed` rather than retried
  *                 into a loop.
- *   5xx / network transient. Retried once with a short backoff.
+ *   5xx / network transient. Retried once with a short backoff, unless the
+ *                 caller opts out — see `retry` below.
  *   unparseable   raised as `malformed`, never handed on — a page rendering
  *                 `undefined` because the upstream returned an HTML error page
  *                 is strictly worse than an error the caller can catch.
+ *
+ * `retry` covers only the transient case. The 401 refresh is not a retry policy
+ * but a correctness one — a token can expire mid-flight — so it always applies.
  */
 export async function shamsFetch<T>(
   path: string,
   query: Record<string, string | number | undefined> = {},
-  opts: { timeoutMs?: number; signal?: AbortSignal } = {},
+  opts: { timeoutMs?: number; signal?: AbortSignal; retry?: boolean } = {},
 ): Promise<T> {
   const env = readEnv();
   if (!env) {
@@ -348,6 +352,7 @@ export async function shamsFetch<T>(
 
   const url = buildUrl(env.baseUrl, path, query);
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const retryTransient = opts.retry ?? true;
 
   let accessToken = await getAccessToken();
   let refreshed = false;
@@ -359,7 +364,7 @@ export async function shamsFetch<T>(
       out = await attempt(url, path, accessToken, timeoutMs, opts.signal);
     } catch (err) {
       // Transport-level failure: transient, retried once.
-      if (err instanceof ShamsError && transientAttempts < MAX_ATTEMPTS - 1) {
+      if (retryTransient && err instanceof ShamsError && transientAttempts < MAX_ATTEMPTS - 1) {
         transientAttempts++;
         console.warn(`[shams] GET ${path} -> ${err.kind}; retrying once`);
         await sleep(RETRY_BASE_DELAY_MS);
@@ -384,7 +389,7 @@ export async function shamsFetch<T>(
     }
 
     if (out.status >= 500) {
-      if (transientAttempts < MAX_ATTEMPTS - 1) {
+      if (retryTransient && transientAttempts < MAX_ATTEMPTS - 1) {
         transientAttempts++;
         console.warn(`[shams] GET ${path} -> HTTP ${out.status}; retrying once`);
         await sleep(RETRY_BASE_DELAY_MS);
