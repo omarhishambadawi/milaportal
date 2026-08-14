@@ -36,11 +36,7 @@ import { InvoiceCell } from "@/features/orders/components/invoice-cell";
 import { useOrdersListFilters } from "@/features/orders/hooks/use-orders-list-filters";
 import { useOrdersListData } from "@/features/orders/hooks/use-orders-list-data";
 import { useOrdersMutations } from "@/features/orders/hooks/use-orders-mutations";
-import {
-  CallCentreCell,
-  callCentreState,
-  orderRowBackground,
-} from "@/features/orders/components/call-centre-cell";
+import { CallCentreCell, callCentreState } from "@/features/orders/components/call-centre-cell";
 import { useOrdersExport } from "@/features/orders/hooks/use-orders-export";
 import {
   rememberOrderReturn,
@@ -485,15 +481,10 @@ function OrdersList() {
                     </td>
                   </tr>
                 )}
-                {pageRows.map((o: any, idx: number) => {
+                {pageRows.map((o: any) => {
                   const editable = canEditOrder(o);
                   const ccState = callCentreState(o);
                   const isStarred = starred.has(o.id);
-                  const zebra = idx % 2 === 1;
-                  // Zebra base, plus a light-mode-only warning tint. Dark mode
-                  // gets no tint: every row there resolves to the same base, and
-                  // the glyph and rail in the first column carry the state.
-                  const rowBg = orderRowBackground(ccState, zebra);
                   const cellCls = "align-middle border-b border-border/40 py-3";
                   return (
                     <tr
@@ -502,7 +493,11 @@ function OrdersList() {
                       // agent comes back from editing it. An id rather than an
                       // offset, because a save can move the row.
                       data-order-id={o.id}
-                      className={cn("group transition-colors hover:bg-accent/50", rowBg)}
+                      // One background for every row, in both themes. No
+                      // positional striping and no state tint: the only thing
+                      // that distinguishes rows is their content — the glyph and
+                      // rail in the first column, and the status pill.
+                      className={cn("group bg-background transition-colors hover:bg-accent/50")}
                     >
                       <td
                         className={cn("text-center px-2 relative", cellCls)}

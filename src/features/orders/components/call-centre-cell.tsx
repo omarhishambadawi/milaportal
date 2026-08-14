@@ -65,37 +65,24 @@ export function callCentreState(order: {
 }
 
 /**
- * The whole background for one row: the zebra base, plus a light-mode-only
- * warning tint.
+ * The Orders table paints no row backgrounds at all — no helper, by design.
  *
- * Returns the *complete* set rather than a tint to be added to something else,
- * because two `bg-*` utilities cannot coexist on one element — `cn`'s
- * tailwind-merge keeps the last and drops the other, so layering silently
- * removed the base and left the row transparent, which is a third background
- * rather than a uniform one.
+ * There were two sources of row-to-row colour and both are gone:
  *
- * **Dark mode gets no tint at all.** Over a dark surface the same 9% destructive
- * read as a *status* colour rather than a faint flag: rows looked painted by
- * their state, which is exactly what a table of statuses must not do, and there
- * is no tint over that background subtle enough to be a whisper and still be
- * visible. So every dark row resolves to its zebra base and nothing else.
+ *   * a **positional** zebra (`idx % 2`), which gave neighbouring rows two
+ *     different backgrounds for no reason a reader could act on;
+ *   * a **state** tint on the walk-in case, which over a dark surface stopped
+ *     reading as a faint flag and started reading as a status colour.
  *
- * Nothing is lost. The signal is the glyph and the 3px rail beside it, both
- * unchanged and both legible in either theme. Light mode keeps the tint —
- * over white it stays a whisper, and nobody complained about it.
+ * Every `<tr>` now resolves to `bg-background` and differs only by its content:
+ * the glyph and the 3px rail in the first column, and the status pill. That is
+ * the whole rule, and it is stated here rather than in a function because there
+ * is no longer a decision to make — a helper taking a state and returning one
+ * constant would only invite the variation back.
  *
- * Cancelled is deliberately absent: a cancelled row is not a warning about its
- * invoice, and painting rows by status is the thing being removed.
+ * Hover stays: it is temporary, applies to whichever row the pointer is over,
+ * and leaves no permanent difference between rows.
  */
-export function orderRowBackground(state: CallCentreState, zebra: boolean): string {
-  const base = zebra ? "bg-muted/25" : "bg-background";
-  if (state !== "walk_in") return base;
-  // Light: the tint. Dark: explicitly back to the base, so the row matches
-  // every other row in the table.
-  return zebra
-    ? "bg-destructive/[0.055] dark:bg-muted/25"
-    : "bg-destructive/[0.055] dark:bg-background";
-}
 
 const COPY: Record<CallCentreState, { label: string; tip: string }> = {
   cancelled: {
