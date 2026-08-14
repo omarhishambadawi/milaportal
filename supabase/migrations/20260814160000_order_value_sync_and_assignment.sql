@@ -63,7 +63,22 @@ ALTER TABLE public.orders
 ALTER TABLE public.orders
   ALTER COLUMN created_by SET DEFAULT auth.uid();
 
+-- The backfill has to step around `orders_prevent_reassignment`, whose first
+-- statement is `IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Not authorized'`.
+-- A migration has no JWT — it runs as `postgres` with no request context — so
+-- `auth.uid()` is NULL and *every* row of this UPDATE is refused. Without this
+-- the whole migration aborts, which is exactly what it did.
+--
+-- Disabled for this one statement and re-enabled before the transaction ends,
+-- so the trigger is never off for anything else and a failure rolls both back
+-- together. `created_by` is not a column the trigger has any opinion about: it
+-- guards `agent_id`, `team` and the verification-only path, none of which this
+-- touches.
+ALTER TABLE public.orders DISABLE TRIGGER orders_prevent_reassignment;
+
 UPDATE public.orders SET created_by = agent_id WHERE created_by IS NULL;
+
+ALTER TABLE public.orders ENABLE TRIGGER orders_prevent_reassignment;
 
 COMMENT ON COLUMN public.orders.created_by IS
   'Who entered the order. Never changes. Distinct from agent_id, which is who owns it and may be reassigned.';

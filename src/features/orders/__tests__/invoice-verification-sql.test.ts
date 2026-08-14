@@ -146,6 +146,24 @@ describe("created_by", () => {
     );
   });
 
+  it("steps around the update trigger, or the backfill cannot run at all", () => {
+    // `orders_prevent_reassignment` raises 'Not authorized' when `auth.uid()`
+    // is NULL, which it always is for a migration — so without this the whole
+    // migration aborts on its first backfilled row. Disabled for that one
+    // statement and re-enabled before the transaction ends.
+    expect(syncSql).toContain(
+      "ALTER TABLE public.orders DISABLE TRIGGER orders_prevent_reassignment;",
+    );
+    expect(syncSql).toContain(
+      "ALTER TABLE public.orders ENABLE TRIGGER orders_prevent_reassignment;",
+    );
+    const disabled = syncSql.indexOf("DISABLE TRIGGER orders_prevent_reassignment");
+    const backfill = syncSql.indexOf("UPDATE public.orders SET created_by");
+    const enabled = syncSql.indexOf("ENABLE TRIGGER orders_prevent_reassignment");
+    expect(disabled).toBeLessThan(backfill);
+    expect(backfill).toBeLessThan(enabled);
+  });
+
   it("cannot be forged, whatever the client sends", () => {
     expect(syncSql).toContain("AND created_by = auth.uid()");
   });

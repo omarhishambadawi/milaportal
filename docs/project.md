@@ -680,7 +680,7 @@ _scooter_only = false)` — `SECURITY DEFINER`, granted to `authenticated` only,
 | ------------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `on_auth_user_created`                                  | `auth.users` | Creates the profile row; **ignores client-supplied role metadata** and always writes the default.                                                                                                                                                                        |
 | `trg_set_order_display_no`                              | `orders`     | Assigns `#<seq>` on insert.                                                                                                                                                                                                                                              |
-| `trg_prevent_order_reassignment`                        | `orders`     | The real order-update authorization: `edit_all_orders` passes; auditors are refused outright; otherwise `agent_id`/`team` are immutable and the caller needs `edit_orders` on their own row, or a verification-only diff plus `verify_all_orders` / `verify_own_orders`. |
+| `orders_prevent_reassignment`                           | `orders`     | The real order-update authorization: `edit_all_orders` passes; auditors are refused outright; otherwise `agent_id`/`team` are immutable and the caller needs `edit_orders` on their own row, or a verification-only diff plus `verify_all_orders` / `verify_own_orders`. |
 | `trg_prevent_profile_escalation`                        | `profiles`   | Refuses session-based writes to `agent_code`, `active`, `permissions`, `yeastar_ext`, `must_change_password*`, `id`. Only `auth.uid() IS NULL` (service_role) bypasses — the admin bypass was **removed**, not widened.                                                  |
 | `trg_protect_last_owner`                                | `user_roles` | At least one Owner must always exist (covers the DELETE-then-INSERT that `adminSetRole` performs).                                                                                                                                                                       |
 | `trg_protect_owner_profile`                             | `profiles`   | An Owner cannot be deactivated or deleted.                                                                                                                                                                                                                               |
@@ -2843,8 +2843,26 @@ Owner and Admin may reassign on edit (`isAdministrator`); at creation the gate i
 the assignee — can still file the order under an agent. Both are **narrower**
 than the database rule, never wider. The backstop is the UPDATE policy's
 `WITH CHECK`, which re-tests the new row: an agent moving their own order away
-fails `auth.uid() = agent_id`. (`prevent_order_reassignment` plays no part —
-that trigger was dropped in `20260701224822`; only the function survives.)
+fails `auth.uid() = agent_id`. The **live backstop is the trigger**, not only
+the policy: `orders_prevent_reassignment` (BEFORE UPDATE, running
+`prevent_order_reassignment()`) is present on the production database and is
+what actually refuses a reassignment, an auditor's write, or an edit outside the
+verification-only path. An earlier note here claimed the trigger had been
+dropped in `20260701224822` and only the function survived; that was checked
+against the live catalog on 2026-08-14 and is **false** — it exists and is
+enabled, under the name `orders_prevent_reassignment` (not
+`trg_prevent_order_reassignment`).
+
+Two consequences worth knowing. Its first statement is
+`IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Not authorized'`, so **no
+connection without a JWT can update `orders` at all** — including a migration
+running as `postgres`, which is why `20260814160000`'s `created_by` backfill has
+to disable it for that one statement. And because the reconciling UPDATE in
+`record_invoice_verification` changes `invoice_value` *and*
+`call_center_verified` together, it does not qualify as a "verification-only"
+diff: a caller holding `verify_all_orders` but not `edit_all_orders` would be
+refused by the trigger even though the function's own check admits them. No
+account currently holds that combination, so the path is unreachable today.
 
 Reassignment is a tracked change. `log_order_activity` raises an `assigned`
 event carrying both sides, so the timeline reads "Assigned to Ahmed Mohamed" or

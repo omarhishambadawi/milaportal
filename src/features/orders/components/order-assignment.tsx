@@ -20,9 +20,11 @@
  * cannot offer an ability that would then be refused. The backstop is the
  * `orders` UPDATE policy: its `WITH CHECK` re-tests the *new* row, so an agent
  * moving their own order to someone else fails `auth.uid() = agent_id` and is
- * rejected. (`prevent_order_reassignment` is not part of that story — the
- * trigger was dropped in 20260701224822 and never recreated; only the function
- * remains.)
+ * rejected. The `orders_prevent_reassignment` trigger is the other half, and it
+ * is the one that actually fires: an earlier comment here said it had been
+ * dropped in 20260701224822 leaving only the function, which the live catalog
+ * disproves — it is present and enabled, and refuses any change to `agent_id`
+ * or `team` from a caller without `edit_all_orders`.
  */
 
 import { useMemo, useState } from "react";
