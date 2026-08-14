@@ -8,23 +8,23 @@ import { actorName, useOrderActivity, type OrderActivityEvent } from "../hooks/u
 /**
  * Describe one logged change.
  *
- * `invoice_verified` is the only machine-written entry, and it is deliberately
- * the most specific: an agent reading history needs the number, the branch and
- * the total to reconcile against, not "the order was edited". The surrounding
- * `edited` and `verification_changed` rows the orders trigger raises on the back
- * of it are left as they are — they are a true record of what changed, and
- * together the three read as the sequence the prompt describes.
+ * Three of these entries are machine-written and they are deliberately the most
+ * specific in the log. An agent reading history needs the invoice number, the
+ * figure it replaced and the fact that nobody typed it — "the order was edited"
+ * answers none of that, which is why `record_invoice_verification` writes
+ * `value_synced` and `call_center_flagged` itself instead of leaving the two
+ * fields to the generic edit trigger.
  */
 function describe(e: OrderActivityEvent, nameOf: (id: unknown) => string): string {
   const d = e.details ?? {};
-  if (e.action === "created") return "Created the order";
+  if (e.action === "created") return "Order created";
   // Reassignment names both sides; a first assignment has no "from" to name.
   // The trigger only writes this row when `agent_id` actually changed, so a
   // page render or a repeated load can never produce one.
   if (e.action === "assigned") {
     return d.from
-      ? `Reassigned from ${nameOf(d.from)} to ${nameOf(d.to)}`
-      : `Assigned to ${nameOf(d.to)}`;
+      ? `Order reassigned — ${nameOf(d.from)} → ${nameOf(d.to)}`
+      : `Order assigned to ${nameOf(d.to)}`;
   }
   if (e.action === "status_changed")
     return `Changed status from ${d.from ?? "—"} to ${d.to ?? "—"}`;
@@ -32,18 +32,45 @@ function describe(e: OrderActivityEvent, nameOf: (id: unknown) => string): strin
     return d.verified
       ? "Marked Call Center invoice verified"
       : "Removed Call Center invoice verification";
-  if (e.action === "invoice_verified") {
-    const parts = [`Invoice #${d.invoice_no ?? d.invoice_key ?? "—"}`];
-    if (d.branch_code) parts.push(`Branch ${d.branch_code}`);
-    if (d.total !== undefined && d.total !== null) parts.push(`Total ${fmtSAR(Number(d.total))}`);
-    return `Invoice verified — ${parts.join(" · ")}`;
-  }
+  if (e.action === "invoice_verified") return "Automated invoice verification by MilaPortal";
+  if (e.action === "value_synced") return "Order value updated automatically by MilaPortal";
+  if (e.action === "call_center_flagged") return "Call Center Invoice checked automatically";
   if (e.action === "edited") {
     const keys = Object.keys(d);
     if (keys.length === 0) return "Edited the order";
     return `Updated ${keys.join(", ")}`;
   }
   return e.action;
+}
+
+/**
+ * The line under the headline: what the event actually says.
+ *
+ * Only for the entries that carry facts worth repeating — the invoice number,
+ * the figure and the one it replaced. Everything else says enough in its title.
+ */
+function detailLine(e: OrderActivityEvent): string | null {
+  const d = e.details ?? {};
+  if (e.action === "invoice_verified") {
+    const parts = [`Invoice #${d.invoice_no ?? d.invoice_key ?? "—"} verified successfully`];
+    if (d.total !== undefined && d.total !== null) parts.push(fmtSAR(Number(d.total)));
+    if (d.branch_code) parts.push(`Branch ${d.branch_code}`);
+    return parts.join(" · ");
+  }
+  if (e.action === "value_synced") {
+    const to = d.to !== undefined && d.to !== null ? fmtSAR(Number(d.to)) : "—";
+    const invoices = d.invoice_no ? ` based on invoice ${String(d.invoice_no)}` : "";
+    const from =
+      d.from !== undefined && d.from !== null ? ` Previous value: ${fmtSAR(Number(d.from))}.` : "";
+    return `Updated to ${to}${invoices}.${from}`;
+  }
+  if (e.action === "call_center_flagged") {
+    return d.invoice_no
+      ? `Invoice ${String(d.invoice_no)} is a Call Centre document.`
+      : "A verified Call Centre invoice was found.";
+  }
+  if (e.action === "assigned" && d.to_team) return `Team: ${String(d.to_team).replace("_", " ")}`;
+  return null;
 }
 
 /** The customer the MIS recorded against a verified invoice, when it has one. */
@@ -53,17 +80,29 @@ function invoiceSubtitle(e: OrderActivityEvent): string | null {
   return typeof customer === "string" && customer.trim() !== "" ? customer : null;
 }
 
+/**
+ * `Today 12:31 PM` for anything from the business day in progress, the date
+ * otherwise. The order lifecycle is mostly a single shift, and a column of
+ * identical dates hides the one entry that is a week old.
+ */
 const fmtBusinessTime = (iso: string) => {
   try {
-    return new Intl.DateTimeFormat("en-US", {
+    const time = new Intl.DateTimeFormat("en-US", {
       timeZone: BUSINESS_TIMEZONE,
-      year: "numeric",
-      month: "short",
-      day: "2-digit",
       hour: "numeric",
       minute: "2-digit",
       hour12: true,
     }).format(new Date(iso));
+    const day = (value: Date) =>
+      new Intl.DateTimeFormat("en-CA", { timeZone: BUSINESS_TIMEZONE }).format(value);
+    if (day(new Date(iso)) === day(new Date())) return `Today ${time}`;
+    const date = new Intl.DateTimeFormat("en-US", {
+      timeZone: BUSINESS_TIMEZONE,
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+    }).format(new Date(iso));
+    return `${date} ${time}`;
   } catch {
     return iso;
   }
@@ -73,37 +112,53 @@ export function OrderActivityTimeline({ orderId }: { orderId: string }) {
   const { data, isLoading } = useOrderActivity(orderId);
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
+    <Card className="overflow-hidden shadow-sm">
+      <CardHeader className="border-b border-border/60 bg-muted/25 px-4 py-3 dark:bg-muted/10">
         <CardTitle className="flex items-center gap-2 text-sm font-semibold">
           <Clock className="h-4 w-4 text-muted-foreground" /> Activity timeline
         </CardTitle>
       </CardHeader>
-      <CardContent>
-        {isLoading && <div className="text-sm text-muted-foreground">Loading…</div>}
+      <CardContent className="p-4">
+        {isLoading && <div className="text-xs text-muted-foreground">Loading…</div>}
         {!isLoading && (data?.length ?? 0) === 0 && (
-          <div className="text-sm text-muted-foreground">No activity yet.</div>
+          <div className="text-xs text-muted-foreground">No activity yet.</div>
         )}
-        <ol className="space-y-3">
-          {(data ?? []).map((e) => {
-            const automated = e.action === "invoice_verified" || e.details?.automated === true;
+        <ol className="space-y-0">
+          {(data ?? []).map((e, i, all) => {
+            const automated = e.details?.automated === true || e.action === "invoice_verified";
             const subtitle = invoiceSubtitle(e);
+            const detail = detailLine(e);
+            const last = i === all.length - 1;
             return (
-              <li key={e.id} className="flex gap-3 text-sm">
-                <div
-                  className={cn(
-                    "mt-1.5 h-2 w-2 shrink-0 rounded-full",
-                    automated ? "bg-success" : "bg-primary",
+              <li key={e.id} className="flex gap-2.5">
+                {/* The rail: a dot per event and a hairline joining them, so the
+                    column reads as one sequence rather than a stack of cards. */}
+                <div className="flex shrink-0 flex-col items-center">
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "mt-1.5 h-2 w-2 shrink-0 rounded-full ring-2 ring-background",
+                      automated ? "bg-success" : "bg-primary",
+                    )}
+                  />
+                  {!last && <span aria-hidden className="w-px flex-1 bg-border" />}
+                </div>
+                <div className={cn("min-w-0 flex-1", last ? "pb-0" : "pb-3")}>
+                  <div className="text-[13px] font-medium leading-snug">
+                    {describe(e, (id) => actorName(e.names, id))}
+                  </div>
+                  {detail && (
+                    <div className="text-[11px] leading-snug text-muted-foreground">{detail}</div>
                   )}
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="font-medium">{describe(e, (id) => actorName(e.names, id))}</div>
                   {subtitle && (
-                    <div className="truncate text-xs text-muted-foreground" dir="auto">
-                      Customer: {subtitle}
+                    <div
+                      className="truncate text-[11px] leading-snug text-muted-foreground"
+                      dir="auto"
+                    >
+                      {subtitle}
                     </div>
                   )}
-                  <div className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">
                     {automated ? (
                       // Named rather than attributed to whoever happened to have
                       // the order open: the portal did this, and history should

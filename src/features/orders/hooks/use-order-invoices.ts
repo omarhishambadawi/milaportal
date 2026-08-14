@@ -19,7 +19,6 @@
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { queryKeys } from "@/lib/query-keys";
 import { useInvoiceStockMany, type InvoiceLookup } from "@/features/shams/hooks/use-shams-data";
 import {
@@ -30,6 +29,7 @@ import {
   type InvoiceSummary,
   type OrderInvoice,
 } from "../invoice-verification";
+import { recordInvoiceVerification } from "../record-verification";
 import { parseInvoiceNumbers } from "../utils";
 import { recordedInvoiceKeys, useOrderActivity } from "./use-order-activity";
 
@@ -162,26 +162,14 @@ export function useOrderInvoices({
    * Write the verification: timeline event, order value, Call Center flag.
    *
    * One RPC, because the three have to agree, and idempotent in the database as
-   * well as here — see the migration. The `edited` and `verification_changed`
-   * events the orders trigger raises on the back of it are left to it: they are
-   * a true record of what changed and the timeline should show them.
+   * well as here — see the migration. The function narrates itself: it writes
+   * `value_synced` and `call_center_flagged` beside the `invoice_verified` row
+   * and the generic edit trigger stands down for those two fields, so the
+   * timeline says the portal did this rather than filing it under whoever had
+   * the order open.
    */
   const record = useMutation({
-    mutationFn: async (entries: OrderInvoice[]) => {
-      const { data, error } = await supabase.rpc("record_invoice_verification" as any, {
-        _order_id: orderId as string,
-        _entries: entries.map((i) => ({
-          invoice_no: i.invoiceNo,
-          branch_code: i.branchCode,
-          total: i.total,
-          customer: i.customer,
-          is_call_centre: i.isCallCentre,
-          doc_date: i.docDate,
-        })),
-      });
-      if (error) throw error;
-      return data;
-    },
+    mutationFn: (entries: OrderInvoice[]) => recordInvoiceVerification(orderId as string, entries),
     onSuccess: () => {
       // The order itself changed (value, flag) and so did its history.
       qc.invalidateQueries({ queryKey: queryKeys.orders.all() });
@@ -252,17 +240,20 @@ export function useOrderInvoices({
 
   const refresh = useCallback(() => {
     for (const query of results) void query.refetch();
-    void activity.refetch();
-  }, [results, activity]);
+    // Guarded on the id, not on `enabled`: `refetch` runs the query function
+    // even for a disabled query, and on the create page there is no order to
+    // ask the history of — the lookup is all there is to refresh.
+    if (orderId) void activity.refetch();
+  }, [results, activity, orderId]);
 
   /** Clear the guard so the same reconciliation may be attempted again. */
   const retrySync = useCallback(() => {
     attempted.current = "";
     record.reset();
-    void activity.refetch();
+    if (orderId) void activity.refetch();
     // `record` is recreated each render; only the ref and the refetch matter.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activity]);
+  }, [activity, orderId]);
 
   return {
     ...summary,

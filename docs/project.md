@@ -1683,7 +1683,39 @@ unchanged.
 `orderFormSchema` (Zod): `order_date`, `team`, `order_type`, `customer_name`,
 `customer_phone`, `branch_no` (**required**), `delivery_type` (**required**),
 `invoice_no`, `invoice_value` (coerced, non-negative, nullable), `notes`,
-`status`.
+`status`, `agent_id` (optional), `call_center_verified` (optional).
+
+The last two are optional so they can be **omitted rather than sent as a default**:
+an absent column keeps whatever the row holds. `call_center_verified` is sent
+only when the caller may verify *and* is not about to write `false` over a flag a
+verified call-centre invoice has set — a save carrying stale form state must not
+untick an automated verification, and raising the flag to `true` from the invoice
+is not this path's job either (that transition belongs to
+`record_invoice_verification`, which writes the automated event beside it).
+
+#### Layout — a two-column operations workspace
+
+`/orders/new` and `/orders/$id` are the same component (`OrderForm`), laid out as
+two columns from `xl` and one below it:
+
+- **Workflow** (left) — Order details, Invoicing, Assignment (with the Call
+  Center Invoice control), Notes. Four cards rather than one tall banded card,
+  which is what left a metre of empty space to the right of a single-column form.
+- **Verification** (right, `xl:sticky top-20`, scrolls internally) — the invoice
+  panel, the branch preview, the activity timeline. Read-only findings, and
+  deliberately outside the `fieldset` a read-only role disables: inside it, the
+  people reviewing an order would be the ones unable to see what was found.
+
+The primary actions live in the page header, under a breadcrumb, and reach the
+form by id (`form={FORM_ID}`) rather than sitting at the end of a scroll. Both columns carry `min-w-0` inside `minmax(0,…)` tracks,
+which is what stops a long Arabic customer name widening the page. The layout
+contract is asserted in `__tests__/new-order-layout.test.ts` — a source-level
+suite, since the test environment is Node and nothing else here renders.
+
+`OrderInvoicePanel` folds each document into a compact header (number, state,
+total, customer) that opens onto branch, channel, document date, *Verified by
+MilaPortal* and the item/stock lines; the customer stays visible **closed**,
+being the fact most often checked and the one the channel is derived from.
 
 ### Writes
 
@@ -1699,8 +1731,12 @@ database. Every write invalidates both `orders.all()` and `dashboard.all()`.
 
 ### Activity
 
-`order_activity` rows are written by trigger and rendered by
-`OrderActivityTimeline`, formatted in `Asia/Riyadh`.
+`order_activity` rows are written by `log_order_activity` (the trigger) and by
+`record_invoice_verification` (the three automated rows: `invoice_verified`,
+`value_synced`, `call_center_flagged`), and rendered by `OrderActivityTimeline`
+in `Asia/Riyadh` — `Today 12:31 PM` within the business day, the date before it.
+Rows carrying `details.automated` are attributed to their `source` (MilaPortal)
+and dotted in `success`; everything else names its actor.
 
 ### Complaints (sibling module)
 
@@ -2713,11 +2749,57 @@ document — never because a number was typed, a lookup ran, one failed, or the
 order exists. `invoicesToRecord` filters to `verified` alone, and the client skips
 the call entirely when the timeline already holds every key.
 
+**And only when that document is a call-centre document** (`20260814190000`).
+The first cut set the flag for *any* verified invoice without reading what the
+invoice said, so verifying a walk-in ticked the box — the one thing it is not
+allowed to mean. The flag is now decided from the log:
+`COUNT(*) WHERE (details->>'is_call_centre')::boolean IS TRUE`, i.e. the MIS's
+own channel classification (`Customer_Name`'s `-Call Centre` suffix, carried onto
+the activity row when the invoice was recorded). Still only ever **set**:
+`CASE WHEN call_centre_cnt > 0 THEN true ELSE call_center_verified END`, so a
+walk-in landing later cannot untick a box and neither can an MIS outage.
+`InvoiceSummary.callCentreVerified` is the same rule on the client, and
+`needsValueSync` only expects the flag when it is true — without that, a verified
+walk-in was a permanent disagreement and the client asked on every render.
+
+The portal narrates its own changes. `record_invoice_verification` writes
+`value_synced` (`from`, `to`, the invoice numbers behind the figure) and
+`call_center_flagged` (the call-centre invoices that caused it) itself, and
+`log_order_activity` stands down for `invoice_value` and `call_center_verified`
+while `milaserv.invoice_sync` is set — a transaction-local GUC scoped to the one
+UPDATE, so an ordinary edit is logged exactly as before and a person's own tick
+is still their `verification_changed` row. Both automated events are written only
+when that UPDATE actually changed the row, which is where their idempotence comes
+from: re-checking the same invoice reconciles nothing and records nothing.
+
 The timeline therefore reads as the real sequence — `invoice_verified` (number,
-branch, total, customer, `automated: true`, source), then the `edited` and
-`verification_changed` rows the orders trigger raises on the back of the same
-update. Machine-written rows are attributed to **MilaPortal**, not to whoever had
-the order open.
+branch, total, customer, `automated: true`, source), `value_synced`
+("Order value updated automatically by MilaPortal — updated to SAR 212.60 based
+on invoice 0169580. Previous value: SAR 100.00."), `call_center_flagged`.
+Machine-written rows are attributed to **MilaPortal**, not to whoever had the
+order open.
+
+#### Verification at creation, not only on re-open
+
+Everything above is keyed on an order id, and at creation there is none — which
+was the second half of the reported bug. An order taken for an invoice **already
+in the MIS** was inserted with whatever the agent typed and stayed that way until
+somebody happened to open it again.
+
+`/orders/new` now runs the same lookup against the numbers being typed
+(debounced, `useDebounced`, against the branch chosen on the form), which records
+nothing because there is no id, and `submit` inserts with `.select("id")` and
+hands the verified documents to `recordInvoiceVerification` — the same RPC, from
+`features/orders/record-verification.ts`, the single place either caller shapes
+it. A failure there is a warning, not an error: the order is saved and valid, and
+the next open reconciles it.
+
+`authoritativeValue(summary, typed)` is the rule itself, in one pure function:
+**a verified total overwrites a manually entered value**, and a typed figure only
+survives while nothing is verified. It is applied at the point of *writing*, not
+only in the box — that was the missing half, since the form could show a verified
+figure while saving whatever the field happened to hold, putting a manual 100.00
+straight back over a verified 212.60 on the next save.
 
 #### Order value stays in step — reconciliation, not an event
 
@@ -2935,6 +3017,16 @@ below — so a phone never scrolls sideways. Branch labels come from
    `features/orders/fulfillment.ts`, mirrored by `public.order_fulfillment()`.
 9. Completion rate and sales totals count `status = 'Completed'` rows only — the
    Dashboard fulfillment mix included.
+10. **A verified invoice total is authoritative.** Once Shams has returned a
+    document, `invoice_value` is the sum of the *distinct* verified totals and a
+    manually entered figure does not survive it — at creation, on save, and on
+    every later reconciliation. Nothing verified yet means the typed value
+    stands: an invoice may still be an hour away. One rule,
+    `authoritativeValue`, plus the server's own recompute from the activity log.
+11. **`call_center_verified` means the call centre raised the invoice.** It is
+    set automatically only from a *verified* document whose MIS channel says
+    Call Centre, never from a typed number, an attempted lookup, a failed one or
+    a pending one — and it is only ever set, never cleared, by that path.
 
 ### Complaints
 

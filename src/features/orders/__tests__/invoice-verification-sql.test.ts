@@ -185,3 +185,116 @@ describe("assignment is a tracked change", () => {
     );
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* The finalising migration: the flag follows the document, and says so        */
+/* -------------------------------------------------------------------------- */
+
+const finalSql = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../supabase/migrations/20260814190000_invoice_automation_finalize.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
+
+describe("the Call Center flag follows the document", () => {
+  it("counts the call-centre invoices in the log rather than any verified one", () => {
+    // The defect: the flag was set for *any* verified invoice, so checking a
+    // walk-in document ticked the Call Center box.
+    expect(finalSql).toContain("(a.details->>'is_call_centre')::boolean IS TRUE");
+    expect(finalSql).toContain("INTO call_centre_cnt");
+  });
+
+  it("leaves the flag alone when nothing call-centre has been verified", () => {
+    expect(finalSql).toContain("WHEN call_centre_cnt > 0 THEN true");
+    expect(finalSql).toContain("ELSE call_center_verified");
+    // Still only ever set, so an MIS outage cannot un-verify an order.
+    expect(finalSql).not.toContain("call_center_verified = false");
+  });
+
+  it("still writes nothing when the order already agrees", () => {
+    expect(finalSql).toContain("invoice_value IS DISTINCT FROM verified_sum");
+    expect(finalSql).toContain(
+      "call_centre_cnt > 0 AND call_center_verified IS DISTINCT FROM true",
+    );
+  });
+
+  it("keeps reconciling on any call, not only when something is new", () => {
+    expect(finalSql).toContain("IF verified_cnt > 0 THEN");
+    expect(finalSql).not.toContain("IF recorded > 0 THEN");
+  });
+
+  it("keeps the per-invoice idempotency guard and the recomputed total", () => {
+    expect(finalSql).toContain("a.details->>'invoice_key' = key");
+    expect(finalSql).toMatch(/SELECT COALESCE\(SUM\(\(a\.details->>'total'\)::numeric\), 0\)/);
+  });
+
+  it("keeps the permission check, since RLS does not run for a definer function", () => {
+    expect(finalSql).toContain("SECURITY DEFINER");
+    expect(finalSql).toContain("public.has_permission(uid, 'view_shams_mis')");
+    expect(finalSql).toContain("public.has_permission(uid, 'edit_all_orders')");
+    expect(finalSql).toMatch(
+      /REVOKE ALL ON FUNCTION public\.record_invoice_verification.*FROM PUBLIC, anon/,
+    );
+  });
+});
+
+describe("the automated changes narrate themselves", () => {
+  it("records the value update with the figure it replaced", () => {
+    expect(finalSql).toContain("'value_synced'");
+    expect(finalSql).toContain("'from',          prev_value");
+    expect(finalSql).toContain("'to',            verified_sum");
+    // Named so the event can say which invoices produced the figure.
+    expect(finalSql).toContain("'invoice_no',    verified_nos");
+  });
+
+  it("records the automatic Call Center tick, naming the invoices behind it", () => {
+    expect(finalSql).toContain("'call_center_flagged'");
+    expect(finalSql).toContain("'invoice_no',    call_centre_nos");
+  });
+
+  it("marks both as automated, with MilaPortal as the source", () => {
+    expect(finalSql).toContain("'automated',     true");
+    expect(finalSql).toContain("'source',        'MilaPortal / Shams MIS'");
+  });
+
+  it("writes them only when the order actually moved", () => {
+    // Idempotence is inherited from the UPDATE's own guard: processing the same
+    // verified total again reconciles nothing and therefore records nothing.
+    expect(finalSql).toContain("synced := FOUND;");
+    expect(finalSql).toContain("IF synced THEN");
+    expect(finalSql).toContain("IF prev_value IS DISTINCT FROM verified_sum THEN");
+    // And the flag event only on the transition, never for an order already set.
+    expect(finalSql).toContain("IF call_centre_cnt > 0 AND NOT prev_flag THEN");
+  });
+
+  it("stands the generic edit trigger down for exactly those two fields", () => {
+    // Otherwise the same change is reported twice: once as the portal's, once
+    // as an `edited`/`verification_changed` row filed under whoever had the
+    // order open.
+    expect(finalSql).toContain(
+      "COALESCE(current_setting('milaserv.invoice_sync', true), 'off') = 'on'",
+    );
+    expect(finalSql).toContain(
+      "IF NEW.call_center_verified IS DISTINCT FROM OLD.call_center_verified AND NOT automated THEN",
+    );
+    expect(finalSql).toContain(
+      "IF NEW.invoice_value IS DISTINCT FROM OLD.invoice_value AND NOT automated THEN",
+    );
+  });
+
+  it("scopes that stand-down to one statement, transaction-locally", () => {
+    // A GUC left set would silence the edit log for every later write in the
+    // session, which is why it is set and cleared around the single UPDATE.
+    expect(finalSql).toContain("PERFORM set_config('milaserv.invoice_sync', 'on', true);");
+    expect(finalSql).toContain("PERFORM set_config('milaserv.invoice_sync', 'off', true);");
+  });
+
+  it("leaves a person's own tick logged as theirs", () => {
+    // `verification_changed` is still written when nothing automated is running.
+    expect(finalSql).toContain("'verification_changed'");
+  });
+});

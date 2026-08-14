@@ -21,26 +21,27 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import {
-  ArrowLeft,
   BadgeCheck,
   Check,
+  ChevronRight,
   ChevronsUpDown,
   ClipboardList,
   Plus,
   ReceiptText,
   ShieldAlert,
-  Store,
+  StickyNote,
   Trash2,
-  User,
   UserCog,
   X,
 } from "lucide-react";
 import { ORDER_TYPES, DELIVERY_TYPES, CURRENCY, formatOrderNo } from "@/lib/branches";
 import { cn } from "@/lib/utils";
 import { useOrderForm } from "@/features/orders/hooks/use-order-form";
+import { invoiceKey } from "@/features/orders/invoice-verification";
 import { OrderActivityTimeline } from "@/features/orders/components/order-activity-timeline";
 import { OrderAssignment } from "@/features/orders/components/order-assignment";
-import { OrderInvoicePanel } from "@/features/orders/components/order-invoice-panel";
+import { CallCenterInvoiceField } from "@/features/orders/components/call-center-invoice-field";
+import { OrderInvoicePanel, StateTag } from "@/features/orders/components/order-invoice-panel";
 import { BranchPreviewPanel } from "@/features/branches/components/branch-preview-panel";
 
 export const Route = createFileRoute("/_app/orders/new")({
@@ -48,25 +49,24 @@ export const Route = createFileRoute("/_app/orders/new")({
   component: () => <OrderForm mode="create" />,
 });
 
+/** The id the header's submit button reaches the form by, across the layout. */
+const FORM_ID = "order-form";
+
 /**
- * One group of fields, with a heading that can actually be found.
+ * One card of the workflow column.
  *
- * The four groups themselves are not new — the form was once a flat grid of
- * eleven controls where "Date" and "Invoice No." carried identical weight, and
- * splitting it into when-and-who, who-is-calling, where-it-goes and
- * what-it-is-worth is what gave an agent filling it in mid-call somewhere to
- * aim. What was missing was making the headings *visible*: 11px uppercase in
- * muted grey is the same treatment this codebase uses for field labels, so the
- * group headings and the things they grouped were indistinguishable at a glance,
- * and the structure only existed if you already knew it was there.
+ * The form used to be a single tall card of five banded sections, which is what
+ * made the page read as one long scroll with a metre of empty space to its
+ * right. Each group is its own card now — same headings, same 8px icon tile,
+ * same 11.5px line of context — so the workflow column can sit beside the
+ * verification column instead of under it, and a group can be skipped by eye
+ * rather than by scrolling past its fields.
  *
- * So each heading now gets a tinted icon tile, body-sized semibold text and a
- * line of context, and each section owns its own padded band separated by a
- * hairline. Deliberately not larger than `text-sm`: these organize a form, they
- * are not page titles, and an oversized heading in a five-section form reads as
- * five pages stacked. The icon does the work that size would otherwise have to.
+ * Deliberately still not larger than `text-sm`: these organize a form, they are
+ * not page titles, and four oversized headings in a column read as four pages
+ * stacked. The icon does the work that size would otherwise have to.
  */
-function Section({
+function SectionCard({
   icon: Icon,
   title,
   hint,
@@ -78,23 +78,23 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="border-t border-border/60 px-4 py-5 first:border-t-0 sm:px-6 sm:py-6">
-      <header className="mb-4 flex items-start gap-3">
+    <Card className="overflow-hidden shadow-sm">
+      <header className="flex items-start gap-3 border-b border-border/60 bg-muted/25 px-4 py-3 dark:bg-muted/10">
         <span
           aria-hidden
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary ring-1 ring-inset ring-primary/15"
+          className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary ring-1 ring-inset ring-primary/15"
         >
-          <Icon className="h-4 w-4" />
+          <Icon className="h-3.5 w-3.5" />
         </span>
-        <div className="min-w-0 pt-0.5">
+        <div className="min-w-0">
           <h2 className="text-sm font-semibold leading-none tracking-tight text-foreground">
             {title}
           </h2>
           <p className="mt-1 text-[11.5px] leading-tight text-muted-foreground">{hint}</p>
         </div>
       </header>
-      <div className="grid gap-x-4 gap-y-4 md:grid-cols-2">{children}</div>
-    </section>
+      <div className="grid gap-x-4 gap-y-3.5 p-4 sm:grid-cols-2">{children}</div>
+    </Card>
   );
 }
 
@@ -123,7 +123,7 @@ function Field({
   label: string;
   required?: boolean;
   optional?: boolean;
-  hint?: string;
+  hint?: React.ReactNode;
   className?: string;
   children: React.ReactNode;
 }) {
@@ -139,7 +139,7 @@ function Field({
         {optional && <span className="font-normal text-muted-foreground/80">&mdash; optional</span>}
       </Label>
       {children}
-      {hint && <p className="text-[11px] leading-tight text-muted-foreground">{hint}</p>}
+      {hint && <div className="text-[11px] leading-tight text-muted-foreground">{hint}</div>}
     </div>
   );
 }
@@ -163,6 +163,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
     canDelete,
     canViewShams,
     canPickAgent,
+    canVerifyThis,
     userId,
     agents,
     shamsInvoices,
@@ -201,60 +202,98 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
   const valueIsVerified =
     shamsInvoices.verified.length > 0 && Number(form.invoice_value) === shamsInvoices.verifiedTotal;
 
+  /** The state of each typed number, so a row can say where its lookup got to. */
+  const stateOf = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    return shamsInvoices.invoices.find((i) => i.key === invoiceKey(trimmed)) ?? null;
+  };
+
+  /** The call-centre documents behind an automated tick, for the caption. */
+  const callCentreNos = shamsInvoices.verified
+    .filter((i) => i.isCallCentre)
+    .map((i) => i.invoiceNo);
+  const callCenterChecked = form.call_center_verified || shamsInvoices.callCentreVerified;
+
   const orderNo = formatOrderNo(existing?.team, existing?.display_no);
   const heading =
     mode === "create" ? "New order" : `${readOnly ? "View" : "Edit"} order ${orderNo}`;
 
   return (
-    // Wider than the form alone needs. The page now carries the invoice
-    // findings and the timeline underneath it, both of which are records to
-    // scan rather than fields to fill, and 3xl forced an invoice's customer,
-    // branch and item lines into a column narrower than the table on the Orders
-    // list. Still a bounded measure, not full-bleed: a two-column form at
-    // browser width is harder to read, not easier.
-    <div className="mx-auto max-w-4xl space-y-5">
-      {/* Page header. The title was inside the card, competing with the section
-          headings for the same job; out here it is unambiguously the page. */}
-      <div>
-        <Link
-          to="/orders"
-          className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-          Back to orders
-        </Link>
-        <div className="mt-2 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-          <div className="min-w-0">
-            <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">{heading}</h1>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {readOnly
-                ? "This order is read-only for your role."
-                : "Fields marked with an asterisk are required."}
-            </p>
-          </div>
+    // Wide enough for two real columns and no wider. The workflow column holds
+    // the fields, the verification column holds what the portal found; below
+    // `xl` there is not enough width for both and they stack, workflow first.
+    <div className="mx-auto max-w-[1360px] space-y-4">
+      {/* Page header. Breadcrumb, what this page is, and the two actions —
+          out here rather than inside the card, where the title competed with
+          the section headings for the same job and the buttons sat at the end
+          of a scroll. */}
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+        <div className="min-w-0">
+          <nav
+            aria-label="Breadcrumb"
+            className="flex items-center gap-1 text-xs text-muted-foreground"
+          >
+            <Link to="/orders" className="font-medium transition-colors hover:text-foreground">
+              Orders
+            </Link>
+            <ChevronRight className="h-3 w-3" aria-hidden="true" />
+            <span className="text-foreground">{mode === "create" ? "New order" : orderNo}</span>
+          </nav>
+          <h1 className="mt-1.5 text-xl font-semibold tracking-tight sm:text-2xl">{heading}</h1>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {readOnly
+              ? "This order is read-only for your role."
+              : mode === "create"
+                ? "Create a new order and link invoices automatically."
+                : "Invoices are looked up and verified automatically; fields marked * are required."}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
           {mode === "edit" && canDelete && (
             <Button
               variant="outline"
               size="sm"
               onClick={del}
-              className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
             >
               <Trash2 className="mr-2 h-4 w-4" />
               Delete
             </Button>
           )}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            // `resetScroll: false` for the same reason as the save path: backing
+            // out of an order must return the agent to the row they opened, not
+            // to the top of the list.
+            onClick={() => navigate({ to: "/orders", resetScroll: false })}
+          >
+            {readOnly ? "Close" : "Cancel"}
+          </Button>
+          {!readOnly && (
+            // Outside the `form` element, so it reaches it by id. Keeping the
+            // primary action in the header is what lets the form itself end
+            // with a field rather than with a band of buttons.
+            <Button type="submit" form={FORM_ID} size="sm" disabled={busy} className="min-w-32">
+              {busy ? "Saving…" : mode === "create" ? "Create order" : "Update order"}
+            </Button>
+          )}
         </div>
       </div>
 
-      {/* `overflow-hidden` so the section bands and the footer's tint stop at the
-          card's rounded corners instead of squaring them off. */}
-      <Card className="overflow-hidden shadow-sm">
-        <form onSubmit={submit}>
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
+        {/* ------------------------------------------------------------------ */}
+        {/* Workflow — what the agent fills in                                  */}
+        {/* ------------------------------------------------------------------ */}
+        <form id={FORM_ID} onSubmit={submit} className="min-w-0 space-y-4">
           <fieldset disabled={readOnly} className="contents">
-            <Section
+            <SectionCard
               icon={ClipboardList}
-              title="Order"
-              hint="When it came in, which team took it, and how it is being fulfilled."
+              title="Order details"
+              hint="When it came in, how it is fulfilled, and who it is for."
             >
               <Field id="order-date" label="Date" required>
                 <Input
@@ -310,80 +349,11 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                   </SelectContent>
                 </Select>
               </Field>
-            </Section>
 
-            {/* ASSIGNMENT — who owns the order, and therefore which team it is
-                filed under. Agent first: the team is derived, never asked for
-                separately, so the two cannot disagree. The picker is Owner/Admin
-                only and edit-only — on insert RLS requires
-                `auth.uid() = agent_id`, so a new order is always the creator's
-                and an administrator reassigns it after saving. */}
-            <Section
-              icon={UserCog}
-              title="Assignment"
-              hint={
-                canPickAgent
-                  ? "Choose the agent; the team follows from who they are. Whoever enters the order is recorded separately."
-                  : "Who this order belongs to, and the team that follows from it."
-              }
-            >
-              <div className="md:col-span-2">
-                <OrderAssignment
-                  agents={agents}
-                  // The assignee — never seeded from whoever is looking at the
-                  // page. An Owner or Supervisor creating an order starts here
-                  // empty and must choose an agent.
-                  agentId={form.agent_id || null}
-                  createdById={mode === "create" ? userId : ((existing as any)?.created_by ?? null)}
-                  team={form.team}
-                  canAssign={canPickAgent}
-                  disabled={readOnly}
-                  onAssign={({ agentId, team }) =>
-                    setForm((f) => ({ ...f, agent_id: agentId, team: team ?? f.team }))
-                  }
-                />
-              </div>
-            </Section>
-
-            <Section
-              icon={User}
-              title="Customer"
-              hint="Not required to save, but it is what makes an order traceable later."
-            >
-              <Field id="customer-name" label="Customer name" optional>
-                <Input
-                  id="customer-name"
-                  value={form.customer_name}
-                  onChange={(e) => setForm({ ...form, customer_name: e.target.value })}
-                  placeholder="As given on the call"
-                />
-              </Field>
-
-              <Field id="customer-phone" label="Customer phone" optional>
-                <Input
-                  id="customer-phone"
-                  value={form.customer_phone}
-                  onChange={(e) => setForm({ ...form, customer_phone: e.target.value })}
-                  placeholder="05XXXXXXXX"
-                  dir="ltr"
-                  inputMode="tel"
-                />
-              </Field>
-            </Section>
-
-            {/* BRANCH — one control, then the answer.
-                The read-only "City (auto)" box beside it is gone. It restated
-                the second half of the label already inside the picker's own
-                trigger, and once a branch is chosen the panel below states the
-                city in both scripts along with everything else a customer asks
-                next. A disabled input whose only job is to echo another
-                control is a field an agent's eye has to skip on every order. */}
-            <Section
-              icon={Store}
-              title="Branch"
-              hint="Everything the customer asks next is answered below, without leaving the form."
-            >
-              <Field id="order-branch" label="Branch No." required className="md:col-span-2">
+              {/* The branch. Everything the customer asks next — is it open,
+                  does it deliver, what is the address — is answered by the
+                  panel in the verification column, without leaving the form. */}
+              <Field id="order-branch" label="Branch No." required>
                 <Popover open={open} onOpenChange={setOpen}>
                   <PopoverTrigger asChild>
                     <Button
@@ -443,36 +413,53 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 </Popover>
               </Field>
 
-              {/* Appears the moment a branch is chosen, so the questions a
-                  customer asks next — is it open, does it deliver, what is the
-                  address — are answered without leaving a half-typed order. */}
-              {form.branch_no && (
-                <div className="md:col-span-2">
-                  <BranchPreviewPanel branchNo={form.branch_no} />
-                </div>
-              )}
-            </Section>
+              <Field id="customer-name" label="Customer name" optional>
+                <Input
+                  id="customer-name"
+                  value={form.customer_name}
+                  onChange={(e) => setForm({ ...form, customer_name: e.target.value })}
+                  placeholder="As given on the call"
+                />
+              </Field>
 
-            <Section
+              <Field id="customer-phone" label="Customer phone" optional>
+                <Input
+                  id="customer-phone"
+                  value={form.customer_phone}
+                  onChange={(e) => setForm({ ...form, customer_phone: e.target.value })}
+                  placeholder="05XXXXXXXX"
+                  dir="ltr"
+                  inputMode="tel"
+                />
+              </Field>
+            </SectionCard>
+
+            <SectionCard
               icon={ReceiptText}
               title="Invoicing"
-              hint="What the order is worth, the invoices it covers, and anything worth recording."
+              hint="What the order is worth, and the invoices it covers."
             >
               {/* Order value. Typed by the agent until Shams returns a
-                  document, from which point the verified total is authoritative
-                  and is written to the order by `record_invoice_verification`.
-                  The field stays editable — a correction is still a legitimate
-                  act — but it says where the number came from, so an agent does
-                  not overwrite a verified figure without knowing they are. */}
+                  document, from which point the verified total is authoritative:
+                  it is put into the box on arrival and written to the order on
+                  save, whatever the box holds. The field stays editable — a
+                  correction before anything is verified is a legitimate act —
+                  but it says where the number came from, so nobody believes a
+                  typed figure survived a verification. */}
               <Field
                 id="order-value"
                 label={`Order value (${CURRENCY})`}
                 hint={
-                  valueIsVerified
-                    ? shamsInvoices.isMulti
-                      ? `Verified from ${shamsInvoices.verified.length} invoices in Shams.`
-                      : "Verified from the invoice in Shams."
-                    : undefined
+                  valueIsVerified ? (
+                    <span className="inline-flex items-center gap-1 font-medium text-success">
+                      <BadgeCheck className="h-3 w-3" aria-hidden="true" />
+                      {shamsInvoices.isMulti
+                        ? `Auto-filled from ${shamsInvoices.verified.length} verified invoices`
+                        : "Auto-filled from the verified invoice"}
+                    </span>
+                  ) : (
+                    "Updated automatically when the invoices are verified."
+                  )
                 }
               >
                 <div className="relative">
@@ -484,7 +471,10 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                     value={form.invoice_value}
                     onChange={(e) => setForm({ ...form, invoice_value: e.target.value })}
                     placeholder="0.00"
-                    className={cn("tabular-nums", valueIsVerified && "pr-24")}
+                    className={cn(
+                      "text-base font-semibold tabular-nums",
+                      valueIsVerified && "border-success/40 pr-24",
+                    )}
                   />
                   {valueIsVerified && (
                     <span className="pointer-events-none absolute right-2 top-1/2 inline-flex -translate-y-1/2 items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-success">
@@ -495,7 +485,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 </div>
               </Field>
 
-              <div className="min-w-0 space-y-1.5 md:col-span-2">
+              <div className="min-w-0 space-y-1.5 sm:col-span-2">
                 <div className="flex items-center justify-between gap-2">
                   <Label
                     htmlFor="invoice-0"
@@ -503,7 +493,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                   >
                     <span>Invoice No.</span>
                     <span className="font-normal text-muted-foreground/80">
-                      &mdash; one or many
+                      &mdash; add one or more invoice numbers
                     </span>
                   </Label>
                   <Button
@@ -517,98 +507,146 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                     <Plus className="mr-1 h-3.5 w-3.5" /> Add invoice
                   </Button>
                 </div>
-                <div className="space-y-2">
-                  {invoices.map((val, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                      {/* A row number rather than a placeholder that says
-                          "Invoice 2": the placeholder vanished the moment
-                          anything was typed, which is exactly when a list of
-                          four identical boxes needs the index. */}
-                      <span
-                        aria-hidden
-                        className="w-4 shrink-0 text-right text-[11px] font-medium tabular-nums text-muted-foreground"
-                      >
-                        {i + 1}
-                      </span>
-                      <Input
-                        id={`invoice-${i}`}
-                        value={val}
-                        onChange={(e) =>
-                          setInvoices((arr) => arr.map((v, j) => (j === i ? e.target.value : v)))
-                        }
-                        placeholder="Invoice number"
-                        aria-label={`Invoice number ${i + 1}`}
-                        className="font-mono"
-                        dir="ltr"
-                      />
-                      {invoices.length > 1 && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-9 w-9 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                          disabled={readOnly}
-                          onClick={() => setInvoices((arr) => arr.filter((_, j) => j !== i))}
-                          aria-label={`Remove invoice ${i + 1}`}
+                <div className="space-y-1.5">
+                  {invoices.map((val, i) => {
+                    const state = canViewShams ? stateOf(val) : null;
+                    return (
+                      <div key={i} className="flex items-center gap-2">
+                        {/* A row number rather than a placeholder that says
+                            "Invoice 2": the placeholder vanished the moment
+                            anything was typed, which is exactly when a list of
+                            four identical boxes needs the index. */}
+                        <span
+                          aria-hidden
+                          className="w-4 shrink-0 text-right text-[11px] font-medium tabular-nums text-muted-foreground"
                         >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      )}
-                    </div>
-                  ))}
+                          {i + 1}
+                        </span>
+                        <div className="relative min-w-0 flex-1">
+                          <Input
+                            id={`invoice-${i}`}
+                            value={val}
+                            onChange={(e) =>
+                              setInvoices((arr) =>
+                                arr.map((v, j) => (j === i ? e.target.value : v)),
+                              )
+                            }
+                            placeholder="Invoice number"
+                            aria-label={`Invoice number ${i + 1}`}
+                            className={cn("font-mono", state && "pr-24")}
+                            dir="ltr"
+                          />
+                          {/* Where this number's lookup got to, on the row that
+                              carries it — the panel opposite has the document,
+                              this only has to say whether there is one. */}
+                          {state && (
+                            <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2">
+                              <StateTag state={state.state} />
+                            </span>
+                          )}
+                        </div>
+                        {invoices.length > 1 && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-9 w-9 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                            disabled={readOnly}
+                            onClick={() => setInvoices((arr) => arr.filter((_, j) => j !== i))}
+                            aria-label={`Remove invoice ${i + 1}`}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
+            </SectionCard>
 
-              <Field
-                id="order-notes"
-                label="Notes"
-                optional
-                className="md:col-span-2"
-                hint="Anything the next person opening this order should know."
-              >
+            {/* ASSIGNMENT — who owns the order, and therefore which team it is
+                filed under. Agent first: the team is derived, never asked for
+                separately, so the two cannot disagree. The Call Center flag
+                sits here because it is the same kind of fact — an operational
+                classification of the order, not a field describing it. */}
+            <SectionCard
+              icon={UserCog}
+              title="Assignment"
+              hint={
+                canPickAgent
+                  ? "Choose the agent; the team follows from who they are. Whoever enters the order is recorded separately."
+                  : "Who this order belongs to, and the team that follows from it."
+              }
+            >
+              <div className="sm:col-span-2">
+                <OrderAssignment
+                  agents={agents}
+                  // The assignee — never seeded from whoever is looking at the
+                  // page. An Owner or Supervisor creating an order starts here
+                  // empty and must choose an agent.
+                  agentId={form.agent_id || null}
+                  createdById={mode === "create" ? userId : ((existing as any)?.created_by ?? null)}
+                  team={form.team}
+                  canAssign={canPickAgent}
+                  disabled={readOnly}
+                  onAssign={({ agentId, team }) =>
+                    setForm((f) => ({ ...f, agent_id: agentId, team: team ?? f.team }))
+                  }
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <CallCenterInvoiceField
+                  checked={callCenterChecked}
+                  automated={shamsInvoices.callCentreVerified}
+                  invoiceNos={callCentreNos}
+                  hasVerified={shamsInvoices.verified.length > 0}
+                  canVerify={canVerifyThis}
+                  disabled={readOnly}
+                  onChange={(next) => setForm((f) => ({ ...f, call_center_verified: next }))}
+                />
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              icon={StickyNote}
+              title="Notes"
+              hint="Anything the next person opening this order should know."
+            >
+              <div className="min-w-0 sm:col-span-2">
                 <Textarea
                   id="order-notes"
-                  rows={3}
+                  aria-label="Notes"
+                  rows={2}
                   value={form.notes}
                   onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                  placeholder="Optional"
                   className="resize-y"
                 />
-              </Field>
-            </Section>
+              </div>
+            </SectionCard>
           </fieldset>
-
-          {/* Action bar. Tinted and separated so it reads as the end of the form
-              rather than as another field, and stacked on a phone so neither
-              button ends up a thumb-width wide. */}
-          <div className="flex flex-col-reverse gap-2 border-t border-border/60 bg-muted/25 px-4 py-4 sm:flex-row sm:items-center sm:justify-end sm:px-6 dark:bg-muted/15">
-            <Button
-              type="button"
-              variant="outline"
-              // `resetScroll: false` for the same reason as the save path:
-              // backing out of an order must return the agent to the row they
-              // opened, not to the top of the list.
-              onClick={() => navigate({ to: "/orders", resetScroll: false })}
-              className="w-full sm:w-auto"
-            >
-              {readOnly ? "Close" : "Cancel"}
-            </Button>
-            {!readOnly && (
-              <Button type="submit" disabled={busy} className="w-full sm:w-auto sm:min-w-32">
-                {busy ? "Saving…" : mode === "create" ? "Save order" : "Update order"}
-              </Button>
-            )}
-          </div>
         </form>
-      </Card>
 
-      {/* Invoice information sits outside the form card, as its own section of
-          the page. It is not a field an agent fills in — it is what the portal
-          found — and putting read-only findings inside a `fieldset` that gets
-          disabled for a read-only role would hide them from exactly the people
-          reviewing the order. */}
-      {mode === "edit" && canViewShams && <OrderInvoicePanel invoices={shamsInvoices} />}
+        {/* ------------------------------------------------------------------ */}
+        {/* Verification — what the portal found                                */}
+        {/* ------------------------------------------------------------------ */}
+        {/* Read-only findings, and deliberately outside the `form` element: a
+            `fieldset` that gets disabled for a read-only role would hide them
+            from exactly the people reviewing the order. Sticky below the app
+            header on a wide screen, so the invoice and the timeline stay in
+            view while the workflow column scrolls; it scrolls internally rather
+            than growing past the viewport. */}
+        <aside className="min-w-0 space-y-4 xl:sticky xl:top-20 xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto xl:pb-1">
+          {canViewShams && <OrderInvoicePanel invoices={shamsInvoices} />}
 
-      {mode === "edit" && id && <OrderActivityTimeline orderId={id} />}
+          {/* Appears the moment a branch is chosen, so the questions a customer
+              asks next are answered without leaving a half-typed order. */}
+          {form.branch_no && <BranchPreviewPanel branchNo={form.branch_no} />}
+
+          {mode === "edit" && id && <OrderActivityTimeline orderId={id} />}
+        </aside>
+      </div>
     </div>
   );
 }

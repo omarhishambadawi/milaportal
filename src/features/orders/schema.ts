@@ -25,4 +25,13 @@ export const orderFormSchema = z.object({
    * and only for callers holding `edit_all_orders`.
    */
   agent_id: z.string().uuid().optional(),
+  /**
+   * Call Center Invoice.
+   *
+   * Optional, and left out entirely rather than sent as `false` whenever the
+   * caller may not verify or the portal has already established the flag from a
+   * verified call-centre invoice — an omitted column keeps whatever the row
+   * holds, which is what stops a save unticking an automated verification.
+   */
+  call_center_verified: z.boolean().optional(),
 });

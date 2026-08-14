@@ -9,11 +9,13 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  authoritativeValue,
   dedupeInvoices,
   invoiceKey,
   invoicesToRecord,
   needsValueSync,
   summarizeInvoices,
+  verificationEntries,
   type OrderInvoice,
 } from "../invoice-verification";
 
@@ -306,5 +308,141 @@ describe("needsValueSync", () => {
   it("counts a verified invoice with no total as contributing nothing", () => {
     const s = summarizeInvoices([verified("1", 212.6), verified("2", 0, { total: null })]);
     expect(s.verifiedTotal).toBe(212.6);
+  });
+
+  it("stops asking once a non-call-centre invoice is reconciled", () => {
+    // The loop this rule closes. `needsValueSync` used to read "verified and the
+    // flag unset means sync", so a walk-in invoice — which must never tick the
+    // box — was a permanent disagreement: the client asked on every render and
+    // the server, correctly, changed nothing.
+    const s = summarizeInvoices([verified("1", 212.6, { isCallCentre: false })]);
+    expect(s.callCentreVerified).toBe(false);
+    expect(needsValueSync(s, 212.6, false)).toBe(false);
+    // The value is still reconciled — only the flag is none of its business.
+    expect(needsValueSync(s, 100, false)).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The Call Center flag                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The distinction the whole checkbox rests on: it says *the call centre raised
+ * this invoice*, established from the document's own channel, and nothing else
+ * may set it — not a typed number, not an attempted lookup, not a failed one.
+ */
+describe("callCentreVerified", () => {
+  it("is true when a verified document carries the Call Centre channel", () => {
+    const s = summarizeInvoices([verified("0169580", 212.6)]);
+    expect(s.callCentreVerified).toBe(true);
+  });
+
+  it("is false for a verified walk-in invoice", () => {
+    const s = summarizeInvoices([
+      verified("22138", 230, { customer: "CASH SALES", isCallCentre: false }),
+    ]);
+    expect(s.verified).toHaveLength(1);
+    expect(s.callCentreVerified).toBe(false);
+  });
+
+  it("is false while the invoice is only pending", () => {
+    // Even though this number will turn out to be a call-centre document.
+    expect(summarizeInvoices([invoice("0169580")]).callCentreVerified).toBe(false);
+  });
+
+  it("is false when the lookup could not be made at all", () => {
+    expect(
+      summarizeInvoices([invoice("0169580", { state: "unavailable" })]).callCentreVerified,
+    ).toBe(false);
+  });
+
+  it("is true when any one of several invoices is a Call Centre document", () => {
+    const s = summarizeInvoices([
+      verified("22138", 230, { isCallCentre: false }),
+      verified("22139", 150, { isCallCentre: true }),
+    ]);
+    expect(s.callCentreVerified).toBe(true);
+  });
+
+  it("asks for a sync when a call-centre invoice is verified and the flag is unset", () => {
+    const s = summarizeInvoices([verified("0169580", 212.6)]);
+    expect(needsValueSync(s, 212.6, false)).toBe(true);
+    expect(needsValueSync(s, 212.6, true)).toBe(false);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* What actually gets written to the order                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The business rule the form kept showing but not saving: **a verified total
+ * overwrites a manually entered value.** Stated once, here, so the field, the
+ * insert and the update cannot each answer it differently.
+ */
+describe("authoritativeValue", () => {
+  it("overwrites a manually entered value with the verified total", () => {
+    const s = summarizeInvoices([verified("0169580", 212.6)]);
+    expect(authoritativeValue(s, 100)).toBe(212.6);
+  });
+
+  it("sums several verified invoices rather than taking the first", () => {
+    const s = summarizeInvoices([verified("0169580", 212.6), verified("0169581", 150)]);
+    expect(authoritativeValue(s, 100)).toBe(362.6);
+  });
+
+  it("counts one document once, however many times the order names it", () => {
+    const s = summarizeInvoices([verified("0169580", 212.6), verified("169580", 212.6)]);
+    expect(authoritativeValue(s, 100)).toBe(212.6);
+  });
+
+  it("overwrites even a value that was typed to match nothing in particular", () => {
+    const s = summarizeInvoices([verified("1", 0)]);
+    expect(authoritativeValue(s, 500)).toBe(0);
+  });
+
+  it("keeps the typed value while nothing has been verified", () => {
+    // A pending invoice may still be an hour away; the order is valid meanwhile.
+    expect(authoritativeValue(summarizeInvoices([invoice("22138")]), 100)).toBe(100);
+    expect(authoritativeValue(summarizeInvoices([]), 100)).toBe(100);
+    expect(
+      authoritativeValue(summarizeInvoices([invoice("1", { state: "unavailable" })]), 100),
+    ).toBe(100);
+  });
+
+  it("leaves an empty field empty rather than inventing a zero", () => {
+    expect(authoritativeValue(summarizeInvoices([invoice("22138")]), null)).toBeNull();
+  });
+});
+
+describe("verificationEntries", () => {
+  it("sends only verified documents", () => {
+    const entries = verificationEntries([
+      verified("0169580", 212.6),
+      invoice("0169581"),
+      invoice("0169582", { state: "unavailable" }),
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].invoice_no).toBe("0169580");
+  });
+
+  it("carries the channel classification the server decides the flag from", () => {
+    const [callCentre] = verificationEntries([verified("0169580", 212.6)]);
+    expect(callCentre.is_call_centre).toBe(true);
+    const [walkIn] = verificationEntries([
+      verified("22138", 230, { customer: "CASH SALES", isCallCentre: false }),
+    ]);
+    expect(walkIn.is_call_centre).toBe(false);
+  });
+
+  it("sends the number as typed, so the server strips zeros the same way", () => {
+    const [entry] = verificationEntries([verified("0169580", 212.6)]);
+    expect(entry.invoice_no).toBe("0169580");
+    expect(invoiceKey(entry.invoice_no)).toBe("169580");
+  });
+
+  it("sends nothing at all for an order whose invoice has not appeared", () => {
+    expect(verificationEntries([invoice("0169580")])).toEqual([]);
   });
 });

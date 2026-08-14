@@ -73,6 +73,16 @@ export interface InvoiceSummary {
   allVerified: boolean;
   /** True when the order carries more than one number, whatever their state. */
   isMulti: boolean;
+  /**
+   * Does the order hold a **verified** Call Centre document?
+   *
+   * The one thing that may tick the Call Center Invoice box. Not "a number was
+   * typed", not "a lookup ran", not "an invoice exists" — the MIS returned a
+   * document and that document's own channel classification says Call Centre.
+   * A pending or unavailable invoice contributes nothing here, whatever anyone
+   * expects it to turn out to be.
+   */
+  callCentreVerified: boolean;
 }
 
 /** The identity of an invoice number: what makes two spellings one document. */
@@ -122,6 +132,7 @@ export function summarizeInvoices(invoices: readonly OrderInvoice[]): InvoiceSum
     verifiedTotal: Math.round(verifiedTotal * 100) / 100,
     allVerified: unique.length > 0 && verified.length === unique.length,
     isMulti: unique.length > 1,
+    callCentreVerified: verified.some((i) => i.isCallCentre),
   };
 }
 
@@ -165,6 +176,12 @@ export function invoicesToRecord(
  *
  * Returns false when nothing is verified — an order with no verified invoice has
  * nothing to be reconciled *to*, and must keep whatever value was typed.
+ *
+ * The flag half is narrower than it was. It used to read "anything verified and
+ * the flag not set means sync", which asked the server to tick the Call Center
+ * box for a walk-in invoice — and, once the server stopped doing that, would
+ * have asked again on every render for ever. Only a *verified call-centre*
+ * document expects the flag, and only then is its absence a disagreement.
  */
 export function needsValueSync(
   summary: InvoiceSummary,
@@ -172,7 +189,53 @@ export function needsValueSync(
   storedVerifiedFlag: boolean | null | undefined,
 ): boolean {
   if (summary.verified.length === 0) return false;
-  if (!storedVerifiedFlag) return true;
   const stored = Number(storedValue ?? 0);
-  return Math.abs(stored - summary.verifiedTotal) >= 0.005;
+  if (Math.abs(stored - summary.verifiedTotal) >= 0.005) return true;
+  return summary.callCentreVerified && !storedVerifiedFlag;
+}
+
+/**
+ * What the order should be worth, given what has been verified.
+ *
+ * The business rule in one place: **once a document has been verified, its total
+ * is authoritative and a typed figure does not survive it.** Passed the field's
+ * current contents for the only case where they still count — nothing verified
+ * yet, an invoice that may still be hours away — so a form, an insert and an
+ * update all reach the same number without restating the rule.
+ */
+export function authoritativeValue(
+  summary: InvoiceSummary,
+  typedValue: number | null,
+): number | null {
+  return summary.verified.length > 0 ? summary.verifiedTotal : typedValue;
+}
+
+/** One entry of `record_invoice_verification`'s `_entries` payload. */
+export interface VerificationEntry {
+  invoice_no: string;
+  branch_code: string | null;
+  total: number | null;
+  customer: string | null;
+  is_call_centre: boolean;
+  doc_date: string | null;
+}
+
+/**
+ * The payload the server records, built from verified documents only.
+ *
+ * Deliberately the whole verified set rather than "what is new": the function is
+ * idempotent per invoice and recomputes the total from its own log, so sending
+ * everything is what makes a missed write repairable by the next caller.
+ */
+export function verificationEntries(invoices: readonly OrderInvoice[]): VerificationEntry[] {
+  return invoices
+    .filter((i) => i.state === "verified")
+    .map((i) => ({
+      invoice_no: i.invoiceNo,
+      branch_code: i.branchCode,
+      total: i.total,
+      customer: i.customer,
+      is_call_centre: i.isCallCentre,
+      doc_date: i.docDate,
+    }));
 }

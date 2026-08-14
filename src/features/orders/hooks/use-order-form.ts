@@ -7,7 +7,10 @@ import { toast } from "sonner";
 import { hasPerm } from "@/lib/permissions";
 import { queryKeys } from "@/lib/query-keys";
 import { useAgentDirectory } from "@/lib/directory";
+import { useDebounced } from "@/features/shams/hooks/use-shams-data";
 import { orderFormSchema } from "../schema";
+import { authoritativeValue } from "../invoice-verification";
+import { recordInvoiceVerification } from "../record-verification";
 import { defaultTeam, parseInvoiceNumbers } from "../utils";
 import { isAssignableAgent } from "../components/order-assignment";
 import { useOrderInvoices } from "./use-order-invoices";
@@ -66,6 +69,16 @@ export function useOrderForm(mode: "create" | "edit") {
      * with it empty and has to choose. See `creatorIsAgent`.
      */
     agent_id: "" as string,
+    /**
+     * Call Center Invoice.
+     *
+     * Held here so the form can *show* it, but the portal is what usually sets
+     * it: a verified call-centre document ticks it through
+     * `record_invoice_verification`. A manual tick is still possible for
+     * whoever holds the verification permission — that path predates this and
+     * is the same column the Orders list toggles.
+     */
+    call_center_verified: false,
   });
   const [invoices, setInvoices] = useState<string[]>([""]);
   const [busy, setBusy] = useState(false);
@@ -85,6 +98,15 @@ export function useOrderForm(mode: "create" | "edit") {
    * server re-checks it on every call; this only decides whether to ask.
    */
   const canViewShams = hasPerm(role, profile?.permissions as any, "view_shams_mis");
+  /**
+   * Who may tick the Call Center Invoice box by hand.
+   *
+   * The same two permissions the Orders list checks per row, so the control on
+   * the form can never offer what the table refuses. The automated path is
+   * governed separately, inside `record_invoice_verification`.
+   */
+  const canVerifyAll = hasPerm(role, profile?.permissions as any, "verify_all_orders");
+  const canVerifyOwn = hasPerm(role, profile?.permissions as any, "verify_own_orders");
   /**
    * Who may move an order to another agent.
    *
@@ -108,6 +130,8 @@ export function useOrderForm(mode: "create" | "edit") {
   const isOwner = !!existing && !!user && existing.agent_id === user.id;
   const canEditThis = mode === "create" ? canCreate : canEditAll || (isOwner && canEditOwn);
   const readOnly = mode === "edit" && !canEditThis;
+  const canVerifyThis =
+    mode === "create" ? canVerifyAll || canVerifyOwn : canVerifyAll || (isOwner && canVerifyOwn);
 
   useEffect(() => {
     if (existing) {
@@ -127,6 +151,7 @@ export function useOrderForm(mode: "create" | "edit") {
         notes: existing.notes ?? "",
         status: existing.status,
         agent_id: existing.agent_id ?? "",
+        call_center_verified: !!(existing as any).call_center_verified,
       });
       const parts = parseInvoiceNumbers(existing.invoice_no);
       setInvoices(parts.length > 0 ? parts : [""]);
@@ -169,28 +194,69 @@ export function useOrderForm(mode: "create" | "edit") {
     setForm((f) => (f.agent_id === "" && creatorIsAgent ? { ...f, agent_id: user.id } : f));
   }, [mode, user?.id, creatorIsAgent]);
 
-  /**
-   * The order's invoices in Shams: state, totals, and the automatic recording.
-   *
-   * Edit mode only and gated on `view_shams_mis`, so an agent without Shams
-   * access issues no request. Driven by the **stored** `invoice_no` rather than
-   * the inputs, because a half-typed number is not yet a fact about the order.
-   */
-  const shamsInvoices = useOrderInvoices({
-    orderId: id,
-    invoiceNo: existing?.invoice_no,
-    branchNo: existing?.branch_no,
-    // The stored figures, so the hook can tell whether the order still agrees
-    // with what has been verified rather than only whether an invoice is new.
-    storedValue: existing?.invoice_value,
-    storedVerifiedFlag: (existing as any)?.call_center_verified,
-    enabled: mode === "edit" && canViewShams && !!existing,
-  });
-
   const invoicesJoined = invoices
     .map((s) => s.trim())
     .filter(Boolean)
     .join(", ");
+
+  /**
+   * The numbers being typed, once they have settled.
+   *
+   * Only used while **creating**, where there is no stored `invoice_no` to
+   * resolve. Debounced with the same helper the Shams page search uses, so a
+   * seven-digit invoice number costs one lookup rather than one per keystroke.
+   */
+  const draftInvoiceNo = useDebounced(invoicesJoined, 500);
+
+  /**
+   * The order's invoices in Shams: state, totals, and the automatic recording.
+   *
+   * Gated on `view_shams_mis`, so an agent without Shams access issues no
+   * request. Which numbers are resolved depends on the mode, and the difference
+   * matters:
+   *
+   *   * **edit** — the *stored* `invoice_no`. A half-typed number is not yet a
+   *     fact about the order, and recording is live here: an unsaved edit must
+   *     not be able to write a total onto the order.
+   *   * **create** — what is on screen, debounced. There is no order id, so the
+   *     hook records nothing (its activity query is disabled without one and
+   *     the write is guarded on the id); this is a *lookup*, and it is what
+   *     lets the form know the verified total before the order exists. The
+   *     recording for a new order happens once, in `submit`, against the id the
+   *     insert returns.
+   */
+  const shamsInvoices = useOrderInvoices({
+    orderId: mode === "edit" ? id : undefined,
+    invoiceNo: mode === "edit" ? existing?.invoice_no : draftInvoiceNo,
+    branchNo: mode === "edit" ? existing?.branch_no : form.branch_no,
+    // The stored figures, so the hook can tell whether the order still agrees
+    // with what has been verified rather than only whether an invoice is new.
+    storedValue: existing?.invoice_value,
+    storedVerifiedFlag: (existing as any)?.call_center_verified,
+    enabled: canViewShams && (mode === "edit" ? !!existing : !!form.branch_no),
+  });
+
+  /**
+   * The verified total, put into the field the moment there is one.
+   *
+   * The business rule is that a verified document's total is authoritative and
+   * a manually entered figure does not survive it, so the box is *shown* the
+   * number that is about to be saved rather than being left to disagree with
+   * it. Not a lock: the field stays editable, and `submit` is what makes the
+   * rule true in the database whatever is on screen.
+   *
+   * Re-applied when `existing` changes as well, so an order refetched after a
+   * reconciliation does not fall back to the figure it held before.
+   */
+  const verifiedTotal = shamsInvoices.verified.length > 0 ? shamsInvoices.verifiedTotal : null;
+  useEffect(() => {
+    if (verifiedTotal === null || readOnly) return;
+    setForm((f) =>
+      f.invoice_value !== "" && Number(f.invoice_value) === verifiedTotal
+        ? f
+        : { ...f, invoice_value: verifiedTotal.toFixed(2) },
+    );
+  }, [verifiedTotal, existing, readOnly]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -207,6 +273,34 @@ export function useOrderForm(mode: "create" | "edit") {
         customer_phone: form.customer_phone || null,
         branch_no: form.branch_no || "",
         invoice_no: invoicesJoined || null,
+        /**
+         * The verified total wins over anything typed.
+         *
+         * Applied at the point of writing, not only in the box: this is the
+         * half that was missing. The form could show a verified figure while
+         * saving whatever the field happened to hold, so a manual 100.00
+         * entered before the invoice was checked went straight back over a
+         * verified 212.60 on the next save. With nothing verified the typed
+         * value is kept untouched — an invoice may still be an hour away.
+         */
+        invoice_value: authoritativeValue(
+          shamsInvoices,
+          form.invoice_value === "" ? null : Number(form.invoice_value),
+        ),
+        /**
+         * The manual tick only, and never a `false` that could untick what the
+         * portal set.
+         *
+         * Deliberately not raised to `true` from a verified call-centre
+         * invoice: that transition belongs to `record_invoice_verification`,
+         * which writes the automated timeline event beside it. Doing it here
+         * would set the flag through the ordinary edit path and file a machine
+         * decision under whoever pressed Save.
+         */
+        call_center_verified:
+          canVerifyThis && (form.call_center_verified || !shamsInvoices.callCentreVerified)
+            ? form.call_center_verified
+            : undefined,
         notes: form.notes || null,
         status: mode === "create" ? "Pending" : form.status,
         // Sent on create (the order needs an owner) and on edit only when this
@@ -227,9 +321,44 @@ export function useOrderForm(mode: "create" | "edit") {
           toast.error("Assign this order to an agent before saving");
           return;
         }
-        const { error } = await supabase.from("orders").insert(parsed as any);
+        // `select("id")` without `single()`: the returned rows pass through the
+        // SELECT policy, so a caller who may create an order they cannot read
+        // back gets an empty array rather than a "no rows" error over an insert
+        // that actually succeeded.
+        const { data: created, error } = await supabase
+          .from("orders")
+          .insert(parsed as any)
+          .select("id");
         if (error) throw error;
         toast.success("Order saved");
+        /**
+         * Record what was already verified, against the order that now exists.
+         *
+         * The gap this closes: everything about automatic verification was
+         * keyed on an order id, and at creation there is none — so an order
+         * taken for an invoice **already in the MIS** was saved with whatever
+         * the agent typed and stayed that way until somebody happened to open
+         * it again. The lookup has already run against the typed numbers; this
+         * hands the same documents to the same function, which writes the
+         * timeline event, reconciles the value and sets the Call Center flag.
+         *
+         * Not fatal. The order is saved and valid either way, and an order
+         * whose invoice has not appeared yet takes this path every time and
+         * sends nothing at all — reconciliation on the next open is the
+         * ordinary case, not the fallback.
+         */
+        const createdId = (created as { id: string }[] | null)?.[0]?.id;
+        if (createdId) {
+          try {
+            await recordInvoiceVerification(createdId, shamsInvoices.invoices);
+          } catch (err: any) {
+            toast.warning(
+              err?.message
+                ? `Order saved. The invoice could not be recorded yet: ${err.message}`
+                : "Order saved. The invoice could not be recorded yet; it will be picked up when the order is next opened.",
+            );
+          }
+        }
       } else {
         const { error } = await supabase
           .from("orders")
@@ -298,6 +427,7 @@ export function useOrderForm(mode: "create" | "edit") {
     canAssign,
     canPickAgent,
     canEditThis,
+    canVerifyThis,
     readOnly,
     submit,
     del,
