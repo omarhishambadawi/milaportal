@@ -3163,10 +3163,19 @@ below — so a phone never scrolls sideways. Branch labels come from
     call centre that operationally belongs to it.
 12. **An order completes itself when nothing is left to do.**
     `record_invoice_verification` moves `status` to `Completed` in the same
-    statement that reconciles the value, and only when all of: every invoice the
-    order names is verified (`verified_cnt = current_cnt`, so a second pending
-    invoice blocks it), at least one is a Call Centre document, and the order is
-    neither `Cancelled` nor already `Completed`.
+    statement that reconciles the value, and only when all of: the order has at
+    least one invoice, every invoice it names is verified
+    (`verified_cnt = current_cnt`, so a pending one blocks it), **every** one of
+    those is a Call Centre document (`call_centre_cnt = verified_cnt`), and the
+    order is neither `Cancelled` nor already `Completed`.
+
+    The Call Centre clause is `= verified_cnt`, not `> 0`, and the difference is
+    the point: a mixed order — one invoice through the call centre, one raised at
+    the counter — is precisely the order somebody needs to look at, so it keeps
+    the order-level flag (which stays ANY) but is **not** completed. Shipped as
+    `> 0` in `20260815120000` and corrected in `20260815140000`; one live order
+    (#8328) was auto-completed under the ANY rule and stays Completed, since the
+    automation never reverses a status.
 13. **Cancelled is terminal for the automation.** Cancellation is a manual
     decision an agent takes when a pharmacist reports one, and no amount of
     later invoice verification may undo it. The same clause makes a re-check

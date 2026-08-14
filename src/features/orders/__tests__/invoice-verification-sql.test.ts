@@ -444,7 +444,6 @@ describe("an order completes itself only when nothing is left to do", () => {
   });
 
   it("requires a Call Centre document, read from the invoice's own channel", () => {
-    expect(autoSql).toContain("call_centre_cnt > 0");
     // The channel comes off the activity row the MIS's answer was recorded on,
     // and only those rows are counted — never the order-level flag, which a
     // person can set by hand.
@@ -519,5 +518,60 @@ describe("invoices_verified", () => {
 
   it("is set by the reconciliation whatever the MIS answered", () => {
     expect(autoSql).toContain("invoices_verified = true,");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Every invoice, not merely one                                               */
+/* -------------------------------------------------------------------------- */
+
+const allCcSql = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../supabase/migrations/20260815140000_complete_only_when_every_invoice_is_call_centre.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
+
+describe("completion requires every invoice to be Call Centre", () => {
+  it("compares the call-centre count against the verified count", () => {
+    // The change itself. `call_centre_cnt > 0` completed a mixed order; this
+    // completes only when every answered document is a call-centre one.
+    expect(allCcSql).toContain("AND call_centre_cnt = verified_cnt");
+    // And the ANY form is gone from the completion predicate specifically —
+    // it survives only in the flag's own CASE, asserted below.
+    expect(allCcSql).not.toContain("AND call_centre_cnt > 0");
+  });
+
+  it("still requires every invoice on the order to be verified", () => {
+    expect(allCcSql).toContain("AND verified_cnt = current_cnt");
+    expect(allCcSql).toContain("(SELECT COUNT(*) FROM current_keys)");
+  });
+
+  it("still refuses a cancelled or already completed order", () => {
+    expect(allCcSql).toContain("prev_status NOT IN ('Cancelled', 'Completed')");
+  });
+
+  it("still reconciles the value in the statement that moves the status", () => {
+    expect(allCcSql).toContain("invoice_value = verified_sum");
+    expect(allCcSql).toContain(
+      "status = CASE WHEN should_complete THEN 'Completed' ELSE status END",
+    );
+  });
+
+  it("records that the decision rested on every invoice", () => {
+    expect(allCcSql).toContain("'all_call_centre',     true,");
+  });
+
+  it("leaves the order-level flag on the ANY rule", () => {
+    // A mixed order is still a call-centre order; only completion got stricter.
+    expect(allCcSql).toContain("WHEN call_centre_cnt > 0 THEN true");
+  });
+
+  it("keeps the per-invoice idempotency guard and the permission predicate", () => {
+    expect(allCcSql).toContain("a.details->>'invoice_key' = key");
+    expect(allCcSql).toContain("public.has_permission(uid, 'view_shams_mis')");
   });
 });

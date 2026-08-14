@@ -461,20 +461,39 @@ describe("verificationEntries", () => {
  * the server is never called and the order sits open for ever.
  */
 describe("eligibleForAutoCompletion", () => {
-  it("completes a fully verified Call Centre order", () => {
+  it("completes an order whose single invoice is a verified Call Centre document", () => {
     const s = summarizeInvoices([verified("0169580", 212.6)]);
     expect(eligibleForAutoCompletion(s, "Pending")).toBe(true);
   });
 
-  it("refuses while any invoice is still pending", () => {
-    // The multi-invoice case that must not complete early: one document has
-    // landed, the other has not, and the order is not finished.
-    const s = summarizeInvoices([verified("0169580", 212.6), invoice("0169581")]);
+  it("completes an order whose two invoices are both verified Call Centre", () => {
+    const s = summarizeInvoices([verified("0169580", 200), verified("0169581", 300)]);
+    expect(s.verifiedTotal).toBe(500);
+    expect(s.allCallCentre).toBe(true);
+    expect(eligibleForAutoCompletion(s, "Pending")).toBe(true);
+  });
+
+  it("refuses when one invoice is Call Centre and the other is not", () => {
+    // The case this rule exists for. The order still *is* a call-centre order —
+    // the flag stays set — but a document raised outside the channel is the one
+    // thing worth looking at, and completing it files that away as settled.
+    const s = summarizeInvoices([
+      verified("0169580", 200),
+      verified("0169581", 300, { customer: "CASH SALES", isCallCentre: false }),
+    ]);
     expect(s.callCentreVerified).toBe(true);
+    expect(s.allCallCentre).toBe(false);
     expect(eligibleForAutoCompletion(s, "Pending")).toBe(false);
   });
 
-  it("refuses while an invoice could not be reached", () => {
+  it("refuses while a second invoice is still pending, even a call-centre one", () => {
+    const s = summarizeInvoices([verified("0169580", 212.6), invoice("0169581")]);
+    expect(eligibleForAutoCompletion(s, "Pending")).toBe(false);
+  });
+
+  it("refuses while a second invoice could not be reached", () => {
+    // `unavailable` is the MIS not answering, which is not the same as a
+    // document that is absent — and neither is a confirmation of anything.
     const s = summarizeInvoices([
       verified("0169580", 212.6),
       invoice("0169581", { state: "unavailable" }),
@@ -490,29 +509,77 @@ describe("eligibleForAutoCompletion", () => {
     expect(eligibleForAutoCompletion(s, "Pending")).toBe(false);
   });
 
-  it("completes a mixed order on the strength of the one Call Centre invoice", () => {
+  it("evaluates every invoice, whichever branch raised it", () => {
     const s = summarizeInvoices([
-      verified("0123891", 242.71, { customer: "CASH IN BOX-", isCallCentre: false }),
-      verified("0123892", 1261.4, { isCallCentre: true }),
+      verified("0169580", 200, { branchCode: "P0206" }),
+      verified("0169581", 300, { branchCode: "P0034" }),
     ]);
-    expect(s.verifiedTotal).toBe(1504.11);
+    expect(eligibleForAutoCompletion(s, "Pending")).toBe(true);
+    // One walk-in among them, from a third branch, and the order is not done.
+    const mixed = summarizeInvoices([
+      verified("0169580", 200, { branchCode: "P0206" }),
+      verified("0169581", 300, { branchCode: "P0034" }),
+      verified("0169582", 50, { branchCode: "P0008", isCallCentre: false }),
+    ]);
+    expect(mixed.allCallCentre).toBe(false);
+    expect(eligibleForAutoCompletion(mixed, "Pending")).toBe(false);
+  });
+
+  it("counts one document once, however the order spells it", () => {
+    // Dedup by the shared invoice key, so a repeated number cannot make the set
+    // look larger — or, if the two spellings disagreed, half-verified.
+    const s = summarizeInvoices([verified("0169580", 212.6), verified("169580", 212.6)]);
+    expect(s.invoices).toHaveLength(1);
+    expect(s.verifiedTotal).toBe(212.6);
     expect(eligibleForAutoCompletion(s, "Pending")).toBe(true);
   });
 
   it("never revives a cancelled order", () => {
     // Cancellation is a manual business decision taken when a pharmacist
     // reports one. No amount of invoice verification may undo it.
-    const s = summarizeInvoices([verified("0169580", 212.6)]);
+    const s = summarizeInvoices([verified("0169580", 212.6), verified("0169581", 300)]);
+    expect(s.allCallCentre).toBe(true);
     expect(eligibleForAutoCompletion(s, "Cancelled")).toBe(false);
   });
 
   it("asks for nothing once the order is already Completed", () => {
-    // The idempotency guard: a re-check of a completed order is free.
+    // The idempotency guard: a re-check of a completed order is free, so no
+    // second completion event can be raised.
     const s = summarizeInvoices([verified("0169580", 212.6)]);
     expect(eligibleForAutoCompletion(s, "Completed")).toBe(false);
   });
 
   it("refuses an order with no invoices at all", () => {
     expect(eligibleForAutoCompletion(summarizeInvoices([]), "Pending")).toBe(false);
+  });
+});
+
+/**
+ * The order-level flag and the completion rule ask different questions, and the
+ * mixed order is where they must disagree. Asserted together so a future edit
+ * cannot quietly collapse one into the other.
+ */
+describe("allCallCentre vs callCentreVerified", () => {
+  const mixed = summarizeInvoices([
+    verified("0169580", 200),
+    verified("0169581", 300, { customer: "CASH SALES", isCallCentre: false }),
+  ]);
+
+  it("still treats a mixed order as a call-centre order", () => {
+    expect(mixed.callCentreVerified).toBe(true);
+  });
+
+  it("does not treat it as finished", () => {
+    expect(mixed.allCallCentre).toBe(false);
+  });
+
+  it("is false for a pending invoice even when it will be call-centre", () => {
+    expect(summarizeInvoices([invoice("0169580")]).allCallCentre).toBe(false);
+  });
+
+  it("agrees with the ANY rule when every invoice is call-centre", () => {
+    const all = summarizeInvoices([verified("0169580", 200), verified("0169581", 300)]);
+    expect(all.callCentreVerified).toBe(true);
+    expect(all.allCallCentre).toBe(true);
   });
 });

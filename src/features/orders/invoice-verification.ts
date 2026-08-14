@@ -83,6 +83,21 @@ export interface InvoiceSummary {
    * expects it to turn out to be.
    */
   callCentreVerified: boolean;
+  /**
+   * Is **every** invoice on the order a verified Call Centre document?
+   *
+   * Deliberately a separate question from `callCentreVerified`, not a
+   * replacement for it, because the two govern different things and disagree
+   * on exactly the case that matters. One walk-in invoice beside a call-centre
+   * one still makes this a call-centre order — so the order-level flag is set,
+   * by `callCentreVerified` — but it does **not** make the order finished:
+   * somebody has to look at why a document was raised outside the channel.
+   *
+   * False for an empty order, and false while anything is pending or
+   * unavailable, since an invoice nobody has seen cannot be confirmed as
+   * anything.
+   */
+  allCallCentre: boolean;
 }
 
 /** The identity of an invoice number: what makes two spellings one document. */
@@ -133,6 +148,11 @@ export function summarizeInvoices(invoices: readonly OrderInvoice[]): InvoiceSum
     allVerified: unique.length > 0 && verified.length === unique.length,
     isMulti: unique.length > 1,
     callCentreVerified: verified.some((i) => i.isCallCentre),
+    // `every` over the *whole* set, not over `verified`: a pending invoice has
+    // to make this false, and `verified.every(...)` would vacuously pass an
+    // order whose only answered document happened to be call-centre.
+    allCallCentre:
+      unique.length > 0 && unique.every((i) => i.state === "verified" && i.isCallCentre),
   };
 }
 
@@ -225,7 +245,10 @@ export function authoritativeValue(
  *
  *   * every invoice on the order verified, not merely one — a second invoice
  *     still pending means the order is not finished;
- *   * at least one of them a Call Centre document, by the MIS's own channel;
+ *   * **every** one of them a Call Centre document, by the MIS's own channel.
+ *     Not "at least one": an order carrying a walk-in invoice beside a
+ *     call-centre one is precisely the order somebody needs to look at, and
+ *     completing it would file that question away as settled;
  *   * not already Cancelled, which is a manual decision this must never undo,
  *     and not already Completed, which is what makes a re-check free.
  */
@@ -233,8 +256,11 @@ export function eligibleForAutoCompletion(
   summary: InvoiceSummary,
   storedStatus: string | null | undefined,
 ): boolean {
+  // `allCallCentre` already implies every invoice is verified, but both are
+  // stated: the rule is "all verified AND all call centre", and reading it here
+  // as one condition would hide half of it.
   if (!summary.allVerified) return false;
-  if (!summary.callCentreVerified) return false;
+  if (!summary.allCallCentre) return false;
   const status = (storedStatus ?? "").trim();
   return status !== "Cancelled" && status !== "Completed";
 }
