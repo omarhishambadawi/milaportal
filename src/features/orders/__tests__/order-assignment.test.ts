@@ -11,7 +11,7 @@
 import { describe, expect, it } from "vitest";
 import { isAdministrator } from "@/lib/auth";
 import { hasPerm } from "@/lib/permissions";
-import { teamForAgent } from "../components/order-assignment";
+import { assignableAgents, isAssignableAgent, teamForAgent } from "../components/order-assignment";
 
 /* -------------------------------------------------------------------------- */
 /* Who may assign                                                              */
@@ -86,5 +86,91 @@ describe("teamForAgent", () => {
   it("has no team when RLS hid the role, rather than guessing one", () => {
     expect(teamForAgent({ role: null })).toBeNull();
     expect(teamForAgent(undefined)).toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Creator is not the assignee                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The rule: entering an order and owning it are different acts.
+ *
+ * The form used to collapse them — a new order was always filed under whoever
+ * typed it — which put owners, admins and supervisors into `agent_id`, and from
+ * there into agent workload, the team split and the "My orders" filter. Only
+ * someone who can actually hold a caseload may be the assignee, and that is
+ * exactly the set with a team.
+ */
+describe("who may be assigned an order", () => {
+  it("accepts the two operational roles", () => {
+    expect(isAssignableAgent({ role: "customer_care" })).toBe(true);
+    expect(isAssignableAgent({ role: "telesales" })).toBe(true);
+  });
+
+  it("refuses an owner, an admin and a supervisor", () => {
+    // A supervisor is not a caseload. They create orders; they do not hold them.
+    expect(isAssignableAgent({ role: "owner" })).toBe(false);
+    expect(isAssignableAgent({ role: "admin" })).toBe(false);
+    expect(isAssignableAgent({ role: "supervisor" })).toBe(false);
+    expect(isAssignableAgent({ role: "auditor" })).toBe(false);
+  });
+
+  it("refuses a directory entry whose role RLS hid", () => {
+    expect(isAssignableAgent({ role: null })).toBe(false);
+    expect(isAssignableAgent(undefined)).toBe(false);
+  });
+});
+
+describe("the agent picker's list", () => {
+  const directory = [
+    { id: "owner-1", full_name: "Omar", agent_code: null, role: "owner" },
+    { id: "sup-1", full_name: "Sara Supervisor", agent_code: null, role: "supervisor" },
+    { id: "cc-1", full_name: "Ahmed Mohamed", agent_code: "CC-01", role: "customer_care" },
+    { id: "ts-1", full_name: "Sara Ali", agent_code: "TS-04", role: "telesales" },
+    { id: "aud-1", full_name: "Auditor", agent_code: null, role: "auditor" },
+  ];
+
+  it("offers agents only — no owner, supervisor or auditor", () => {
+    expect(assignableAgents(directory).map((a) => a.id)).toEqual(["cc-1", "ts-1"]);
+  });
+
+  it("is empty rather than wrong when the directory has not loaded", () => {
+    expect(assignableAgents(undefined)).toEqual([]);
+  });
+
+  it("derives the team from whichever agent is picked", () => {
+    const ahmed = directory.find((a) => a.id === "cc-1");
+    const sara = directory.find((a) => a.id === "ts-1");
+    expect(teamForAgent(ahmed)).toBe("customer_care");
+    expect(teamForAgent(sara)).toBe("telesales");
+  });
+});
+
+/**
+ * Seeding a new order's assignee.
+ *
+ * Mirrors `creatorIsAgent` in `use-order-form`: an agent's own new order is
+ * theirs, and anyone else starts with the field empty and has to choose.
+ */
+describe("a newly created order's assignee", () => {
+  const seed = (creatorRole: string | null) =>
+    isAssignableAgent({ role: creatorRole }) ? "creator" : "";
+
+  it("is the creator when an agent takes the order down", () => {
+    expect(seed("customer_care")).toBe("creator");
+    expect(seed("telesales")).toBe("creator");
+  });
+
+  it("is empty when an owner creates it", () => {
+    expect(seed("owner")).toBe("");
+  });
+
+  it("is empty when a supervisor creates it", () => {
+    expect(seed("supervisor")).toBe("");
+  });
+
+  it("is empty when an admin creates it", () => {
+    expect(seed("admin")).toBe("");
   });
 });

@@ -12,15 +12,21 @@
  *
  * ## Who may use it
  *
- * Owner and Admin. `isAdministrator` rather than a new permission: reassignment
- * is already governed by `edit_all_orders` in `prevent_order_reassignment`, and
- * this control is deliberately narrower than that rule rather than wider —
- * nothing here can grant an ability the database does not already allow. Agents
- * see who the order is assigned to and no control.
+ * Owner and Admin on edit; anyone holding `edit_all_orders` at creation, which
+ * additionally covers Supervisor — they cannot be the assignee themselves, so
+ * without the picker they could not save an order at all.
+ *
+ * Both are narrower than what the database permits, never wider, so this control
+ * cannot offer an ability that would then be refused. The backstop is the
+ * `orders` UPDATE policy: its `WITH CHECK` re-tests the *new* row, so an agent
+ * moving their own order to someone else fails `auth.uid() = agent_id` and is
+ * rejected. (`prevent_order_reassignment` is not part of that story — the
+ * trigger was dropped in 20260701224822 and never recreated; only the function
+ * remains.)
  */
 
 import { useMemo, useState } from "react";
-import { Check, ChevronsUpDown, UserCog } from "lucide-react";
+import { Check, ChevronsUpDown, UserCog, UserPen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -52,11 +58,30 @@ export function teamForAgent(agent: Pick<DirectoryAgent, "role"> | undefined): O
   return null;
 }
 
+/**
+ * May this person be the agent an order is assigned to?
+ *
+ * Having a team *is* the test, and that is not a coincidence: an order is filed
+ * under a team, and only the two operational roles have one. Owner, Admin,
+ * Supervisor and Auditor therefore never appear in the picker — a supervisor is
+ * not a caseload, and putting one in agent workload, team splits or the "My
+ * orders" filter misreports all three.
+ */
+export function isAssignableAgent(agent: { role?: string | null } | undefined): boolean {
+  return teamForAgent(agent as Pick<DirectoryAgent, "role"> | undefined) !== null;
+}
+
+/** Only the people an order may actually be assigned to. */
+export function assignableAgents(agents: readonly DirectoryAgent[] | undefined): DirectoryAgent[] {
+  return (agents ?? []).filter((a) => isAssignableAgent(a));
+}
+
 const teamLabel = (team: string) => TEAMS.find((t) => t.value === team)?.label ?? team;
 
 export function OrderAssignment({
   agents,
   agentId,
+  createdById,
   team,
   canAssign,
   disabled,
@@ -65,6 +90,8 @@ export function OrderAssignment({
   /** The shared agent directory; only operational roles are offered. */
   agents: DirectoryAgent[] | undefined;
   agentId: string | null | undefined;
+  /** Who entered the order. Informational, and never the same field as above. */
+  createdById: string | null | undefined;
   team: string;
   canAssign: boolean;
   disabled?: boolean;
@@ -74,18 +101,33 @@ export function OrderAssignment({
   const [open, setOpen] = useState(false);
 
   /** Only the roles that can hold an order. An admin is not an order's agent. */
-  const assignable = useMemo(
-    () => (agents ?? []).filter((a) => teamForAgent(a) !== null),
-    [agents],
-  );
+  const assignable = useMemo(() => assignableAgents(agents), [agents]);
 
   const current = useMemo(() => agents?.find((a) => a.id === agentId), [agents, agentId]);
+  const creator = useMemo(() => agents?.find((a) => a.id === createdById), [agents, createdById]);
   const derivedTeam = teamForAgent(current) ?? (team || null);
 
   return (
     <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
+      {/* Created by — a fact, stated once. Kept visibly separate from the
+          assignee because they are different people whenever a supervisor or an
+          administrator takes an order down, and conflating them is what put
+          non-agents into agent workload. */}
+      <div className="min-w-0 space-y-1.5 sm:col-span-2">
+        <p className="text-xs font-medium">Created by</p>
+        <p className="flex h-9 items-center gap-2 text-sm">
+          <UserPen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span className="truncate">{creator?.full_name ?? "—"}</span>
+          {creator?.agent_code && (
+            <span className="shrink-0 font-mono text-xs text-muted-foreground">
+              {creator.agent_code}
+            </span>
+          )}
+        </p>
+      </div>
+
       <div className="min-w-0 space-y-1.5">
-        <p className="text-xs font-medium">Assigned agent</p>
+        <p className="text-xs font-medium">Assigned to</p>
         {canAssign ? (
           <Popover open={open} onOpenChange={setOpen}>
             <PopoverTrigger asChild>
@@ -107,7 +149,8 @@ export function OrderAssignment({
                     )}
                   </span>
                 ) : (
-                  <span className="text-muted-foreground">Select an agent…</span>
+                  // Deliberately not pre-filled with whoever is looking at it.
+                  <span className="text-muted-foreground">Assign to an agent…</span>
                 )}
                 <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
               </Button>
@@ -151,7 +194,7 @@ export function OrderAssignment({
           // Not a disabled control: an agent who cannot reassign is being told a
           // fact, and a greyed-out picker invites a click that does nothing.
           <p className="flex h-9 items-center gap-2 text-sm">
-            <span className="truncate font-medium">{current?.full_name ?? "—"}</span>
+            <span className="truncate font-medium">{current?.full_name ?? "Unassigned"}</span>
             {current?.agent_code && (
               <span className="shrink-0 font-mono text-xs text-muted-foreground">
                 {current.agent_code}

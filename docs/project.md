@@ -497,7 +497,8 @@ first.
 (→ `auth.users`, `ON DELETE RESTRICT`), `order_type`, `branch_no`
 (→ `branches.branch_no`), `delivery_type`, `invoice_no`, `invoice_value`,
 `status`, `customer_name`, `customer_phone`, `notes`, `call_center_verified`,
-`created_at`, `updated_at`.
+`created_by` (→ `auth.users`, `DEFAULT auth.uid()` — who *entered* the order, as
+opposed to `agent_id`, who owns it), `created_at`, `updated_at`.
 
 Indexes include `orders_team_date_idx (team, order_date) INCLUDE (agent_id,
 status, order_type, invoice_value)` and `orders_agent_date_idx (agent_id,
@@ -2718,21 +2719,57 @@ branch, total, customer, `automated: true`, source), then the `edited` and
 update. Machine-written rows are attributed to **MilaPortal**, not to whoever had
 the order open.
 
-#### Order form — assignment
+#### Order value stays in step — reconciliation, not an event
+
+The first cut of this made the sync a **one-shot**, and that was a bug worth
+recording. `record_invoice_verification` wrote `orders.invoice_value` only
+`IF recorded > 0`, and the client only called it for invoices the timeline did
+not already hold. So the value was written on exactly one render — the first
+where an invoice became verified — and never again. If that single write did not
+land, the order kept a verified invoice of SAR 212.60 beside an order value of
+0.00 **permanently**: every later visit correctly found nothing *new* to record
+and therefore asked for nothing.
+
+Both halves now reconcile instead. `needsValueSync` (pure) is the second reason
+to call the server — *the order's stored figures disagree with what has been
+verified* — and the function brings any order holding a verified invoice into
+line on whatever call notices, not only when something is new. The `WHERE` guard
+means an order already in agreement is not written to at all, so opening one
+costs nothing and raises no spurious `edited` row. A failure is surfaced in the
+panel with a retry rather than swallowed.
+
+#### Order form — creator, assignee, team
+
+Three separate things, and they used to be two. `orders.created_by` (added in
+`20260814160000`, defaulting to `auth.uid()`, backfilled from `agent_id`) records
+who entered the order and never changes; `agent_id` records who owns it and can
+be reassigned. Before that column the INSERT policy required
+`auth.uid() = agent_id`, so an Owner or Supervisor taking an order down became
+its agent — and appeared in agent workload, the team split and "My orders".
 
 The **Team** selector is gone. It asked the question backwards: an order belongs
 to a person and the team is a fact about that person, so choosing "Telesales"
 and then a Customer Care agent was possible and filed the order under a team its
 agent is not in. `OrderAssignment` picks the **agent**, and `teamForAgent` reads
 the team off their `user_roles.role` — the same enum `orders.team` takes, so
-there is nothing to map.
+there is nothing to map. `isAssignableAgent` keeps Owner, Admin, Supervisor and
+Auditor out of the picker entirely: having a team *is* the test for being able to
+hold a caseload.
 
-Owner and Admin only (`isAdministrator`), and edit-mode only: the INSERT policy
-requires `auth.uid() = agent_id`, so a new order is always the creator's and an
-administrator reassigns it after saving. The control is deliberately **narrower**
-than `prevent_order_reassignment`, which permits any `edit_all_orders` holder
-(including Supervisor) — a UI gate can never grant what the database refuses, and
-the database rule is unchanged.
+Owner and Admin may reassign on edit (`isAdministrator`); at creation the gate is
+`edit_all_orders`, mirroring the INSERT policy so a Supervisor — who cannot be
+the assignee — can still file the order under an agent. Both are **narrower**
+than the database rule, never wider. The backstop is the UPDATE policy's
+`WITH CHECK`, which re-tests the new row: an agent moving their own order away
+fails `auth.uid() = agent_id`. (`prevent_order_reassignment` plays no part —
+that trigger was dropped in `20260701224822`; only the function survives.)
+
+Reassignment is a tracked change. `log_order_activity` raises an `assigned`
+event carrying both sides, so the timeline reads "Assigned to Ahmed Mohamed" or
+"Reassigned from Ahmed Mohamed to Sara Ali". `IS DISTINCT FROM` inside an UPDATE
+trigger is the whole idempotency story — no read path can reach it, and a save
+that did not move the agent is inert. `agent_id` is deliberately absent from the
+`edited` bag, and `team` is only reported there when it moved on its own.
 
 #### Wildcard product search
 

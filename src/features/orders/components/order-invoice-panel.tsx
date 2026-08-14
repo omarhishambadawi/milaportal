@@ -98,6 +98,27 @@ export function OrderInvoicePanel({ invoices }: { invoices: OrderInvoicesResult 
           </div>
         )}
 
+        {/* The order could not be brought into line with what was verified.
+            Said out loud rather than swallowed: a silent failure here is
+            precisely what left a verified invoice sitting beside an order value
+            of 0.00 with nothing on screen to explain it. */}
+        {invoices.syncError && (
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-[11px] leading-snug text-muted-foreground">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden="true" />
+            <span className="min-w-0 flex-1">
+              The invoice was verified, but the order value could not be updated.
+            </span>
+            <button
+              type="button"
+              onClick={invoices.retrySync}
+              disabled={invoices.isRecording}
+              className="font-medium text-primary underline-offset-2 hover:underline"
+            >
+              {invoices.isRecording ? "Retrying…" : "Retry"}
+            </button>
+          </p>
+        )}
+
         {isLoading && rows.length > 0 && verified.length === 0 && (
           <Skeleton className="h-16 w-full" />
         )}

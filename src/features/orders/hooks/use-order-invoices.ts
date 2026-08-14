@@ -25,6 +25,7 @@ import { useInvoiceStockMany, type InvoiceLookup } from "@/features/shams/hooks/
 import {
   invoiceKey,
   invoicesToRecord,
+  needsValueSync,
   summarizeInvoices,
   type InvoiceSummary,
   type OrderInvoice,
@@ -38,6 +39,15 @@ interface UseOrderInvoicesArgs {
   invoiceNo: string | null | undefined;
   /** The order's `branch_no`: where to look first, never an answer in itself. */
   branchNo: string | null | undefined;
+  /**
+   * The order's stored value and verification flag, as they are in the database.
+   *
+   * Passed in so the hook can tell whether the order still *agrees* with what
+   * has been verified, rather than only whether an invoice is newly seen. That
+   * distinction is what makes the sync self-healing — see `needsValueSync`.
+   */
+  storedValue: number | null | undefined;
+  storedVerifiedFlag: boolean | null | undefined;
   /** False for agents without `view_shams_mis`; nothing is requested then. */
   enabled: boolean;
 }
@@ -50,6 +60,16 @@ export interface OrderInvoicesResult extends InvoiceSummary {
   refresh: () => void;
   /** True while the verification is being written. */
   isRecording: boolean;
+  /**
+   * Why the order's value could not be brought into line, when that happened.
+   *
+   * Surfaced rather than swallowed. A silently failed sync is exactly the state
+   * that produced a verified invoice sitting beside an order value of 0.00 with
+   * nothing on screen to say why, so the panel shows this and offers a retry.
+   */
+  syncError: Error | null;
+  /** Try the reconciliation again after a failure. */
+  retrySync: () => void;
   /** Invoice keys the order's timeline already records as verified. */
   recordedKeys: ReadonlySet<string>;
 }
@@ -58,6 +78,8 @@ export function useOrderInvoices({
   orderId,
   invoiceNo,
   branchNo,
+  storedValue,
+  storedVerifiedFlag,
   enabled,
 }: UseOrderInvoicesArgs): OrderInvoicesResult {
   const qc = useQueryClient();
@@ -176,35 +198,71 @@ export function useOrderInvoices({
    */
   const attempted = useRef<string>("");
 
-  const pendingWrite = useMemo(
-    () => (activity.isSuccess ? invoicesToRecord(summary, recordedKeys) : []),
-    [activity.isSuccess, summary, recordedKeys],
-  );
+  /**
+   * Whether the server needs to hear from us, and what to send.
+   *
+   * Two independent reasons, and the second is the fix for the bug this hook
+   * shipped with. Recording used to be driven *only* by `invoicesToRecord` —
+   * invoices the timeline does not yet hold — which made the sync a one-shot:
+   * miss the single call that mattered and the order kept a verified invoice
+   * beside a stale value for ever, because every later visit correctly found
+   * nothing *new* and asked for nothing.
+   *
+   * `needsValueSync` adds the reason that repairs it: the order's stored figures
+   * disagree with what has been verified. Either reason sends the same payload —
+   * the server records what it has not seen and reconciles the total from its
+   * own log — so there is still exactly one code path and one implementation.
+   */
+  const pendingWrite = useMemo(() => {
+    if (!activity.isSuccess) return [];
+    const unrecorded = invoicesToRecord(summary, recordedKeys);
+    if (unrecorded.length > 0) return unrecorded;
+    // Nothing new, but the order does not agree with its own verified invoices.
+    // Send them all: the server is idempotent on each, and recomputes the total
+    // from the log rather than from what we send.
+    if (needsValueSync(summary, storedValue, storedVerifiedFlag)) return summary.verified;
+    return [];
+  }, [activity.isSuccess, summary, recordedKeys, storedValue, storedVerifiedFlag]);
 
   useEffect(() => {
     if (!orderId || !enabled || pendingWrite.length === 0) return;
-    const signature = pendingWrite
-      .map((i) => i.key)
-      .sort()
-      .join(",");
+    // The stored figures are part of the signature, so a reconciliation that
+    // succeeds and changes them does not immediately re-arm itself, while a
+    // genuinely different disagreement later does get its own attempt.
+    const signature = [
+      pendingWrite
+        .map((i) => i.key)
+        .sort()
+        .join(","),
+      summary.verifiedTotal,
+      storedValue ?? "",
+      storedVerifiedFlag ? "1" : "0",
+    ].join("|");
     // Never cleared, including on failure. `useQueries` hands back a new array
     // every render, so `pendingWrite` is a new array every render too; a guard
     // that reset itself would turn one rejected call — an unapplied migration,
-    // a revoked permission — into a request per render. A genuinely new invoice
-    // changes the signature and gets its own attempt; a success makes
-    // `pendingWrite` empty when the activity query refetches.
+    // a revoked permission — into a request per render.
     if (attempted.current === signature) return;
     attempted.current = signature;
     record.mutate(pendingWrite);
     // `record` is recreated each render by `useMutation`; the signature above is
     // what actually decides whether this runs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderId, enabled, pendingWrite]);
+  }, [orderId, enabled, pendingWrite, summary.verifiedTotal, storedValue, storedVerifiedFlag]);
 
   const refresh = useCallback(() => {
     for (const query of results) void query.refetch();
     void activity.refetch();
   }, [results, activity]);
+
+  /** Clear the guard so the same reconciliation may be attempted again. */
+  const retrySync = useCallback(() => {
+    attempted.current = "";
+    record.reset();
+    void activity.refetch();
+    // `record` is recreated each render; only the ref and the refetch matter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activity]);
 
   return {
     ...summary,
@@ -212,6 +270,8 @@ export function useOrderInvoices({
     isFetching: results.some((r) => r.isFetching),
     refresh,
     isRecording: record.isPending,
+    syncError: record.error as Error | null,
+    retrySync,
     recordedKeys,
   };
 }

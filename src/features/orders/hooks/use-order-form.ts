@@ -9,6 +9,7 @@ import { queryKeys } from "@/lib/query-keys";
 import { useAgentDirectory } from "@/lib/directory";
 import { orderFormSchema } from "../schema";
 import { defaultTeam, parseInvoiceNumbers } from "../utils";
+import { isAssignableAgent } from "../components/order-assignment";
 import { useOrderInvoices } from "./use-order-invoices";
 
 /**
@@ -59,7 +60,11 @@ export function useOrderForm(mode: "create" | "edit") {
     invoice_value: "",
     notes: "",
     status: "Pending",
-    /** Empty until an existing order loads; a new order is always the creator's. */
+    /**
+     * The assignee. Empty until an existing order loads, or until a new order's
+     * creator turns out to be an agent — an Owner, Admin or Supervisor starts
+     * with it empty and has to choose. See `creatorIsAgent`.
+     */
     agent_id: "" as string,
   });
   const [invoices, setInvoices] = useState<string[]>([""]);
@@ -84,11 +89,22 @@ export function useOrderForm(mode: "create" | "edit") {
    * Who may move an order to another agent.
    *
    * Owner and Admin, per `isAdministrator`. Deliberately narrower than the
-   * database rule — `prevent_order_reassignment` permits any `edit_all_orders`
+   * database rule — the `orders` UPDATE policy admits any `edit_all_orders`
    * holder, which includes Supervisor — so this control can never offer an
-   * ability the database would refuse, and the wider DB rule is left as it was.
+   * ability the database would refuse, and the wider rule is left as it was.
    */
   const canAssign = isAdministrator(role);
+  /**
+   * Whether the agent picker is live in the current mode.
+   *
+   * On **create** the gate is `edit_all_orders`, mirroring the INSERT policy
+   * exactly: that permission is what lets a caller file an order under someone
+   * else, and a Supervisor holds it. They must be able to pick, because they
+   * cannot be the assignee themselves and would otherwise be unable to save at
+   * all. On **edit** it is the narrower Owner/Admin rule this phase was asked
+   * for. A plain agent sees their own name as text in both.
+   */
+  const canPickAgent = mode === "create" ? canEditAll : canAssign;
   const isOwner = !!existing && !!user && existing.agent_id === user.id;
   const canEditThis = mode === "create" ? canCreate : canEditAll || (isOwner && canEditOwn);
   const readOnly = mode === "edit" && !canEditThis;
@@ -136,6 +152,24 @@ export function useOrderForm(mode: "create" | "edit") {
   const { data: agents } = useAgentDirectory();
 
   /**
+   * Seed a new order's assignee — but only when the creator is an agent.
+   *
+   * The creator and the assignee are different concepts, and the form used to
+   * collapse them: a new order was always filed under whoever typed it. For an
+   * agent that is right and is what the INSERT policy expects. For an Owner,
+   * Admin or Supervisor it is wrong — they are not a caseload, and putting them
+   * in `agent_id` puts them into agent workload, the team split and the "My
+   * orders" filter. Those roles start with the field **empty** and must choose
+   * an agent — which the INSERT policy now permits, because `created_by` records
+   * the author separately and `edit_all_orders` admits naming another assignee.
+   */
+  const creatorIsAgent = isAssignableAgent(agents?.find((a) => a.id === user?.id));
+  useEffect(() => {
+    if (mode !== "create" || !user?.id) return;
+    setForm((f) => (f.agent_id === "" && creatorIsAgent ? { ...f, agent_id: user.id } : f));
+  }, [mode, user?.id, creatorIsAgent]);
+
+  /**
    * The order's invoices in Shams: state, totals, and the automatic recording.
    *
    * Edit mode only and gated on `view_shams_mis`, so an agent without Shams
@@ -146,6 +180,10 @@ export function useOrderForm(mode: "create" | "edit") {
     orderId: id,
     invoiceNo: existing?.invoice_no,
     branchNo: existing?.branch_no,
+    // The stored figures, so the hook can tell whether the order still agrees
+    // with what has been verified rather than only whether an invoice is new.
+    storedValue: existing?.invoice_value,
+    storedVerifiedFlag: (existing as any)?.call_center_verified,
     enabled: mode === "edit" && canViewShams && !!existing,
   });
 
@@ -171,19 +209,25 @@ export function useOrderForm(mode: "create" | "edit") {
         invoice_no: invoicesJoined || null,
         notes: form.notes || null,
         status: mode === "create" ? "Pending" : form.status,
-        // Only sent when this caller may actually reassign; everyone else's
-        // update leaves `agent_id` out entirely rather than writing back the
-        // value it happens to be holding.
-        agent_id: mode === "edit" && canAssign && form.agent_id ? form.agent_id : undefined,
+        // Sent on create (the order needs an owner) and on edit only when this
+        // caller may reassign; everyone else's update leaves `agent_id` out
+        // rather than writing back the value it happens to be holding.
+        agent_id:
+          mode === "create"
+            ? form.agent_id || undefined
+            : canAssign && form.agent_id
+              ? form.agent_id
+              : undefined,
       });
       if (mode === "create") {
-        // Always the creator's: the INSERT policy requires `auth.uid() =
-        // agent_id`, so a new order cannot be filed under someone else. An
-        // administrator who needs it elsewhere reassigns it after saving.
-        const { agent_id: _ignored, ...insertable } = parsed;
-        const { error } = await supabase
-          .from("orders")
-          .insert({ ...insertable, agent_id: user.id } as any);
+        // The assignee, not the author. `created_by` defaults to `auth.uid()`
+        // in the database, so the two are recorded separately and a supervisor
+        // taking an order down does not become the agent who owns it.
+        if (!parsed.agent_id) {
+          toast.error("Assign this order to an agent before saving");
+          return;
+        }
+        const { error } = await supabase.from("orders").insert(parsed as any);
         if (error) throw error;
         toast.success("Order saved");
       } else {
@@ -252,6 +296,7 @@ export function useOrderForm(mode: "create" | "edit") {
     canDelete,
     canViewShams,
     canAssign,
+    canPickAgent,
     canEditThis,
     readOnly,
     submit,

@@ -162,7 +162,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
     canCreate,
     canDelete,
     canViewShams,
-    canAssign,
+    canPickAgent,
     userId,
     agents,
     shamsInvoices,
@@ -322,17 +322,21 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
               icon={UserCog}
               title="Assignment"
               hint={
-                canAssign && mode === "edit"
-                  ? "Choose the agent; the team follows from who they are."
+                canPickAgent
+                  ? "Choose the agent; the team follows from who they are. Whoever enters the order is recorded separately."
                   : "Who this order belongs to, and the team that follows from it."
               }
             >
               <div className="md:col-span-2">
                 <OrderAssignment
                   agents={agents}
-                  agentId={mode === "create" ? userId : form.agent_id}
+                  // The assignee — never seeded from whoever is looking at the
+                  // page. An Owner or Supervisor creating an order starts here
+                  // empty and must choose an agent.
+                  agentId={form.agent_id || null}
+                  createdById={mode === "create" ? userId : ((existing as any)?.created_by ?? null)}
                   team={form.team}
-                  canAssign={canAssign && mode === "edit"}
+                  canAssign={canPickAgent}
                   disabled={readOnly}
                   onAssign={({ agentId, team }) =>
                     setForm((f) => ({ ...f, agent_id: agentId, team: team ?? f.team }))

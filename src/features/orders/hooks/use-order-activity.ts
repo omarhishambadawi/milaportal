@@ -20,6 +20,8 @@ export interface OrderActivityEvent {
   actor_id: string | null;
   /** Resolved from `profiles`; "System" for the trigger's own rows. */
   actor_name: string;
+  /** The directory the event was resolved against — see `actorName`. */
+  names?: Map<string, string>;
 }
 
 export function useOrderActivity(orderId: string | undefined, enabled = true) {
@@ -39,9 +41,19 @@ export function useOrderActivity(orderId: string | undefined, enabled = true) {
       return ((events as any[]) ?? []).map((e: any) => ({
         ...e,
         actor_name: nm.get(e.actor_id) ?? "System",
+        // The same directory resolves the *subjects* of an assignment, not only
+        // its author, so "Reassigned from Ahmed to Sara" can be rendered from
+        // the two ids the trigger recorded.
+        names: nm,
       }));
     },
   });
+}
+
+/** Resolve a user id recorded inside an event's details to a display name. */
+export function actorName(names: Map<string, string> | undefined, id: unknown): string {
+  if (typeof id !== "string" || id === "") return "—";
+  return names?.get(id) ?? "an agent no longer listed";
 }
 
 /**

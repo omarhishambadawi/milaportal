@@ -145,3 +145,34 @@ export function invoicesToRecord(
 ): OrderInvoice[] {
   return summary.verified.filter((i) => !alreadyRecorded.has(i.key));
 }
+
+/**
+ * Does the order's stored value still disagree with what has been verified?
+ *
+ * This is the second half of the answer to "should we call the server", and it
+ * exists because the first half was not enough. Recording used to be triggered
+ * *only* by an invoice the timeline did not yet hold, which made the whole
+ * thing a one-shot: if that single write did not land — the function not
+ * deployed, a dropped response, a tab closed mid-flight — the order kept a
+ * verified invoice of SAR 212.60 beside a value of 0.00 for ever, because every
+ * later visit correctly concluded there was nothing *new* to record and
+ * therefore asked for nothing.
+ *
+ * Comparing the figures instead makes it self-healing: whatever went wrong last
+ * time, the next person to open the order reconciles it. Compared with a
+ * tolerance rather than `!==` because the stored column is `numeric(12,2)` and
+ * the total is a float summed from the wire.
+ *
+ * Returns false when nothing is verified — an order with no verified invoice has
+ * nothing to be reconciled *to*, and must keep whatever value was typed.
+ */
+export function needsValueSync(
+  summary: InvoiceSummary,
+  storedValue: number | null | undefined,
+  storedVerifiedFlag: boolean | null | undefined,
+): boolean {
+  if (summary.verified.length === 0) return false;
+  if (!storedVerifiedFlag) return true;
+  const stored = Number(storedValue ?? 0);
+  return Math.abs(stored - summary.verifiedTotal) >= 0.005;
+}

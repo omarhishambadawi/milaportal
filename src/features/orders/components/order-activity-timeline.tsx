@@ -3,7 +3,7 @@ import { Bot, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fmtSAR } from "@/lib/branches";
 import { BUSINESS_TIMEZONE } from "@/lib/timezone";
-import { useOrderActivity, type OrderActivityEvent } from "../hooks/use-order-activity";
+import { actorName, useOrderActivity, type OrderActivityEvent } from "../hooks/use-order-activity";
 
 /**
  * Describe one logged change.
@@ -15,9 +15,17 @@ import { useOrderActivity, type OrderActivityEvent } from "../hooks/use-order-ac
  * of it are left as they are — they are a true record of what changed, and
  * together the three read as the sequence the prompt describes.
  */
-function describe(e: OrderActivityEvent): string {
+function describe(e: OrderActivityEvent, nameOf: (id: unknown) => string): string {
   const d = e.details ?? {};
   if (e.action === "created") return "Created the order";
+  // Reassignment names both sides; a first assignment has no "from" to name.
+  // The trigger only writes this row when `agent_id` actually changed, so a
+  // page render or a repeated load can never produce one.
+  if (e.action === "assigned") {
+    return d.from
+      ? `Reassigned from ${nameOf(d.from)} to ${nameOf(d.to)}`
+      : `Assigned to ${nameOf(d.to)}`;
+  }
   if (e.action === "status_changed")
     return `Changed status from ${d.from ?? "—"} to ${d.to ?? "—"}`;
   if (e.action === "verification_changed")
@@ -89,7 +97,7 @@ export function OrderActivityTimeline({ orderId }: { orderId: string }) {
                   )}
                 />
                 <div className="min-w-0 flex-1">
-                  <div className="font-medium">{describe(e)}</div>
+                  <div className="font-medium">{describe(e, (id) => actorName(e.names, id))}</div>
                   {subtitle && (
                     <div className="truncate text-xs text-muted-foreground" dir="auto">
                       Customer: {subtitle}

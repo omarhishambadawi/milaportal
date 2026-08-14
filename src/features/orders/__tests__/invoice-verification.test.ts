@@ -12,6 +12,7 @@ import {
   dedupeInvoices,
   invoiceKey,
   invoicesToRecord,
+  needsValueSync,
   summarizeInvoices,
   type OrderInvoice,
 } from "../invoice-verification";
@@ -220,5 +221,90 @@ describe("invoicesToRecord", () => {
     // number, nor an attempted lookup, nor a failed one is a verification.
     const s = summarizeInvoices([invoice("22138"), invoice("22139", { state: "unavailable" })]);
     expect(invoicesToRecord(s, new Set())).toEqual([]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Keeping the order's value in step — the self-healing half                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The bug this suite exists for.
+ *
+ * Recording used to be driven *only* by an invoice the timeline did not yet
+ * hold, which made the whole sync a one-shot: if that single write did not land,
+ * the order kept a verified invoice of SAR 212.60 beside an order value of 0.00
+ * for ever, because every later visit correctly found nothing **new** to record
+ * and therefore asked for nothing at all. `needsValueSync` is the second reason
+ * to call the server, and it is what repairs that.
+ */
+describe("needsValueSync", () => {
+  it("asks for a sync when the stored value is still zero", () => {
+    // The reported case, exactly: verified 212.60, order value 0.00.
+    const s = summarizeInvoices([verified("0169580", 212.6)]);
+    expect(needsValueSync(s, 0, false)).toBe(true);
+  });
+
+  it("asks for a sync when the invoice is recorded but the value never landed", () => {
+    // Nothing new to record — `invoicesToRecord` is empty — and yet the order
+    // disagrees with its own log. This is the state that used to be terminal.
+    const s = summarizeInvoices([verified("0169580", 212.6)]);
+    expect(invoicesToRecord(s, new Set(["169580"]))).toEqual([]);
+    expect(needsValueSync(s, 0, false)).toBe(true);
+  });
+
+  it("asks for a sync when the value agrees but the flag was never set", () => {
+    const s = summarizeInvoices([verified("0169580", 212.6)]);
+    expect(needsValueSync(s, 212.6, false)).toBe(true);
+  });
+
+  it("asks for nothing once the order agrees with what was verified", () => {
+    // The steady state: opening the order again must cost no write at all.
+    const s = summarizeInvoices([verified("0169580", 212.6)]);
+    expect(needsValueSync(s, 212.6, true)).toBe(false);
+  });
+
+  it("tolerates the stored column's two-decimal rounding", () => {
+    const s = summarizeInvoices([verified("1", 212.599999)]);
+    expect(needsValueSync(s, 212.6, true)).toBe(false);
+  });
+
+  it("asks for a sync when a second invoice lands", () => {
+    const s = summarizeInvoices([verified("1", 212.6), verified("2", 100)]);
+    expect(needsValueSync(s, 212.6, true)).toBe(true);
+    expect(s.verifiedTotal).toBe(312.6);
+  });
+
+  it("never asks while nothing is verified, so a typed value survives", () => {
+    // An order with a pending invoice keeps whatever the agent entered.
+    expect(needsValueSync(summarizeInvoices([invoice("22138")]), 500, false)).toBe(false);
+    expect(needsValueSync(summarizeInvoices([]), 500, false)).toBe(false);
+    expect(
+      needsValueSync(summarizeInvoices([invoice("1", { state: "unavailable" })]), 500, false),
+    ).toBe(false);
+  });
+
+  it("does not re-add a duplicate invoice's total on a repeat check", () => {
+    // The explicit scenario: checking 0169580 again must leave the order at
+    // 212.60, not 425.20.
+    const first = summarizeInvoices([verified("0169580", 212.6)]);
+    const again = summarizeInvoices([verified("0169580", 212.6), verified("169580", 212.6)]);
+    expect(again.verifiedTotal).toBe(212.6);
+    expect(needsValueSync(again, first.verifiedTotal, true)).toBe(false);
+  });
+
+  it("treats an invoice the MIS priced at nothing as verified, not pending", () => {
+    // A zero-total document is still a document; it just adds nothing.
+    const s = summarizeInvoices([verified("1", 0)]);
+    expect(s.verified).toHaveLength(1);
+    expect(s.verifiedTotal).toBe(0);
+    expect(needsValueSync(s, 0, true)).toBe(false);
+    // But the flag still has to be set, so it is not silently skipped.
+    expect(needsValueSync(s, 0, false)).toBe(true);
+  });
+
+  it("counts a verified invoice with no total as contributing nothing", () => {
+    const s = summarizeInvoices([verified("1", 212.6), verified("2", 0, { total: null })]);
+    expect(s.verifiedTotal).toBe(212.6);
   });
 });
