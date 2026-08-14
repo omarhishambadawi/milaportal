@@ -33,8 +33,12 @@ function describe(e: OrderActivityEvent, nameOf: (id: unknown) => string): strin
       ? "Marked Call Center invoice verified"
       : "Removed Call Center invoice verification";
   if (e.action === "invoice_verified") return "Automated invoice verification by MilaPortal";
+  // Named after the invoice, not the order: this is one document's total being
+  // corrected by the MIS, and the order-level consequence gets its own event.
+  if (e.action === "invoice_value_changed")
+    return `Invoice #${d.invoice_no ?? d.invoice_key ?? "—"} value updated automatically`;
   if (e.action === "value_synced") return "Order value updated automatically by MilaPortal";
-  if (e.action === "call_center_flagged") return "Call Center Invoice checked automatically";
+  if (e.action === "call_center_flagged") return "Call Center Invoice marked automatically";
   if (e.action === "edited") {
     const keys = Object.keys(d);
     if (keys.length === 0) return "Edited the order";
@@ -55,19 +59,36 @@ function detailLine(e: OrderActivityEvent): string | null {
     const parts = [`Invoice #${d.invoice_no ?? d.invoice_key ?? "—"} verified successfully`];
     if (d.total !== undefined && d.total !== null) parts.push(fmtSAR(Number(d.total)));
     if (d.branch_code) parts.push(`Branch ${d.branch_code}`);
+    // The channel this document was classified as, stated on the event that
+    // classified it. Without it the timeline can look as though a Call Centre
+    // conclusion came from nowhere — or worse, from the wrong invoice.
+    if (d.is_call_centre !== undefined && d.is_call_centre !== null) {
+      parts.push(`Channel: ${d.is_call_centre ? "Call Centre" : "Non Call Centre"}`);
+    }
     return parts.join(" · ");
   }
-  if (e.action === "value_synced") {
+  if (e.action === "invoice_value_changed") {
+    const from = d.from !== undefined && d.from !== null ? fmtSAR(Number(d.from)) : "—";
     const to = d.to !== undefined && d.to !== null ? fmtSAR(Number(d.to)) : "—";
-    const invoices = d.invoice_no ? ` based on invoice ${String(d.invoice_no)}` : "";
-    const from =
-      d.from !== undefined && d.from !== null ? ` Previous value: ${fmtSAR(Number(d.from))}.` : "";
-    return `Updated to ${to}${invoices}.${from}`;
+    return `${from} → ${to}`;
+  }
+  if (e.action === "value_synced") {
+    const from = d.from !== undefined && d.from !== null ? fmtSAR(Number(d.from)) : "—";
+    const to = d.to !== undefined && d.to !== null ? fmtSAR(Number(d.to)) : "—";
+    // The invoices the new figure is built from — all of them, since the total
+    // is rebuilt from the order's current set rather than accumulated.
+    const based = d.invoice_no
+      ? ` · Based on verified invoice${d.invoice_count > 1 ? "s" : ""} #${String(d.invoice_no).split(", ").join(", #")}`
+      : "";
+    return `${from} → ${to}${based}`;
   }
   if (e.action === "call_center_flagged") {
+    // Names the document that actually carried the Call Centre channel — never
+    // "an invoice was verified", which is what let a Non Call Centre invoice
+    // appear to be the cause.
     return d.invoice_no
-      ? `Invoice ${String(d.invoice_no)} is a Call Centre document.`
-      : "A verified Call Centre invoice was found.";
+      ? `Invoice #${String(d.invoice_no).split(", ").join(", #")} verified as Call Centre`
+      : "A verified Call Centre invoice was found";
   }
   if (e.action === "assigned" && d.to_team) return `Team: ${String(d.to_team).replace("_", " ")}`;
   return null;

@@ -50,8 +50,17 @@ import type { ItemAvailability, StockState } from "@/lib/shams/availability";
 import type { OrderInvoice } from "../invoice-verification";
 import type { OrderInvoicesResult } from "../hooks/use-order-invoices";
 
-/** Above this many invoices the documents start folded, to keep the column usable. */
-const OPEN_BY_DEFAULT_UP_TO = 2;
+/**
+ * Every document starts open.
+ *
+ * It used to fold past two invoices, back when this column had its own capped,
+ * scrolling box and height was scarce. It no longer does — the column is part of
+ * the page scroll — and the items are the reason an agent opens this panel at
+ * all: a pharmacist checking what is on an invoice should not have to click
+ * anything first. The fold is still there for tidying a four-invoice order by
+ * hand, it just is not the starting state.
+ */
+const STARTS_OPEN = true;
 
 export function OrderInvoicePanel({ invoices }: { invoices: OrderInvoicesResult }) {
   const { data: branchLabels } = useBranchLabels();
@@ -139,7 +148,7 @@ export function OrderInvoicePanel({ invoices }: { invoices: OrderInvoicesResult 
                 key={invoice.key}
                 invoice={invoice}
                 labels={branchLabels}
-                defaultOpen={rows.length <= OPEN_BY_DEFAULT_UP_TO}
+                defaultOpen={STARTS_OPEN}
               />
             ))}
           </>
@@ -346,44 +355,80 @@ const STOCK_LABEL: Record<StockState, string> = {
   unknown: "Stock unavailable",
 };
 
+/**
+ * The invoice's lines, and what the branch still holds of each.
+ *
+ * A real three-column table rather than the flex row this replaces, because
+ * these are medications and the previous layout made them the hardest thing on
+ * the page to read: the name was `truncate`d to whatever space the quantity and
+ * stock badge left over, so `MOUNJARO KWIKPEN 5 MG/0.6ML` and
+ * `MOUNJARO KWIKPEN 7.5 MG/0.6ML` — different products, different prices —
+ * rendered identically as `MOUNJARO KWIKPEN 5 MG/0.6…`. Two products that look
+ * the same on screen is a dispensing error waiting to happen.
+ *
+ * So the name column wraps instead of truncating, and quantity and stock get
+ * fixed columns that line up down the list. The full name is on `title` as
+ * well, for the pathological ones.
+ */
 function ItemLines({ items }: { items: ItemAvailability[] }) {
   return (
-    <div className="mt-2.5">
-      <p className="mb-1 text-[10.5px] uppercase tracking-wide text-muted-foreground">
-        Items &amp; branch stock
-      </p>
-      <ul className="divide-y divide-border/40 border-t border-border/40">
-        {items.map((item, i) => (
-          <li
-            key={`${item.itemCode}-${i}`}
-            className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 py-1.5"
-          >
-            <span className="flex min-w-0 flex-1 items-baseline gap-2">
-              <span className="truncate text-xs">{item.itemName || item.itemCode}</span>
-              <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+    <div className="mt-3">
+      <table className="w-full table-fixed border-collapse text-left">
+        <caption className="sr-only">Invoice items and branch stock</caption>
+        <thead>
+          <tr className="border-b border-border/60 text-[10px] uppercase tracking-wide text-muted-foreground">
+            <th scope="col" className="w-auto pb-1 pr-2 font-medium">
+              Item
+            </th>
+            <th scope="col" className="w-12 pb-1 pr-2 text-right font-medium">
+              Qty
+            </th>
+            <th scope="col" className="w-24 pb-1 text-right font-medium">
+              Stock
+            </th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border/40">
+          {items.map((item, i) => (
+            <tr key={`${item.itemCode}-${i}`} className="align-top">
+              <td className="py-1.5 pr-2">
+                {/* Wrapping, not truncating — see above. `break-words` so a long
+                    unbroken code cannot widen the column either. */}
+                <span
+                  className="block break-words text-xs leading-snug"
+                  title={item.itemName || item.itemCode}
+                >
+                  {item.itemName || item.itemCode}
+                </span>
+              </td>
+              <td className="py-1.5 pr-2 text-right text-xs tabular-nums text-muted-foreground">
                 &times;{item.invoiced}
-              </span>
-            </span>
-            {item.state === "in_stock" ? (
-              <span className="shrink-0 text-[11px] text-muted-foreground">
-                <span className="font-semibold tabular-nums text-foreground">{item.quantity}</span>{" "}
-                {STOCK_LABEL.in_stock}
-              </span>
-            ) : (
-              <span
-                className={cn(
-                  "shrink-0 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
-                  item.state === "out_of_stock"
-                    ? "bg-destructive/10 text-destructive"
-                    : "bg-muted text-muted-foreground",
+              </td>
+              <td className="py-1.5 text-right">
+                {item.state === "in_stock" ? (
+                  <span className="whitespace-nowrap text-[11px] text-muted-foreground">
+                    <span className="font-semibold tabular-nums text-foreground">
+                      {item.quantity}
+                    </span>{" "}
+                    {STOCK_LABEL.in_stock}
+                  </span>
+                ) : (
+                  <span
+                    className={cn(
+                      "inline-block whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+                      item.state === "out_of_stock"
+                        ? "bg-destructive/10 text-destructive"
+                        : "bg-muted text-muted-foreground",
+                    )}
+                  >
+                    {STOCK_LABEL[item.state]}
+                  </span>
                 )}
-              >
-                {STOCK_LABEL[item.state]}
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

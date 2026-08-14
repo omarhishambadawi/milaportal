@@ -1685,7 +1685,28 @@ unchanged.
 `invoice_no`, `invoice_value` (coerced, non-negative, nullable), `notes`,
 `status`, `agent_id` (optional), `call_center_verified` (optional).
 
-The last two are optional so they can be **omitted rather than sent as a default**:
+The payload itself is built by **`buildOrderPayload`** (pure, in
+`features/orders/payload.ts`), not by spreading form state. Editing an order and
+changing only its value failed with
+`delivery_type: "Delivery / pickup method is required"` — on orders that have
+one; all 4344 rows do, and the column is granted to `authenticated`, so the
+value was never missing from the *order*, only from form state at submit. That
+can happen for more than one reason (a save before the fetch resolved, a stale
+`setForm({...form})` closure captured on an earlier render), so the rule is about
+shape rather than any one field: **a required field left blank is never a user's
+intention** — the UI cannot produce one, every such control being a `Select` or
+picker with no empty option — so for an existing order the persisted value backs
+it. Optional fields deliberately do the opposite: blank means blank and is sent
+as null, or a customer name could never be cleared. A new order has nothing to
+fall back to and still fails validation, correctly; the schema is untouched.
+
+Two supporting changes closed the ways form state went stale: hydration is keyed
+on the **order id** rather than on `existing`'s object identity (React Query
+hands back a new one per refetch, so a verification landing mid-edit used to
+rebuild the form under the agent), and every `setForm` in the route is a
+functional update. `call_center_verified` is re-applied on its own, raise-only.
+
+The last two schema fields are optional so they can be **omitted rather than sent as a default**:
 an absent column keeps whatever the row holds. `call_center_verified` is sent
 only when the caller may verify *and* is not about to write `false` over a flag a
 verified call-centre invoice has set — a save carrying stale form state must not
@@ -1701,10 +1722,17 @@ two columns from `xl` and one below it:
 - **Workflow** (left) — Order details, Invoicing, Assignment (with the Call
   Center Invoice control), Notes. Four cards rather than one tall banded card,
   which is what left a metre of empty space to the right of a single-column form.
-- **Verification** (right, `xl:sticky top-20`, scrolls internally) — the invoice
-  panel, the branch preview, the activity timeline. Read-only findings, and
-  deliberately outside the `fieldset` a read-only role disables: inside it, the
-  people reviewing an order would be the ones unable to see what was found.
+- **Verification** (right) — the invoice panel, the branch preview, the activity
+  timeline. Read-only findings, and deliberately outside the `fieldset` a
+  read-only role disables: inside it, the people reviewing an order would be the
+  ones unable to see what was found.
+
+**One scrollbar.** The verification column was `sticky` with a capped height and
+`overflow-y: auto`, which gave the page a second scrolling region: a wheel
+gesture did different things a few pixels apart, and reading an invoice's items
+meant working out which box the pointer was in. Both columns sit in the document
+scroll now (`items-start` keeps them top-aligned); `new-order-layout.test.ts`
+asserts that neither `overflow-y-auto` nor a viewport-capped height returns.
 
 The primary actions live in the page header, under a breadcrumb, and reach the
 form by id (`form={FORM_ID}`) rather than sitting at the end of a scroll. Both columns carry `min-w-0` inside `minmax(0,…)` tracks,
@@ -1712,10 +1740,14 @@ which is what stops a long Arabic customer name widening the page. The layout
 contract is asserted in `__tests__/new-order-layout.test.ts` — a source-level
 suite, since the test environment is Node and nothing else here renders.
 
-`OrderInvoicePanel` folds each document into a compact header (number, state,
-total, customer) that opens onto branch, channel, document date, *Verified by
-MilaPortal* and the item/stock lines; the customer stays visible **closed**,
-being the fact most often checked and the one the channel is derived from.
+`OrderInvoicePanel` gives each document a compact header (number, state, total,
+customer) over branch, channel, document date, *Verified by MilaPortal* and the
+item lines. Every document **starts open** — folding was for the old capped
+column, and the items are what a pharmacist opens the panel for. The item list
+is a three-column table (item / qty / stock) whose name column **wraps rather
+than truncates**: it used to be `truncate`d to whatever the quantity and stock
+badge left over, rendering `MOUNJARO KWIKPEN 5 MG/0.6ML` and
+`… 7.5 MG/0.6ML` identically — two different products, one string on screen.
 
 ### Writes
 
@@ -2820,6 +2852,49 @@ means an order already in agreement is not written to at all, so opening one
 costs nothing and raises no spurious `edited` row. A failure is surfaced in the
 panel with a retry rather than swallowed.
 
+#### The total is the order's *current* invoices — `20260814210000`
+
+The reconciliation summed `SUM(total)` over every `invoice_verified` row the
+order had ever collected, which is its history, not its state. Order #8724
+recorded the consequence exactly:
+
+```
+18:07  created, invoice 0123891 typed, value 1261.40 entered by hand
+18:35  0123891 verified — 242.71, Non Call Centre → value 242.71   (correct)
+18:38  agent corrects the number on the order to 0123892
+18:38  0123892 verified — 1261.40, Call Centre
+       → value 1504.11, "invoice_count: 2", "0123891, 0123892"
+```
+
+One invoice worth 1261.40, an order claiming 1504.11, because the superseded
+number's row went on counting. The same shape is the reported
+`1200 + 1261.40 = 2461.40`: **a historical event is not a second invoice.**
+
+Two changes fix it, both inside `record_invoice_verification`:
+
+- **Current, not historical.** `orders.invoice_no` is parsed in SQL — the
+  separators `parseInvoiceNumbers` splits on, the zero-stripping `invoiceKey`
+  applies — and only invoices keyed on the order *today* contribute to the
+  total, the flag or the events. `WITH current_keys … JOIN` is the whole
+  mechanism. Remove a number and it stops counting; the log keeps the history.
+- **Latest, not first.** A document the MIS reprices used to be skipped by the
+  idempotency guard, so the order kept the stale figure for ever. A changed
+  total now writes `invoice_value_changed` (`from`, `to`, `invoice_no`) and the
+  reconciliation reads `DISTINCT ON (invoice_key) … ORDER BY created_at DESC` —
+  the most recent statement per document. `invoice_verified` stays one per
+  document, so first-sighting and re-pricing are different events.
+
+Both still read from the log rather than from the caller, so a repeated call
+cannot inflate anything, and an unchanged total writes nothing at all.
+
+This is also the **Call Centre attribution** fix. `call_centre_cnt` and the
+invoice numbers named in `call_center_flagged` come from the same current-keys
+intersection, filtered on the authoritative per-invoice `is_call_centre` — so an
+order whose only current invoice is Non Call Centre cannot carry the flag from a
+document it no longer has, and the event can never name the wrong invoice. The
+flag remains set-only: a call-centre invoice being replaced by a walk-in does
+not untick it, since a person may also have ticked it.
+
 #### Order form — creator, assignee, team
 
 Three separate things, and they used to be two. `orders.created_by` (added in
@@ -3041,6 +3116,9 @@ below — so a phone never scrolls sideways. Branch labels come from
     every later reconciliation. Nothing verified yet means the typed value
     stands: an invoice may still be an hour away. One rule,
     `authoritativeValue`, plus the server's own recompute from the activity log.
+    The sum is over the invoices the order names **now**, at their **latest**
+    known totals — never accumulated onto the previous value, and never counting
+    a number since removed or a document's superseded price.
 11. **`call_center_verified` means the call centre raised the invoice.** It is
     set automatically only from a *verified* document whose MIS channel says
     Call Centre, never from a typed number, an attempted lookup, a failed one or

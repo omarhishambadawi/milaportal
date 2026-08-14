@@ -41,10 +41,19 @@ describe("two-column workspace", () => {
     expect(source.indexOf(`<form id={FORM_ID}`)).toBeLessThan(source.indexOf("<aside"));
   });
 
-  it("keeps the verification column in view on a wide screen without growing the page", () => {
-    // `top-20` clears the app header (h-16) plus the page's own gap.
-    expect(source).toContain("xl:sticky xl:top-20");
-    expect(source).toContain("xl:overflow-y-auto");
+  it("gives the page exactly one scrollbar", () => {
+    // The verification column used to be `sticky` with a capped height and
+    // `overflow-y: auto`, which meant two scrolling regions a few pixels apart
+    // and a wheel gesture that did different things depending on where the
+    // pointer was. Both columns are in the document scroll now, so neither of
+    // these may come back on the page shell.
+    expect(source).not.toMatch(/overflow-y-auto/);
+    expect(source).not.toMatch(/max-h-\[calc\(100vh/);
+    expect(source).not.toMatch(/<aside[^>]*sticky/);
+  });
+
+  it("top-aligns the columns rather than stretching the shorter one", () => {
+    expect(source).toContain("items-start");
   });
 
   it("cannot scroll the page sideways", () => {

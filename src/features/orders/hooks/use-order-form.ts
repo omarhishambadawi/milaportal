@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -9,7 +9,7 @@ import { queryKeys } from "@/lib/query-keys";
 import { useAgentDirectory } from "@/lib/directory";
 import { useDebounced } from "@/features/shams/hooks/use-shams-data";
 import { orderFormSchema } from "../schema";
-import { authoritativeValue } from "../invoice-verification";
+import { buildOrderPayload, type PersistedOrder } from "../payload";
 import { recordInvoiceVerification } from "../record-verification";
 import { defaultTeam, parseInvoiceNumbers } from "../utils";
 import { isAssignableAgent } from "../components/order-assignment";
@@ -133,29 +133,59 @@ export function useOrderForm(mode: "create" | "edit") {
   const canVerifyThis =
     mode === "create" ? canVerifyAll || canVerifyOwn : canVerifyAll || (isOwner && canVerifyOwn);
 
+  /**
+   * Fill the form from the order — once per order, not once per fetch.
+   *
+   * This used to key on `existing` alone, and React Query hands back a new
+   * object identity on every refetch: opening an order runs a verification,
+   * the verification invalidates `orders.all()`, the refetch lands, and the
+   * whole form was rebuilt from the row *while the agent was typing in it*.
+   * Anything half-entered went, and a field could be re-hydrated underneath a
+   * `setForm({...form})` closure captured before it — one of the ways a
+   * required field arrived at validation empty.
+   *
+   * Keyed on the order's id instead: the form is seeded when the order arrives
+   * (or when the route moves to a different order) and is the agent's from
+   * then on. The two things the *server* legitimately changes afterwards —
+   * the reconciled value and the Call Center flag — are applied below by their
+   * own effects, narrowly, without touching anything else.
+   */
+  const hydratedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (existing) {
-      const t =
-        existing.team === "customer_care" || existing.team === "telesales"
-          ? existing.team
-          : "customer_care";
-      setForm({
-        order_date: existing.order_date,
-        team: t,
-        order_type: existing.order_type,
-        customer_name: (existing as any).customer_name ?? "",
-        customer_phone: (existing as any).customer_phone ?? "",
-        branch_no: existing.branch_no ?? "",
-        delivery_type: existing.delivery_type ?? "",
-        invoice_value: existing.invoice_value?.toString() ?? "",
-        notes: existing.notes ?? "",
-        status: existing.status,
-        agent_id: existing.agent_id ?? "",
-        call_center_verified: !!(existing as any).call_center_verified,
-      });
-      const parts = parseInvoiceNumbers(existing.invoice_no);
-      setInvoices(parts.length > 0 ? parts : [""]);
-    }
+    if (!existing || !id || hydratedFor.current === id) return;
+    hydratedFor.current = id;
+    const t =
+      existing.team === "customer_care" || existing.team === "telesales"
+        ? existing.team
+        : "customer_care";
+    setForm({
+      order_date: existing.order_date,
+      team: t,
+      order_type: existing.order_type,
+      customer_name: (existing as any).customer_name ?? "",
+      customer_phone: (existing as any).customer_phone ?? "",
+      branch_no: existing.branch_no ?? "",
+      delivery_type: existing.delivery_type ?? "",
+      invoice_value: existing.invoice_value?.toString() ?? "",
+      notes: existing.notes ?? "",
+      status: existing.status,
+      agent_id: existing.agent_id ?? "",
+      call_center_verified: !!(existing as any).call_center_verified,
+    });
+    const parts = parseInvoiceNumbers(existing.invoice_no);
+    setInvoices(parts.length > 0 ? parts : [""]);
+  }, [existing, id]);
+
+  /**
+   * The flag, once the portal has set it.
+   *
+   * Only ever raised here, and only to `true`: the automation cannot untick a
+   * box, and an agent who has just ticked one must not see it flip back
+   * because a refetch arrived carrying the older row.
+   */
+  useEffect(() => {
+    if (!(existing as any)?.call_center_verified) return;
+    setForm((f) => (f.call_center_verified ? f : { ...f, call_center_verified: true }));
   }, [existing]);
 
   useEffect(() => {
@@ -265,54 +295,30 @@ export function useOrderForm(mode: "create" | "edit") {
       toast.error("You don't have permission to modify this order");
       return;
     }
+    // An edit cannot be built before the order it edits has arrived. Saving
+    // then would submit the form's *defaults* — which is one of the ways a
+    // required field reached validation empty — so it is refused outright
+    // rather than half-applied.
+    if (mode === "edit" && !existing) {
+      toast.error("This order is still loading — try again in a moment");
+      return;
+    }
     setBusy(true);
     try {
-      const parsed = orderFormSchema.parse({
-        ...form,
-        customer_name: form.customer_name || null,
-        customer_phone: form.customer_phone || null,
-        branch_no: form.branch_no || "",
-        invoice_no: invoicesJoined || null,
-        /**
-         * The verified total wins over anything typed.
-         *
-         * Applied at the point of writing, not only in the box: this is the
-         * half that was missing. The form could show a verified figure while
-         * saving whatever the field happened to hold, so a manual 100.00
-         * entered before the invoice was checked went straight back over a
-         * verified 212.60 on the next save. With nothing verified the typed
-         * value is kept untouched — an invoice may still be an hour away.
-         */
-        invoice_value: authoritativeValue(
-          shamsInvoices,
-          form.invoice_value === "" ? null : Number(form.invoice_value),
-        ),
-        /**
-         * The manual tick only, and never a `false` that could untick what the
-         * portal set.
-         *
-         * Deliberately not raised to `true` from a verified call-centre
-         * invoice: that transition belongs to `record_invoice_verification`,
-         * which writes the automated timeline event beside it. Doing it here
-         * would set the flag through the ordinary edit path and file a machine
-         * decision under whoever pressed Save.
-         */
-        call_center_verified:
-          canVerifyThis && (form.call_center_verified || !shamsInvoices.callCentreVerified)
-            ? form.call_center_verified
-            : undefined,
-        notes: form.notes || null,
-        status: mode === "create" ? "Pending" : form.status,
-        // Sent on create (the order needs an owner) and on edit only when this
-        // caller may reassign; everyone else's update leaves `agent_id` out
-        // rather than writing back the value it happens to be holding.
-        agent_id:
-          mode === "create"
-            ? form.agent_id || undefined
-            : canAssign && form.agent_id
-              ? form.agent_id
-              : undefined,
-      });
+      // Built by `buildOrderPayload`, which is pure and tested: every field the
+      // order has is present, and a *required* field left blank by a hydration
+      // failure falls back to the stored row rather than being sent empty.
+      const parsed = orderFormSchema.parse(
+        buildOrderPayload({
+          mode,
+          form,
+          invoiceNo: invoicesJoined,
+          persisted: existing as PersistedOrder | null | undefined,
+          invoices: shamsInvoices,
+          canAssign,
+          canVerify: canVerifyThis,
+        }),
+      );
       if (mode === "create") {
         // The assignee, not the author. `created_by` defaults to `auth.uid()`
         // in the database, so the two are recorded separately and a supervisor

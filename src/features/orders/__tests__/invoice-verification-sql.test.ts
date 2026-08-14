@@ -316,3 +316,106 @@ describe("the automated changes narrate themselves", () => {
     expect(finalSql).toContain("'verification_changed'");
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Reconciling from the order's current invoices, not its whole history        */
+/* -------------------------------------------------------------------------- */
+
+const currentSql = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../supabase/migrations/20260814210000_invoice_reconciliation_current_state.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
+
+describe("the total is rebuilt from the invoices the order names now", () => {
+  it("parses `orders.invoice_no` with the client's separators and zero-stripping", () => {
+    // The same split `parseInvoiceNumbers` does and the same identity
+    // `invoiceKey` produces — otherwise the SQL and the panel disagree about
+    // which document is which.
+    expect(currentSql).toContain("regexp_split_to_table(COALESCE(ord.invoice_no, ''), '[,\\n]+')");
+    expect(currentSql).toContain("ltrim(btrim(part), '0')");
+    expect(currentSql).toMatch(/WHEN ltrim\(btrim\(part\), '0'\) = '' THEN '0'/);
+  });
+
+  it("counts only documents whose key is on the order today", () => {
+    // The defect: an invoice number corrected on the order left its old
+    // `invoice_verified` row behind, and the row went on being summed — so
+    // order #8724 named one invoice worth 1261.40 and claimed to be 1504.11.
+    expect(currentSql).toContain("JOIN current_keys c ON c.key = l.key");
+  });
+
+  it("takes the most recent total per document rather than every one ever seen", () => {
+    expect(currentSql).toContain("SELECT DISTINCT ON (a.details->>'invoice_key')");
+    expect(currentSql).toMatch(/ORDER BY a\.details->>'invoice_key', a\.created_at DESC/);
+  });
+
+  it("never accumulates onto the previous order value", () => {
+    // The total is assigned, and assigned from the rebuilt set.
+    expect(currentSql).toContain("SET invoice_value = verified_sum");
+    expect(currentSql).not.toMatch(/invoice_value\s*\+/);
+    expect(currentSql).not.toMatch(/invoice_value\s*=\s*ord\.invoice_value/);
+  });
+});
+
+describe("a corrected invoice total", () => {
+  it("is recorded rather than skipped by the idempotency guard", () => {
+    // It used to `CONTINUE WHEN EXISTS(... invoice_key = key)`, so a document
+    // the MIS later repriced was ignored and the order kept the stale figure.
+    expect(currentSql).toContain("ELSIF prev_total IS DISTINCT FROM new_total THEN");
+    expect(currentSql).toContain("'invoice_value_changed'");
+  });
+
+  it("carries both sides and the invoice it belongs to", () => {
+    expect(currentSql).toContain("'from',          prev_total");
+    expect(currentSql).toContain("'to',            new_total");
+    expect(currentSql).toContain("'invoice_key',   key");
+  });
+
+  it("writes nothing at all when the total is unchanged", () => {
+    // Neither branch is taken, which is what keeps a repeat check silent.
+    expect(currentSql).toContain("IF NOT had_row THEN");
+    expect(currentSql).toMatch(/-- Unchanged total: nothing written/);
+  });
+
+  it("keeps one first-sighting event per document", () => {
+    expect(currentSql).toContain("'invoice_verified'");
+    expect(currentSql).toContain("had_row := FOUND;");
+  });
+});
+
+describe("Call Centre attribution", () => {
+  it("reads the authoritative per-invoice field and nothing else", () => {
+    expect(currentSql).toContain("(a.details->>'is_call_centre')::boolean AS is_cc");
+    expect(currentSql).toContain("COUNT(*) FILTER (WHERE is_cc IS TRUE)");
+  });
+
+  it("names only the call-centre documents the order currently holds", () => {
+    // The attribution bug: an event naming an invoice the order no longer has,
+    // beside a panel showing "Non Call Centre".
+    expect(currentSql).toContain(
+      "string_agg(invoice_no, ', ' ORDER BY invoice_no) FILTER (WHERE is_cc IS TRUE)",
+    );
+    expect(currentSql).toContain("'invoice_no',    call_centre_nos");
+  });
+
+  it("raises the flag only when such a document exists, and never lowers it", () => {
+    expect(currentSql).toContain("WHEN call_centre_cnt > 0 THEN true");
+    expect(currentSql).toContain("ELSE call_center_verified");
+    expect(currentSql).not.toContain("call_center_verified = false");
+  });
+
+  it("writes the transition event once", () => {
+    expect(currentSql).toContain("IF call_centre_cnt > 0 AND NOT prev_flag THEN");
+  });
+
+  it("keeps the permission check and the anon revoke", () => {
+    expect(currentSql).toContain("public.has_permission(uid, 'view_shams_mis')");
+    expect(currentSql).toMatch(
+      /REVOKE ALL ON FUNCTION public\.record_invoice_verification.*FROM PUBLIC, anon/,
+    );
+  });
+});

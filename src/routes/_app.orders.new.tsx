@@ -300,7 +300,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                   id="order-date"
                   type="date"
                   value={form.order_date}
-                  onChange={(e) => setForm({ ...form, order_date: e.target.value })}
+                  onChange={(e) => setForm((f) => ({ ...f, order_date: e.target.value }))}
                   required
                 />
               </Field>
@@ -315,7 +315,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
               <Field id="order-type" label="Order type" required>
                 <Select
                   value={form.order_type}
-                  onValueChange={(v) => setForm({ ...form, order_type: v })}
+                  onValueChange={(v) => setForm((f) => ({ ...f, order_type: v }))}
                   disabled={readOnly}
                 >
                   <SelectTrigger id="order-type">
@@ -334,7 +334,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
               <Field id="order-delivery" label="Delivery & pickup" required>
                 <Select
                   value={form.delivery_type}
-                  onValueChange={(v) => setForm({ ...form, delivery_type: v })}
+                  onValueChange={(v) => setForm((f) => ({ ...f, delivery_type: v }))}
                   disabled={readOnly}
                 >
                   <SelectTrigger id="order-delivery">
@@ -390,7 +390,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                               key={b.branch_no}
                               value={`${b.branch_no} ${b.city}`}
                               onSelect={() => {
-                                setForm({ ...form, branch_no: b.branch_no });
+                                setForm((f) => ({ ...f, branch_no: b.branch_no }));
                                 setOpen(false);
                               }}
                             >
@@ -417,7 +417,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 <Input
                   id="customer-name"
                   value={form.customer_name}
-                  onChange={(e) => setForm({ ...form, customer_name: e.target.value })}
+                  onChange={(e) => setForm((f) => ({ ...f, customer_name: e.target.value }))}
                   placeholder="As given on the call"
                 />
               </Field>
@@ -426,7 +426,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 <Input
                   id="customer-phone"
                   value={form.customer_phone}
-                  onChange={(e) => setForm({ ...form, customer_phone: e.target.value })}
+                  onChange={(e) => setForm((f) => ({ ...f, customer_phone: e.target.value }))}
                   placeholder="05XXXXXXXX"
                   dir="ltr"
                   inputMode="tel"
@@ -469,7 +469,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                     step="0.01"
                     min="0"
                     value={form.invoice_value}
-                    onChange={(e) => setForm({ ...form, invoice_value: e.target.value })}
+                    onChange={(e) => setForm((f) => ({ ...f, invoice_value: e.target.value }))}
                     placeholder="0.00"
                     className={cn(
                       "text-base font-semibold tabular-nums",
@@ -619,7 +619,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                   aria-label="Notes"
                   rows={2}
                   value={form.notes}
-                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                  onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
                   placeholder="Optional"
                   className="resize-y"
                 />
@@ -633,11 +633,18 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
         {/* ------------------------------------------------------------------ */}
         {/* Read-only findings, and deliberately outside the `form` element: a
             `fieldset` that gets disabled for a read-only role would hide them
-            from exactly the people reviewing the order. Sticky below the app
-            header on a wide screen, so the invoice and the timeline stay in
-            view while the workflow column scrolls; it scrolls internally rather
-            than growing past the viewport. */}
-        <aside className="min-w-0 space-y-4 xl:sticky xl:top-20 xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto xl:pb-1">
+            from exactly the people reviewing the order.
+
+            **No scroll container of its own.** This column was `sticky` with a
+            capped height and `overflow-y: auto`, which gave the page a second
+            scrollbar: an agent reading an invoice's items had to work out which
+            of two scrolling regions the pointer was over, and a wheel gesture
+            did different things a few pixels apart. An order form is not a
+            dashboard — the two columns are one document, read top to bottom —
+            so both now sit in the page's own scroll and there is exactly one
+            scrollbar. `items-start` on the grid keeps them top-aligned rather
+            than stretching the shorter one. */}
+        <aside className="min-w-0 space-y-4">
           {canViewShams && <OrderInvoicePanel invoices={shamsInvoices} />}
 
           {/* Appears the moment a branch is chosen, so the questions a customer
