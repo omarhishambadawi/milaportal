@@ -177,18 +177,6 @@ export function useOrderForm(mode: "create" | "edit") {
   }, [existing, id]);
 
   /**
-   * The flag, once the portal has set it.
-   *
-   * Only ever raised here, and only to `true`: the automation cannot untick a
-   * box, and an agent who has just ticked one must not see it flip back
-   * because a refetch arrived carrying the older row.
-   */
-  useEffect(() => {
-    if (!(existing as any)?.call_center_verified) return;
-    setForm((f) => (f.call_center_verified ? f : { ...f, call_center_verified: true }));
-  }, [existing]);
-
-  /**
    * The status, once the server has moved it.
    *
    * Hydration runs once per order, so a form opened while an order was Pending
@@ -305,6 +293,27 @@ export function useOrderForm(mode: "create" | "edit") {
         : { ...f, invoice_value: verifiedTotal.toFixed(2) },
     );
   }, [verifiedTotal, existing, readOnly]);
+
+  /**
+   * The flag, in step with what the portal has derived.
+   *
+   * Raised whenever the stored row says so. Lowered only when the *documents*
+   * say so — a verified invoice that is not a call-centre one, which is what
+   * the server now derives `false` from. That asymmetry is deliberate: without
+   * it a form left open while an invoice was replaced would keep showing a
+   * verification the order no longer has, and save it back on the next edit;
+   * with a blunt mirror instead, an agent's manual tick on an order whose
+   * invoice has not landed yet would be wiped the moment any refetch arrived.
+   */
+  useEffect(() => {
+    if ((existing as any)?.call_center_verified) {
+      setForm((f) => (f.call_center_verified ? f : { ...f, call_center_verified: true }));
+      return;
+    }
+    if (shamsInvoices.verified.length > 0 && !shamsInvoices.callCentreVerified) {
+      setForm((f) => (f.call_center_verified ? { ...f, call_center_verified: false } : f));
+    }
+  }, [existing, shamsInvoices.verified.length, shamsInvoices.callCentreVerified]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -575,3 +575,57 @@ describe("completion requires every invoice to be Call Centre", () => {
     expect(allCcSql).toContain("public.has_permission(uid, 'view_shams_mis')");
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* The flag follows the current invoices, both ways                            */
+/* -------------------------------------------------------------------------- */
+
+const derivedSql = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../supabase/migrations/20260815170000_call_centre_flag_follows_current_invoices.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
+
+describe("call_center_verified is derived, not latched", () => {
+  it("is assigned from the current call-centre count", () => {
+    expect(derivedSql).toContain("call_center_verified = (call_centre_cnt > 0),");
+    // The set-only CASE that could never clear is gone from the *code*. The
+    // header comment quotes it to explain what was wrong, so the assertion is
+    // scoped to the function body rather than the whole file.
+    const body = derivedSql.slice(derivedSql.indexOf("CREATE OR REPLACE FUNCTION"));
+    expect(body).not.toContain("WHEN call_centre_cnt > 0 THEN true");
+  });
+
+  it("notices a flag that needs clearing, not only one that needs setting", () => {
+    // The old guard only fired for `call_centre_cnt > 0`, so an order needing
+    // the flag cleared was never written to at all.
+    expect(derivedSql).toContain("OR call_center_verified IS DISTINCT FROM (call_centre_cnt > 0)");
+  });
+
+  it("records the withdrawal as its own automated event", () => {
+    expect(derivedSql).toContain("ELSIF call_centre_cnt = 0 AND prev_flag THEN");
+    expect(derivedSql).toContain("'call_center_cleared'");
+  });
+
+  it("recomputes only when something is currently verified", () => {
+    // An unreachable MIS contributes no entries, so the counts come from the
+    // log and the flag holds. Nothing is derived from an absence.
+    expect(derivedSql).toContain("IF verified_cnt > 0 THEN");
+  });
+
+  it("breaks the latest-per-invoice tie deterministically", () => {
+    // `created_at` is transaction time, so two events in one transaction tie
+    // and the tie-break would otherwise fall to a random uuid.
+    expect(derivedSql).toContain("(a.action = 'invoice_value_changed') DESC");
+  });
+
+  it("leaves the current-invoice scoping and the completion rule alone", () => {
+    expect(derivedSql).toContain("(SELECT COUNT(*) FROM current_keys)");
+    expect(derivedSql).toContain("AND call_centre_cnt = verified_cnt");
+    expect(derivedSql).toContain("prev_status NOT IN ('Cancelled', 'Completed')");
+  });
+});

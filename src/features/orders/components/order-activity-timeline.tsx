@@ -39,6 +39,8 @@ function describe(e: OrderActivityEvent, nameOf: (id: unknown) => string): strin
     return `Invoice #${d.invoice_no ?? d.invoice_key ?? "—"} value updated automatically`;
   if (e.action === "value_synced") return "Order value updated automatically by MilaPortal";
   if (e.action === "call_center_flagged") return "Call Center Invoice marked automatically";
+  // The withdrawal, which had no event until the flag could be cleared at all.
+  if (e.action === "call_center_cleared") return "Call Center Invoice cleared automatically";
   if (e.action === "auto_completed") return "Order automatically completed by MilaPortal";
   if (e.action === "edited") {
     const keys = Object.keys(d);
@@ -90,6 +92,11 @@ function detailLine(e: OrderActivityEvent): string | null {
     return d.invoice_no
       ? `Invoice #${String(d.invoice_no).split(", ").join(", #")} verified as Call Centre`
       : "A verified Call Centre invoice was found";
+  }
+  if (e.action === "call_center_cleared") {
+    return d.invoice_no
+      ? `No verified invoice on this order is a Call Centre document (#${String(d.invoice_no).split(", ").join(", #")})`
+      : "No verified invoice on this order is a Call Centre document";
   }
   if (e.action === "auto_completed") {
     // Says why, not just what: the invoices are the evidence, and the

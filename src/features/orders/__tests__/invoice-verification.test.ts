@@ -287,6 +287,40 @@ describe("needsValueSync", () => {
     ).toBe(false);
   });
 
+  /**
+   * The mirror image, which is what let the Call Centre flag go stale.
+   *
+   * The flag half used to be one-directional — "a call-centre document expects
+   * the flag, so its absence is a disagreement" — which never noticed an order
+   * whose call-centre invoice had been *replaced* by a walk-in one. The client
+   * asked for nothing, so the server was never called, so the flag stayed true
+   * against documents that no longer supported it.
+   */
+  it("asks for a sync when the flag is set but no current invoice is call-centre", () => {
+    const s = summarizeInvoices([
+      verified("0177777", 99, { customer: "CASH SALES", isCallCentre: false }),
+    ]);
+    expect(s.callCentreVerified).toBe(false);
+    // Value already agrees; the disagreement is the flag, in the other direction.
+    expect(needsValueSync(s, 99, true)).toBe(true);
+    expect(needsValueSync(s, 99, false)).toBe(false);
+  });
+
+  it("still asks when a call-centre invoice appears and the flag is unset", () => {
+    const s = summarizeInvoices([verified("0169580", 200)]);
+    expect(needsValueSync(s, 200, false)).toBe(true);
+    expect(needsValueSync(s, 200, true)).toBe(false);
+  });
+
+  it("asks for nothing while nothing is verified, so an outage cannot clear it", () => {
+    // A pending replacement, or an unreachable MIS, must leave the flag alone
+    // rather than recompute it from an absence.
+    expect(needsValueSync(summarizeInvoices([invoice("0177777")]), 200, true)).toBe(false);
+    expect(
+      needsValueSync(summarizeInvoices([invoice("1", { state: "unavailable" })]), 200, true),
+    ).toBe(false);
+  });
+
   it("does not re-add a duplicate invoice's total on a repeat check", () => {
     // The explicit scenario: checking 0169580 again must leave the order at
     // 212.60, not 425.20.

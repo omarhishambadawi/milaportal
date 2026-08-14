@@ -197,11 +197,17 @@ export function invoicesToRecord(
  * Returns false when nothing is verified — an order with no verified invoice has
  * nothing to be reconciled *to*, and must keep whatever value was typed.
  *
- * The flag half is narrower than it was. It used to read "anything verified and
- * the flag not set means sync", which asked the server to tick the Call Center
- * box for a walk-in invoice — and, once the server stopped doing that, would
- * have asked again on every render for ever. Only a *verified call-centre*
- * document expects the flag, and only then is its absence a disagreement.
+ * The flag half compares in **both** directions. It once read "anything verified
+ * and the flag not set means sync", which asked the server to tick the box for a
+ * walk-in invoice; narrowing it to "a call-centre document expects the flag"
+ * fixed that but left the mirror image: an order whose call-centre invoice had
+ * been replaced by a walk-in one expected the flag *cleared*, and nothing here
+ * ever noticed. So the server was never called, and the flag stayed true against
+ * documents that no longer supported it.
+ *
+ * An inequality covers both. It is only reached when something is currently
+ * verified, so a pending replacement or an unreachable MIS still asks for
+ * nothing and the flag holds its last value.
  */
 export function needsValueSync(
   summary: InvoiceSummary,
@@ -211,7 +217,7 @@ export function needsValueSync(
   if (summary.verified.length === 0) return false;
   const stored = Number(storedValue ?? 0);
   if (Math.abs(stored - summary.verifiedTotal) >= 0.005) return true;
-  return summary.callCentreVerified && !storedVerifiedFlag;
+  return summary.callCentreVerified !== !!storedVerifiedFlag;
 }
 
 /**

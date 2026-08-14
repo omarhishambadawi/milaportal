@@ -3157,7 +3157,15 @@ below — so a phone never scrolls sideways. Branch labels come from
 11. **`call_center_verified` means the call centre raised the invoice.** It is
     set automatically only from a *verified* document whose MIS channel says
     Call Centre, never from a typed number, an attempted lookup, a failed one or
-    a pending one — and it is only ever set, never cleared, by that path. It is
+    a pending one. It is **derived, not latched**
+    (`call_center_verified = (call_centre_cnt > 0)`, `20260815170000`): replace a
+    call-centre invoice with a walk-in one, or have the MIS correct the channel
+    on the same number, and the flag clears itself and the timeline records
+    `call_center_cleared`. It was set-only until then, so a replaced invoice left
+    the order claiming a verification its own documents no longer supported.
+    Clearing needs *current* evidence — the recompute sits inside
+    `IF verified_cnt > 0`, so a pending replacement or an unreachable MIS leaves
+    the flag exactly as it was rather than deriving it from an absence. It is
     **not** manually tickable from the Orders list any more; the order form
     still offers it to `verify_*` holders, for a document raised outside the
     call centre that operationally belongs to it.
