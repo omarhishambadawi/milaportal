@@ -40,6 +40,21 @@ export interface ItemAvailability {
   state: StockState;
   /** Units at the branch — `null` whenever the state is not a quantity. */
   quantity: number | null;
+  /**
+   * What the line was priced and charged at, straight off the document.
+   *
+   * `unitRate` is the MIS's `Rate` and `lineTotal` its `Item_NetAmt`, falling
+   * back to `Amt` — the two money fields a sales line carries. Both are
+   * **`null` when the document priced nothing on this line**, which is a real
+   * state and not zero: a header-only row, or a line the MIS returned without
+   * money, must not be rendered as "0.00 SAR" as though it were free.
+   *
+   * Carried here rather than re-fetched: the invoice response already holds
+   * them and they were simply being dropped at this boundary, so the panel had
+   * a quantity and a stock level for a medication and no idea what it cost.
+   */
+  unitRate: number | null;
+  lineTotal: number | null;
 }
 
 /**
@@ -118,6 +133,30 @@ export function resolveItemAvailability(
       invoiced: item.quantity,
       state,
       quantity,
+      ...lineMoney(item),
     };
   });
+}
+
+/**
+ * The money a line carries, or nulls when it carries none.
+ *
+ * `toMoney` in the normalizer turns an absent or unparseable field into `0`, so
+ * zero here is ambiguous — it is both "free of charge" and "the MIS said
+ * nothing". Distinguishing them is not possible from one field alone, but it is
+ * from the pair: a line the document priced has *something* non-zero across its
+ * rate and its total, and a line with neither was not priced at all. So the two
+ * travel together — either both figures or neither — and the panel shows a dash
+ * rather than inventing `0.00 SAR` for a medication whose price is unknown.
+ *
+ * `Item_NetAmt` is preferred over `Amt` because it is the figure the MIS totals
+ * a document from; `Amt` is the fallback for responses that leave it empty.
+ */
+function lineMoney(item: ShamsInvoiceItem): {
+  unitRate: number | null;
+  lineTotal: number | null;
+} {
+  const total = item.netAmount || item.amount;
+  if (!item.unitRate && !total) return { unitRate: null, lineTotal: null };
+  return { unitRate: item.unitRate, lineTotal: total };
 }

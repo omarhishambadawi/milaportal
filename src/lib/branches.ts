@@ -18,10 +18,31 @@ export const STATUS_STYLES: Record<string, string> = {
 };
 
 export const CURRENCY = "SAR";
-export const fmtSAR = (v: number | string | null | undefined) => {
+/**
+ * Money, in the one place the app formats it.
+ *
+ * `exact` fixes the fraction at two digits. The default rounds *up to* two and
+ * drops trailing zeros, which is right for a KPI card or a chart axis — `1,200
+ * SAR` reads better than `1,200.00 SAR` — but wrong down a column of invoice
+ * lines, where `45 SAR` above `167.5 SAR` above `212.60 SAR` gives three
+ * different shapes for the same kind of figure and nothing lines up.
+ *
+ * `bare` drops the ` SAR` suffix, for a column whose *header* already carries
+ * the unit. Repeating it on every cell of a narrow table costs about 34px a
+ * column, which on this page comes straight out of the product name beside it.
+ *
+ * Options on this function rather than formatters beside it: two currency
+ * helpers is how an app ends up rendering the same riyal two ways on one screen.
+ */
+export const fmtSAR = (
+  v: number | string | null | undefined,
+  opts?: { exact?: boolean; bare?: boolean },
+) => {
   const n = typeof v === "string" ? Number(v) : v;
   if (n == null || isNaN(n as number)) return "—";
-  return `${(n as number).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${CURRENCY}`;
+  const digits = opts?.exact ? { minimumFractionDigits: 2, maximumFractionDigits: 2 } : {};
+  const text = (n as number).toLocaleString(undefined, { maximumFractionDigits: 2, ...digits });
+  return opts?.bare ? text : `${text} ${CURRENCY}`;
 };
 
 /** Team-aware display number, e.g. CC-43435 or TS-4323. Strips leading "#". */

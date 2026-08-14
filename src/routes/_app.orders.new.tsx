@@ -284,7 +284,16 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
         </div>
       </div>
 
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
+      {/* 60/40, as fractions rather than a fixed right-hand width.
+          `minmax(0,26rem)` made the verification column a sidebar: on a 1360px
+          page it took under 30%, which left the form's two-up fields swimming in
+          whitespace on the left while an invoice's customer, channel and item
+          lines fought over 380px on the right. The invoice panel is not a
+          sidebar — it is the half of this page an agent reconciles against — so
+          the space is split in proportion and both halves get a usable measure.
+          `minmax(0,…)` on both tracks is what stops a long Arabic customer name
+          widening the page instead of wrapping. */}
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         {/* ------------------------------------------------------------------ */}
         {/* Workflow — what the agent fills in                                  */}
         {/* ------------------------------------------------------------------ */}

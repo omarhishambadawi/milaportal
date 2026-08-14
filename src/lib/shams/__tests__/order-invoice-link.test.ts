@@ -241,13 +241,25 @@ describe("the whole chain, and what it costs", () => {
     expect(salesCalls()).toHaveLength(1);
     expect(stockCalls()).toHaveLength(2);
     expect(items).toEqual([
-      { itemCode: "SKU-1", itemName: "Item SKU-1", invoiced: 2, state: "in_stock", quantity: 14 },
+      {
+        itemCode: "SKU-1",
+        itemName: "Item SKU-1",
+        invoiced: 2,
+        state: "in_stock",
+        quantity: 14,
+        // Straight off the document's `Rate` and `Item_NetAmt`, through the
+        // whole chain — the panel's price columns read these.
+        unitRate: 50,
+        lineTotal: 100,
+      },
       {
         itemCode: "SKU-2",
         itemName: "Item SKU-2",
         invoiced: 1,
         state: "out_of_stock",
         quantity: 0,
+        unitRate: 50,
+        lineTotal: 50,
       },
     ]);
   });

@@ -43,7 +43,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Skeleton } from "@/components/ui/skeleton";
-import { fmtSAR } from "@/lib/branches";
+import { CURRENCY, fmtSAR } from "@/lib/branches";
 import { cn } from "@/lib/utils";
 import { useBranchLabels, type BranchLabel } from "@/features/shams/hooks/use-shams-data";
 import type { ItemAvailability, StockState } from "@/lib/shams/availability";
@@ -366,23 +366,66 @@ const STOCK_LABEL: Record<StockState, string> = {
  * rendered identically as `MOUNJARO KWIKPEN 5 MG/0.6…`. Two products that look
  * the same on screen is a dispensing error waiting to happen.
  *
- * So the name column wraps instead of truncating, and quantity and stock get
- * fixed columns that line up down the list. The full name is on `title` as
+ * So the name column wraps instead of truncating, and everything else gets a
+ * fixed column that lines up down the list. The full name is on `title` as
  * well, for the pathological ones.
+ *
+ * ## What a line now says
+ *
+ * Product, code, quantity, unit price, line total, stock. The money was there
+ * all along — `Rate`, `Amt` and `Item_NetAmt` come back on every sales line —
+ * and was simply dropped at the availability boundary, so an agent could see
+ * that a branch held four of something without being able to see what the
+ * customer paid for it. `ItemAvailability` carries it now; nothing new is
+ * fetched.
+ *
+ * The code sits *under* the name rather than in its own column. At this width
+ * six columns would leave the product — the one field that is genuinely long
+ * and genuinely ambiguous between similar medications — with the least space of
+ * anything on the row, which is the trade this whole table exists to avoid.
  */
 function ItemLines({ items }: { items: ItemAvailability[] }) {
+  /** True when the MIS priced any line here; an unpriced document loses the columns. */
+  const priced = items.some((i) => i.lineTotal !== null || i.unitRate !== null);
+
   return (
     <div className="mt-3">
       <table className="w-full table-fixed border-collapse text-left">
-        <caption className="sr-only">Invoice items and branch stock</caption>
+        <caption className="sr-only">Invoice items, prices and branch stock</caption>
         <thead>
           <tr className="border-b border-border/60 text-[10px] uppercase tracking-wide text-muted-foreground">
-            <th scope="col" className="w-auto pb-1 pr-2 font-medium">
-              Item
+            {/* No width on the product column: `table-fixed` gives it whatever
+                the fixed ones leave, which is the largest share and the point. */}
+            <th scope="col" className="pb-1 pr-2 font-medium">
+              Product
             </th>
-            <th scope="col" className="w-12 pb-1 pr-2 text-right font-medium">
+            <th scope="col" className="w-10 pb-1 pr-2 text-right font-medium">
               Qty
             </th>
+            {priced && (
+              <>
+                {/* Columns from `sm` up; on a phone they fold into the product
+                    cell instead. Six fixed columns cannot fit a 295px table
+                    without either overflowing the page sideways or crushing the
+                    product name, and both are worse than one extra line. */}
+                {/* The unit lives in the header, once, instead of on every
+                    cell: repeating " SAR" down two columns costs ~34px each,
+                    and on this page that comes straight out of the product name
+                    beside it. */}
+                <th
+                  scope="col"
+                  className="hidden w-[3.75rem] pb-1 pr-2 text-right font-medium sm:table-cell"
+                >
+                  Unit <span className="font-normal">({CURRENCY})</span>
+                </th>
+                <th
+                  scope="col"
+                  className="hidden w-[4.25rem] pb-1 pr-2 text-right font-medium sm:table-cell"
+                >
+                  Total <span className="font-normal">({CURRENCY})</span>
+                </th>
+              </>
+            )}
             <th scope="col" className="w-24 pb-1 text-right font-medium">
               Stock
             </th>
@@ -400,10 +443,43 @@ function ItemLines({ items }: { items: ItemAvailability[] }) {
                 >
                   {item.itemName || item.itemCode}
                 </span>
+                {item.itemCode && item.itemName && (
+                  <span className="mt-0.5 block font-mono text-[10px] leading-none text-muted-foreground">
+                    {item.itemCode}
+                  </span>
+                )}
+                {/* The phone's version of the two money columns. Same values,
+                    same formatter — only the placement changes. */}
+                {priced && (item.unitRate !== null || item.lineTotal !== null) && (
+                  <span className="mt-1 block text-[10.5px] leading-none tabular-nums text-muted-foreground sm:hidden">
+                    {item.unitRate === null ? "—" : fmtSAR(item.unitRate, { exact: true })}
+                    {" · "}
+                    <span className="font-medium text-foreground">
+                      {item.lineTotal === null ? "—" : fmtSAR(item.lineTotal, { exact: true })}
+                    </span>
+                  </span>
+                )}
               </td>
               <td className="py-1.5 pr-2 text-right text-xs tabular-nums text-muted-foreground">
                 &times;{item.invoiced}
               </td>
+              {priced && (
+                <>
+                  <td className="hidden py-1.5 pr-2 text-right text-xs tabular-nums text-muted-foreground sm:table-cell">
+                    {/* `exact` so a column of figures shares one shape: 45.00
+                        above 167.50, not 45 above 167.5. A line the document
+                        priced at nothing shows a dash — never a made-up 0.00. */}
+                    {item.unitRate === null
+                      ? "—"
+                      : fmtSAR(item.unitRate, { exact: true, bare: true })}
+                  </td>
+                  <td className="hidden py-1.5 pr-2 text-right text-xs font-medium tabular-nums sm:table-cell">
+                    {item.lineTotal === null
+                      ? "—"
+                      : fmtSAR(item.lineTotal, { exact: true, bare: true })}
+                  </td>
+                </>
+              )}
               <td className="py-1.5 text-right">
                 {item.state === "in_stock" ? (
                   <span className="whitespace-nowrap text-[11px] text-muted-foreground">

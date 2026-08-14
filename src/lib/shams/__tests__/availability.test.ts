@@ -148,10 +148,64 @@ describe("resolveItemAvailability", () => {
         invoiced: 2,
         state: "in_stock",
         quantity: 14,
+        unitRate: 10,
+        lineTotal: 20,
       },
-      { itemCode: "SKU-2", itemName: "Ozempic 1", invoiced: 1, state: "out_of_stock", quantity: 0 },
-      { itemCode: "SKU-3", itemName: "Trulicity", invoiced: 4, state: "unknown", quantity: null },
+      {
+        itemCode: "SKU-2",
+        itemName: "Ozempic 1",
+        invoiced: 1,
+        state: "out_of_stock",
+        quantity: 0,
+        unitRate: 10,
+        lineTotal: 10,
+      },
+      {
+        itemCode: "SKU-3",
+        itemName: "Trulicity",
+        invoiced: 4,
+        state: "unknown",
+        quantity: null,
+        unitRate: 10,
+        lineTotal: 40,
+      },
     ]);
+  });
+
+  /**
+   * The money the panel shows per line.
+   *
+   * Carried from the document rather than re-derived: `Rate` and
+   * `Item_NetAmt`/`Amt` are on every sales line and were being dropped here, so
+   * the item table could say how many a branch held but not what one cost.
+   */
+  describe("line money", () => {
+    it("carries the unit rate and the line total off the document", () => {
+      const rows = resolveItemAvailability([item("SKU-1", "Mounjaro 2.5", 3)], new Map(), "P0221");
+      expect(rows[0]).toMatchObject({ unitRate: 10, lineTotal: 30 });
+    });
+
+    it("prefers the net amount, falling back to the plain amount", () => {
+      const line = { ...item("SKU-1", "Mounjaro 2.5", 2), netAmount: 0, amount: 55 };
+      expect(resolveItemAvailability([line], new Map(), "P0221")[0].lineTotal).toBe(55);
+    });
+
+    it("reports an unpriced line as unknown rather than as free", () => {
+      // `toMoney` turns an absent field into 0, so a line with no money at all
+      // would otherwise render as a confident "0.00 SAR" for a medication.
+      const line = { ...item("SKU-1", "Mounjaro 2.5", 2), unitRate: 0, amount: 0, netAmount: 0 };
+      const [row] = resolveItemAvailability([line], new Map(), "P0221");
+      expect(row.unitRate).toBeNull();
+      expect(row.lineTotal).toBeNull();
+    });
+
+    it("keeps a genuinely free line priced at zero once anything else is known", () => {
+      const line = { ...item("SKU-1", "Mounjaro 2.5", 2), unitRate: 0, amount: 0, netAmount: 12 };
+      expect(resolveItemAvailability([line], new Map(), "P0221")[0]).toMatchObject({
+        unitRate: 0,
+        lineTotal: 12,
+      });
+    });
   });
 
   it("answers for the branch asked about, not the one with the most stock", () => {

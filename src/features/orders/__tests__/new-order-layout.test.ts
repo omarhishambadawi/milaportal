@@ -30,7 +30,11 @@ const source = readFileSync(
 
 describe("two-column workspace", () => {
   it("splits into two columns only from the xl breakpoint", () => {
-    expect(source).toContain("xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]");
+    // 60/40 in fractions, not a fixed right-hand width. `minmax(0,26rem)` made
+    // the verification column a sidebar — under 30% of the page — which starved
+    // the invoice's customer, channel and item lines while the form's fields
+    // swam in whitespace opposite.
+    expect(source).toContain("xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]");
     // A single-column `grid` below that breakpoint: no `md:`/`lg:` column rule
     // anywhere on the page shell.
     expect(source).not.toMatch(/\bmd:grid-cols-\[/);

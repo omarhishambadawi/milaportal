@@ -1740,14 +1740,34 @@ which is what stops a long Arabic customer name widening the page. The layout
 contract is asserted in `__tests__/new-order-layout.test.ts` — a source-level
 suite, since the test environment is Node and nothing else here renders.
 
+The split is **60/40** (`xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]`), in
+fractions rather than the fixed `26rem` it started as — that made the
+verification column a sidebar at under 30% of the page, starving the invoice
+while the form's two-up fields swam in whitespace opposite. Measured at 1440px:
+806 / 538.
+
 `OrderInvoicePanel` gives each document a compact header (number, state, total,
 customer) over branch, channel, document date, *Verified by MilaPortal* and the
 item lines. Every document **starts open** — folding was for the old capped
-column, and the items are what a pharmacist opens the panel for. The item list
-is a three-column table (item / qty / stock) whose name column **wraps rather
-than truncates**: it used to be `truncate`d to whatever the quantity and stock
-badge left over, rendering `MOUNJARO KWIKPEN 5 MG/0.6ML` and
-`… 7.5 MG/0.6ML` identically — two different products, one string on screen.
+column, and the items are what a pharmacist opens the panel for.
+
+The item table is **product · code · qty · unit · total · stock**. The money was
+always on the wire — `Rate`, `Amt` and `Item_NetAmt` come back on every sales
+line — and was being dropped at the `ItemAvailability` boundary, so the panel
+could say a branch held four of something but not what it cost. It is carried
+through now; nothing extra is fetched. An unpriced line reports `null` and
+renders a dash: `toMoney` turns an absent field into `0`, and a confident
+"0.00 SAR" against a medication is worse than saying nothing.
+
+The product column takes whatever the fixed columns leave (214px at 1440) and
+**wraps rather than truncates** — it used to be cut to whatever the quantity and
+stock badge left over, rendering `MOUNJARO KWIKPEN 5 MG/0.6ML` and
+`… 7.5 MG/0.6ML` identically, two different products as one string. The item
+code sits under the name rather than in its own column, and `SAR` sits in the
+`Unit`/`Total` headers rather than on every cell; both buy width for the one
+field that is genuinely long. Below `sm` the two money columns fold into a line
+under the product name, because six fixed columns cannot fit a 295px table
+without either overflowing sideways or crushing the name.
 
 ### Writes
 
