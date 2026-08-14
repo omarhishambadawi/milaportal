@@ -38,8 +38,8 @@ import { useOrdersListData } from "@/features/orders/hooks/use-orders-list-data"
 import { useOrdersMutations } from "@/features/orders/hooks/use-orders-mutations";
 import {
   CallCentreCell,
-  callCentreRowTint,
   callCentreState,
+  orderRowBackground,
 } from "@/features/orders/components/call-centre-cell";
 import { useOrdersExport } from "@/features/orders/hooks/use-orders-export";
 import {
@@ -490,13 +490,10 @@ function OrdersList() {
                   const ccState = callCentreState(o);
                   const isStarred = starred.has(o.id);
                   const zebra = idx % 2 === 1;
-                  // The tint marks the *warning* case only. A full-width teal
-                  // band on every verified order was most of the table lit up
-                  // at once, which made the one row worth looking at harder to
-                  // find, not easier; the tick in the first column carries the
-                  // positive state now.
-                  const tint = callCentreRowTint(ccState);
-                  const rowBg = tint || (zebra ? "bg-muted/25" : "bg-background");
+                  // Zebra base, plus a light-mode-only warning tint. Dark mode
+                  // gets no tint: every row there resolves to the same base, and
+                  // the glyph and rail in the first column carry the state.
+                  const rowBg = orderRowBackground(ccState, zebra);
                   const cellCls = "align-middle border-b border-border/40 py-3";
                   return (
                     <tr
@@ -511,6 +508,10 @@ function OrdersList() {
                         className={cn("text-center px-2 relative", cellCls)}
                         onClick={(e) => e.stopPropagation()}
                       >
+                        {/* The 3px rail, which is what carries the row's state
+                            now that dark mode no longer tints the row itself.
+                            Cancelled and walk-in both read destructive; they are
+                            told apart by the glyph, not the colour. */}
                         {ccState !== "pending" && (
                           <span
                             aria-hidden
