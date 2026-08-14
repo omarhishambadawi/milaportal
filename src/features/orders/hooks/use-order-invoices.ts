@@ -22,6 +22,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/query-keys";
 import { useInvoiceStockMany, type InvoiceLookup } from "@/features/shams/hooks/use-shams-data";
 import {
+  eligibleForAutoCompletion,
   invoiceKey,
   invoicesToRecord,
   needsValueSync,
@@ -48,6 +49,16 @@ interface UseOrderInvoicesArgs {
    */
   storedValue: number | null | undefined;
   storedVerifiedFlag: boolean | null | undefined;
+  /**
+   * The order's stored status.
+   *
+   * Read for one reason: an order can be fully reconciled — value and flag both
+   * in agreement — and still be one step from finished. Without this the hook
+   * would find nothing to sync and never call the server, and the automatic
+   * completion would never happen for any order that had already been through
+   * a reconciliation.
+   */
+  storedStatus: string | null | undefined;
   /** False for agents without `view_shams_mis`; nothing is requested then. */
   enabled: boolean;
 }
@@ -80,6 +91,7 @@ export function useOrderInvoices({
   branchNo,
   storedValue,
   storedVerifiedFlag,
+  storedStatus,
   enabled,
 }: UseOrderInvoicesArgs): OrderInvoicesResult {
   const qc = useQueryClient();
@@ -209,8 +221,12 @@ export function useOrderInvoices({
     // Send them all: the server is idempotent on each, and recomputes the total
     // from the log rather than from what we send.
     if (needsValueSync(summary, storedValue, storedVerifiedFlag)) return summary.verified;
+    // Reconciled already, but everything the completion rule asks for is true
+    // and the order is still open. The server re-checks all of this and is the
+    // one that decides; this only stops the call being skipped.
+    if (eligibleForAutoCompletion(summary, storedStatus)) return summary.verified;
     return [];
-  }, [activity.isSuccess, summary, recordedKeys, storedValue, storedVerifiedFlag]);
+  }, [activity.isSuccess, summary, recordedKeys, storedValue, storedVerifiedFlag, storedStatus]);
 
   useEffect(() => {
     if (!orderId || !enabled || pendingWrite.length === 0) return;
@@ -225,6 +241,7 @@ export function useOrderInvoices({
       summary.verifiedTotal,
       storedValue ?? "",
       storedVerifiedFlag ? "1" : "0",
+      storedStatus ?? "",
     ].join("|");
     // Never cleared, including on failure. `useQueries` hands back a new array
     // every render, so `pendingWrite` is a new array every render too; a guard
@@ -236,7 +253,15 @@ export function useOrderInvoices({
     // `record` is recreated each render by `useMutation`; the signature above is
     // what actually decides whether this runs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderId, enabled, pendingWrite, summary.verifiedTotal, storedValue, storedVerifiedFlag]);
+  }, [
+    orderId,
+    enabled,
+    pendingWrite,
+    summary.verifiedTotal,
+    storedValue,
+    storedVerifiedFlag,
+    storedStatus,
+  ]);
 
   const refresh = useCallback(() => {
     for (const query of results) void query.refetch();

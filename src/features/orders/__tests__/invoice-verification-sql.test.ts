@@ -419,3 +419,105 @@ describe("Call Centre attribution", () => {
     );
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Automatic completion                                                        */
+/* -------------------------------------------------------------------------- */
+
+const autoSql = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../supabase/migrations/20260815120000_auto_complete_verified_call_centre.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
+
+describe("an order completes itself only when nothing is left to do", () => {
+  it("requires every invoice on the order to be verified, not merely one", () => {
+    // `current_cnt` counts the numbers `orders.invoice_no` names; `verified_cnt`
+    // counts the ones the MIS has answered for. Equality is the guard that stops
+    // an order completing while a second invoice is still pending.
+    expect(autoSql).toContain("verified_cnt = current_cnt");
+    expect(autoSql).toContain("(SELECT COUNT(*) FROM current_keys)");
+  });
+
+  it("requires a Call Centre document, read from the invoice's own channel", () => {
+    expect(autoSql).toContain("call_centre_cnt > 0");
+    // The channel comes off the activity row the MIS's answer was recorded on,
+    // and only those rows are counted — never the order-level flag, which a
+    // person can set by hand.
+    expect(autoSql).toContain("(a.details->>'is_call_centre')::boolean AS is_cc");
+    expect(autoSql).toContain("COUNT(*) FILTER (WHERE is_cc IS TRUE)");
+  });
+
+  it("never revives a cancelled order, and never repeats itself", () => {
+    // One clause carries both: Cancelled is a manual decision this must not
+    // undo, and Completed is what makes a re-check write nothing.
+    expect(autoSql).toContain("prev_status NOT IN ('Cancelled', 'Completed')");
+  });
+
+  it("reconciles the value in the same statement that moves the status", () => {
+    // So there is no path where the status advances while the figure disagrees.
+    const update = autoSql.slice(autoSql.indexOf("UPDATE public.orders\n       SET invoice_value"));
+    expect(update.slice(0, 700)).toContain("invoice_value = verified_sum");
+    expect(update.slice(0, 700)).toContain(
+      "status = CASE WHEN should_complete THEN 'Completed' ELSE status END",
+    );
+  });
+
+  it("writes its own event instead of a bare status change", () => {
+    expect(autoSql).toContain("'auto_completed'");
+    expect(autoSql).toContain("'from',                prev_status");
+    expect(autoSql).toContain("'call_centre_invoice', call_centre_nos");
+    expect(autoSql).toContain("'automated',           true");
+  });
+
+  it("stands the generic status event down only while a verification runs", () => {
+    // A person changing the dropdown must still produce `status_changed`.
+    expect(autoSql).toContain("IF NEW.status IS DISTINCT FROM OLD.status AND NOT automated THEN");
+    expect(autoSql).toContain("'status_changed'");
+    expect(autoSql).toContain(
+      "COALESCE(current_setting('milaserv.invoice_sync', true), 'off') = 'on'",
+    );
+  });
+
+  it("only writes the completion event when the row actually moved", () => {
+    expect(autoSql).toContain("synced := FOUND;");
+    expect(autoSql).toContain("IF should_complete THEN");
+  });
+
+  it("does not make completion depend on being the order's assignee", () => {
+    // The permission predicate is the one the reconciliation already used;
+    // completing is part of reconciling, not a separate act.
+    expect(autoSql).toContain("public.has_permission(uid, 'verify_all_orders')");
+    expect(autoSql).toContain("public.has_permission(uid, 'edit_all_orders')");
+  });
+});
+
+describe("invoices_verified", () => {
+  it("is a separate column from the Call Centre flag", () => {
+    // Two booleans, because an unticked box meant both "not checked yet" and
+    // "checked, and not a Call Centre invoice" — opposite things on screen.
+    expect(autoSql).toMatch(/ADD COLUMN IF NOT EXISTS invoices_verified boolean/);
+  });
+
+  it("is backfilled from the log, around the update trigger", () => {
+    expect(autoSql).toContain(
+      "ALTER TABLE public.orders DISABLE TRIGGER orders_prevent_reassignment;",
+    );
+    expect(autoSql).toContain(
+      "ALTER TABLE public.orders ENABLE TRIGGER orders_prevent_reassignment;",
+    );
+    const disabled = autoSql.indexOf("DISABLE TRIGGER orders_prevent_reassignment");
+    const backfill = autoSql.indexOf("SET invoices_verified = true");
+    const enabled = autoSql.indexOf("ENABLE TRIGGER orders_prevent_reassignment");
+    expect(disabled).toBeLessThan(backfill);
+    expect(backfill).toBeLessThan(enabled);
+  });
+
+  it("is set by the reconciliation whatever the MIS answered", () => {
+    expect(autoSql).toContain("invoices_verified = true,");
+  });
+});

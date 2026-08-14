@@ -210,6 +210,35 @@ export function authoritativeValue(
   return summary.verified.length > 0 ? summary.verifiedTotal : typedValue;
 }
 
+/**
+ * Is there anything left to do on this order but mark it done?
+ *
+ * The client's copy of the rule `record_invoice_verification` applies, and it
+ * exists for one reason: to know whether the server is worth calling. An order
+ * whose value and flag already agree has nothing to reconcile, so without this
+ * the reconciliation would never be asked for and an order sitting one step
+ * from completion would sit there for ever — the same one-shot trap the value
+ * sync fell into.
+ *
+ * The database decides; this only decides whether to ask. Kept deliberately
+ * identical to it so the two cannot disagree about what "finished" means:
+ *
+ *   * every invoice on the order verified, not merely one — a second invoice
+ *     still pending means the order is not finished;
+ *   * at least one of them a Call Centre document, by the MIS's own channel;
+ *   * not already Cancelled, which is a manual decision this must never undo,
+ *     and not already Completed, which is what makes a re-check free.
+ */
+export function eligibleForAutoCompletion(
+  summary: InvoiceSummary,
+  storedStatus: string | null | undefined,
+): boolean {
+  if (!summary.allVerified) return false;
+  if (!summary.callCentreVerified) return false;
+  const status = (storedStatus ?? "").trim();
+  return status !== "Cancelled" && status !== "Completed";
+}
+
 /** One entry of `record_invoice_verification`'s `_entries` payload. */
 export interface VerificationEntry {
   invoice_no: string;

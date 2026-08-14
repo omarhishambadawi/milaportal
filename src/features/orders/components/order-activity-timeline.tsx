@@ -39,6 +39,7 @@ function describe(e: OrderActivityEvent, nameOf: (id: unknown) => string): strin
     return `Invoice #${d.invoice_no ?? d.invoice_key ?? "—"} value updated automatically`;
   if (e.action === "value_synced") return "Order value updated automatically by MilaPortal";
   if (e.action === "call_center_flagged") return "Call Center Invoice marked automatically";
+  if (e.action === "auto_completed") return "Order automatically completed by MilaPortal";
   if (e.action === "edited") {
     const keys = Object.keys(d);
     if (keys.length === 0) return "Edited the order";
@@ -89,6 +90,16 @@ function detailLine(e: OrderActivityEvent): string | null {
     return d.invoice_no
       ? `Invoice #${String(d.invoice_no).split(", ").join(", #")} verified as Call Centre`
       : "A verified Call Centre invoice was found";
+  }
+  if (e.action === "auto_completed") {
+    // Says why, not just what: the invoices are the evidence, and the
+    // call-centre one is named separately because it is the condition that
+    // qualified the order rather than merely one of its documents.
+    const parts = [`${d.from ?? "—"} → ${d.to ?? "Completed"}`];
+    if (d.total !== undefined && d.total !== null)
+      parts.push(`verified total ${fmtSAR(Number(d.total))}`);
+    if (d.call_centre_invoice) parts.push(`Call Centre invoice ${String(d.call_centre_invoice)}`);
+    return parts.join(" · ");
   }
   if (e.action === "assigned" && d.to_team) return `Team: ${String(d.to_team).replace("_", " ")}`;
   return null;

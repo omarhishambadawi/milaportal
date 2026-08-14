@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   authoritativeValue,
   dedupeInvoices,
+  eligibleForAutoCompletion,
   invoiceKey,
   invoicesToRecord,
   needsValueSync,
@@ -444,5 +445,74 @@ describe("verificationEntries", () => {
 
   it("sends nothing at all for an order whose invoice has not appeared", () => {
     expect(verificationEntries([invoice("0169580")])).toEqual([]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Automatic completion                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * An order with nothing left to do.
+ *
+ * The client's copy of the rule the database applies, and the reason it exists
+ * is the same one that made the value sync self-healing: an order can be fully
+ * reconciled and still be one step from finished, and if nothing here says so
+ * the server is never called and the order sits open for ever.
+ */
+describe("eligibleForAutoCompletion", () => {
+  it("completes a fully verified Call Centre order", () => {
+    const s = summarizeInvoices([verified("0169580", 212.6)]);
+    expect(eligibleForAutoCompletion(s, "Pending")).toBe(true);
+  });
+
+  it("refuses while any invoice is still pending", () => {
+    // The multi-invoice case that must not complete early: one document has
+    // landed, the other has not, and the order is not finished.
+    const s = summarizeInvoices([verified("0169580", 212.6), invoice("0169581")]);
+    expect(s.callCentreVerified).toBe(true);
+    expect(eligibleForAutoCompletion(s, "Pending")).toBe(false);
+  });
+
+  it("refuses while an invoice could not be reached", () => {
+    const s = summarizeInvoices([
+      verified("0169580", 212.6),
+      invoice("0169581", { state: "unavailable" }),
+    ]);
+    expect(eligibleForAutoCompletion(s, "Pending")).toBe(false);
+  });
+
+  it("refuses when no verified invoice is a Call Centre document", () => {
+    const s = summarizeInvoices([
+      verified("22138", 230, { customer: "CASH SALES", isCallCentre: false }),
+    ]);
+    expect(s.allVerified).toBe(true);
+    expect(eligibleForAutoCompletion(s, "Pending")).toBe(false);
+  });
+
+  it("completes a mixed order on the strength of the one Call Centre invoice", () => {
+    const s = summarizeInvoices([
+      verified("0123891", 242.71, { customer: "CASH IN BOX-", isCallCentre: false }),
+      verified("0123892", 1261.4, { isCallCentre: true }),
+    ]);
+    expect(s.verifiedTotal).toBe(1504.11);
+    expect(eligibleForAutoCompletion(s, "Pending")).toBe(true);
+  });
+
+  it("never revives a cancelled order", () => {
+    // Cancellation is a manual business decision taken when a pharmacist
+    // reports one. No amount of invoice verification may undo it.
+    const s = summarizeInvoices([verified("0169580", 212.6)]);
+    expect(eligibleForAutoCompletion(s, "Cancelled")).toBe(false);
+  });
+
+  it("asks for nothing once the order is already Completed", () => {
+    // The idempotency guard: a re-check of a completed order is free.
+    const s = summarizeInvoices([verified("0169580", 212.6)]);
+    expect(eligibleForAutoCompletion(s, "Completed")).toBe(false);
+  });
+
+  it("refuses an order with no invoices at all", () => {
+    expect(eligibleForAutoCompletion(summarizeInvoices([]), "Pending")).toBe(false);
   });
 });

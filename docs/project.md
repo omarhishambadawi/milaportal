@@ -1574,13 +1574,28 @@ comes back to is the one they left.
 One twelve-column table at every width, scrolled sideways below `min-w: 1240`.
 Three of those columns carry state rather than a field:
 
-- **Verified** (col 1) — the `call_center_verified` checkbox, a 3px `bg-primary`
-  rail down the row's left edge, and the row tint `--tint-row`. One state, one
-  set of styles, both themes. Light mode tinted at 6% turquoise over a white
-  card, which was invisible without a second row to compare against; it is 15%
-  now — the row composites to `#dcf5f5`, body text 14.5:1 and muted text 5.2:1 —
-  matching what dark mode already did at 12% over a dark surface (`#13313a`,
-  unchanged).
+- **Call Centre** (col 1) — read-only, derived, three states
+  (`components/call-centre-cell`). It used to be a checkbox an agent could tick,
+  which made a claim the row cannot support: the channel is a property of the
+  *document*, and since `record_invoice_verification` re-derives the flag on
+  every reconciliation a disagreeing tick would be silently overwritten. The
+  cell is a `span` with a tooltip now — nothing to press.
+
+  The third state is the point. `call_center_verified = false` meant both "not
+  checked yet" and "checked, and it is a walk-in invoice", and those want
+  opposite treatments; `invoices_verified` separates them:
+
+  | State      | Condition                                     | Row                             |
+  | ---------- | --------------------------------------------- | ------------------------------- |
+  | `pending`  | `!invoices_verified`                          | muted dash, no tint             |
+  | `verified` | `call_center_verified`                        | success tick, success rail      |
+  | `walk_in`  | `invoices_verified && !call_center_verified`  | warning icon, rail, faint tint  |
+
+  Only the warning case tints the row, at ~5.5% destructive. The old positive
+  tint (`--tint-row`, 15% turquoise across every verified row) is gone: on a
+  page where most orders are verified it lit up most of the table at once, which
+  made the one row worth looking at harder to find rather than easier. The tick
+  carries the positive state.
 - **Star** (col 2) — `useStarredOrders`, below. Per agent, in `order_stars`.
 - **Invoice No.** — every invoice on the order, one per line
   (`components/invoice-cell`). It used to show the first with a "+2" pill, which
@@ -3142,7 +3157,20 @@ below — so a phone never scrolls sideways. Branch labels come from
 11. **`call_center_verified` means the call centre raised the invoice.** It is
     set automatically only from a *verified* document whose MIS channel says
     Call Centre, never from a typed number, an attempted lookup, a failed one or
-    a pending one — and it is only ever set, never cleared, by that path.
+    a pending one — and it is only ever set, never cleared, by that path. It is
+    **not** manually tickable from the Orders list any more; the order form
+    still offers it to `verify_*` holders, for a document raised outside the
+    call centre that operationally belongs to it.
+12. **An order completes itself when nothing is left to do.**
+    `record_invoice_verification` moves `status` to `Completed` in the same
+    statement that reconciles the value, and only when all of: every invoice the
+    order names is verified (`verified_cnt = current_cnt`, so a second pending
+    invoice blocks it), at least one is a Call Centre document, and the order is
+    neither `Cancelled` nor already `Completed`.
+13. **Cancelled is terminal for the automation.** Cancellation is a manual
+    decision an agent takes when a pharmacist reports one, and no amount of
+    later invoice verification may undo it. The same clause makes a re-check
+    free: once `Completed`, nothing is written and no event is raised.
 
 ### Complaints
 

@@ -188,6 +188,21 @@ export function useOrderForm(mode: "create" | "edit") {
     setForm((f) => (f.call_center_verified ? f : { ...f, call_center_verified: true }));
   }, [existing]);
 
+  /**
+   * The status, once the server has moved it.
+   *
+   * Hydration runs once per order, so a form opened while an order was Pending
+   * goes on holding "Pending" after the portal completes it — and `submit`
+   * sends the whole row, so the next save would quietly put it back. There is
+   * no status control on this page for this to fight with; the Orders list owns
+   * that, and this only follows what the database now says.
+   */
+  useEffect(() => {
+    const stored = existing?.status;
+    if (!stored) return;
+    setForm((f) => (f.status === stored ? f : { ...f, status: stored }));
+  }, [existing]);
+
   useEffect(() => {
     if (mode === "create") setForm((f) => ({ ...f, team: defaultTeam(role) }));
   }, [role, mode]);
@@ -263,6 +278,9 @@ export function useOrderForm(mode: "create" | "edit") {
     // with what has been verified rather than only whether an invoice is new.
     storedValue: existing?.invoice_value,
     storedVerifiedFlag: (existing as any)?.call_center_verified,
+    // Lets the hook notice an order that is fully reconciled but still open,
+    // which is the only remaining reason to call the server.
+    storedStatus: existing?.status,
     enabled: canViewShams && (mode === "edit" ? !!existing : !!form.branch_no),
   });
 

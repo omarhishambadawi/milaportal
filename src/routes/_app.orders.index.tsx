@@ -12,7 +12,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   ChevronLeft,
   ChevronRight,
@@ -37,6 +36,11 @@ import { InvoiceCell } from "@/features/orders/components/invoice-cell";
 import { useOrdersListFilters } from "@/features/orders/hooks/use-orders-list-filters";
 import { useOrdersListData } from "@/features/orders/hooks/use-orders-list-data";
 import { useOrdersMutations } from "@/features/orders/hooks/use-orders-mutations";
+import {
+  CallCentreCell,
+  callCentreRowTint,
+  callCentreState,
+} from "@/features/orders/components/call-centre-cell";
 import { useOrdersExport } from "@/features/orders/hooks/use-orders-export";
 import {
   rememberOrderReturn,
@@ -72,12 +76,10 @@ function OrdersList() {
     namesById: f.namesById,
     cities: f.cities,
   });
-  const { canEditOrder, canVerifyOrder, updateStatus, toggleVerified } = useOrdersMutations({
+  const { canEditOrder, updateStatus } = useOrdersMutations({
     userId: f.userId,
     canEditAll: f.canEditAll,
     canEditOwn: f.canEditOwn,
-    canVerifyAll: f.canVerifyAll,
-    canVerifyOwn: f.canVerifyOwn,
   });
   // Personal, per-agent shortcuts, read through `useOrdersListFilters` because
   // "Starred only" is one of the filters. RLS on `order_stars` is what keeps one
@@ -437,7 +439,7 @@ function OrdersList() {
                 <tr className="text-[10.5px] uppercase tracking-[0.08em] font-semibold text-muted-foreground">
                   <th
                     className="text-center px-2 py-3 border-b border-border/70"
-                    title="Call Center verified"
+                    title="Call Centre — derived from verified invoice data"
                   >
                     <ShieldCheck
                       className="h-4 w-4 mx-auto text-primary/80"
@@ -485,15 +487,16 @@ function OrdersList() {
                 )}
                 {pageRows.map((o: any, idx: number) => {
                   const editable = canEditOrder(o);
-                  const canVerifyRow = canVerifyOrder(o);
-                  const verified = !!o.call_center_verified;
+                  const ccState = callCentreState(o);
                   const isStarred = starred.has(o.id);
                   const zebra = idx % 2 === 1;
-                  const rowBg = verified
-                    ? "bg-[var(--tint-row)]"
-                    : zebra
-                      ? "bg-muted/25"
-                      : "bg-background";
+                  // The tint marks the *warning* case only. A full-width teal
+                  // band on every verified order was most of the table lit up
+                  // at once, which made the one row worth looking at harder to
+                  // find, not easier; the tick in the first column carries the
+                  // positive state now.
+                  const tint = callCentreRowTint(ccState);
+                  const rowBg = tint || (zebra ? "bg-muted/25" : "bg-background");
                   const cellCls = "align-middle border-b border-border/40 py-3";
                   return (
                     <tr
@@ -508,18 +511,16 @@ function OrdersList() {
                         className={cn("text-center px-2 relative", cellCls)}
                         onClick={(e) => e.stopPropagation()}
                       >
-                        {verified && (
+                        {ccState !== "pending" && (
                           <span
                             aria-hidden
-                            className="absolute left-0 top-0 bottom-0 w-[3px] bg-primary"
+                            className={cn(
+                              "absolute left-0 top-0 bottom-0 w-[3px]",
+                              ccState === "verified" ? "bg-success" : "bg-destructive",
+                            )}
                           />
                         )}
-                        <Checkbox
-                          checked={verified}
-                          disabled={!canVerifyRow}
-                          onCheckedChange={(v) => toggleVerified(o, !!v)}
-                          aria-label="Call Center invoice verified"
-                        />
+                        <CallCentreCell state={ccState} />
                       </td>
                       <td
                         className={cn("text-center px-1", cellCls)}
