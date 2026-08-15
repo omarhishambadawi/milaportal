@@ -41,6 +41,7 @@ import { Route as AppBranchesImportRouteImport } from './routes/_app.branches.im
 import { Route as AppAdminYeastarDiagnosticsRouteImport } from './routes/_app.admin.yeastar-diagnostics'
 import { Route as AppAdminYeastarRouteImport } from './routes/_app.admin.yeastar'
 import { Route as AppAdminUsersRouteImport } from './routes/_app.admin.users'
+import { Route as AppAdminShamsDiagnosticsRouteImport } from './routes/_app.admin.shams-diagnostics'
 import { Route as AppAdminBranchesRouteImport } from './routes/_app.admin.branches'
 import { Route as Char91DotmcpChar93InvokeToolToolRouteImport } from './routes/[.mcp]/invoke-tool/$tool'
 import { Route as DotlovableOauthConsentRouteImport } from './routes/[.]lovable.oauth.consent'
@@ -211,6 +212,12 @@ const AppAdminUsersRoute = AppAdminUsersRouteImport.update({
   path: '/admin/users',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAdminShamsDiagnosticsRoute =
+  AppAdminShamsDiagnosticsRouteImport.update({
+    id: '/admin/shams-diagnostics',
+    path: '/admin/shams-diagnostics',
+    getParentRoute: () => AppRoute,
+  } as any)
 const AppAdminBranchesRoute = AppAdminBranchesRouteImport.update({
   id: '/admin/branches',
   path: '/admin/branches',
@@ -267,6 +274,7 @@ export interface FileRoutesByFullPath {
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
   '/admin/branches': typeof AppAdminBranchesRoute
+  '/admin/shams-diagnostics': typeof AppAdminShamsDiagnosticsRoute
   '/admin/users': typeof AppAdminUsersRoute
   '/admin/yeastar': typeof AppAdminYeastarRoute
   '/admin/yeastar-diagnostics': typeof AppAdminYeastarDiagnosticsRoute
@@ -307,6 +315,7 @@ export interface FileRoutesByTo {
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
   '/admin/branches': typeof AppAdminBranchesRoute
+  '/admin/shams-diagnostics': typeof AppAdminShamsDiagnosticsRoute
   '/admin/users': typeof AppAdminUsersRoute
   '/admin/yeastar': typeof AppAdminYeastarRoute
   '/admin/yeastar-diagnostics': typeof AppAdminYeastarDiagnosticsRoute
@@ -349,6 +358,7 @@ export interface FileRoutesById {
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
   '/_app/admin/branches': typeof AppAdminBranchesRoute
+  '/_app/admin/shams-diagnostics': typeof AppAdminShamsDiagnosticsRoute
   '/_app/admin/users': typeof AppAdminUsersRoute
   '/_app/admin/yeastar': typeof AppAdminYeastarRoute
   '/_app/admin/yeastar-diagnostics': typeof AppAdminYeastarDiagnosticsRoute
@@ -391,6 +401,7 @@ export interface FileRouteTypes {
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
     | '/admin/branches'
+    | '/admin/shams-diagnostics'
     | '/admin/users'
     | '/admin/yeastar'
     | '/admin/yeastar-diagnostics'
@@ -431,6 +442,7 @@ export interface FileRouteTypes {
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
     | '/admin/branches'
+    | '/admin/shams-diagnostics'
     | '/admin/users'
     | '/admin/yeastar'
     | '/admin/yeastar-diagnostics'
@@ -472,6 +484,7 @@ export interface FileRouteTypes {
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
     | '/_app/admin/branches'
+    | '/_app/admin/shams-diagnostics'
     | '/_app/admin/users'
     | '/_app/admin/yeastar'
     | '/_app/admin/yeastar-diagnostics'
@@ -740,6 +753,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAdminUsersRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/admin/shams-diagnostics': {
+      id: '/_app/admin/shams-diagnostics'
+      path: '/admin/shams-diagnostics'
+      fullPath: '/admin/shams-diagnostics'
+      preLoaderRoute: typeof AppAdminShamsDiagnosticsRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/admin/branches': {
       id: '/_app/admin/branches'
       path: '/admin/branches'
@@ -799,6 +819,7 @@ interface AppRouteChildren {
   AppReportsRoute: typeof AppReportsRoute
   AppShamsRoute: typeof AppShamsRoute
   AppAdminBranchesRoute: typeof AppAdminBranchesRoute
+  AppAdminShamsDiagnosticsRoute: typeof AppAdminShamsDiagnosticsRoute
   AppAdminUsersRoute: typeof AppAdminUsersRoute
   AppAdminYeastarRoute: typeof AppAdminYeastarRoute
   AppAdminYeastarDiagnosticsRoute: typeof AppAdminYeastarDiagnosticsRoute
@@ -826,6 +847,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppReportsRoute: AppReportsRoute,
   AppShamsRoute: AppShamsRoute,
   AppAdminBranchesRoute: AppAdminBranchesRoute,
+  AppAdminShamsDiagnosticsRoute: AppAdminShamsDiagnosticsRoute,
   AppAdminUsersRoute: AppAdminUsersRoute,
   AppAdminYeastarRoute: AppAdminYeastarRoute,
   AppAdminYeastarDiagnosticsRoute: AppAdminYeastarDiagnosticsRoute,

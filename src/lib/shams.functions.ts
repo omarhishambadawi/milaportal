@@ -34,6 +34,7 @@ import type {
 } from "@/lib/shams/types";
 import type { InvoiceBranchMatch } from "@/lib/shams/types";
 import type { ItemAvailability } from "@/lib/shams/availability";
+import type { CatalogDiagnostics } from "@/lib/shams/diagnostics.server";
 
 /* -------------------------------------------------------------------------- */
 /* Gates                                                                       */
@@ -455,5 +456,41 @@ export const shamsStatus = createServerFn({ method: "POST" })
       return { ok: true, configured, auth: await checkAuth(), error: null };
     } catch (err) {
       return { ok: false, configured, auth: null, error: await toFailure(err) };
+    }
+  });
+
+export interface ShamsDiagnosticsResult {
+  ok: boolean;
+  configured: boolean;
+  report: CatalogDiagnostics | null;
+  error: ShamsFailure | null;
+}
+
+/**
+ * Administrator-only catalog diagnostics.
+ *
+ * Answers the three questions in `scripts/shams-catalog-probe.mjs` from inside
+ * the deployment, because the MIS credentials live in this runtime and nowhere
+ * else. Same gate as `shamsStatus` — `assertAdmin`, not `view_shams_mis` — since
+ * this spends ~20 requests against a third-party production API.
+ *
+ * Returns shapes and counts only; see `diagnostics.server.ts` for what is
+ * deliberately left out.
+ */
+export const shamsCatalogDiagnostics = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }): Promise<ShamsDiagnosticsResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertAdmin(supabase, userId);
+
+    const { isConfigured } = await import("@/lib/shams/client.server");
+    const configured = isConfigured();
+    if (!configured) return { ok: false, configured, report: null, error: null };
+
+    try {
+      const { runCatalogDiagnostics } = await import("@/lib/shams/diagnostics.server");
+      return { ok: true, configured, report: await runCatalogDiagnostics(), error: null };
+    } catch (err) {
+      return { ok: false, configured, report: null, error: await toFailure(err) };
     }
   });
