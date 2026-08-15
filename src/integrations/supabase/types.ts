@@ -586,6 +586,7 @@ export type Database = {
           branch_no: string | null
           call_center_verified: boolean
           created_at: string
+          created_by: string | null
           customer_name: string | null
           customer_phone: string | null
           delivery_type: string | null
@@ -593,6 +594,7 @@ export type Database = {
           id: string
           invoice_no: string | null
           invoice_value: number | null
+          invoices_verified: boolean
           notes: string | null
           order_date: string
           order_type: string
@@ -605,6 +607,7 @@ export type Database = {
           branch_no?: string | null
           call_center_verified?: boolean
           created_at?: string
+          created_by?: string | null
           customer_name?: string | null
           customer_phone?: string | null
           delivery_type?: string | null
@@ -612,6 +615,7 @@ export type Database = {
           id?: string
           invoice_no?: string | null
           invoice_value?: number | null
+          invoices_verified?: boolean
           notes?: string | null
           order_date?: string
           order_type: string
@@ -624,6 +628,7 @@ export type Database = {
           branch_no?: string | null
           call_center_verified?: boolean
           created_at?: string
+          created_by?: string | null
           customer_name?: string | null
           customer_phone?: string | null
           delivery_type?: string | null
@@ -631,6 +636,7 @@ export type Database = {
           id?: string
           invoice_no?: string | null
           invoice_value?: number | null
+          invoices_verified?: boolean
           notes?: string | null
           order_date?: string
           order_type?: string
@@ -1386,6 +1392,7 @@ export type Database = {
           branch_no: string | null
           call_center_verified: boolean
           created_at: string
+          created_by: string | null
           customer_name: string | null
           customer_phone: string | null
           delivery_type: string | null
@@ -1393,6 +1400,7 @@ export type Database = {
           id: string
           invoice_no: string | null
           invoice_value: number | null
+          invoices_verified: boolean
           notes: string | null
           order_date: string
           order_type: string
@@ -1551,6 +1559,10 @@ export type Database = {
           msg_id: number
           read_ct: number
         }[]
+      }
+      record_invoice_verification: {
+        Args: { _entries: Json; _order_id: string }
+        Returns: Json
       }
       st_3dclosestpoint: {
         Args: { geom1: unknown; geom2: unknown }
