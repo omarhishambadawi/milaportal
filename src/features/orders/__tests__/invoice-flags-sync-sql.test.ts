@@ -25,7 +25,35 @@ import { describe, expect, it } from "vitest";
 import { invoiceKey, summarizeInvoices, type OrderInvoice } from "../invoice-verification";
 import { callCentreState } from "../components/call-centre-cell";
 
+/**
+ * The *deployed* definition, not the one this trigger shipped with.
+ * `20260815190000` has been retired to a no-op: its backfill caused the
+ * verification incident of 2026-08-15, and its copy of this function lacked the
+ * current-evidence guard. `20260815230000` is what production runs.
+ */
 const sql = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../supabase/migrations/20260815230000_verification_needs_current_evidence.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
+
+/** The applied migration that owns the trigger itself. */
+const triggerSql = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../supabase/migrations/20260815165443_a379abae-77cb-4ad7-ae18-ede8fed096ab.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
+
+/** The retired migration, asserted to stay harmless. */
+const retired = readFileSync(
   fileURLToPath(
     new URL(
       "../../../../supabase/migrations/20260815190000_invoice_flags_follow_the_invoice_number.sql",
@@ -48,8 +76,10 @@ const rpcSql = readFileSync(
 
 describe("the flags are re-derived when the invoice number changes", () => {
   it("fires on an invoice_no change and only on one", () => {
-    expect(sql).toContain("AFTER UPDATE OF invoice_no ON public.orders");
-    expect(sql).toContain("WHEN (NEW.invoice_no IS DISTINCT FROM OLD.invoice_no)");
+    // The trigger is owned by the migration that created it; 20260815230000
+    // replaces the function body underneath it and leaves the binding alone.
+    expect(triggerSql).toContain("AFTER UPDATE OF invoice_no ON public.orders");
+    expect(triggerSql).toContain("WHEN (NEW.invoice_no IS DISTINCT FROM OLD.invoice_no)");
   });
 
   it("cannot re-enter itself", () => {
@@ -85,7 +115,7 @@ describe("the rules it applies are the existing ones", () => {
   it("keeps the ANY rule for the order-level flag", () => {
     // One Call Centre invoice beside a walk-in one is still a call-centre
     // order. ALL governs auto-completion, which this does not touch.
-    expect(sql).toContain("new_flag     := (call_centre_cnt > 0) OR manual_tick;");
+    expect(sql).toContain("THEN (call_centre_cnt > 0) OR manual_tick");
     expect(rpcSql).toContain("call_center_verified = (call_centre_cnt > 0)");
     expect(sql).not.toContain("call_centre_cnt = verified_cnt");
   });
@@ -133,13 +163,21 @@ describe("the correction is attributed to the portal, not to whoever saved", () 
     }
   });
 
-  it("repairs the orders that are already stale, without inventing history", () => {
-    expect(sql).toContain("UPDATE public.orders o");
-    expect(sql).toContain("FROM derived d");
-    // The backfill runs under the same GUC, so it cannot file a
-    // `verification_changed` row against nobody for every order it corrects.
-    const backfill = sql.slice(sql.indexOf("Repair the orders"));
-    expect(backfill).toContain("set_config('milaserv.invoice_sync', 'on', true)");
+  it("repairs nothing in bulk — the backfill is what caused the incident", () => {
+    // `20260815165443` / `20260815190000` applied this derivation to every order
+    // at once, against evidence that only started existing on 2026-08-14, and
+    // cleared 3,836 hand-set flags. The deployed function touches one row, the
+    // one whose invoice_no just changed.
+    expect(sql).not.toContain("FROM derived d");
+    expect(sql).not.toContain("DISABLE TRIGGER");
+    expect(sql).not.toMatch(/UPDATE public\.orders o\b/);
+  });
+
+  it("keeps the retired migration harmless", () => {
+    // It must never re-run its backfill through a future `supabase db push`.
+    expect(retired).not.toMatch(/\bUPDATE\s+public\.orders\b/i);
+    expect(retired).not.toMatch(/\bCREATE\s+OR\s+REPLACE\s+FUNCTION\b/i);
+    expect(retired).not.toMatch(/\bCREATE\s+TRIGGER\b/i);
   });
 });
 
@@ -154,12 +192,20 @@ describe("the correction is attributed to the portal, not to whoever saved", () 
  * invoice set; this mirrors the two assignments so the transition an agent
  * actually sees can be asserted end to end.
  */
-function listState(counts: { verifiedCnt: number; callCentreCnt: number }, status = "Pending") {
-  return callCentreState({
-    status,
-    invoices_verified: counts.verifiedCnt > 0,
+function derive(
+  counts: { verifiedCnt: number; callCentreCnt: number },
+  existing = { call_center_verified: false, invoices_verified: false },
+) {
+  // The guard: with nothing answered for, every column keeps what it holds.
+  if (counts.verifiedCnt === 0) return existing;
+  return {
     call_center_verified: counts.callCentreCnt > 0,
-  });
+    invoices_verified: true,
+  };
+}
+
+function listState(counts: { verifiedCnt: number; callCentreCnt: number }, status = "Pending") {
+  return callCentreState({ status, ...derive(counts) });
 }
 
 const invoice = (over: Partial<OrderInvoice> = {}): OrderInvoice => ({
@@ -218,5 +264,74 @@ describe("the transition the agent sees", () => {
 
   it("a cancelled order still outranks whatever its invoices say", () => {
     expect(listState({ verifiedCnt: 1, callCentreCnt: 1 }, "Cancelled")).toBe("cancelled");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Regression: the 2026-08-15 incident                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 3,836 orders lost a hand-set `call_center_verified` because a derivation read
+ * `verified_cnt = 0` — no matching `invoice_verified` row — as proof the order
+ * was a walk-in. For any order raised before 2026-08-14 that evidence could not
+ * exist, so the conclusion was drawn from silence.
+ *
+ * The rule these guard: **absence of current evidence is not evidence of
+ * non-verification.**
+ */
+describe("absence of evidence never clears a verification", () => {
+  it("keeps both flags when nothing is verified (the incident)", () => {
+    const existing = { call_center_verified: true, invoices_verified: true };
+    expect(derive({ verifiedCnt: 0, callCentreCnt: 0 }, existing)).toEqual(existing);
+    // And the list still shows the tick rather than a dash.
+    expect(callCentreState({ status: "Pending", ...derive({ verifiedCnt: 0, callCentreCnt: 0 }, existing) })).toBe(
+      "verified",
+    );
+  });
+
+  it("invents no verification when there was none", () => {
+    // The guard preserves; it must never promote false to true.
+    const existing = { call_center_verified: false, invoices_verified: false };
+    expect(derive({ verifiedCnt: 0, callCentreCnt: 0 }, existing)).toEqual(existing);
+    expect(callCentreState({ status: "Pending", ...derive({ verifiedCnt: 0, callCentreCnt: 0 }, existing) })).toBe(
+      "pending",
+    );
+  });
+
+  it("still reconciles normally once the MIS has answered", () => {
+    // Positive current evidence: the derivation runs exactly as before, and may
+    // clear a flag — because now there is something that justifies clearing it.
+    const existing = { call_center_verified: true, invoices_verified: true };
+    expect(derive({ verifiedCnt: 1, callCentreCnt: 1 }, existing)).toEqual({
+      call_center_verified: true,
+      invoices_verified: true,
+    });
+    expect(derive({ verifiedCnt: 1, callCentreCnt: 0 }, existing)).toEqual({
+      call_center_verified: false,
+      invoices_verified: true,
+    });
+  });
+
+  it("states the guard in the deployed SQL", () => {
+    expect(sql).toContain("ELSE COALESCE(NEW.call_center_verified, false) END");
+    expect(sql).toContain("ELSE NEW.invoices_verified END");
+    expect(sql).not.toContain("new_verified := (verified_cnt > 0);");
+  });
+
+  it("holds in the migrations that also define this function", () => {
+    // 20260815210000 is unapplied and older than the fix; its copy must not be
+    // able to revert the guard if it is ever pushed.
+    const channel = readFileSync(
+      fileURLToPath(
+        new URL(
+          "../../../../supabase/migrations/20260815210000_record_a_channel_correction.sql",
+          import.meta.url,
+        ),
+      ),
+      "utf8",
+    );
+    expect(channel).not.toContain("new_verified := (verified_cnt > 0);");
+    expect(channel).toContain("ELSE NEW.invoices_verified END");
   });
 });

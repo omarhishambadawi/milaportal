@@ -427,8 +427,13 @@ BEGIN
     INTO verified_sum, verified_cnt, verified_nos, call_centre_cnt, call_centre_nos
   FROM cur;
 
-  new_flag     := (call_centre_cnt > 0) OR manual_tick;
-  new_verified := (verified_cnt > 0);
+  -- Carries the current-evidence guard from 20260815230000. This migration is
+  -- older than that fix and its copy of this function must not silently undo it:
+  -- with nothing answered for, every column keeps what it holds.
+  new_flag     := CASE WHEN verified_cnt > 0 THEN (call_centre_cnt > 0) OR manual_tick
+                       ELSE COALESCE(NEW.call_center_verified, false) END;
+  new_verified := CASE WHEN verified_cnt > 0 THEN true
+                       ELSE NEW.invoices_verified END;
   new_value    := CASE WHEN verified_cnt > 0 THEN verified_sum ELSE NEW.invoice_value END;
 
   PERFORM set_config('milaserv.invoice_sync', 'on', true);

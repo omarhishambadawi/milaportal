@@ -3235,9 +3235,35 @@ below — so a phone never scrolls sideways. Branch labels come from
     current-keys × latest-per-document evidence, under the same
     `milaserv.invoice_sync` GUC so the correction is attributed to the portal
     and narrated with the same three events. It reads the local activity log, not
-    the MIS, so it needs no outage guard — but it does keep the value guard, and
-    a tick made **by hand in the same statement** survives it (`OR manual_tick`),
-    since the form still offers that box to `verify_*` holders.
+    the MIS, and a tick made **by hand in the same statement** survives it
+    (`OR manual_tick`), since the form still offers that box to `verify_*`
+    holders.
+
+    It recomputes **only when `verified_cnt > 0`** (`20260815230000`) — the same
+    guard the RPC has always had, and which this trigger and its one-time
+    backfill were written without. With nothing answered for, all three columns
+    keep what they hold. The backfill shipped in `20260815165443` did not: it
+    applied the derivation to every order in the table at once, and since its
+    evidence (`invoice_verified` rows) only began to exist on 2026-08-14 while
+    `call_center_verified` had been a hand-ticked box since 2026-06-24, 3,837
+    orders were written in one statement at `2026-08-15 16:54:43.943234+00` and
+    3,836 lost a flag a person had set. 3,834 were restored from their own
+    `verification_changed` history; the pre-restoration state is preserved in
+    `public.orders_verification_snapshot_20260815` (RLS on, no grants — evidence,
+    not application data).
+
+    Verification is **historical state, not a derived view**. It records what was
+    established about an order when someone or something established it, so:
+    absence of current `invoice_verified` activity is never evidence that an
+    order was not verified, and neither flag may be cleared without positive
+    current evidence justifying the change. A new verification still updates
+    state, and an explicit un-verification still works — what is gone is
+    clearing by silence. `20260815190000` has been retired to a no-op so its
+    backfill cannot run again, and `20260815210000` carries the guard so it
+    cannot revert the fix if it is ever pushed. `invoice-flags-sync-sql.test.ts`
+    holds the regression cases deliberately: the two zero-evidence cases (keep
+    what you hold; never promote false to true) and the positive-evidence case
+    (reconcile as normal). Absence of evidence is not evidence of a walk-in.
 
     It is **not** manually tickable from the Orders list any more; the order form
     still offers it to `verify_*` holders, for a document raised outside the
