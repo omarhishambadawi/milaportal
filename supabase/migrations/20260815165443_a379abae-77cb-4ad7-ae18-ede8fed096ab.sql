@@ -230,12 +230,13 @@ EXECUTE FUNCTION public.sync_order_invoice_flags();
 SELECT set_config('milaserv.invoice_sync', 'on', true);
 
 -- Same convention as the earlier backfills (20260814160000, 20260815120000):
--- `prevent_order_reassignment` is written for a signed-in agent and refuses a
+-- the permission trigger is written for a signed-in agent and refuses a
 -- migration-time UPDATE, so it stands down for this maintenance statement only.
 ALTER TABLE public.orders DISABLE TRIGGER orders_prevent_reassignment;
 
 WITH current_keys AS (
   SELECT o.id AS order_id,
+
          CASE
            WHEN ltrim(btrim(part), '0') = '' THEN '0'
            ELSE ltrim(btrim(part), '0')
