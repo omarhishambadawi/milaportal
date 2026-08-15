@@ -104,12 +104,39 @@ export function ProductSearchField({
 export function StockTab({
   selected,
   onSelect,
+  query,
+  onQueryChange,
 }: {
   selected: ShamsProduct | null;
   onSelect: (product: ShamsProduct | null) => void;
+  /**
+   * The search text, owned by the route so it lives in the URL.
+   *
+   * Lifted for one reason: an agent who opened a product and pressed Back came
+   * back to an empty box and had to type the search again. The box is still
+   * typed into locally (`draft`), and only the settled value is published
+   * upward, so the address bar does not churn on every keystroke.
+   */
+  query: string;
+  onQueryChange: (next: string) => void;
 }) {
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState(query);
   const term = useDebounced(draft);
+
+  // Adopt the query when it changes underneath us — a Back navigation, or a
+  // link opened with `?q=`. Guarded on inequality so typing is never fought.
+  useEffect(() => {
+    setDraft((d) => (d === query ? d : query));
+  }, [query]);
+
+  // Publish the settled term upward, so the URL carries what was searched
+  // rather than what is being typed.
+  useEffect(() => {
+    if (term !== query) onQueryChange(term);
+    // `onQueryChange` is recreated per render by the route; `term` is what
+    // decides this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [term]);
 
   // The picker only runs while no product is chosen — once one is, this tab is
   // about its stock, and there is nothing to search for.
@@ -184,7 +211,8 @@ export function StockTab({
               autoFocus
             />
             <p className="mt-2 text-xs leading-snug text-muted-foreground">
-              Type any part of a name, strength, pack size or item code.{" "}
+              Search by product name or item code — paste{" "}
+              <span className="font-mono">10400746</span> to jump straight to it.{" "}
               <span className="font-medium text-foreground">*</span> stands for anything in between,
               so <span className="font-mono">mou*n*j*2.5</span> finds Mounjaro 2.5. Use ↑ ↓ and
               Enter to pick.

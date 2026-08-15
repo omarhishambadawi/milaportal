@@ -142,6 +142,33 @@ export function wildcardProbes(fragments: string[], minLength: number, max: numb
 }
 
 /* -------------------------------------------------------------------------- */
+/* Item codes                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The shortest run of digits worth treating as an item code.
+ *
+ * Shams codes are eight digits (`10400746`). Four is the point below which a
+ * number is far more likely to be part of a name — a pack size, a strength,
+ * `400 G` — than an identifier, and probing `product/info` for those would be a
+ * request per keystroke that never resolves.
+ */
+export const MIN_ITEM_CODE_LENGTH = 4;
+
+/**
+ * Could this query be an item code?
+ *
+ * Digits only, long enough to mean something. Deliberately *not* exclusive: a
+ * query that looks like a code is still searched as a name too, because the
+ * agent should never have to tell the field which one they meant. It only adds
+ * a lookup, it never replaces one.
+ */
+export function looksLikeItemCode(query: string): boolean {
+  const q = query.trim();
+  return q.length >= MIN_ITEM_CODE_LENGTH && /^\d+$/.test(q);
+}
+
+/* -------------------------------------------------------------------------- */
 /* Ranking                                                                     */
 /* -------------------------------------------------------------------------- */
 

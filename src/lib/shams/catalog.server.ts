@@ -23,6 +23,7 @@ import { shamsFetch, ShamsError, TtlCache } from "./client.server";
 import { normalizeProductDetail, normalizeProducts, normalizeStock } from "./normalize";
 import {
   isWildcardQuery,
+  looksLikeItemCode,
   matchesProductWildcard,
   parseWildcardQuery,
   rankProducts,
@@ -110,19 +111,52 @@ export async function searchProducts(query: string): Promise<ShamsProduct[]> {
     : q.length >= MIN_SEARCH_LENGTH
       ? [q]
       : [];
+  // A pure code lookup still has a probe, since MIN_ITEM_CODE_LENGTH exceeds
+  // MIN_SEARCH_LENGTH; this stays the guard for queries too short for either.
   if (probes.length === 0) return [];
+
+  /**
+   * An item code is not searchable through `product/search`.
+   *
+   * That endpoint matches a **substring of the item name** and nothing else
+   * (see docs/shams/api-discovery.md §3.1), so pasting `10400746` searched the
+   * catalog for a *name* containing those digits and found nothing — the one
+   * lookup an agent holding a document is most likely to want.
+   *
+   * `product/info?itemcode=` is the endpoint that does answer it, exactly. So a
+   * query that looks like a code asks both, in parallel, and the answers are
+   * merged. It is additive, never exclusive: `10400746` is still searched as a
+   * name too, so the field never has to be told which kind of thing was typed.
+   *
+   * Exact only. `product/info` takes a whole code and `product/search` cannot
+   * see codes at all, so a *partial* code has nothing upstream that can answer
+   * it — that is an API limit, not a decision made here.
+   */
+  const codeLookup = looksLikeItemCode(q) ? getProductDetail(q).catch(() => null) : null;
 
   // Probes run together — they are independent, and a wildcard search should
   // not cost the agent one round trip per fragment.
-  const responses = await Promise.all(
-    probes.map((term) =>
-      shamsFetch<RawProductSearchResponse>("/api/v2/product/search", { q: term }),
+  const [responses, byItemCode] = await Promise.all([
+    Promise.all(
+      probes.map((term) =>
+        shamsFetch<RawProductSearchResponse>("/api/v2/product/search", { q: term }),
+      ),
     ),
-  );
+    codeLookup,
+  ]);
 
   // Union, de-duplicated by item code. First sighting wins, so the most
   // selective probe's ordering survives into the ranking below.
   const byCode = new Map<string, ShamsProduct>();
+  // The exact code match goes in first, so it survives de-duplication and — via
+  // `scoreProduct`'s code band — sorts to the top.
+  if (byItemCode) {
+    byCode.set(byItemCode.itemCode, {
+      itemCode: byItemCode.itemCode,
+      itemName: byItemCode.itemName,
+      retailPrice: byItemCode.retailPrice,
+    });
+  }
   for (const body of responses) {
     for (const product of normalizeProducts(body?.data)) {
       if (!byCode.has(product.itemCode)) byCode.set(product.itemCode, product);

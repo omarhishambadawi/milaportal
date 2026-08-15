@@ -97,3 +97,81 @@ describe("nothing is fetched before a search", () => {
     expect(source).not.toContain("useQuery({");
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Product search: item codes, and state that survives Back                    */
+/* -------------------------------------------------------------------------- */
+
+const stockTab = readFileSync(
+  fileURLToPath(new URL("../components/stock-tab.tsx", import.meta.url)),
+  "utf8",
+);
+
+const shamsRoute = readFileSync(
+  fileURLToPath(new URL("../../../routes/_app.shams.tsx", import.meta.url)),
+  "utf8",
+);
+
+const catalog = readFileSync(
+  fileURLToPath(new URL("../../../lib/shams/catalog.server.ts", import.meta.url)),
+  "utf8",
+);
+
+describe("an item code is looked up by the endpoint that can answer it", () => {
+  it("asks product/info as well as product/search", () => {
+    // `product/search?q=` matches the item NAME only, so a pasted code found
+    // nothing at all. `product/info?itemcode=` is the exact-code endpoint.
+    expect(catalog).toContain("looksLikeItemCode(q)");
+    expect(catalog).toContain("getProductDetail(q)");
+  });
+
+  it("adds the lookup rather than replacing the name search", () => {
+    // Both run, in parallel, and the results are merged — so the field never
+    // has to be told which kind of thing was typed.
+    expect(catalog).toContain("const [responses, byItemCode] = await Promise.all([");
+  });
+
+  it("puts the exact code match in first, so it survives de-duplication", () => {
+    expect(catalog).toContain("if (byItemCode) {");
+    expect(catalog.indexOf("byCode.set(byItemCode.itemCode")).toBeLessThan(
+      catalog.indexOf("for (const body of responses)"),
+    );
+  });
+
+  it("does not fail the whole search when the code is unknown", () => {
+    expect(catalog).toContain(".catch(() => null)");
+  });
+});
+
+describe("the search survives Back", () => {
+  it("keeps the query, the tab and the open product in the URL", () => {
+    expect(shamsRoute).toContain("validateSearch:");
+    expect(shamsRoute).toContain('tab: s.tab === "invoices" ? "invoices" : "stock"');
+    expect(shamsRoute).toContain('q: typeof s.q === "string"');
+    expect(shamsRoute).toContain('item: typeof s.item === "string"');
+  });
+
+  it("pushes when a product is opened, so Back returns to the results", () => {
+    expect(shamsRoute).toContain("put({ item: product?.itemCode }, false)");
+  });
+
+  it("replaces while typing, so Back is not a walk through every keystroke", () => {
+    expect(shamsRoute).toContain("put({ q: next || undefined }, true)");
+    expect(shamsRoute).toContain("put({ tab: v as TabId }, true)");
+  });
+
+  it("restores the open product from its code alone", () => {
+    // Back arrives with `?item=` and nothing in hand.
+    expect(shamsRoute).toContain("const restoring = Boolean(item)");
+    expect(shamsRoute).toContain("useProductDetail(item ?? null, restoring)");
+  });
+
+  it("adopts a query that changed underneath the box without fighting typing", () => {
+    expect(stockTab).toContain("setDraft((d) => (d === query ? d : query));");
+  });
+
+  it("publishes only the settled term, not the keystroke", () => {
+    expect(stockTab).toContain("const term = useDebounced(draft);");
+    expect(stockTab).toContain("if (term !== query) onQueryChange(term);");
+  });
+});

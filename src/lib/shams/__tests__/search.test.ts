@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   filterBranchStock,
   isWildcardQuery,
+  looksLikeItemCode,
   matchesBranchQuery,
   matchesProductWildcard,
   matchesWildcard,
@@ -450,5 +451,69 @@ describe("summariseStock", () => {
 
   it("reports zeroes for an empty filter result", () => {
     expect(summariseStock([])).toEqual({ branches: 0, withStock: 0, without: 0, units: 0 });
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Item codes                                                                  */
+/* -------------------------------------------------------------------------- */
+
+describe("looksLikeItemCode", () => {
+  it("accepts a full Shams item code", () => {
+    expect(looksLikeItemCode("10400746")).toBe(true);
+  });
+
+  it("accepts a partial code long enough to mean something", () => {
+    expect(looksLikeItemCode("10400")).toBe(true);
+  });
+
+  it("refuses a number short enough to be part of a name", () => {
+    // `400 G`, `2.5`, `800` — pack sizes and strengths, not identifiers.
+    expect(looksLikeItemCode("400")).toBe(false);
+    expect(looksLikeItemCode("2.5")).toBe(false);
+  });
+
+  it("refuses anything that is not purely digits", () => {
+    expect(looksLikeItemCode("nan")).toBe(false);
+    expect(looksLikeItemCode("104007460 g")).toBe(false);
+    expect(looksLikeItemCode("nan*op")).toBe(false);
+  });
+
+  it("ignores surrounding whitespace, as a pasted code carries", () => {
+    expect(looksLikeItemCode("  10400746  ")).toBe(true);
+  });
+});
+
+/**
+ * The exact names from the MIS, as a regression guard.
+ *
+ * `nan*op` was reported as finding nothing on this page. The matcher is not the
+ * reason — it accepts every one of these — so this pins that down: a future
+ * change to fragment parsing or ordering that broke it would show up here
+ * rather than in a support message.
+ */
+describe("nan*op against the real catalog names", () => {
+  const rows = [
+    ["10400746", "NAN 2 OPTIPRO 1800 GM"],
+    ["10400817", "NAN NO.3 OPTIPRO, 1800 G (2*1800)"],
+    ["10400741", "NAN OPTIPRO KIDS MILK, 400 G"],
+    ["10400395", "NAN OPTIPRO NO 1 400GM"],
+    ["10400396", "NAN OPTIPRO NO 1 MILK  800G"],
+    ["10400393", "NAN OPTIPRO NO 2  MILK, 400GM"],
+  ].map(([itemCode, itemName]) => ({ itemCode, itemName, retailPrice: 1 }));
+
+  it("parses into two ordered fragments", () => {
+    expect(parseWildcardQuery("nan*op")).toEqual(["nan", "op"]);
+  });
+
+  it("matches every one of them", () => {
+    const fragments = parseWildcardQuery("nan*op");
+    for (const row of rows) {
+      expect(matchesProductWildcard(row, fragments)).toBe(true);
+    }
+  });
+
+  it("sends both fragments upstream, so either can retrieve the set", () => {
+    expect(wildcardProbes(parseWildcardQuery("nan*op"), 2, 3)).toEqual(["nan", "op"]);
   });
 });
