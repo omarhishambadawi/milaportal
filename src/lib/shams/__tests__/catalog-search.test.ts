@@ -152,6 +152,60 @@ describe("searchProducts — wildcard queries", () => {
     expect(await searchProducts("a*b*c")).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  /**
+   * The regression this guards. `moun*2.5` sent `2.5` as a second probe, which
+   * matches every 2.5 mg product Shams sells. The endpoint has no `limit`, and
+   * the probes were awaited together, so that one request held the whole search
+   * — including the good `moun` answer — until it timed out. The agent watched a
+   * skeleton that never resolved.
+   */
+  it("does not spend a second request on a short, unselective fragment", async () => {
+    respondWith({ moun: [MOUNJARO] });
+
+    const products = await searchProducts("moun*2.5");
+
+    expect(termsAsked()).toEqual(["moun"]);
+    expect(products.map((p) => p.itemCode)).toEqual(["10609670"]);
+  });
+
+  it("still corroborates with fragments that are selective enough", async () => {
+    respondWith({ gold: [S26], "1800": [S26] });
+
+    await searchProducts("*26*gold*3*1800");
+
+    expect(termsAsked()).toEqual(["gold", "1800"]);
+  });
+
+  it("answers from the first probe when a corroborating one fails", async () => {
+    // The first probe IS the search; the rest are optional insurance, so one of
+    // them failing must not cost the agent the answer that already arrived.
+    fetchMock.mockImplementation(async (_path: string, query: Record<string, string>) => {
+      if (query.q === "1800") throw new Error("upstream blew up");
+      return { success: true, data: query.q === "gold" ? [S26] : [] };
+    });
+
+    const products = await searchProducts("*26*gold*3*1800");
+
+    expect(products.map((p) => p.itemCode)).toEqual(["10501234"]);
+  });
+
+  it("fails the search when the first probe fails", async () => {
+    fetchMock.mockRejectedValue(new Error("MIS unreachable"));
+
+    await expect(searchProducts("mounjaro")).rejects.toThrow();
+  });
+
+  it("caps how long a corroborating probe may hold the search", async () => {
+    respondWith({ gold: [S26], "1800": [S26] });
+
+    await searchProducts("*26*gold*3*1800");
+
+    const [, secondCall] = fetchMock.mock.calls;
+    // The primary carries no override — it uses the transport's own timeout.
+    expect(fetchMock.mock.calls[0][2]).toBeUndefined();
+    expect((secondCall[2] as { timeoutMs?: number })?.timeoutMs).toBeGreaterThan(0);
+  });
 });
 
 describe("searchProducts — caching and ranking", () => {

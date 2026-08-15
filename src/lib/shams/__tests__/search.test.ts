@@ -179,6 +179,26 @@ describe("wildcardProbes", () => {
     expect(wildcardProbes(["a", "b", "gold"], 2, 3)).toEqual(["gold"]);
   });
 
+  /**
+   * A secondary probe may be held to a higher floor than the first. `2.5` is a
+   * fine thing to *match* on and a ruinous thing to *search* on — it retrieves
+   * every 2.5 mg product in the catalog.
+   */
+  it("holds probes after the first to a higher floor", () => {
+    expect(wildcardProbes(["moun", "2.5"], 2, 3, 4)).toEqual(["moun"]);
+    expect(wildcardProbes(["gold", "1800", "26"], 2, 3, 4)).toEqual(["gold", "1800"]);
+  });
+
+  it("still takes the first probe at the lower floor, since it is the search", () => {
+    // Nothing here reaches the secondary floor; refusing the first probe too
+    // would mean declining to search at all.
+    expect(wildcardProbes(["mou", "2.5"], 2, 3, 4)).toEqual(["mou"]);
+  });
+
+  it("leaves the floors equal when no secondary floor is given", () => {
+    expect(wildcardProbes(["moun", "2.5"], 2, 3)).toEqual(["moun", "2.5"]);
+  });
+
   it("returns nothing when no fragment is long enough", () => {
     expect(wildcardProbes(["a", "b"], 2, 3)).toEqual([]);
   });

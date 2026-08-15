@@ -127,8 +127,11 @@ describe("an item code is looked up by the endpoint that can answer it", () => {
 
   it("adds the lookup rather than replacing the name search", () => {
     // Both run, in parallel, and the results are merged — so the field never
-    // has to be told which kind of thing was typed.
-    expect(catalog).toContain("const [responses, byItemCode] = await Promise.all([");
+    // has to be told which kind of thing was typed. Pinned on the destructure
+    // rather than the whole line: the name search alongside it has since been
+    // split into a required probe and optional corroborating ones.
+    expect(catalog).toContain("byItemCode] = await Promise.all([");
+    expect(catalog).toContain("codeLookup,");
   });
 
   it("puts the exact code match in first, so it survives de-duplication", () => {

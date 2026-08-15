@@ -146,8 +146,28 @@ export function wildcardProbe(fragments: string[], minLength: number): string | 
  *
  * Ordered longest-first (ties earliest) so the most selective probe runs first
  * and the ones after it are cheap corroboration.
+ *
+ * ## Why a secondary probe has a higher floor
+ *
+ * `secondaryMinLength` applies to every probe after the first, and it exists
+ * because a short fragment is a *terrible* search term against this catalog.
+ * `moun*2.5` split to `["moun", "2.5"]`, and `2.5` matched every 2.5 mg product
+ * Shams sells. The endpoint has no `limit`, so that probe asked for thousands of
+ * rows, and because the probes are awaited together it held the whole search —
+ * including the perfectly good `moun` result — until it timed out. The agent saw
+ * a skeleton that never resolved.
+ *
+ * The first probe keeps the lower floor: it is the one the search *needs*, it is
+ * the longest fragment available, and declining it would mean refusing to search
+ * at all. Anything after it is optional insurance, and optional work is not
+ * worth a broad scan of the catalog.
  */
-export function wildcardProbes(fragments: string[], minLength: number, max: number): string[] {
+export function wildcardProbes(
+  fragments: string[],
+  minLength: number,
+  max: number,
+  secondaryMinLength = minLength,
+): string[] {
   const usable = fragments
     .map((fragment, index) => ({ fragment, index }))
     .filter((f) => f.fragment.length >= minLength);
@@ -157,6 +177,9 @@ export function wildcardProbes(fragments: string[], minLength: number, max: numb
   const out: string[] = [];
   for (const { fragment } of usable) {
     if (out.length >= max) break;
+    // Every probe after the first must be selective enough to be worth a
+    // request; the first is the search itself and is taken as it comes.
+    if (out.length > 0 && fragment.length < secondaryMinLength) continue;
     // Two probes where one contains the other retrieve nested sets; the shorter
     // adds nothing the longer did not already cover.
     if (out.some((chosen) => chosen.includes(fragment) || fragment.includes(chosen))) continue;

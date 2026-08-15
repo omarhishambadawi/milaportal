@@ -55,6 +55,27 @@ export const MAX_SEARCH_RESULTS = 100;
  * one request, and no query can cost more than this however many `*` it carries.
  */
 export const MAX_SEARCH_PROBES = 3;
+/**
+ * Shortest fragment worth spending a *second* request on.
+ *
+ * Higher than `MIN_SEARCH_LENGTH` on purpose. `moun*2.5` split to
+ * `["moun", "2.5"]`, and `2.5` matches every 2.5 mg product in the catalog: an
+ * unbounded response (the endpoint has no `limit`) for a probe that was only
+ * ever corroboration. Since the probes were awaited together, it held the whole
+ * search — including the good `moun` answer — hostage until it timed out.
+ *
+ * Four characters is the same floor `looksLikeItemCode` uses, and it keeps the
+ * useful secondary probes (`gold`, `1800`) while refusing the ruinous ones.
+ */
+export const SECONDARY_PROBE_MIN_LENGTH = 4;
+/**
+ * How long a corroborating probe may take before it is abandoned.
+ *
+ * Well under the transport's 30 s default. A secondary probe exists to catch a
+ * result the first probe might have had truncated; if it has not answered in
+ * this long it has stopped being insurance and started being the delay.
+ */
+const SECONDARY_PROBE_TIMEOUT_MS = 8_000;
 
 const searchCache = new TtlCache<ShamsProduct[]>(SEARCH_TTL_MS);
 const infoCache = new TtlCache<ShamsProductDetail | null>(INFO_TTL_MS);
@@ -114,7 +135,7 @@ export async function searchProducts(query: string): Promise<ShamsProduct[]> {
   // The upstream terms: the whole query when it is plain, the most selective
   // fragments when it is an expression.
   const probes = wildcard
-    ? wildcardProbes(fragments, MIN_SEARCH_LENGTH, MAX_SEARCH_PROBES)
+    ? wildcardProbes(fragments, MIN_SEARCH_LENGTH, MAX_SEARCH_PROBES, SECONDARY_PROBE_MIN_LENGTH)
     : q.length >= MIN_SEARCH_LENGTH
       ? [q]
       : [];
@@ -141,16 +162,40 @@ export async function searchProducts(query: string): Promise<ShamsProduct[]> {
    */
   const codeLookup = looksLikeItemCode(q) ? getProductDetail(q).catch(() => null) : null;
 
-  // Probes run together — they are independent, and a wildcard search should
-  // not cost the agent one round trip per fragment.
-  const [responses, byItemCode] = await Promise.all([
-    Promise.all(
-      probes.map((term) =>
-        shamsFetch<RawProductSearchResponse>("/api/v2/product/search", { q: term }),
+  /**
+   * Probes run together — they are independent, and a wildcard search should not
+   * cost the agent one round trip per fragment.
+   *
+   * The first probe **is** the search: if it fails, the search failed, and the
+   * caller is told. Every probe after it is corroboration against a truncation
+   * nobody has measured, so it is capped in time and allowed to fail silently —
+   * `allSettled`, not `all`. Awaiting them the same way meant one slow or angry
+   * secondary probe could take down a search whose real answer had already
+   * arrived.
+   */
+  const [primary, ...secondary] = probes;
+  const [primaryBody, secondaryResults, byItemCode] = await Promise.all([
+    shamsFetch<RawProductSearchResponse>("/api/v2/product/search", { q: primary }),
+    Promise.allSettled(
+      secondary.map((term) =>
+        shamsFetch<RawProductSearchResponse>(
+          "/api/v2/product/search",
+          { q: term },
+          { timeoutMs: SECONDARY_PROBE_TIMEOUT_MS },
+        ),
       ),
     ),
     codeLookup,
   ]);
+
+  const responses = [
+    primaryBody,
+    ...secondaryResults
+      .filter(
+        (r): r is PromiseFulfilledResult<RawProductSearchResponse> => r.status === "fulfilled",
+      )
+      .map((r) => r.value),
+  ];
 
   // Union, de-duplicated by item code. First sighting wins, so the most
   // selective probe's ordering survives into the ranking below.
