@@ -453,3 +453,124 @@ In-memory and per-isolate — no migration, no table of third-party data.
 **Adding an endpoint** means a typed wire shape in `types.ts`, a pure mapper in
 `normalize.ts`, a fetch in the relevant `*.server.ts`, and a gated server
 function. No transport or auth changes.
+
+---
+
+## 10. PharmacyCRM Desktop — what the client Shams staff actually use
+
+Source: `PharmacyCRM-desktop-update-2026.07.25.112540`, a PyInstaller (Python
+3.11 / PySide6) build. Findings below were read out of the shipped archive —
+`PYZ.pyz` unpacked from the executable and `desktop.main_window` disassembled —
+plus the client's own SQLite file, which ships with a populated HTTP cache. They
+are **transcribed, not inferred**; the request shapes come from cache rows the
+application itself wrote.
+
+### 10.1 It is a different backend
+
+| | Portal | PharmacyCRM Desktop |
+| --- | --- | --- |
+| Host | `mis.shamspharmacy.com` | `shams-crm.cloud` |
+| Config | `SHAMS_MIS_*` env | `desktop-client.json` → `api_base` |
+| Catalog read | `GET /api/v2/product/search?q=` | `GET /products/names` |
+| Stock read | `GET /api/v2/product/stock?itemcode=` | `GET /products/search-live?q=` |
+
+The portal holds no credential for `shams-crm.cloud`, and the desktop
+authenticates as a *branch user* (bcrypt, per-user), not as a machine account.
+Nothing in the package is reusable as a portal credential.
+
+### 10.2 `/products/search-live` is a stock lookup, not a product search
+
+The single cached call the application recorded:
+
+```
+GET /products/search-live
+  ?q=10612091&limit=20
+  &location_lat=26.1295039&location_lon=51.2046522
+  &location_link=https://www.google.com/maps?q=26.129504,51.204652
+```
+
+```jsonc
+{ "query": "10612091", "name_source": "local_products_table",
+  "stock_source": "solver_api_branch_stock",
+  "resolved_location_lat": 26.1295039, "resolved_location_lon": 51.2046522,
+  "items": [ { "item_code": "10612091",
+               "item_name": "PHARMATON VITALITY FOOD SUPLEMENT CAP, 30'S",
+               "total_available_qty": 5466.0, "available_branch_count": 138,
+               "stock_status": "cache_or_live", "nearest_branch_code": "P0701",
+               "nearest_branch_distance_km": 187.85,
+               "nearest_available_branch_qty": 33.0 } ],
+  "warnings": [] }
+```
+
+`q` is an **item code that the client has already resolved**, never the text the
+agent typed. `search_live_products` resolves the query locally first — through
+`_resolve_local_product_selection` or `_wildcard_pattern_candidates`, both of
+which set `stock_source: "pending_lookup"` — and only then calls this endpoint
+for the chosen product. `limit` is **20**. The `180` visible nearby is the
+`timeout` argument to `_api_call`, **not** a result cap.
+
+So switching the portal's product search to `/products/search-live` would not
+work: it answers "where is this item code in stock", which is what
+`product/stock` already answers here.
+
+### 10.3 Search is local, over a fully cached catalog
+
+`GET /products/names` returns the whole catalog as `{code, name, price}` and is
+cached in the client's SQLite `app_state` under `cached_product_names`. The
+shipped copy holds **8 484 products** (`cache_metadata.products_count`), refreshed
+when a stock-sync marker changes. `_internal/_internal/product_cache_seed.json`
+is the same list, shipped as a cold-start seed.
+
+Three search modes, all matched against that local list:
+
+- **Item code** — exact, and `startswith` on the code, so a *partial* code works.
+- **Name** — `_find_local_product_candidates`, `startswith`/contains scoring.
+- **Wildcard** — `_wildcard_pattern_candidates`:
+
+```python
+query = str(query_text or "").strip()
+if not query or "*" not in query:
+    return []
+pattern = re.escape(query).replace("\*", ".*")
+regex = re.compile(f"^{pattern}$", re.IGNORECASE)     # anchored, both ends
+for code, name in self._product_code_to_name.items():
+    if regex.search(str(name or "").strip()):          # item NAME only
+        ...
+```
+
+Anchored at both ends, `*` → `.*`, case-insensitive, **item name only**, results
+sorted by name then code. A `*` is required; without one the mode returns
+nothing. This is why the in-app hints read `pana*extr*` and `*omega*` — under
+anchoring, a bare `nan*op` means "starts nan, *ends* op" and matches nothing in
+the real catalog; the agent has to type `nan*op*`.
+
+### 10.4 What this means for the portal
+
+Verified against the real 8 484-row catalog (`pharmacycrm-parity.test.ts` carries
+a 237-row slice of it, and every product any of its queries can reach):
+
+- The portal's fragment matching is a **superset** of the desktop's. Star the
+  query at both ends and the two agree row for row — `*omega*` returns the same
+  45 products, `pana*extr*` the same 1, `nan*op*` the same 10. The portal also
+  answers `nan*op` with those same 10 where the desktop, being anchored, returns
+  none. The looser reading is the one this behaviour was asked for.
+- Two API limits are the desktop's real advantage, and neither is a matching
+  rule: it matches over the **whole catalog**, and its codes are searchable. The
+  portal matches over whatever `product/search?q=` returned for its probes, and
+  that endpoint sees names only. **A partial item code, and a wildcard written
+  against a code, therefore cannot be retrieved at all** — no probe brings the
+  row back for local matching to see.
+- Closing that gap needs a catalog source: either a credential for
+  `shams-crm.cloud`'s `/products/names`, or a catalog-dump endpoint on the MIS
+  API. `product/search?q=` is not one — it takes no `limit`/`page`/`offset`, so
+  whether it truncates is still `NOT VERIFIED`.
+
+### 10.5 Not verified
+
+No live call was made to either backend while writing this. The portal's
+`SHAMS_MIS_*` credentials are absent from the development environment, and no
+credential for `shams-crm.cloud` exists at all. Everything above comes from the
+shipped package — its bytecode, its config, and the HTTP cache it wrote itself.
+Whether the two backends expose the *same* product universe is therefore
+**`NOT VERIFIED`**, and it is the most likely explanation for a query returning
+different rows in the two systems.

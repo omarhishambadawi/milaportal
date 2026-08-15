@@ -104,6 +104,13 @@ export async function searchProducts(query: string): Promise<ShamsProduct[]> {
   const fragments = isWildcardQuery(q) ? parseWildcardQuery(q) : [];
   const wildcard = fragments.length > 0;
 
+  // A query carrying a `*` is an expression, even when nothing survives the
+  // split. `***` parses to no fragments, and treating that as a plain query sent
+  // `q=***` upstream to be matched as three literal characters — a guaranteed
+  // empty answer bought with a round trip. It is "match everything", which this
+  // endpoint cannot express, so it is declined here.
+  if (isWildcardQuery(q) && !wildcard) return [];
+
   // The upstream terms: the whole query when it is plain, the most selective
   // fragments when it is an expression.
   const probes = wildcard

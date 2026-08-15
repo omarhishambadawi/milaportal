@@ -28,9 +28,25 @@ export function normalizeForSearch(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-/** What a product is matched against: its name and its item code. */
-export function productSearchText(product: ShamsProduct): string {
-  return `${product.itemName} ${product.itemCode}`;
+/**
+ * The two fields a wildcard expression may be matched against, separately.
+ *
+ * Deliberately not one joined `"<name> <code>"` string, which is what this used
+ * to be. Joining let the fragments straddle the join: for `*omega*3*`, `omega`
+ * landed in the name and `3` in the digits of the item code, so products whose
+ * visible name has no `3` in it came back as matches for a pattern that plainly
+ * asks for one. Every item code is digits, so any numeric fragment could be
+ * satisfied by a field the agent was not searching.
+ *
+ * PharmacyCRM Desktop matches its wildcard against the item **name** only
+ * (`docs/shams/api-discovery.md` §10). The code is kept as a second, whole
+ * haystack rather than dropped, so a pattern that does describe a code still
+ * matches a row the search already retrieved; what is no longer possible is one
+ * match assembled from both. Retrieving a row *by* its code is a separate
+ * question, and `product/search` cannot do it at all — see `searchProducts`.
+ */
+export function productWildcardHaystacks(product: ShamsProduct): [string, string] {
+  return [product.itemName, product.itemCode];
 }
 
 /* -------------------------------------------------------------------------- */
@@ -82,8 +98,16 @@ export function matchesWildcard(text: string, fragments: string[]): boolean {
   return true;
 }
 
+/**
+ * Does this product match the whole expression, in one field?
+ *
+ * The name is tried first because it is what an agent is describing; the item
+ * code answers the pasted-fragments case. One field has to satisfy every
+ * fragment — see `productWildcardHaystacks` for why a match may not be assembled
+ * from both.
+ */
 export function matchesProductWildcard(product: ShamsProduct, fragments: string[]): boolean {
-  return matchesWildcard(productSearchText(product), fragments);
+  return productWildcardHaystacks(product).some((text) => matchesWildcard(text, fragments));
 }
 
 /**

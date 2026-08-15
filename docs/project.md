@@ -2985,8 +2985,31 @@ that did not move the agent is inert. `agent_id` is deliberately absent from the
 
 `*` means "anything in between": `mou*n*j*2.5` finds Mounjaro 2.5,
 `*26*gold*3*1800` finds S-26 Gold 3 1800. Fragments are all required and must
-appear **in order**; matching is case-insensitive, whitespace-tolerant, and runs
-over item name **and** item code. A query with no `*` behaves exactly as before.
+appear **in order**; matching is case-insensitive and whitespace-tolerant. A
+query with no `*` behaves exactly as before.
+
+**One field has to carry the whole expression** — the item name, or the item
+code, tried separately. Matching the joined `"<name> <code>"` let fragments
+straddle the join: every code is digits, so `*omega*3*` was answered by products
+whose visible name has no `3` in it, the `3` having come from the code. A query
+that is only asterisks (`***`) is declined without a request rather than being
+sent upstream as three literal characters.
+
+This matches PharmacyCRM Desktop, the client Shams staff use, which matches its
+wildcard against the item **name** only. Its rule is anchored — `^…$` with `*`
+as `.*` — so `nan*op` means "starts nan, *ends* op" there and finds nothing,
+while here it reads as "these pieces, in this order, anywhere" and returns the
+ten NAN OPTIPRO/SCOOP products. The portal is deliberately the looser of the two:
+a superset of the desktop's answer, never a different one.
+`pharmacycrm-parity.test.ts` holds that comparison against real catalog rows;
+`docs/shams/api-discovery.md` §10 records how the desktop was read.
+
+**Item codes are exact-only, and that is an API limit.** `product/search?q=`
+matches names and cannot see codes, so a partial code — and a wildcard written
+against a code — brings no candidate back for local matching. The desktop
+supports both because it downloads the whole 8 484-product catalog and matches
+offline; closing the gap here needs a catalog source the MIS API does not
+currently offer (§10.4).
 
 The MIS API has no wildcard syntax — its only parameter is `q`, matched as a
 plain substring — so the expression is split in `catalog.server.ts`: fragments go
