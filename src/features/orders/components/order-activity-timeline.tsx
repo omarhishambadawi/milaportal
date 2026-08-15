@@ -37,6 +37,10 @@ function describe(e: OrderActivityEvent, nameOf: (id: unknown) => string): strin
   // corrected by the MIS, and the order-level consequence gets its own event.
   if (e.action === "invoice_value_changed")
     return `Invoice #${d.invoice_no ?? d.invoice_key ?? "—"} value updated automatically`;
+  // The same shape for the other thing the MIS can restate about a document.
+  // Separate from the value event because the money did not move.
+  if (e.action === "invoice_channel_changed")
+    return `Invoice #${d.invoice_no ?? d.invoice_key ?? "—"} channel corrected automatically`;
   if (e.action === "value_synced") return "Order value updated automatically by MilaPortal";
   if (e.action === "call_center_flagged") return "Call Center Invoice marked automatically";
   // The withdrawal, which had no event until the flag could be cleared at all.
@@ -74,6 +78,14 @@ function detailLine(e: OrderActivityEvent): string | null {
     const from = d.from !== undefined && d.from !== null ? fmtSAR(Number(d.from)) : "—";
     const to = d.to !== undefined && d.to !== null ? fmtSAR(Number(d.to)) : "—";
     return `${from} → ${to}`;
+  }
+  if (e.action === "invoice_channel_changed") {
+    // Spelled out rather than shown as true → false: the channel is what the
+    // Call Centre flag is decided from, and this is the row that explains a
+    // flag changing without anybody touching the order.
+    const channel = (v: unknown) =>
+      v === undefined || v === null ? "—" : v ? "Call Centre" : "Non Call Centre";
+    return `${channel(d.from)} → ${channel(d.to)}`;
   }
   if (e.action === "value_synced") {
     const from = d.from !== undefined && d.from !== null ? fmtSAR(Number(d.from)) : "—";

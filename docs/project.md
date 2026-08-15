@@ -2918,6 +2918,23 @@ Two changes fix it, both inside `record_invoice_verification`:
   reconciliation reads `DISTINCT ON (invoice_key) … ORDER BY created_at DESC` —
   the most recent statement per document. `invoice_verified` stays one per
   document, so first-sighting and re-pricing are different events.
+- **The channel can be restated too** (`20260815210000`). The re-pricing branch
+  was gated on the **total**, and the lookup feeding it selected `prev_total`
+  alone — so a document first recorded as a walk-in stayed one for ever, however
+  many times Shams answered "Call Centre". Two ordinary things put an order
+  there: it was verified before `be824e2`, when the portal read `Customer`
+  instead of `Customer_Name`; or the MIS corrected the customer on a number
+  already recorded. A changed channel now writes `invoice_channel_changed`
+  (`from`, `to` as booleans, plus `total` so it can be the latest statement
+  without losing what the document is worth), and every reader of the log — the
+  per-invoice lookup, the RPC's derivation and `sync_order_invoice_flags` — takes
+  all three actions. The tie-break widened from `= 'invoice_value_changed'` to
+  `<> 'invoice_verified'`, so any correction beats the first sighting.
+
+  No backfill: what a document's channel is today is a question only Shams can
+  answer. Affected orders repair themselves on the next page open, because
+  `needsValueSync` has been asking for a reconciliation all along — that call was
+  arriving and being discarded.
 
 Both still read from the log rather than from the caller, so a repeated call
 cannot inflate anything, and an unchanged total writes nothing at all.
@@ -3198,7 +3215,10 @@ below — so a phone never scrolls sideways. Branch labels come from
     (`call_center_verified = (call_centre_cnt > 0)`, `20260815170000`): replace a
     call-centre invoice with a walk-in one, or have the MIS correct the channel
     on the same number, and the flag clears itself and the timeline records
-    `call_center_cleared`. It was set-only until then, so a replaced invoice left
+    `call_center_cleared`. The second half of that was a claim this file made and
+    the code did not keep until `20260815210000` — nothing re-recorded a
+    document's channel, so the flag was decided from the first answer ever
+    received about it. It was set-only until then, so a replaced invoice left
     the order claiming a verification its own documents no longer supported.
     Clearing needs *current* evidence — the recompute sits inside
     `IF verified_cnt > 0`, so a pending replacement or an unreachable MIS leaves
