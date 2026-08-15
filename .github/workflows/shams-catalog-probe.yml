@@ -1,0 +1,110 @@
+# Shams MIS catalog-source probe — manual, diagnostic, read-only.
+#
+# Runs `scripts/shams-catalog-probe.mjs` where the MIS credentials actually
+# live, because they are not available on a developer workstation. It answers
+# three questions recorded in docs/shams/api-discovery.md §10.7:
+#
+#   A  does any MIS path serve a product catalog?
+#   B  does `product/search?q=` truncate a broad result set? (`count` vs
+#      `data.length` — a truncated candidate set would explain wildcard
+#      searches that come back thin)
+#   C  are the NAN OPTIPRO rows present upstream at all?
+#
+# `workflow_dispatch` only. It is never triggered by a push, a pull request or
+# a schedule: it spends real requests against a third-party production API, so
+# it runs when somebody asks for it and not otherwise.
+#
+# The probe itself is GET-only against a hand-written allow-list, with one POST
+# for the token exchange. It has no npm dependencies — only `node:` builtins
+# and global `fetch` — so there is deliberately no install step.
+name: Shams catalog probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Fails fast with a readable reason when a secret is absent, rather than
+      # letting the probe's token exchange fail and look like an API problem.
+      # Only the *names* are ever printed; a missing secret expands to an empty
+      # string, and a present one is tested with `-n` and never echoed.
+      - name: Confirm the secrets are readable
+        env:
+          SHAMS_MIS_BASE_URL: ${{ secrets.SHAMS_MIS_BASE_URL }}
+          SHAMS_MIS_ACCOUNT_IDENTIFIER: ${{ secrets.SHAMS_MIS_ACCOUNT_IDENTIFIER }}
+          SHAMS_MIS_API_KEY: ${{ secrets.SHAMS_MIS_API_KEY }}
+        run: |
+          missing=""
+          [ -n "$SHAMS_MIS_BASE_URL" ] || missing="$missing SHAMS_MIS_BASE_URL"
+          [ -n "$SHAMS_MIS_ACCOUNT_IDENTIFIER" ] || missing="$missing SHAMS_MIS_ACCOUNT_IDENTIFIER"
+          [ -n "$SHAMS_MIS_API_KEY" ] || missing="$missing SHAMS_MIS_API_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Repository secrets not readable by this workflow:$missing"
+            echo "Set them under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          echo "All three secrets are present. Values are not printed."
+
+      # `tee` keeps the probe's own progress lines for the artifact, so a failed
+      # run still ships its reason. Actions masks registered secret values in log
+      # output, and the probe prints no credential of its own.
+      - name: Run the probe
+        env:
+          SHAMS_MIS_BASE_URL: ${{ secrets.SHAMS_MIS_BASE_URL }}
+          SHAMS_MIS_ACCOUNT_IDENTIFIER: ${{ secrets.SHAMS_MIS_ACCOUNT_IDENTIFIER }}
+          SHAMS_MIS_API_KEY: ${{ secrets.SHAMS_MIS_API_KEY }}
+        run: |
+          set -o pipefail
+          node scripts/shams-catalog-probe.mjs 2>&1 | tee probe.log
+
+      # Artifacts are downloadable and are **not** masked the way logs are, and
+      # the base URL is held as a repository secret — so it is stripped from both
+      # reports before upload. Nothing diagnostic is lost: the tables are keyed by
+      # path, and whoever runs this already knows their own host. Delete this step
+      # to keep the value in the report.
+      - name: Redact the base URL from the reports
+        if: always()
+        run: |
+          cd docs/shams || exit 0
+          if [ -f catalog-probe-results.md ]; then
+            sed -i 's|^- Base URL: .*|- Base URL: <redacted>|' catalog-probe-results.md
+          fi
+          if [ -f catalog-probe-results.json ]; then
+            node -e '
+              const fs = require("node:fs");
+              const f = "catalog-probe-results.json";
+              const doc = JSON.parse(fs.readFileSync(f, "utf8"));
+              doc.baseUrl = "<redacted>";
+              fs.writeFileSync(f, JSON.stringify(doc, null, 2));
+            '
+          fi
+
+      # `always()` so a failed probe still ships its log; `warn` so a run that
+      # died before writing a report does not fail a second time on the upload.
+      - name: Upload the reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shams-catalog-probe
+          path: |
+            docs/shams/catalog-probe-results.md
+            docs/shams/catalog-probe-results.json
+            probe.log
+          if-no-files-found: warn
+          retention-days: 7
