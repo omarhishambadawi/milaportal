@@ -128,7 +128,8 @@ describe("searchProducts — wildcard queries", () => {
 
     await searchProducts("mounjaro*kwikpen*12.5*0.6*2.4*qr");
 
-    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(MAX_SEARCH_PROBES);
+    // MAX_SEARCH_PROBES single-fragment probes, plus the one compound probe.
+    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(MAX_SEARCH_PROBES + 1);
   });
 
   it("drops candidates that fail the full expression", async () => {
@@ -165,7 +166,7 @@ describe("searchProducts — wildcard queries", () => {
 
     const products = await searchProducts("moun*2.5");
 
-    expect(termsAsked()).toEqual(["moun"]);
+    expect(termsAsked()).toEqual(["moun", "moun 2.5"]);
     expect(products.map((p) => p.itemCode)).toEqual(["10609670"]);
   });
 
@@ -174,7 +175,7 @@ describe("searchProducts — wildcard queries", () => {
 
     await searchProducts("*26*gold*3*1800");
 
-    expect(termsAsked()).toEqual(["gold", "1800"]);
+    expect(termsAsked()).toEqual(["gold", "1800", "26 gold 3 1800"]);
   });
 
   it("answers from the first probe when a corroborating one fails", async () => {
@@ -235,5 +236,83 @@ describe("searchProducts — caching and ranking", () => {
       "MOUNJARO 5 MG",
       "PEN NEEDLE FOR MOUNJARO",
     ]);
+  });
+});
+
+/**
+ * The 50-row cap, and the compound probe that gets under it.
+ *
+ * `product/search` matches a contiguous substring, returns at most 50 rows and
+ * exposes no pagination — established from the live API, not assumed. A broad
+ * fragment is therefore cut before the wanted product: `q=nan` matches 53+
+ * products and the NAN OPTIPRO range falls outside the 50 that come back, so
+ * `nan*op` had nothing to match against and returned empty while `nan optipro`
+ * and `optipro` both resolved.
+ *
+ * The upstream here reproduces exactly that: substring matching, hard cap at 50,
+ * with the NAN OPTIPRO rows ordered last so they fall outside it.
+ */
+describe("searchProducts — the upstream 50-row cap", () => {
+  const CAP = 50;
+
+  /** 50 filler rows containing "nan", then the products actually wanted. */
+  const FILLER = Array.from({ length: CAP }, (_, i) =>
+    row(`2010${String(i).padStart(4, "0")}`, `BANANA BOAT SUNSCREEN VARIANT ${i}`),
+  );
+  const NAN_OPTIPRO = [
+    row("10400741", "NAN OPTIPRO KIDS MILK, 400 G"),
+    row("10400395", "NAN OPTIPRO NO 1 400GM"),
+    row("10400396", "NAN OPTIPRO NO 1 MILK  800G"),
+    row("10400393", "NAN OPTIPRO NO 2  MILK, 400GM"),
+  ];
+  const CATALOG = [...FILLER, ...NAN_OPTIPRO];
+
+  /** Contiguous substring over the name, truncated at 50, no pagination. */
+  function respondCapped() {
+    fetchMock.mockImplementation(async (_path: string, query: Record<string, string>) => {
+      const needle = (query.q ?? "").toLowerCase();
+      const hits = CATALOG.filter((p) => (p.itemName ?? "").toLowerCase().includes(needle));
+      const data = hits.slice(0, CAP);
+      return { success: true, count: data.length, data };
+    });
+  }
+
+  beforeEach(() => respondCapped());
+
+  it("a single broad fragment is capped, and misses the product", async () => {
+    // What the agent saw before the compound probe: 50 rows of noise.
+    const capped = await searchProducts("nan");
+    expect(capped).toHaveLength(CAP);
+    expect(capped.some((p) => p.itemName.startsWith("NAN OPTIPRO"))).toBe(false);
+  });
+
+  it("`nan*op` finds the NAN OPTIPRO products via the compound probe", async () => {
+    const products = await searchProducts("nan*op");
+
+    expect(products.map((p) => p.itemCode).sort()).toEqual([
+      "10400393",
+      "10400395",
+      "10400396",
+      "10400741",
+    ]);
+  });
+
+  it("sends `nan op` as an extra probe without dropping `nan`", async () => {
+    await searchProducts("nan*op");
+
+    // Additive: the original probe is still made, the compound is appended.
+    expect(termsAsked()).toEqual(["nan", "nan op"]);
+  });
+
+  it("the compound probe result is under the cap, so nothing is truncated away", async () => {
+    await searchProducts("nan*op");
+
+    const compound = fetchMock.mock.calls.find(
+      (c) => (c[1] as Record<string, string>).q === "nan op",
+    );
+    expect(compound).toBeDefined();
+    expect(
+      CATALOG.filter((p) => (p.itemName ?? "").toLowerCase().includes("nan op")).length,
+    ).toBeLessThan(CAP);
   });
 });

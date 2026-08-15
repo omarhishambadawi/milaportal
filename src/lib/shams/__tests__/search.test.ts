@@ -160,23 +160,29 @@ describe("wildcardProbes", () => {
    * be ruled out. Several probes mean a product has to survive only one of them.
    */
   it("returns several probes, most selective first", () => {
-    expect(wildcardProbes(["26", "golden", "3", "1800"], 2, 3)).toEqual(["golden", "1800", "26"]);
+    expect(wildcardProbes(["26", "golden", "3", "1800"], 2, 3)).toEqual([
+      "golden",
+      "1800",
+      "26",
+      "26 golden 3 1800",
+    ]);
   });
 
   it("is bounded by max", () => {
     expect(wildcardProbes(["mounjaro", "kwikpen", "12.5", "0.6"], 2, 2)).toEqual([
       "mounjaro",
       "kwikpen",
+      "mounjaro kwikpen 12.5 0.6",
     ]);
   });
 
   it("skips fragments nested inside a probe already chosen", () => {
     // "gold" inside "golden" retrieves a superset of the same rows.
-    expect(wildcardProbes(["golden", "gold"], 2, 3)).toEqual(["golden"]);
+    expect(wildcardProbes(["golden", "gold"], 2, 3)).toEqual(["golden", "golden gold"]);
   });
 
   it("skips fragments too short to search with", () => {
-    expect(wildcardProbes(["a", "b", "gold"], 2, 3)).toEqual(["gold"]);
+    expect(wildcardProbes(["a", "b", "gold"], 2, 3)).toEqual(["gold", "a b gold"]);
   });
 
   /**
@@ -185,18 +191,22 @@ describe("wildcardProbes", () => {
    * every 2.5 mg product in the catalog.
    */
   it("holds probes after the first to a higher floor", () => {
-    expect(wildcardProbes(["moun", "2.5"], 2, 3, 4)).toEqual(["moun"]);
-    expect(wildcardProbes(["gold", "1800", "26"], 2, 3, 4)).toEqual(["gold", "1800"]);
+    expect(wildcardProbes(["moun", "2.5"], 2, 3, 4)).toEqual(["moun", "moun 2.5"]);
+    expect(wildcardProbes(["gold", "1800", "26"], 2, 3, 4)).toEqual([
+      "gold",
+      "1800",
+      "gold 1800 26",
+    ]);
   });
 
   it("still takes the first probe at the lower floor, since it is the search", () => {
     // Nothing here reaches the secondary floor; refusing the first probe too
     // would mean declining to search at all.
-    expect(wildcardProbes(["mou", "2.5"], 2, 3, 4)).toEqual(["mou"]);
+    expect(wildcardProbes(["mou", "2.5"], 2, 3, 4)).toEqual(["mou", "mou 2.5"]);
   });
 
   it("leaves the floors equal when no secondary floor is given", () => {
-    expect(wildcardProbes(["moun", "2.5"], 2, 3)).toEqual(["moun", "2.5"]);
+    expect(wildcardProbes(["moun", "2.5"], 2, 3)).toEqual(["moun", "2.5", "moun 2.5"]);
   });
 
   it("returns nothing when no fragment is long enough", () => {
@@ -534,6 +544,6 @@ describe("nan*op against the real catalog names", () => {
   });
 
   it("sends both fragments upstream, so either can retrieve the set", () => {
-    expect(wildcardProbes(parseWildcardQuery("nan*op"), 2, 3)).toEqual(["nan", "op"]);
+    expect(wildcardProbes(parseWildcardQuery("nan*op"), 2, 3)).toEqual(["nan", "op", "nan op"]);
   });
 });

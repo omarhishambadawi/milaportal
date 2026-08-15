@@ -185,6 +185,23 @@ export function wildcardProbes(
     if (out.some((chosen) => chosen.includes(fragment) || fragment.includes(chosen))) continue;
     out.push(fragment);
   }
+
+  // The fragments as one space-joined term, appended to — never substituted for
+  // — the probes above.
+  //
+  // `product/search` matches a contiguous substring and returns at most 50 rows
+  // with no pagination, so a broad single fragment is cut long before the wanted
+  // product: `nan` matches 53+ products and the NAN OPTIPRO range falls outside
+  // the 50 that come back, which is why `nan*op` found nothing. `nan op` is a
+  // substring of `NAN OPTIPRO …` and matches four rows, comfortably under the
+  // cap. It is a heuristic — it pays off when a `*` stands where a space does —
+  // so it only ever adds candidates, and the union and matcher decide the rest.
+  // `out.length > 0` keeps the existing guard intact: when no fragment is long
+  // enough to search with, the query is declined rather than swept, and a
+  // compound built from those same too-short fragments must not smuggle it back.
+  const compound = fragments.join(" ");
+  if (out.length > 0 && fragments.length >= 2 && !out.includes(compound)) out.push(compound);
+
   return out;
 }
 
