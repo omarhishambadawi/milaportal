@@ -14,7 +14,7 @@
  *   C  are the NAN OPTIPRO rows present upstream at all?
  *
  * Transport is `shamsFetch` and nothing else: no token exchange, no header, and
- * no read of `SHAMS_MIS_*` happens here. Twenty read-only requests per run.
+ * no read of `SHAMS_MIS_*` happens here. Twenty-four read-only requests per run.
  *
  * **No raw upstream body is returned.** Each response is reduced to its shape —
  * status, kind, row counts, field names — plus at most five `{itemCode,
@@ -39,8 +39,29 @@ const CATALOG_PATHS: { path: string; note: string }[] = [
 /** Broad terms, to see whether a big result set stops at a round number. */
 const BROAD_TERMS = ["a", "e", "in", "ta", "co"];
 
-/** The queries this investigation was opened against. */
-const REPORTED_TERMS = ["nan", "op", "pana", "extra", "omega", "10400746"];
+/**
+ * The queries this investigation was opened against, plus four that separate the
+ * two readings of `count`.
+ *
+ * `q=nan` returned `count: 50, data.length: 50` with **no** NAN OPTIPRO row,
+ * while `q=10400746` returned that exact product. Either `count` is the total
+ * and the NAN range genuinely is not in the catalog, or `count` is just the rows
+ * on this page and 50 is a cap that cut the range off. Naming the product
+ * directly decides it: if `nan optipro` returns it, the catalog has it and `nan`
+ * was truncated.
+ */
+const REPORTED_TERMS = [
+  "nan",
+  "op",
+  "pana",
+  "extra",
+  "omega",
+  "10400746",
+  "nan optipro",
+  "nan 2 optipro",
+  "optipro",
+  "1800",
+];
 
 const SEARCH_PATH = "/api/v2/product/search";
 
@@ -72,6 +93,10 @@ export interface TruncationRow {
   dataLength: number | null;
   truncated: boolean | null;
   durationMs: number;
+  /** Pagination/total fields the envelope carried, if any. */
+  meta: Record<string, string> | null;
+  /** Top-level key *names* of the envelope — never their values. */
+  envelopeKeys: string[] | null;
 }
 
 export interface ReportedRow extends TruncationRow {
@@ -151,6 +176,46 @@ function rowsOf(body: unknown): Record<string, unknown>[] | null {
   return Array.isArray(data) ? (data as Record<string, unknown>[]) : null;
 }
 
+/**
+ * Pagination fields worth looking for, and the envelope's own key names.
+ *
+ * Read off the response the caller already has — no extra request. The key names
+ * are collected as well as the known fields, because a paging field this list
+ * failed to guess would otherwise cost another round trip to discover.
+ */
+const META_KEYS = [
+  "total",
+  "totalCount",
+  "total_count",
+  "pages",
+  "page",
+  "pageSize",
+  "page_size",
+  "limit",
+  "offset",
+  "next",
+  "hasNext",
+  "has_next",
+];
+
+function pageMeta(body: unknown): Pick<TruncationRow, "meta" | "envelopeKeys"> {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { meta: null, envelopeKeys: null };
+  }
+  const rec = body as Record<string, unknown>;
+  const meta: Record<string, string> = {};
+  for (const key of META_KEYS) {
+    const value = rec[key];
+    if (value !== undefined && value !== null && typeof value !== "object") {
+      meta[key] = String(value);
+    }
+  }
+  return {
+    meta: Object.keys(meta).length > 0 ? meta : null,
+    envelopeKeys: Object.keys(rec).slice(0, 12),
+  };
+}
+
 /** The `count` the API declares, which can exceed the rows it actually sent. */
 function declaredCount(body: unknown): number | null {
   if (!body || typeof body !== "object") return null;
@@ -187,6 +252,7 @@ async function searchRow(
       dataLength,
       truncated: count === null || dataLength === null ? null : count > dataLength,
       durationMs,
+      ...pageMeta(body),
     },
     rows,
   };

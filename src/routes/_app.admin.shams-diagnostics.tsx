@@ -89,7 +89,7 @@ function ShamsDiagnosticsPage() {
       <div className="space-y-1">
         <h1 className="text-xl font-semibold">Shams catalog diagnostics</h1>
         <p className="text-sm text-muted-foreground">
-          Read-only. One run spends about twenty requests against the Shams MIS.
+          Read-only. One run spends about two dozen requests against the Shams MIS.
         </p>
       </div>
 
@@ -160,7 +160,9 @@ function ShamsDiagnosticsPage() {
           </Section>
 
           <Section title="C — reported queries" hint="NAN OPTIPRO counts names reading “nan … op”.">
-            <Table head={["q", "HTTP", "count", "data.length", "NAN OPTIPRO", "Sample"]}>
+            <Table
+              head={["q", "HTTP", "count", "data.length", "NAN OPTIPRO", "Metadata", "Sample"]}
+            >
               {report.reported.map((r) => (
                 <tr key={r.q} className="border-t align-top">
                   <td className={`${TD} font-mono text-xs`}>{r.q}</td>
@@ -168,6 +170,13 @@ function ShamsDiagnosticsPage() {
                   <td className={TD}>{r.count ?? "—"}</td>
                   <td className={TD}>{r.dataLength ?? "—"}</td>
                   <td className={TD}>{r.nanOptipro}</td>
+                  <td className={`${TD} text-xs`}>
+                    {r.meta
+                      ? Object.entries(r.meta)
+                          .map(([k, v]) => `${k}=${v}`)
+                          .join(" · ")
+                      : `keys: ${r.envelopeKeys?.join(", ") ?? "—"}`}
+                  </td>
                   <td className={`${TD} text-xs`}>
                     {r.sample.map((s) => `${s.itemCode} ${s.itemName}`).join(" · ") || "—"}
                   </td>
