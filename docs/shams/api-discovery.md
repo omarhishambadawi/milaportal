@@ -574,3 +574,55 @@ shipped package — its bytecode, its config, and the HTTP cache it wrote itself
 Whether the two backends expose the *same* product universe is therefore
 **`NOT VERIFIED`**, and it is the most likely explanation for a query returning
 different rows in the two systems.
+
+### 10.6 How the desktop keeps its catalog current
+
+`GET /products/names` answers with a **bare JSON array** — not the `{success, data}`
+envelope the MIS uses — of `{code, name, price}`. Verified against the shipped
+package: the endpoint's cached response, `product_cache_seed.json`, and the live
+`app_state.cached_product_names` all hold the **same 8 484 item codes**, so the
+seed is the complete catalog and the endpoint returns that same catalog. The seed
+is a cold-start copy (`_load_product_seed_rows`), used until the first fetch
+lands. Three fields, nothing else: no barcode, no pack size, no branch data.
+
+**The refresh is event-driven, not a TTL.** `_refresh_product_name_cache_for_stock_sync`:
+
+1. `GET /stock/sync/status` (60 s timeout) → `{latest_run, last_success_at_utc,
+   sync_interval_minutes, is_running}`.
+2. `_extract_stock_sync_success_marker` reduces that to one string — the latest
+   run's `completed_at`/`started_at` when its `status` is `success`, otherwise
+   `last_success_at_utc`.
+3. If the marker differs from `app_state.cached_product_names_stock_sync_marker`,
+   re-fetch `/products/names` and **replace** the cache, storing the new marker.
+
+So the catalog is re-pulled when the upstream stock sync reports a *new success*,
+and not otherwise. There is no age-based expiry on this path;
+`_is_cache_stale(key, max_age_seconds)` exists for the branch list. The captured
+deployment reports `sync_interval_minutes: 0` — "Manual" in the UI — with
+`last_success_at_utc: 2026-08-14T11:53:23Z`.
+
+**Observed drift**, seed (2026-07-25) against the endpoint's response
+(2026-08-14), 20 days apart: 488 of 8 484 prices changed (5.8 %) and 11 names.
+Roughly 0.3 % of rows a day, and no code added or removed in the window. A
+several-hour TTL would therefore be comfortably current if a marker endpoint is
+not available; the marker is better because it refreshes on change rather than on
+a clock.
+
+**Authentication is `X-Session-Token`** (`MainWindow._api_call` sets it from
+`_current_session_token`), issued by the desktop's own `/login` for a *branch
+user* — bcrypt is bundled for it. It is not the portal's machine Bearer
+credential, and the portal holds nothing for that host.
+
+### 10.7 Probing this API for a catalog source
+
+`scripts/shams-catalog-probe.mjs` is the read-only check, to be run where
+`SHAMS_MIS_*` credentials exist. It allow-lists GET paths only, prints nothing
+secret, and answers three things: whether any path on the MIS serves a product
+list, whether `product/search?q=` truncates a broad result (its `count` field
+reveals the true total even when `data` is capped), and whether the NAN OPTIPRO
+rows exist upstream at all. Its output belongs in
+`docs/shams/catalog-probe-results.{md,json}`.
+
+Until it has been run, the catalog source is **`NOT VERIFIED`** and no
+server-side catalog cache should be built: there is nothing confirmed to fill it
+from.
