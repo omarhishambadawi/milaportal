@@ -3202,8 +3202,24 @@ below — so a phone never scrolls sideways. Branch labels come from
     the order claiming a verification its own documents no longer supported.
     Clearing needs *current* evidence — the recompute sits inside
     `IF verified_cnt > 0`, so a pending replacement or an unreachable MIS leaves
-    the flag exactly as it was rather than deriving it from an absence. It is
-    **not** manually tickable from the Orders list any more; the order form
+    the flag exactly as it was rather than deriving it from an absence.
+
+    That guard left one gap, closed by `20260815190000`: the recompute ran only
+    when the *order page* called it, so **changing `invoice_no` did not
+    re-derive anything**. Create did (`submit` calls the RPC after the insert);
+    the edit path is a plain `UPDATE` and had no equivalent, so an agent who
+    replaced a walk-in invoice with a call-centre one, saved, and went back to
+    the list saw the old warning against a document the order no longer had.
+    `trg_sync_order_invoice_flags` (AFTER UPDATE OF `invoice_no`) now re-derives
+    `invoices_verified`, `call_center_verified` and `invoice_value` from the same
+    current-keys × latest-per-document evidence, under the same
+    `milaserv.invoice_sync` GUC so the correction is attributed to the portal
+    and narrated with the same three events. It reads the local activity log, not
+    the MIS, so it needs no outage guard — but it does keep the value guard, and
+    a tick made **by hand in the same statement** survives it (`OR manual_tick`),
+    since the form still offers that box to `verify_*` holders.
+
+    It is **not** manually tickable from the Orders list any more; the order form
     still offers it to `verify_*` holders, for a document raised outside the
     call centre that operationally belongs to it.
 12. **An order completes itself when nothing is left to do.**
