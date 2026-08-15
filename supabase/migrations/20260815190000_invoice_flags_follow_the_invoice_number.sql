@@ -229,6 +229,11 @@ EXECUTE FUNCTION public.sync_order_invoice_flags();
 -- narrating an event, so it writes no activity of its own.
 SELECT set_config('milaserv.invoice_sync', 'on', true);
 
+-- Same convention as the earlier backfills (20260814160000, 20260815120000):
+-- `prevent_order_reassignment` is written for a signed-in agent and refuses a
+-- migration-time UPDATE, so it stands down for this maintenance statement only.
+ALTER TABLE public.orders DISABLE TRIGGER orders_prevent_reassignment;
+
 WITH current_keys AS (
   SELECT o.id AS order_id,
          CASE
@@ -275,6 +280,8 @@ UPDATE public.orders o
      OR o.invoices_verified IS DISTINCT FROM (d.verified_cnt > 0)
      OR (d.verified_cnt > 0 AND o.invoice_value IS DISTINCT FROM d.verified_sum)
    );
+
+ALTER TABLE public.orders ENABLE TRIGGER orders_prevent_reassignment;
 
 SELECT set_config('milaserv.invoice_sync', 'off', true);
 
