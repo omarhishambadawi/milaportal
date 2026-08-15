@@ -285,18 +285,24 @@ describe("absence of evidence never clears a verification", () => {
     const existing = { call_center_verified: true, invoices_verified: true };
     expect(derive({ verifiedCnt: 0, callCentreCnt: 0 }, existing)).toEqual(existing);
     // And the list still shows the tick rather than a dash.
-    expect(callCentreState({ status: "Pending", ...derive({ verifiedCnt: 0, callCentreCnt: 0 }, existing) })).toBe(
-      "verified",
-    );
+    expect(
+      callCentreState({
+        status: "Pending",
+        ...derive({ verifiedCnt: 0, callCentreCnt: 0 }, existing),
+      }),
+    ).toBe("verified");
   });
 
   it("invents no verification when there was none", () => {
     // The guard preserves; it must never promote false to true.
     const existing = { call_center_verified: false, invoices_verified: false };
     expect(derive({ verifiedCnt: 0, callCentreCnt: 0 }, existing)).toEqual(existing);
-    expect(callCentreState({ status: "Pending", ...derive({ verifiedCnt: 0, callCentreCnt: 0 }, existing) })).toBe(
-      "pending",
-    );
+    expect(
+      callCentreState({
+        status: "Pending",
+        ...derive({ verifiedCnt: 0, callCentreCnt: 0 }, existing),
+      }),
+    ).toBe("pending");
   });
 
   it("still reconciles normally once the MIS has answered", () => {
