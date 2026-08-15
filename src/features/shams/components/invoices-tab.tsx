@@ -19,6 +19,19 @@
  * empty state, not an error, because a document that does not exist is a fact
  * the API reports with `200`.
  *
+ * ## Naming the branch is the fast path
+ *
+ * The sweep is the expensive part of this page — 137 branches asked about one
+ * number, four parts in parallel at 24 in flight, roughly six waves of upstream
+ * calls. It exists because the MIS cannot look a document up across branches,
+ * and it stays the default because an agent usually does not know the branch.
+ *
+ * But often they do. The optional branch selector turns those 137 requests into
+ * **one**: pick the branch and the sweep is skipped entirely, straight to
+ * `sales/details` for that `(branch, docNo)` pair. It is never required — the
+ * number alone still works exactly as before — it is simply the difference
+ * between asking every warehouse and asking the right one.
+ *
  * ## Customer and Call Centre status
  *
  * Both are shown, and the raw `customer` label is shown *unaltered* next to the
@@ -33,10 +46,28 @@
  */
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { ArrowLeft, Building2, FileText, Loader2, Search } from "lucide-react";
+import {
+  ArrowLeft,
+  Building2,
+  Check,
+  ChevronsUpDown,
+  FileText,
+  Loader2,
+  Search,
+  X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fmtSAR } from "@/lib/branches";
 import { cn } from "@/lib/utils";
@@ -54,11 +85,28 @@ export function InvoicesTab() {
   const [docNo, setDocNo] = useState("");
   /** The number actually searched for. Typing never triggers a sweep. */
   const [submitted, setSubmitted] = useState<string | null>(null);
+  /** The optional branch filter, as currently set in the picker. */
+  const [branchFilter, setBranchFilter] = useState<string | null>(null);
+  /**
+   * The filter *as it was when the search was submitted*.
+   *
+   * Separate from `branchFilter` so changing the picker after a search does not
+   * silently re-scope the results already on screen; the search is re-run on
+   * submit, like the number.
+   */
+  const [submittedBranch, setSubmittedBranch] = useState<string | null>(null);
   const [branchCode, setBranchCode] = useState<string | null>(null);
 
   const { data: branchLabels } = useBranchLabels();
 
-  const discovery = useInvoiceBranches(submitted);
+  /**
+   * The sweep — **not run at all** when the agent named a branch.
+   *
+   * `enabled` is the whole optimisation: with a branch there is nothing to
+   * discover, so the 137-branch probe is skipped and the lookup below goes
+   * straight at the one warehouse that matters.
+   */
+  const discovery = useInvoiceBranches(submitted, !submittedBranch);
   const matches = discovery.matches;
 
   /**
@@ -83,7 +131,10 @@ export function InvoicesTab() {
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
-    setBranchCode(null);
+    // With a branch named, the chosen branch *is* the filter and the sweep
+    // never runs. Without one, this clears back to discovery.
+    setBranchCode(branchFilter);
+    setSubmittedBranch(branchFilter);
     setSubmitted(docNo.trim());
   };
 
@@ -126,6 +177,8 @@ export function InvoicesTab() {
               </div>
             </label>
 
+            <BranchPicker value={branchFilter} labels={branchLabels} onChange={setBranchFilter} />
+
             <Button type="submit" disabled={!canSubmit || searching} className="h-11 sm:w-40">
               <Search className="mr-1.5 h-4 w-4" aria-hidden="true" />
               {searching ? "Searching…" : "Find invoice"}
@@ -133,8 +186,19 @@ export function InvoicesTab() {
           </form>
 
           <p className="mt-2 text-xs leading-snug text-muted-foreground">
-            Enter the number alone. The same number can exist in several branches, so the portal
-            checks which branches hold it and asks only if there is a choice.
+            {branchFilter ? (
+              <>
+                Looking up <span className="font-mono font-medium">{branchFilter}</span> directly —
+                one request instead of a sweep of every branch. Clear the branch to search
+                everywhere.
+              </>
+            ) : (
+              <>
+                Enter the number alone. The same number can exist in several branches, so the portal
+                checks which branches hold it and asks only if there is a choice. Naming the branch,
+                if you know it, skips that search entirely.
+              </>
+            )}
           </p>
         </CardContent>
       </Card>
@@ -153,6 +217,29 @@ export function InvoicesTab() {
       {discovery.done && !discovery.failed && matches.length === 0 && (
         <EmptyState icon={<FileText className="h-8 w-8 opacity-40" aria-hidden="true" />}>
           No invoice found for this document number.
+        </EmptyState>
+      )}
+
+      {/* The direct path has no sweep to report "nothing found", so it says so
+          itself — and offers the obvious next move, which is to drop the branch
+          and let the portal look everywhere. */}
+      {submittedBranch && invoiceResult?.ok && invoices.length === 0 && (
+        <EmptyState icon={<FileText className="h-8 w-8 opacity-40" aria-hidden="true" />}>
+          <span className="block">
+            No invoice <span className="font-mono font-medium">{submitted}</span> in branch{" "}
+            <span className="font-mono font-medium">{submittedBranch}</span>.
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setBranchFilter(null);
+              setSubmittedBranch(null);
+              setBranchCode(null);
+            }}
+            className="mt-2 text-xs font-medium text-primary underline-offset-2 hover:underline"
+          >
+            Search all branches instead
+          </button>
         </EmptyState>
       )}
 
@@ -197,6 +284,136 @@ export function InvoicesTab() {
           Enter an invoice number to look it up across all Shams branches.
         </EmptyState>
       )}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Branch filter                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The optional branch, as a searchable combobox.
+ *
+ * Deliberately the same Popover + Command pairing the order form's branch
+ * picker uses, rather than a new control: an agent moving between the two
+ * screens should not have to learn a second way to find `P0206`. Searching
+ * covers the code and the city in both scripts, because that is what
+ * `useBranchLabels` already carries and what an agent actually knows —
+ * "the Jeddah one" as often as the code.
+ *
+ * The list itself costs nothing extra. `useBranchLabels` is already loaded by
+ * this tab for rendering branch names beside results, so this reads the same
+ * cached map.
+ */
+function BranchPicker({
+  value,
+  labels,
+  onChange,
+}: {
+  value: string | null;
+  labels: Map<string, BranchLabel> | undefined;
+  onChange: (branchCode: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const branches = useMemo(
+    () => [...(labels?.values() ?? [])].sort((a, b) => a.branchNo.localeCompare(b.branchNo)),
+    [labels],
+  );
+
+  const current = value ? labels?.get(value) : undefined;
+  const cityOf = (b: BranchLabel) => b.cityEnglish ?? b.city ?? "";
+
+  return (
+    <div className="flex min-w-0 flex-col gap-1 sm:w-64">
+      <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        Branch &mdash; optional
+      </span>
+      <div className="flex items-center gap-1">
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              role="combobox"
+              aria-label="Filter by branch"
+              className="h-11 min-w-0 flex-1 justify-between font-normal"
+            >
+              {current ? (
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="font-mono font-medium">{current.branchNo}</span>
+                  <span className="truncate text-muted-foreground" dir="auto">
+                    {cityOf(current)}
+                  </span>
+                </span>
+              ) : (
+                <span className="text-muted-foreground">All branches</span>
+              )}
+              <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" aria-hidden="true" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-0">
+            <Command>
+              <CommandInput placeholder="Search a branch code or city…" />
+              <CommandList>
+                <CommandEmpty>No branch.</CommandEmpty>
+                <CommandGroup>
+                  <CommandItem
+                    value="all branches"
+                    onSelect={() => {
+                      onChange(null);
+                      setOpen(false);
+                    }}
+                  >
+                    <Check
+                      className={cn("mr-2 h-4 w-4", value === null ? "opacity-100" : "opacity-0")}
+                    />
+                    All branches
+                  </CommandItem>
+                  {branches.map((b) => (
+                    <CommandItem
+                      key={b.branchNo}
+                      // Both are searchable: the code an agent reads off a
+                      // document, and the city they were told on the phone.
+                      value={`${b.branchNo} ${b.city} ${b.cityEnglish ?? ""}`}
+                      onSelect={() => {
+                        onChange(b.branchNo);
+                        setOpen(false);
+                      }}
+                    >
+                      <Check
+                        className={cn(
+                          "mr-2 h-4 w-4",
+                          value === b.branchNo ? "opacity-100" : "opacity-0",
+                        )}
+                      />
+                      <span className="mr-2 font-mono">{b.branchNo}</span>
+                      <span className="truncate text-xs text-muted-foreground" dir="auto">
+                        {cityOf(b)}
+                      </span>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+
+        {/* One click back to every branch, without opening the list. */}
+        {value && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Clear branch filter"
+            onClick={() => onChange(null)}
+            className="h-11 w-9 shrink-0 text-muted-foreground hover:text-foreground"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
@@ -251,6 +468,9 @@ function InvoiceSkeleton() {
  * Everything else stays plain: one emphasised row among five is a signal, five
  * emphasised rows are wallpaper.
  */
+/** Above this many matches the chooser offers a filter box of its own. */
+const FILTERABLE_FROM = 6;
+
 function BranchChoice({
   matches,
   labels,
@@ -262,6 +482,25 @@ function BranchChoice({
   onChoose: (branchCode: string) => void;
   searching: boolean;
 }) {
+  const [filter, setFilter] = useState("");
+
+  /**
+   * Narrowing a list already in hand — no request, no refetch.
+   *
+   * Only offered once the list is long enough to be worth it: a filter box over
+   * three rows is furniture. Matches on the code and on the city, the same two
+   * things the picker above searches.
+   */
+  const shown = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return matches;
+    return matches.filter((m) => {
+      const label = labels?.get(m.branchCode);
+      const city = `${label?.city ?? ""} ${label?.cityEnglish ?? ""}`;
+      return `${m.branchCode} ${city}`.toLowerCase().includes(q);
+    });
+  }, [matches, labels, filter]);
+
   return (
     <Card className="overflow-hidden">
       <CardContent className="p-0">
@@ -278,8 +517,25 @@ function BranchChoice({
             </span>
           )}
         </div>
+
+        {matches.length >= FILTERABLE_FROM && (
+          <div className="border-b border-border/60 px-4 py-2">
+            <Input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter these branches by code or city…"
+              aria-label="Filter matching branches"
+              className="h-9"
+            />
+          </div>
+        )}
         <ul className="divide-y divide-border/40">
-          {matches.map((match) => (
+          {shown.length === 0 && (
+            <li className="px-4 py-3 text-sm text-muted-foreground">
+              No matching branch in these results.
+            </li>
+          )}
+          {shown.map((match) => (
             <li key={match.branchCode}>
               <button
                 type="button"

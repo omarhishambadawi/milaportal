@@ -3046,7 +3046,21 @@ because Shams returned a document for it. A branch that fails is skipped; a tota
 failure raises, because "nothing matched" and "nothing answered" are different
 facts.
 
-**What makes it fast enough to use:**
+**The cheapest sweep is the one that does not run.** The Invoices tab carries an
+optional **branch selector** beside the number, and choosing one skips discovery
+entirely: `useInvoiceBranches(submitted, !submittedBranch)` disables all four
+parts, so a search goes straight to `sales/details` for that `(branch, docNo)`
+pair. **141 upstream document lookups become 1** (144 rows in `branches`, 141
+carrying a sweepable `^[A-Z]\d{4}$` code). It is never required — a bare number
+still sweeps, which is the whole point of the sweep existing — and the filter is
+read at submit, not as it changes, so altering the picker cannot silently
+re-scope results already on screen. The selector is the same Popover + Command
+combobox the order form uses, searching branch code and city in both scripts off
+the already-cached `useBranchLabels` map; a result list of six or more branches
+gets its own filter box, which narrows rows already in hand and issues no
+request.
+
+**What makes the sweep itself fast enough to use:**
 
 - **Concurrency 24** per part, up from 8. 137 branches at 8 in flight is ~17
   waves; at the observed 0.4–2.3 s per lookup that was a 10–40 s wait. No rate
