@@ -626,3 +626,115 @@ rows exist upstream at all. Its output belongs in
 Until it has been run, the catalog source is **`NOT VERIFIED`** and no
 server-side catalog cache should be built: there is nothing confirmed to fill it
 from.
+
+---
+
+## 11. Offers — what the CRM actually provides
+
+Established from the shipped PharmacyCRM package (its bytecode and the HTTP cache
+it wrote itself), and from a read-only inspection of this repository. **No live
+call was made to discover any of it**, and no undocumented endpoint was probed.
+
+### 11.1 There is no Offers endpoint
+
+There is no `/offers`, no promotions *list*, and no offers feed. Searching the
+desktop build for `offer`, `promo` and `discount` turns up exactly two things:
+per-item pricing fields, and an administrative sync job. The desktop has no
+Offers screen either — it renders offer columns inside its branch-stock table.
+
+### 11.2 An offer is a per-branch field on the availability response
+
+```
+GET /products/{item_code}/available-branches      X-Session-Token
+```
+
+One row per branch (138 for the captured item), each carrying:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `price` | number | list price before the offer |
+| `offer_percent` | number | discount percentage, `0` when there is none |
+| `offer_display` | string | preformatted, e.g. `"25.00%"` |
+| `after_offer_price` | number | the price to charge |
+| `price_without_tax` | number | ex-VAT list price |
+
+The row also carries `available_qty`, `distance_km`, `within_radius` and a nested
+`branch` object (`code`, `city`, `district`, `address`, `latitude`, `longitude`,
+`whatsapp`, `maps_url`).
+
+**Fields that do not exist** — confirmed absent, listed so nobody plans around
+them: offer id, offer name or title, description, start date, end date, minimum
+or maximum quantity, eligibility rules, customer restrictions, active/inactive
+status, image, and deep link. An "offer" here is a discount percentage on one
+item at one branch and nothing more.
+
+`GET /products/search-live` carries **no** offer fields at all — it answers
+stock only. So the availability endpoint is the sole source.
+
+### 11.3 `/promotions/sync` is a job, not a feed
+
+```
+POST /promotions/sync           starts a server-side refresh
+GET  /promotions/sync/status    {latest_run, active_run, last_success_at_utc,
+                                 sync_interval_minutes, is_running}
+```
+
+The desktop only *triggers* and *polls* this; it never reads offers back from it.
+The captured run: `sync_type: full`, 138 branches, 10,398 rows, ~24 minutes,
+`sync_interval_minutes: 0` (Manual). **`POST /promotions/sync` must never be
+wired into the portal** — it is a write-side trigger for a 24-minute job on
+Shams's infrastructure, and nothing on a page should be able to fire it.
+
+### 11.4 How offers relate to `ShamsProduct`
+
+Keyed by **`item_code`**, which is `ShamsProduct.itemCode` — the same identifier
+the catalog and the MIS stock reads already use. No new identifier, no mapping
+table, and no change to `ShamsProduct` is required.
+
+Offers should stay a **separate domain model**. They are per-branch and
+time-varying; `ShamsProduct` is catalog reference data cached for six hours.
+Folding a moving price into it would make the catalog cache wrong rather than
+merely stale.
+
+**One observation, and its limit:** for the single captured item, all 138 branches
+reported the *same* `offer_percent` (25.0), which suggests the discount is a
+property of the product that the response denormalizes per branch. That is `n=1`.
+Whether an offer can differ between branches is **`NOT VERIFIED`**, and the
+per-branch shape should be preserved until it is.
+
+### 11.5 Reachability, cost and MIS
+
+**Reachable today.** The Phase 1 CRM client already authenticates to this host, so
+an offers read is `crmFetch("/products/<code>/available-branches")` — no new
+credential, no new client, no new auth flow.
+
+**There is no bulk form.** The endpoint takes one item code and returned ~62 KB
+for it. Offers for a result set of *n* products would cost *n* requests; there is
+no observed way to ask for many at once, and no pagination or `limit` parameter.
+Rate limits: `NOT VERIFIED`.
+
+**The MIS is not involved.** `product/stock` carries no offer fields — verified
+against `RawStockRow`, `normalizeStock` and §3.3, which hold only `branchCode`,
+`branchName`, `areaName`, `quantity`, `lzQuantity`. The MIS `Discount` and
+`ItmDiscAmt` fields in §5 are invoice-line amounts on a *sold* document, not a
+current promotional price. Offers need no MIS data.
+
+Note that this response is location-aware (it takes `location_lat` / `location_lon`
+and sorts by distance) and carries outward-facing `whatsapp` and `maps_url`
+links. Those are display data; nothing should follow them server-side.
+
+### 11.6 What a future phase would have to decide
+
+The per-item cost is the whole design problem. Showing an offer badge on a
+100-row search result would be 100 requests and ~6 MB. Two shapes avoid that, and
+neither is implemented:
+
+1. **On demand, for the opened product only** — one request when an agent opens a
+   product, alongside the MIS stock read the page already makes. Smallest, and it
+   matches how the desktop itself surfaces offers.
+2. **A cached offers index**, if Shams can expose a bulk endpoint. Not possible
+   against the API as it stands.
+
+Caching, when it happens, must be **shorter than the catalog's six hours** — an
+offer is a live price, and a stale one is a price an agent quotes wrongly. The
+60-second MIS stock TTL is the closer precedent.
