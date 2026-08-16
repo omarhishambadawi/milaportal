@@ -45,7 +45,7 @@ describe("submit records the invoices it just saved", () => {
   it("records after the row is written, so the order already names the documents", () => {
     // The server reconciles against `orders.invoice_no` / `branch_no` as stored,
     // so recording before the update would reconcile against the old ones.
-    const editUpdate = source.indexOf('.update(parsed as any)');
+    const editUpdate = source.indexOf(".update(parsed as any)");
     const editRecord = source.indexOf("recordInvoiceVerification(id!,");
     expect(editUpdate).toBeGreaterThan(-1);
     expect(editRecord).toBeGreaterThan(editUpdate);
