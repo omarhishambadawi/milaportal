@@ -35,7 +35,7 @@ import type {
 import type { InvoiceBranchMatch } from "@/lib/shams/types";
 import type { ItemAvailability } from "@/lib/shams/availability";
 import type { CatalogDiagnostics } from "@/lib/shams/diagnostics.server";
-import type { CrmSmokeResult } from "@/lib/shams-crm/diagnostics.server";
+import type { CrmSearchDiagnostics, CrmSmokeResult } from "@/lib/shams-crm/diagnostics.server";
 
 /* -------------------------------------------------------------------------- */
 /* Gates                                                                       */
@@ -515,4 +515,23 @@ export const shamsCrmSmokeTest = createServerFn({ method: "POST" })
 
     const { runCrmSmokeTest } = await import("@/lib/shams-crm/diagnostics.server");
     return runCrmSmokeTest();
+  });
+
+/**
+ * Administrator-only Phase 4 search verification.
+ *
+ * Runs four fixed queries through the same `searchProducts` the Stock page uses,
+ * inside the runtime where the real CRM credentials live — local tests only ever
+ * see a 237-row fixture. Same gate as the other Shams diagnostics.
+ *
+ * Returns item code and name only; never a price, never a full result set.
+ */
+export const shamsCrmSearchDiagnostic = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }): Promise<CrmSearchDiagnostics> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertAdmin(supabase, userId);
+
+    const { runCrmSearchDiagnostic } = await import("@/lib/shams-crm/diagnostics.server");
+    return runCrmSearchDiagnostic();
   });

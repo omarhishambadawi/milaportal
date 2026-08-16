@@ -21,7 +21,11 @@ import { Loader2, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { isAdministrator, useAuth } from "@/lib/auth";
-import { shamsCatalogDiagnostics, shamsCrmSmokeTest } from "@/lib/shams.functions";
+import {
+  shamsCatalogDiagnostics,
+  shamsCrmSearchDiagnostic,
+  shamsCrmSmokeTest,
+} from "@/lib/shams.functions";
 import { TD, TH } from "@/features/shams/constants";
 
 export const Route = createFileRoute("/_app/admin/shams-diagnostics")({
@@ -71,6 +75,8 @@ function ShamsDiagnosticsPage() {
   const probe = useMutation({ mutationFn: () => run({ data: undefined }) });
   const runCrm = useServerFn(shamsCrmSmokeTest);
   const crm = useMutation({ mutationFn: () => runCrm({ data: undefined }) });
+  const runCrmSearch = useServerFn(shamsCrmSearchDiagnostic);
+  const crmSearch = useMutation({ mutationFn: () => runCrmSearch({ data: undefined }) });
 
   if (!isAdministrator(role)) {
     return (
@@ -125,6 +131,56 @@ function ShamsDiagnosticsPage() {
               <td className={TD}>{crm.data.errorKind ?? "—"}</td>
             </tr>
           </Table>
+        )}
+      </Section>
+
+      <Section
+        title="Shams CRM — product search verification"
+        hint="Runs four fixed queries through the same search the Stock page uses."
+      >
+        <Button
+          onClick={() => crmSearch.mutate()}
+          disabled={crmSearch.isPending}
+          variant="secondary"
+        >
+          {crmSearch.isPending && (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+          )}
+          {crmSearch.isPending ? "Running…" : "Run CRM search tests"}
+        </Button>
+
+        {crmSearch.isError && (
+          <p className="text-sm text-destructive">
+            The search diagnostic failed. You may not have administrator access.
+          </p>
+        )}
+
+        {crmSearch.data && (
+          <div className="space-y-2">
+            <p className="text-sm text-muted-foreground">
+              Catalog available: {crmSearch.data.catalogAvailable ? "yes" : "no"} · Overall:{" "}
+              <span
+                className={
+                  crmSearch.data.allPassed ? "font-medium" : "font-medium text-destructive"
+                }
+              >
+                {crmSearch.data.allPassed ? "all passed" : "check results"}
+              </span>
+            </p>
+            <Table head={["Query", "Status", "Results", "Sample", "Error"]}>
+              {crmSearch.data.queries.map((r) => (
+                <tr key={r.query} className="border-t align-top">
+                  <td className={`${TD} font-mono text-xs`}>{r.query}</td>
+                  <td className={TD}>{r.status}</td>
+                  <td className={TD}>{r.count ?? "—"}</td>
+                  <td className={`${TD} text-xs`}>
+                    {r.sample?.map((s) => `${s.itemCode} ${s.itemName}`).join(" · ") || "—"}
+                  </td>
+                  <td className={TD}>{r.errorKind ?? "—"}</td>
+                </tr>
+              ))}
+            </Table>
+          </div>
         )}
       </Section>
 

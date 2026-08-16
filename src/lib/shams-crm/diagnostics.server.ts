@@ -109,3 +109,97 @@ export async function runCrmSmokeTest(): Promise<CrmSmokeResult> {
     };
   }
 }
+
+/* -------------------------------------------------------------------------- */
+/* Phase 4 search verification                                                 */
+/* -------------------------------------------------------------------------- */
+
+/** Fixed, and fixed on purpose: these are the queries Phase 4 was opened against. */
+const SEARCH_QUERIES = ["Mounjaro", "nan", "nan*op", "104*746"];
+
+/** Rows shown back. Enough to recognise a product, not enough to be a catalog. */
+const SAMPLE_SIZE = 3;
+
+export interface SearchProbe {
+  query: string;
+  status: "success" | "failed";
+  count: number | null;
+  sample: { itemCode: string; itemName: string }[] | null;
+  errorKind: string | null;
+}
+
+export interface CrmSearchDiagnostics {
+  catalogAvailable: boolean;
+  queries: SearchProbe[];
+  allPassed: boolean;
+}
+
+/**
+ * The four queries, through the **production** search function.
+ *
+ * `searchProducts` is imported and called as-is — the same function the Stock
+ * page reaches through `shamsSearchProducts`. Reimplementing the matching here
+ * would verify the diagnostic instead of the thing being diagnosed, which is the
+ * whole reason this exists: local tests run against a 237-row fixture, and the
+ * real catalog is 36× larger.
+ *
+ * Sequential, so the first query fills the CRM catalog cache and the other three
+ * read it. No cache is added and none is bypassed; `searchProducts` keeps its own
+ * five-minute per-query result cache, so a second run inside that window is
+ * answered without rescanning.
+ *
+ * `allPassed` means every query ran **and** returned at least one row. A search
+ * that succeeds and finds nothing is not a pass here — `104*746` finding no
+ * product is exactly the kind of result this is meant to surface rather than
+ * round up.
+ */
+export async function runCrmSearchDiagnostic(): Promise<CrmSearchDiagnostics> {
+  const catalogAvailable = isCrmConfigured();
+  if (!catalogAvailable) {
+    return {
+      catalogAvailable: false,
+      queries: SEARCH_QUERIES.map((query) => ({
+        query,
+        status: "failed" as const,
+        count: null,
+        sample: null,
+        errorKind: "not_configured",
+      })),
+      allPassed: false,
+    };
+  }
+
+  const { searchProducts } = await import("@/lib/shams/catalog.server");
+  const queries: SearchProbe[] = [];
+
+  for (const query of SEARCH_QUERIES) {
+    try {
+      const products = await searchProducts(query);
+      queries.push({
+        query,
+        status: "success",
+        count: products.length,
+        // Item code and name only. No price, no full result set.
+        sample: products.slice(0, SAMPLE_SIZE).map((p) => ({
+          itemCode: p.itemCode,
+          itemName: p.itemName,
+        })),
+        errorKind: null,
+      });
+    } catch (err) {
+      queries.push({
+        query,
+        status: "failed",
+        count: null,
+        sample: null,
+        errorKind: err instanceof ShamsCrmError ? err.kind : "unknown",
+      });
+    }
+  }
+
+  return {
+    catalogAvailable,
+    queries,
+    allPassed: queries.every((q) => q.status === "success" && (q.count ?? 0) > 0),
+  };
+}
