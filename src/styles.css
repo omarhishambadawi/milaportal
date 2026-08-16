@@ -615,6 +615,54 @@ html.theme-vt * {
 }
 
 /*
+ * The Orders row's "here it is" flash, played when the agent returns from an
+ * order they had opened. The table-row counterpart of `branch-card-flash` below,
+ * and the same idea: answer "which one was I just looking at" for a couple of
+ * seconds, then leave no trace.
+ *
+ * Animated rather than toggled. A class that merely swaps the background needs a
+ * `transition` to fade, and the row's own `transition-colors` cannot do it —
+ * that transition is 150ms and is shared with `hover`, so the mark snapped in
+ * and out and, at the tint that was there before, read as nothing at all. A
+ * keyframe owns the whole arc instead: full strength immediately, held while the
+ * eye arrives, then faded out over the last third.
+ *
+ * `background-color` on the `<tr>` itself. An overlay is what the branch card
+ * needs because it clips its own content; a table row has nothing to clip and no
+ * transform to fight, and an absolutely-positioned overlay inside a row is the
+ * one thing tables genuinely cannot lay out. A CSS animation outranks the row's
+ * `bg-background` utility for its duration, so no specificity juggling is needed,
+ * and it ends transparent — which over the page's own background is exactly the
+ * colour the row returns to, so removing the class afterwards is invisible.
+ *
+ * `color-mix` against `--color-primary` rather than a fixed tint: the token is
+ * the portal's teal in both themes, so the mark is legible on the near-white
+ * light background and on the dark navy one without a second rule.
+ */
+@keyframes order-row-return {
+  0% {
+    background-color: color-mix(in oklab, var(--color-primary) 30%, transparent);
+  }
+  65% {
+    background-color: color-mix(in oklab, var(--color-primary) 24%, transparent);
+  }
+  100% {
+    background-color: color-mix(in oklab, var(--color-primary) 0%, transparent);
+  }
+}
+
+.order-row-return {
+  animation: order-row-return 2.8s ease-out both;
+}
+
+/*
+ * Reduced motion still needs the answer to "which row". There is no movement
+ * here to remove — the animation is a colour fade — so it plays as it is, which
+ * is why there is no `prefers-reduced-motion` override: removing it would take
+ * away the information rather than the motion.
+ */
+
+/*
  * The branch card's "here it is" flash, played when a locator result is clicked.
  *
  * An overlay inside the card rather than a class on the card itself, for two

@@ -49,6 +49,35 @@ interface ReturnAnchor {
 
 let anchor: ReturnAnchor | null = null;
 
+/**
+ * The order the agent last opened, waiting to be pointed at when they come back.
+ *
+ * Deliberately a second slot rather than a read of `anchor`, because the two
+ * answer different questions and have different lifetimes. `anchor` is consumed
+ * by the scroll restore in the one commit where it decides where to put the
+ * viewport, and it is only honoured when the row is in the DOM *at that moment*.
+ * Tying the highlight to it meant the mark was skipped whenever the restore took
+ * any other branch — the row arriving a commit later, the list already settled,
+ * or the browser's own scroll restoration having handled the back button — which
+ * is most of the ways a return actually happens.
+ */
+let returnedOrderId: string | null = null;
+
+/**
+ * Take the order to highlight, if there is one. Reading it clears it, so one
+ * return produces exactly one mark however many times the list re-renders.
+ */
+export function takeReturnedOrderId(): string | null {
+  const id = returnedOrderId;
+  returnedOrderId = null;
+  return id;
+}
+
+/** Test seam: arrange the module as though an order had just been opened. */
+export function setReturnedOrderId(orderId: string | null): void {
+  returnedOrderId = orderId;
+}
+
 function findRow(orderId: string): HTMLElement | null {
   return document.querySelector<HTMLElement>(`[data-order-id="${CSS.escape(orderId)}"]`);
 }
@@ -67,6 +96,10 @@ export function rememberOrderReturn(orderId: string): void {
     scrollY: window.scrollY,
     viewportOffset: row ? row.getBoundingClientRect().top : 0,
   };
+  // Same trip, separate lifetime — see `returnedOrderId`. Recorded on the way
+  // *out* so it covers every way back in: saving, cancelling, the browser's
+  // back button, or closing the form.
+  returnedOrderId = orderId;
 }
 
 /** What the restore should do with the state it finds on a given commit. */
@@ -150,7 +183,7 @@ interface RestorationState {
  * never reads as a selection. The fade itself is the row's existing
  * `transition-colors`, so removing the mark is as gradual as applying it.
  */
-export const RETURN_HIGHLIGHT_MS = 2400;
+export const RETURN_HIGHLIGHT_MS = 3000;
 
 export interface RestorationResult {
   /**
@@ -170,6 +203,18 @@ export function useOrdersScrollRestoration({
 }: RestorationState): RestorationResult {
   const restored = useRef(false);
   const [highlightedOrderId, setHighlighted] = useState<string | null>(null);
+
+  // Claim the mark once per mount of the list, independently of where the scroll
+  // restore ends up. The row does not have to exist yet: the class is applied by
+  // id while rendering, so a row that arrives in a later commit still gets it,
+  // and still gets it if a save re-sorted it or the list refetched underneath.
+  const claimed = useRef(false);
+  useLayoutEffect(() => {
+    if (claimed.current) return;
+    claimed.current = true;
+    const id = takeReturnedOrderId();
+    if (id) setHighlighted(id);
+  }, []);
 
   // Drop the mark after its moment. Keyed on the id so a second return re-arms
   // the timer rather than inheriting the remains of the first one's.
@@ -216,10 +261,6 @@ export function useOrdersScrollRestoration({
     if (action.kind === "none") return;
 
     if (action.kind === "row" && row && target) {
-      // Found it, so say which one it was. Set here rather than in
-      // `rememberOrderReturn` so an order that never comes back into view is
-      // never marked — the mark is a pointer at something on screen.
-      setHighlighted(target.orderId);
       const rect = row.getBoundingClientRect();
       window.scrollTo({
         top: scrollTopForRow({

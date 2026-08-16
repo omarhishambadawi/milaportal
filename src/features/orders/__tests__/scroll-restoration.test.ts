@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  RETURN_HIGHLIGHT_MS,
   decideRestore,
   isRowVisible,
   scrollTopForRow,
+  setReturnedOrderId,
+  takeReturnedOrderId,
 } from "../hooks/use-orders-scroll-restoration";
 
 /**
@@ -98,5 +101,57 @@ describe("isRowVisible", () => {
     // Otherwise a very tall row (many stacked invoice numbers) would be judged
     // invisible forever and trigger an endless re-centre.
     expect(isRowVisible(0, 1200, viewport)).toBe(true);
+  });
+});
+
+/**
+ * The mark on the row the agent just came back from.
+ *
+ * This is a *separate* slot from the scroll anchor, and the separation is the
+ * whole fix. The mark was previously set inside the restore, in the one branch
+ * where it both had an anchor and found the row in the DOM on that exact commit.
+ * Every other way of coming back — the row rendering a commit later, the list
+ * already settled, the browser's own back-button scroll restoration — took a
+ * different branch and produced no mark at all, which is why nothing was ever
+ * visible.
+ */
+describe("the returned-from order", () => {
+  it("is remembered on the way out and read on the way back", () => {
+    setReturnedOrderId("order-8937");
+    expect(takeReturnedOrderId()).toBe("order-8937");
+  });
+
+  it("is consumed, so one return marks exactly one row once", () => {
+    setReturnedOrderId("order-8937");
+    expect(takeReturnedOrderId()).toBe("order-8937");
+    // Every later render of the same list must find nothing left to claim,
+    // or a refetch would re-arm the flash indefinitely.
+    expect(takeReturnedOrderId()).toBeNull();
+  });
+
+  it("is empty when the agent arrives from anywhere else", () => {
+    setReturnedOrderId(null);
+    expect(takeReturnedOrderId()).toBeNull();
+  });
+
+  it("does not depend on the restore finding the row", () => {
+    // The case that was broken: the row is not in the DOM on the commit the
+    // restore runs, so `decideRestore` never reaches `row` — and the mark must
+    // survive that, because the class is applied by id when the row renders.
+    setReturnedOrderId("order-8937");
+    const action = decideRestore({
+      ready: true,
+      settled: true,
+      hasAnchor: true,
+      rowFound: false,
+      fallbackY: 400,
+    });
+    expect(action.kind).toBe("offset");
+    expect(takeReturnedOrderId()).toBe("order-8937");
+  });
+
+  it("outlives the flash it triggers, so the class is not pulled mid-animation", () => {
+    // The CSS animation is 2.8s; the state that applies it must last longer.
+    expect(RETURN_HIGHLIGHT_MS).toBeGreaterThan(2800);
   });
 });

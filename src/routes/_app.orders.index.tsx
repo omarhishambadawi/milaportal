@@ -502,13 +502,13 @@ function OrdersList() {
                       // rail in the first column, and the status pill.
                       //
                       // The single exception is temporary and is not state: the
-                      // order just returned from carries a faint tint for a
-                      // couple of seconds so the eye can find it after the
-                      // scroll lands. It fades out through the row's own
-                      // `transition-colors` and leaves nothing behind.
+                      // order just returned from plays `order-row-return`, a
+                      // two-and-a-bit-second flash that fades itself out and
+                      // leaves the row exactly as it found it. Applied by id, so
+                      // it follows the order if a save re-sorted it.
                       className={cn(
-                        "group transition-colors hover:bg-accent/50",
-                        o.id === highlightedOrderId ? "bg-primary/10" : "bg-background",
+                        "group bg-background transition-colors hover:bg-accent/50",
+                        o.id === highlightedOrderId && "order-row-return",
                       )}
                     >
                       <td
