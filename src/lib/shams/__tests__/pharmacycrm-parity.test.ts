@@ -15,10 +15,10 @@
  *
  *   2. **It matches over the whole catalog, not over search results.** The
  *      desktop downloads all ~8 500 products once (`GET /products/names`) and
- *      matches locally. The portal has no such endpoint and matches whatever
- *      `product/search?q=` returns for its probes, so the fixture here plays the
- *      part of the catalog: `respondFromCatalog` answers every `q` by substring
- *      over the name, which is exactly what §3.1 says the MIS does.
+ *      matches locally. Since Phase 4 the portal does the same, through the same
+ *      endpoint, so the fixture is simply handed over whole — it no longer has
+ *      to stand in for the MIS's 50-row `product/search`, which is out of the
+ *      discovery path entirely.
  *
  * The fixture is **real Shams data** — 237 rows lifted from the desktop's own
  * `product_cache_seed.json` — trimmed to the products any query below can reach.
@@ -45,6 +45,13 @@ interface CatalogRow {
 }
 
 const fetchMock = vi.fn();
+const crmMock = vi.fn();
+
+// Since Phase 4 the catalog is the CRM's, so the fixture is handed over whole
+// rather than filtered through a stand-in for the MIS's 50-row search.
+vi.mock("@/lib/shams-crm/products.server", () => ({
+  getCrmProducts: () => crmMock(),
+}));
 
 vi.mock("@/lib/shams/client.server", async () => {
   const actual = await vi.importActual<typeof import("@/lib/shams/client.server")>(
@@ -57,31 +64,15 @@ const { searchProducts, _clearCaches } = await import("@/lib/shams/catalog.serve
 
 const CATALOG = catalog as CatalogRow[];
 
-/**
- * The MIS, as documented: `product/search?q=` is a case-insensitive substring
- * over the item name and nothing else, and `product/info?itemcode=` answers one
- * whole code exactly. Anything else returns an empty payload rather than a 404.
- */
+/** The whole catalog, as the CRM serves it. */
 function respondFromCatalog(): void {
-  fetchMock.mockImplementation(async (path: string, query: Record<string, string>) => {
-    if (path.endsWith("/product/info")) {
-      // `data` is one object here, not a list, and an unknown code is an empty
-      // payload with a 200 rather than a 404.
-      const hit = CATALOG.find((p) => p.itemCode === query.itemcode);
-      return { success: true, data: hit ?? null };
-    }
-    const needle = (query.q ?? "").toLowerCase();
-    return {
-      success: true,
-      data: CATALOG.filter((p) => p.itemName.toLowerCase().includes(needle)),
-    };
-  });
+  crmMock.mockResolvedValue(CATALOG);
 }
 
 /**
  * PharmacyCRM's `_wildcard_pattern_candidates`, transcribed.
  *
- * `re.escape(query).replace("\\*", ".*")`, compiled as `^…$` with `IGNORECASE`
+ * `re.escape(query).replace("\*", ".*")`, compiled as `^…$` with `IGNORECASE`
  * and tested against the trimmed item name. Results come back sorted by name
  * then code, which is the desktop's own ordering.
  */
@@ -100,6 +91,7 @@ const codesOf = (rows: { itemCode: string }[]): string[] => rows.map((r) => r.it
 
 beforeEach(() => {
   fetchMock.mockReset();
+  crmMock.mockReset();
   _clearCaches();
   respondFromCatalog();
 });
@@ -166,12 +158,10 @@ describe("the reported queries, against real catalog rows", () => {
     });
   });
 
-  it("an item code is asked of product/info, since product/search cannot see codes", async () => {
+  it("an item code is answered from the catalog, with no MIS request", async () => {
     await searchProducts("10400746");
 
-    const paths = fetchMock.mock.calls.map((c) => c[0] as string);
-    expect(paths.some((p) => p.endsWith("/product/info"))).toBe(true);
-    expect(paths.some((p) => p.endsWith("/product/search"))).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -224,13 +214,10 @@ describe("wildcard semantics agree with PharmacyCRM", () => {
     expect(portal.length).toBeGreaterThan(desktop.length);
   });
 
-  it("a `*` is never sent upstream", async () => {
+  it("no query is sent upstream at all — matching is local to the catalog", async () => {
     await searchProducts("pana*extr*");
 
-    for (const call of fetchMock.mock.calls) {
-      const query = call[1] as Record<string, string>;
-      expect(query.q ?? "").not.toContain("*");
-    }
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("multiple segments narrow rather than widen", async () => {
@@ -252,12 +239,13 @@ describe("wildcard semantics agree with PharmacyCRM", () => {
     }
   });
 
-  it("a wildcard written against an item code alone cannot be retrieved", async () => {
-    // Not a matching decision: `product/search?q=` sees names only, so no probe
-    // built from `104` or `746` ever returns this row for the code haystack to
-    // match. The same API limit as a partial item code — recorded in §10 so it
-    // is not rediscovered as a bug.
-    expect(await searchProducts("104*746")).toEqual([]);
+  it("a wildcard written against an item code now resolves", () => {
+    // Was impossible while candidates came from `product/search`, which sees
+    // names only — no probe ever returned the row for the code to match. With
+    // the whole catalog in hand it is just another haystack.
+    return expect(searchProducts("104*746")).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ itemCode: "10400746" })]),
+    );
   });
 });
 
@@ -295,12 +283,12 @@ describe("edges", () => {
     await expect(searchProducts("panadol extra tab, 24 's")).resolves.toHaveLength(1);
   });
 
-  it("repeating a search is answered from cache, not upstream again", async () => {
+  it("repeating a search is answered from cache, not by rescanning the catalog", async () => {
     await searchProducts("nan*op");
-    const first = fetchMock.mock.calls.length;
+    const first = crmMock.mock.calls.length;
     const repeat = await searchProducts("nan*op");
 
-    expect(fetchMock.mock.calls).toHaveLength(first);
+    expect(crmMock.mock.calls).toHaveLength(first);
     expect(repeat.length).toBeGreaterThan(0);
   });
 

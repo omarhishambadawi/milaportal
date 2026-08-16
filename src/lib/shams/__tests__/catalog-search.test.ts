@@ -1,18 +1,29 @@
 /**
- * Catalog search tests — the upstream side of product discovery.
+ * Catalog search — the source, and what it does with it.
  *
- * `search.test.ts` covers the matching rules in isolation. What is tested here
- * is the part that decides *which products ever get matched*: how many requests
- * a query costs, what is sent as `q`, and whether a product the API only
- * returned for one probe still reaches the agent.
+ * `search.ts` covers the matching rules in isolation. What is tested here is the
+ * part that decides *which products ever get matched*: since Phase 4 that is the
+ * **Shams CRM catalog**, not the MIS.
  *
- * `shamsFetch` is stubbed, so no credentials, no network and no MIS.
+ * The MIS `product/search` returned at most 50 rows with no pagination, so a
+ * broad query was truncated before the wanted product was seen. It is no longer
+ * consulted for product discovery at all, and these tests assert that — a
+ * regression that quietly reinstated it would otherwise look like a passing
+ * search.
+ *
+ * `getCrmProducts` is stubbed and `shamsFetch` is stubbed separately, so a
+ * search costs no network and any MIS call would be visible.
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RawProductSearchRow } from "@/lib/shams/types";
+import type { ShamsProduct } from "@/lib/shams/types";
 
+const crmMock = vi.fn();
 const fetchMock = vi.fn();
+
+vi.mock("@/lib/shams-crm/products.server", () => ({
+  getCrmProducts: () => crmMock(),
+}));
 
 vi.mock("@/lib/shams/client.server", async () => {
   const actual = await vi.importActual<typeof import("@/lib/shams/client.server")>(
@@ -21,298 +32,115 @@ vi.mock("@/lib/shams/client.server", async () => {
   return { ...actual, shamsFetch: (...args: unknown[]) => fetchMock(...args) };
 });
 
-const { searchProducts, _clearCaches, MAX_SEARCH_PROBES } =
+const { searchProducts, _clearCaches, MAX_SEARCH_RESULTS } =
   await import("@/lib/shams/catalog.server");
 
-const row = (itemCode: string, itemName: string): RawProductSearchRow => ({
+const product = (itemCode: string, itemName: string, retailPrice = 10): ShamsProduct => ({
   itemCode,
   itemName,
-  retailPrice: 1261.4,
+  retailPrice,
 });
 
-const MOUNJARO = row("10609670", "MOUNJARO 2.5 MG 0.5ML PEN, 4'S");
-const S26 = row("10501234", "S-26 GOLD 3 1800 GM");
-const NOISE = row("10999999", "PANADOL 500MG");
+const MOUNJARO = product("10609670", "MOUNJARO 2.5 MG 0.5ML PEN, 4'S", 1261.4);
+const S26 = product("10501234", "S-26 GOLD 3 1800 GM");
+const PANADOL = product("10999999", "PANADOL 500MG");
+const NAN_OPTIPRO = product("10400746", "NAN 2 OPTIPRO 1800 GM");
 
-/** Answer each `q` with its own rows. */
-function respondWith(rowsByTerm: Record<string, RawProductSearchRow[]>) {
-  fetchMock.mockImplementation(async (_path: string, query: Record<string, string>) => ({
-    success: true,
-    data: rowsByTerm[query.q] ?? [],
-  }));
-}
-
-function termsAsked(): string[] {
-  return fetchMock.mock.calls.map((c) => (c[1] as Record<string, string>).q);
-}
+const CATALOG = [MOUNJARO, S26, PANADOL, NAN_OPTIPRO];
 
 beforeEach(() => {
+  crmMock.mockReset();
   fetchMock.mockReset();
   _clearCaches();
+  crmMock.mockResolvedValue(CATALOG);
 });
 
-describe("searchProducts — plain queries", () => {
-  it("sends the query as typed, in exactly one request", async () => {
-    respondWith({ mounjaro: [MOUNJARO] });
+/* -------------------------------------------------------------------------- */
+/* The source                                                                  */
+/* -------------------------------------------------------------------------- */
 
+describe("search source", () => {
+  it("reads the CRM catalog and never asks the MIS for product discovery", async () => {
     const products = await searchProducts("mounjaro");
 
-    expect(termsAsked()).toEqual(["mounjaro"]);
-    expect(products.map((p) => p.itemCode)).toEqual(["10609670"]);
-  });
-
-  it("still finds a product from a partial spelling", async () => {
-    respondWith({ mounj: [MOUNJARO] });
-    expect((await searchProducts("mounj")).map((p) => p.itemCode)).toEqual(["10609670"]);
-  });
-
-  it("never sends an asterisk upstream", async () => {
-    respondWith({ mou: [MOUNJARO], "2.5": [MOUNJARO] });
-
-    await searchProducts("mou*n*j*2.5");
-
-    for (const term of termsAsked()) expect(term).not.toContain("*");
-  });
-
-  it("asks nothing at all for a query below the floor", async () => {
-    await searchProducts("m");
+    expect(crmMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-});
-
-describe("searchProducts — wildcard queries", () => {
-  it("finds Mounjaro 2.5 from mou*n*j*2.5", async () => {
-    respondWith({ mou: [MOUNJARO, NOISE] });
-
-    const products = await searchProducts("mou*n*j*2.5");
-
     expect(products.map((p) => p.itemCode)).toEqual(["10609670"]);
   });
 
-  it("finds S-26 Gold 3 1800 from *26*gold*3*1800", async () => {
-    respondWith({ gold: [S26], "1800": [S26, NOISE] });
+  it("does not fall back to the MIS when the CRM catalog fails", async () => {
+    crmMock.mockRejectedValue(Object.assign(new Error("crm down"), { kind: "unavailable" }));
 
-    const products = await searchProducts("*26*gold*3*1800");
-
-    expect(products.map((p) => p.itemCode)).toEqual(["10501234"]);
-  });
-
-  /**
-   * The reliability fix. A single probe is only a superset if the API returns
-   * everything it matched — and it exposes no limit/page/offset, so a
-   * server-side cap cannot be ruled out. Here the first probe's response is
-   * truncated to noise; the product still has to be found.
-   */
-  it("finds a product the most selective probe did not return", async () => {
-    respondWith({
-      gold: [NOISE], // as if truncated upstream — the real match cut off
-      "1800": [S26],
-    });
-
-    const products = await searchProducts("*26*gold*3*1800");
-
-    expect(products.map((p) => p.itemCode)).toEqual(["10501234"]);
-    expect(termsAsked().length).toBeGreaterThan(1);
-  });
-
-  it("merges the probes and returns each product once", async () => {
-    respondWith({ gold: [S26], "1800": [S26], "26": [S26] });
-
-    const products = await searchProducts("*26*gold*3*1800");
-
-    expect(products).toHaveLength(1);
-  });
-
-  it("bounds how many requests one query may cost", async () => {
-    respondWith({});
-
-    await searchProducts("mounjaro*kwikpen*12.5*0.6*2.4*qr");
-
-    // MAX_SEARCH_PROBES single-fragment probes, plus the one compound probe.
-    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(MAX_SEARCH_PROBES + 1);
-  });
-
-  it("drops candidates that fail the full expression", async () => {
-    // Both probes return noise alongside the match; noise satisfies neither
-    // the fragment set nor its order.
-    respondWith({ mou: [MOUNJARO, NOISE], "2.5": [MOUNJARO, NOISE] });
-
-    const products = await searchProducts("mou*n*j*2.5");
-
-    expect(products.map((p) => p.itemName)).toEqual(["MOUNJARO 2.5 MG 0.5ML PEN, 4'S"]);
-  });
-
-  it("is case-insensitive and tolerant of the agent's spacing", async () => {
-    respondWith({ mou: [MOUNJARO], "2.5": [MOUNJARO] });
-
-    expect(await searchProducts("MOU * 2.5")).toHaveLength(1);
-    expect(await searchProducts("  mou*2.5  ")).toHaveLength(1);
-  });
-
-  it("returns nothing when no fragment is long enough to search with", async () => {
-    expect(await searchProducts("a*b*c")).toEqual([]);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  /**
-   * The regression this guards. `moun*2.5` sent `2.5` as a second probe, which
-   * matches every 2.5 mg product Shams sells. The endpoint has no `limit`, and
-   * the probes were awaited together, so that one request held the whole search
-   * — including the good `moun` answer — until it timed out. The agent watched a
-   * skeleton that never resolved.
-   */
-  it("does not spend a second request on a short, unselective fragment", async () => {
-    respondWith({ moun: [MOUNJARO] });
-
-    const products = await searchProducts("moun*2.5");
-
-    expect(termsAsked()).toEqual(["moun", "moun 2.5"]);
-    expect(products.map((p) => p.itemCode)).toEqual(["10609670"]);
-  });
-
-  it("still corroborates with fragments that are selective enough", async () => {
-    respondWith({ gold: [S26], "1800": [S26] });
-
-    await searchProducts("*26*gold*3*1800");
-
-    expect(termsAsked()).toEqual(["gold", "1800", "26 gold 3 1800"]);
-  });
-
-  it("answers from the first probe when a corroborating one fails", async () => {
-    // The first probe IS the search; the rest are optional insurance, so one of
-    // them failing must not cost the agent the answer that already arrived.
-    fetchMock.mockImplementation(async (_path: string, query: Record<string, string>) => {
-      if (query.q === "1800") throw new Error("upstream blew up");
-      return { success: true, data: query.q === "gold" ? [S26] : [] };
-    });
-
-    const products = await searchProducts("*26*gold*3*1800");
-
-    expect(products.map((p) => p.itemCode)).toEqual(["10501234"]);
-  });
-
-  it("fails the search when the first probe fails", async () => {
-    fetchMock.mockRejectedValue(new Error("MIS unreachable"));
-
+    // An outage must surface, not quietly become an MIS search or an empty list.
     await expect(searchProducts("mounjaro")).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("caps how long a corroborating probe may hold the search", async () => {
-    respondWith({ gold: [S26], "1800": [S26] });
-
-    await searchProducts("*26*gold*3*1800");
-
-    const [, secondCall] = fetchMock.mock.calls;
-    // The primary carries no override — it uses the transport's own timeout.
-    expect(fetchMock.mock.calls[0][2]).toBeUndefined();
-    expect((secondCall[2] as { timeoutMs?: number })?.timeoutMs).toBeGreaterThan(0);
-  });
-});
-
-describe("searchProducts — caching and ranking", () => {
-  it("does not repeat a search it has already run", async () => {
-    respondWith({ mounjaro: [MOUNJARO] });
-
+  it("reuses the per-query result cache rather than rescanning the catalog", async () => {
     await searchProducts("mounjaro");
-    const afterFirst = fetchMock.mock.calls.length;
-    await searchProducts("MOUNJARO");
+    await searchProducts("mounjaro");
 
-    expect(fetchMock.mock.calls.length).toBe(afterFirst);
+    expect(crmMock).toHaveBeenCalledTimes(1);
   });
 
-  it("puts the best match first rather than the API's own order", async () => {
-    respondWith({
-      mounjaro: [
-        row("1", "PEN NEEDLE FOR MOUNJARO"),
-        row("2", "MOUNJARO"),
-        row("3", "MOUNJARO 5 MG"),
-      ],
-    });
+  it("a short or empty query costs nothing at all", async () => {
+    expect(await searchProducts("")).toEqual([]);
+    expect(await searchProducts("   ")).toEqual([]);
+    expect(await searchProducts("m")).toEqual([]);
+    expect(await searchProducts("***")).toEqual([]);
 
-    const products = await searchProducts("mounjaro");
-
-    expect(products.map((p) => p.itemName)).toEqual([
-      "MOUNJARO",
-      "MOUNJARO 5 MG",
-      "PEN NEEDLE FOR MOUNJARO",
-    ]);
+    expect(crmMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
-/**
- * The 50-row cap, and the compound probe that gets under it.
- *
- * `product/search` matches a contiguous substring, returns at most 50 rows and
- * exposes no pagination — established from the live API, not assumed. A broad
- * fragment is therefore cut before the wanted product: `q=nan` matches 53+
- * products and the NAN OPTIPRO range falls outside the 50 that come back, so
- * `nan*op` had nothing to match against and returned empty while `nan optipro`
- * and `optipro` both resolved.
- *
- * The upstream here reproduces exactly that: substring matching, hard cap at 50,
- * with the NAN OPTIPRO rows ordered last so they fall outside it.
- */
-describe("searchProducts — the upstream 50-row cap", () => {
-  const CAP = 50;
+/* -------------------------------------------------------------------------- */
+/* Matching — unchanged rules, wider catalog                                   */
+/* -------------------------------------------------------------------------- */
 
-  /** 50 filler rows containing "nan", then the products actually wanted. */
-  const FILLER = Array.from({ length: CAP }, (_, i) =>
-    row(`2010${String(i).padStart(4, "0")}`, `BANANA BOAT SUNSCREEN VARIANT ${i}`),
-  );
-  const NAN_OPTIPRO = [
-    row("10400741", "NAN OPTIPRO KIDS MILK, 400 G"),
-    row("10400395", "NAN OPTIPRO NO 1 400GM"),
-    row("10400396", "NAN OPTIPRO NO 1 MILK  800G"),
-    row("10400393", "NAN OPTIPRO NO 2  MILK, 400GM"),
-  ];
-  const CATALOG = [...FILLER, ...NAN_OPTIPRO];
+describe("matching", () => {
+  it("matches a substring of the item name, case- and space-insensitively", async () => {
+    expect((await searchProducts("MOUNJ")).map((p) => p.itemCode)).toEqual(["10609670"]);
+    expect((await searchProducts("  gold 3  ")).map((p) => p.itemCode)).toEqual(["10501234"]);
+  });
 
-  /** Contiguous substring over the name, truncated at 50, no pagination. */
-  function respondCapped() {
-    fetchMock.mockImplementation(async (_path: string, query: Record<string, string>) => {
-      const needle = (query.q ?? "").toLowerCase();
-      const hits = CATALOG.filter((p) => (p.itemName ?? "").toLowerCase().includes(needle));
-      const data = hits.slice(0, CAP);
-      return { success: true, count: data.length, data };
+  it("finds an exact item code without a separate MIS lookup", async () => {
+    const products = await searchProducts("10400746");
+
+    expect(products[0]).toMatchObject({
+      itemCode: "10400746",
+      itemName: "NAN 2 OPTIPRO 1800 GM",
     });
-  }
-
-  beforeEach(() => respondCapped());
-
-  it("a single broad fragment is capped, and misses the product", async () => {
-    // What the agent saw before the compound probe: 50 rows of noise.
-    const capped = await searchProducts("nan");
-    expect(capped).toHaveLength(CAP);
-    expect(capped.some((p) => p.itemName.startsWith("NAN OPTIPRO"))).toBe(false);
+    // `product/info` used to answer this; the catalog already holds it.
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("`nan*op` finds the NAN OPTIPRO products via the compound probe", async () => {
-    const products = await searchProducts("nan*op");
-
-    expect(products.map((p) => p.itemCode).sort()).toEqual([
-      "10400393",
-      "10400395",
-      "10400396",
-      "10400741",
-    ]);
+  it("applies wildcards over the whole catalog", async () => {
+    expect((await searchProducts("nan*op")).map((p) => p.itemCode)).toEqual(["10400746"]);
+    expect((await searchProducts("*gold*1800*")).map((p) => p.itemCode)).toEqual(["10501234"]);
   });
 
-  it("sends `nan op` as an extra probe without dropping `nan`", async () => {
-    await searchProducts("nan*op");
-
-    // Additive: the original probe is still made, the compound is appended.
-    expect(termsAsked()).toEqual(["nan", "nan op"]);
+  it("returns nothing for a query that matches nothing", async () => {
+    expect(await searchProducts("zzzznotaproduct")).toEqual([]);
+    expect(await searchProducts("zzz*qqq*")).toEqual([]);
   });
 
-  it("the compound probe result is under the cap, so nothing is truncated away", async () => {
-    await searchProducts("nan*op");
-
-    const compound = fetchMock.mock.calls.find(
-      (c) => (c[1] as Record<string, string>).q === "nan op",
+  it("caps the result set however large the catalog is", async () => {
+    const many = Array.from({ length: MAX_SEARCH_RESULTS + 25 }, (_, i) =>
+      product(`2010${String(i).padStart(4, "0")}`, `PARACETAMOL VARIANT ${i}`),
     );
-    expect(compound).toBeDefined();
-    expect(
-      CATALOG.filter((p) => (p.itemName ?? "").toLowerCase().includes("nan op")).length,
-    ).toBeLessThan(CAP);
+    crmMock.mockResolvedValue(many);
+
+    expect(await searchProducts("paracetamol")).toHaveLength(MAX_SEARCH_RESULTS);
+  });
+
+  it("preserves the product identity the MIS flows need", async () => {
+    const [hit] = await searchProducts("mounjaro");
+
+    expect(hit).toEqual({
+      itemCode: "10609670",
+      itemName: "MOUNJARO 2.5 MG 0.5ML PEN, 4'S",
+      retailPrice: 1261.4,
+    });
   });
 });

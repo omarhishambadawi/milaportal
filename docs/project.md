@@ -2584,7 +2584,7 @@ src/lib/shams/types.ts           wire shapes + normalized models
 src/lib/shams/normalize.ts       PURE: numeric parsing, invoice grouping, Call Centre rule
 src/lib/shams/search.ts          PURE: wildcard product matching, branch filter, stock summary
 src/lib/shams/availability.ts    PURE: invoice line ↔ branch stock join, the four stock states
-src/lib/shams/catalog.server.ts  product search (wildcards applied here) / info / stock + caches
+src/lib/shams/catalog.server.ts  product search (over the CRM catalog) / info / stock + caches
 src/lib/shams/sales.server.ts    invoice lookup + query validation + branch discovery fan-out
 src/lib/shams.functions.ts       authenticated, RBAC-gated server functions
 ```
@@ -2625,9 +2625,29 @@ returning an empty list: an outage and an empty catalog lead to opposite
 decisions. A *stale* catalog is not a failure — a failed refresh keeps serving
 the previous rows.
 
-**The MIS is untouched by this.** Nothing in `src/lib/shams/` reads the CRM, and
-the Stock page still searches through `product/search` exactly as before. Wiring
-the CRM catalog into search is a later phase; this one only makes it available.
+**Product discovery is the CRM's; operational data stays on the MIS.** That split
+is the whole point:
+
+| Concern | Source |
+| --- | --- |
+| Catalog, names, item codes, retail price, **search** | Shams CRM |
+| Stock, branch availability, invoices, order/transactional data | Shams MIS |
+
+`searchProducts()` in `src/lib/shams/catalog.server.ts` now matches over
+`getCrmProducts()` instead of probing `product/search`. The matching rules in
+`lib/shams/search.ts` are unchanged — what changed is which products are
+available to match against. `product/info` and `product/stock` are untouched and
+still answer for a product the agent has opened, keyed by the item code the
+search returned.
+
+**The MIS is not a fallback product source.** If the CRM catalog cannot be
+loaded, `searchProducts` throws rather than quietly searching the MIS or
+returning an empty list — an outage and "no such product" must not look alike.
+
+Two limits disappeared with the 50-row cap: a broad query is no longer truncated
+(`nan` returns all 53 matches, and `nan*op` finds the NAN OPTIPRO range), and a
+wildcard written against an item code now resolves, because the row is already
+in hand rather than needing a probe that could never retrieve it.
 
 ### RBAC — one page-level permission
 

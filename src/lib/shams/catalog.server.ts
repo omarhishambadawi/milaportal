@@ -20,18 +20,17 @@
  */
 
 import { shamsFetch, ShamsError, TtlCache } from "./client.server";
-import { normalizeProductDetail, normalizeProducts, normalizeStock } from "./normalize";
+import { normalizeProductDetail, normalizeStock } from "./normalize";
 import {
   isWildcardQuery,
-  looksLikeItemCode,
   matchesProductWildcard,
+  normalizeForSearch,
   parseWildcardQuery,
   rankProducts,
-  wildcardProbes,
 } from "./search";
+import { getCrmProducts } from "@/lib/shams-crm/products.server";
 import type {
   RawProductInfoResponse,
-  RawProductSearchResponse,
   RawStockResponse,
   ShamsBranchStock,
   ShamsProduct,
@@ -46,36 +45,6 @@ const STOCK_TTL_MS = 60_000;
 export const MIN_SEARCH_LENGTH = 2;
 /** Cap on rows handed back to a caller, whatever the catalog returns. */
 export const MAX_SEARCH_RESULTS = 100;
-/**
- * Upstream requests one wildcard search may issue.
- *
- * Three, because the point is insurance against a server-side result cap
- * nobody has been able to measure — the endpoint exposes no `limit`, `page` or
- * `offset` — not breadth for its own sake. A plain search still costs exactly
- * one request, and no query can cost more than this however many `*` it carries.
- */
-export const MAX_SEARCH_PROBES = 3;
-/**
- * Shortest fragment worth spending a *second* request on.
- *
- * Higher than `MIN_SEARCH_LENGTH` on purpose. `moun*2.5` split to
- * `["moun", "2.5"]`, and `2.5` matches every 2.5 mg product in the catalog: an
- * unbounded response (the endpoint has no `limit`) for a probe that was only
- * ever corroboration. Since the probes were awaited together, it held the whole
- * search — including the good `moun` answer — hostage until it timed out.
- *
- * Four characters is the same floor `looksLikeItemCode` uses, and it keeps the
- * useful secondary probes (`gold`, `1800`) while refusing the ruinous ones.
- */
-export const SECONDARY_PROBE_MIN_LENGTH = 4;
-/**
- * How long a corroborating probe may take before it is abandoned.
- *
- * Well under the transport's 30 s default. A secondary probe exists to catch a
- * result the first probe might have had truncated; if it has not answered in
- * this long it has stopped being insurance and started being the delay.
- */
-const SECONDARY_PROBE_TIMEOUT_MS = 8_000;
 
 const searchCache = new TtlCache<ShamsProduct[]>(SEARCH_TTL_MS);
 const infoCache = new TtlCache<ShamsProductDetail | null>(INFO_TTL_MS);
@@ -89,30 +58,31 @@ export function _clearCaches(): void {
 }
 
 /**
- * Free-text catalog search, with `*` wildcards.
+ * Free-text catalog search, over the Shams CRM catalog.
  *
- * Without a `*` this is the API's own matching: substring over the item name —
- * the capture shows `q=moun` and the full name `mounjaro 2.5 mg 0.5ml pen, 4's`
- * both resolving, the latter to a single row. Queries shorter than
- * `MIN_SEARCH_LENGTH` return empty without a request rather than sweeping the
- * catalog.
+ * **The catalog comes from the CRM, not the MIS.** `product/search` returns at
+ * most 50 rows with no pagination, so a broad query was truncated before the
+ * wanted product was ever seen — `nan` matched 53+ products and the NAN OPTIPRO
+ * range fell outside the 50 that came back. The CRM's `/products/names` returns
+ * all ~8,484 rows in one cached response, so matching now runs over the whole
+ * catalog and the cap is gone.
  *
- * ## Wildcards, and why they are applied here
+ * This function is product **discovery** only. Stock, availability, invoices and
+ * branch data stay on the MIS, and `getProductDetail` / `getProductStock` below
+ * are untouched — a product found here is looked up there by its item code,
+ * exactly as before.
  *
- * `mou*n*j*2.5` means "these fragments, in this order, anything in between".
- * **The MIS API has no such syntax.** Its only search parameter is `q`, matched
- * as a plain substring (verified against the portal's own bundle, which builds
- * `/product/search?q=` and nothing else), so forwarding the asterisks literally
- * would search for a product whose name contains a `*` and return nothing.
+ * ## Matching is unchanged
  *
- * So the expression is split: one fragment goes upstream as an ordinary term to
- * pull candidates, and the full ordered match is applied to the rows that come
- * back. That is correct rather than approximate — every product satisfying the
- * whole expression must contain each individual fragment, so a single-fragment
- * search is guaranteed to be a superset of the answer.
+ * The same pure rules as before, from `lib/shams/search.ts`: case- and
+ * whitespace-insensitive, `*` as ordered fragments, `rankProducts` for ordering,
+ * capped at `MAX_SEARCH_RESULTS`. What changed is only *which products are
+ * available to match against*. A plain query matches a substring of the item
+ * name — what the MIS did upstream — plus an exact item code, which used to cost
+ * a separate `product/info` request and is now a scan of rows already in hand.
  *
- * Filtering happens **before** the result cap, so a wildcard match cannot be
- * truncated away by candidates it was going to reject anyway.
+ * The per-query result cache is kept: matching 8,484 rows is cheap, but a
+ * search-as-you-type field would otherwise redo it on every keystroke.
  */
 export async function searchProducts(query: string): Promise<ShamsProduct[]> {
   const q = query.trim();
@@ -126,99 +96,29 @@ export async function searchProducts(query: string): Promise<ShamsProduct[]> {
   const wildcard = fragments.length > 0;
 
   // A query carrying a `*` is an expression, even when nothing survives the
-  // split. `***` parses to no fragments, and treating that as a plain query sent
-  // `q=***` upstream to be matched as three literal characters — a guaranteed
-  // empty answer bought with a round trip. It is "match everything", which this
-  // endpoint cannot express, so it is declined here.
+  // split: `***` is "match everything", which is not a search.
   if (isWildcardQuery(q) && !wildcard) return [];
 
-  // The upstream terms: the whole query when it is plain, the most selective
-  // fragments when it is an expression.
-  const probes = wildcard
-    ? wildcardProbes(fragments, MIN_SEARCH_LENGTH, MAX_SEARCH_PROBES, SECONDARY_PROBE_MIN_LENGTH)
-    : q.length >= MIN_SEARCH_LENGTH
-      ? [q]
-      : [];
-  // A pure code lookup still has a probe, since MIN_ITEM_CODE_LENGTH exceeds
-  // MIN_SEARCH_LENGTH; this stays the guard for queries too short for either.
-  if (probes.length === 0) return [];
+  // The same floors as before. They no longer protect an upstream request —
+  // there is none — but a one-character query still matches most of the catalog
+  // and returning it is not an answer.
+  const searchable = wildcard
+    ? fragments.some((fragment) => fragment.length >= MIN_SEARCH_LENGTH)
+    : q.length >= MIN_SEARCH_LENGTH;
+  if (!searchable) return [];
 
-  /**
-   * An item code is not searchable through `product/search`.
-   *
-   * That endpoint matches a **substring of the item name** and nothing else
-   * (see docs/shams/api-discovery.md §3.1), so pasting `10400746` searched the
-   * catalog for a *name* containing those digits and found nothing — the one
-   * lookup an agent holding a document is most likely to want.
-   *
-   * `product/info?itemcode=` is the endpoint that does answer it, exactly. So a
-   * query that looks like a code asks both, in parallel, and the answers are
-   * merged. It is additive, never exclusive: `10400746` is still searched as a
-   * name too, so the field never has to be told which kind of thing was typed.
-   *
-   * Exact only. `product/info` takes a whole code and `product/search` cannot
-   * see codes at all, so a *partial* code has nothing upstream that can answer
-   * it — that is an API limit, not a decision made here.
-   */
-  const codeLookup = looksLikeItemCode(q) ? getProductDetail(q).catch(() => null) : null;
+  // Throws when the catalog cannot be loaded. Deliberately not caught here: the
+  // MIS must not silently become a second product source, and an outage must not
+  // read as "no products found".
+  const catalog = await getCrmProducts();
 
-  /**
-   * Probes run together — they are independent, and a wildcard search should not
-   * cost the agent one round trip per fragment.
-   *
-   * The first probe **is** the search: if it fails, the search failed, and the
-   * caller is told. Every probe after it is corroboration against a truncation
-   * nobody has measured, so it is capped in time and allowed to fail silently —
-   * `allSettled`, not `all`. Awaiting them the same way meant one slow or angry
-   * secondary probe could take down a search whose real answer had already
-   * arrived.
-   */
-  const [primary, ...secondary] = probes;
-  const [primaryBody, secondaryResults, byItemCode] = await Promise.all([
-    shamsFetch<RawProductSearchResponse>("/api/v2/product/search", { q: primary }),
-    Promise.allSettled(
-      secondary.map((term) =>
-        shamsFetch<RawProductSearchResponse>(
-          "/api/v2/product/search",
-          { q: term },
-          { timeoutMs: SECONDARY_PROBE_TIMEOUT_MS },
-        ),
-      ),
-    ),
-    codeLookup,
-  ]);
-
-  const responses = [
-    primaryBody,
-    ...secondaryResults
-      .filter(
-        (r): r is PromiseFulfilledResult<RawProductSearchResponse> => r.status === "fulfilled",
-      )
-      .map((r) => r.value),
-  ];
-
-  // Union, de-duplicated by item code. First sighting wins, so the most
-  // selective probe's ordering survives into the ranking below.
-  const byCode = new Map<string, ShamsProduct>();
-  // The exact code match goes in first, so it survives de-duplication and — via
-  // `scoreProduct`'s code band — sorts to the top.
-  if (byItemCode) {
-    byCode.set(byItemCode.itemCode, {
-      itemCode: byItemCode.itemCode,
-      itemName: byItemCode.itemName,
-      retailPrice: byItemCode.retailPrice,
-    });
-  }
-  for (const body of responses) {
-    for (const product of normalizeProducts(body?.data)) {
-      if (!byCode.has(product.itemCode)) byCode.set(product.itemCode, product);
-    }
-  }
-
-  const candidates = [...byCode.values()];
+  const needle = normalizeForSearch(q);
   const matched = wildcard
-    ? candidates.filter((product) => matchesProductWildcard(product, fragments))
-    : candidates;
+    ? catalog.filter((product) => matchesProductWildcard(product, fragments))
+    : catalog.filter(
+        (product) =>
+          normalizeForSearch(product.itemName).includes(needle) || product.itemCode === q,
+      );
 
   const products = rankProducts(matched, q, fragments).slice(0, MAX_SEARCH_RESULTS);
   searchCache.set(key, products);

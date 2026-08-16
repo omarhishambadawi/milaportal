@@ -117,32 +117,40 @@ const catalog = readFileSync(
   "utf8",
 );
 
-describe("an item code is looked up by the endpoint that can answer it", () => {
-  it("asks product/info as well as product/search", () => {
-    // `product/search?q=` matches the item NAME only, so a pasted code found
-    // nothing at all. `product/info?itemcode=` is the exact-code endpoint.
-    expect(catalog).toContain("looksLikeItemCode(q)");
-    expect(catalog).toContain("getProductDetail(q)");
+describe("an item code is still findable, now from the catalog", () => {
+  // The capability from e876452 is preserved; only its mechanism moved. Product
+  // discovery is the CRM catalog's job since Phase 4, so an exact code is a scan
+  // of rows already in hand rather than a second MIS request.
+  it("matches an exact item code against the catalog rows", () => {
+    expect(catalog).toContain("product.itemCode === q");
   });
 
-  it("adds the lookup rather than replacing the name search", () => {
-    // Both run, in parallel, and the results are merged — so the field never
-    // has to be told which kind of thing was typed. Pinned on the destructure
-    // rather than the whole line: the name search alongside it has since been
-    // split into a required probe and optional corroborating ones.
-    expect(catalog).toContain("byItemCode] = await Promise.all([");
-    expect(catalog).toContain("codeLookup,");
+  it("searches the name too, so the field is never told which kind was typed", () => {
+    expect(catalog).toContain("normalizeForSearch(product.itemName).includes(needle)");
   });
 
-  it("puts the exact code match in first, so it survives de-duplication", () => {
-    expect(catalog).toContain("if (byItemCode) {");
-    expect(catalog.indexOf("byCode.set(byItemCode.itemCode")).toBeLessThan(
-      catalog.indexOf("for (const body of responses)"),
-    );
+  it("no longer spends a product/info request to answer a code", () => {
+    expect(catalog).not.toContain("looksLikeItemCode(q)");
+    expect(catalog).not.toContain("getProductDetail(q).catch");
   });
 
-  it("does not fail the whole search when the code is unknown", () => {
-    expect(catalog).toContain(".catch(() => null)");
+  it("does not ask the MIS for product discovery at all", () => {
+    expect(catalog).not.toContain('"/api/v2/product/search"');
+    expect(catalog).toContain("getCrmProducts()");
+  });
+});
+
+describe("MIS keeps the operational reads", () => {
+  // Only discovery moved. Stock, availability and product detail are still the
+  // MIS's, and a product found in the CRM catalog is looked up there by code.
+  it("still reads product detail and branch stock from the MIS", () => {
+    expect(catalog).toContain('shamsFetch<RawProductInfoResponse>("/api/v2/product/info"');
+    expect(catalog).toContain('shamsFetch<RawStockResponse>("/api/v2/product/stock"');
+  });
+
+  it("keeps the batched stock read the invoice flow depends on", () => {
+    expect(catalog).toContain("export async function getStockForItems(");
+    expect(catalog).toContain("export async function getProductWithStock(");
   });
 });
 
