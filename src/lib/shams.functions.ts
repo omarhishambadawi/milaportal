@@ -35,6 +35,7 @@ import type {
 import type { InvoiceBranchMatch } from "@/lib/shams/types";
 import type { ItemAvailability } from "@/lib/shams/availability";
 import type { CatalogDiagnostics } from "@/lib/shams/diagnostics.server";
+import type { CrmSmokeResult } from "@/lib/shams-crm/diagnostics.server";
 
 /* -------------------------------------------------------------------------- */
 /* Gates                                                                       */
@@ -493,4 +494,25 @@ export const shamsCatalogDiagnostics = createServerFn({ method: "POST" })
     } catch (err) {
       return { ok: false, configured, report: null, error: await toFailure(err) };
     }
+  });
+
+/**
+ * Administrator-only Shams CRM smoke test.
+ *
+ * Same gate as `shamsStatus` and `shamsCatalogDiagnostics` — `assertAdmin`, not
+ * `view_shams_mis` — because it authenticates against a second third-party
+ * system and downloads its catalog.
+ *
+ * The result is the closed shape in `diagnostics.server.ts`: counts, a status
+ * and an error kind. No credential, token, header or product row crosses this
+ * boundary.
+ */
+export const shamsCrmSmokeTest = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }): Promise<CrmSmokeResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertAdmin(supabase, userId);
+
+    const { runCrmSmokeTest } = await import("@/lib/shams-crm/diagnostics.server");
+    return runCrmSmokeTest();
   });

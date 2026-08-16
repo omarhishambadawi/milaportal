@@ -21,7 +21,7 @@ import { Loader2, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { isAdministrator, useAuth } from "@/lib/auth";
-import { shamsCatalogDiagnostics } from "@/lib/shams.functions";
+import { shamsCatalogDiagnostics, shamsCrmSmokeTest } from "@/lib/shams.functions";
 import { TD, TH } from "@/features/shams/constants";
 
 export const Route = createFileRoute("/_app/admin/shams-diagnostics")({
@@ -69,6 +69,8 @@ function ShamsDiagnosticsPage() {
   const { role } = useAuth();
   const run = useServerFn(shamsCatalogDiagnostics);
   const probe = useMutation({ mutationFn: () => run({ data: undefined }) });
+  const runCrm = useServerFn(shamsCrmSmokeTest);
+  const crm = useMutation({ mutationFn: () => runCrm({ data: undefined }) });
 
   if (!isAdministrator(role)) {
     return (
@@ -92,6 +94,39 @@ function ShamsDiagnosticsPage() {
           Read-only. One run spends about two dozen requests against the Shams MIS.
         </p>
       </div>
+
+      <Section
+        title="Shams CRM — connection smoke test"
+        hint="Authenticates against the Shams CRM backend and downloads the catalog once."
+      >
+        <Button onClick={() => crm.mutate()} disabled={crm.isPending} variant="secondary">
+          {crm.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
+          {crm.isPending ? "Running…" : "Run CRM test"}
+        </Button>
+
+        {crm.isError && (
+          <p className="text-sm text-destructive">
+            The CRM test call failed. You may not have administrator access.
+          </p>
+        )}
+
+        {crm.data && (
+          <Table
+            head={["Configured", "Login", "Catalog HTTP", "Products", "Cache reused", "Error"]}
+          >
+            <tr className="border-t">
+              <td className={TD}>{crm.data.configured ? "yes" : "no"}</td>
+              <td className={TD}>{crm.data.login ?? "—"}</td>
+              <td className={TD}>{crm.data.catalogStatus ?? "—"}</td>
+              <td className={TD}>{crm.data.catalogCount ?? "—"}</td>
+              <td className={TD}>
+                {crm.data.cacheReused === null ? "—" : crm.data.cacheReused ? "yes" : "no"}
+              </td>
+              <td className={TD}>{crm.data.errorKind ?? "—"}</td>
+            </tr>
+          </Table>
+        )}
+      </Section>
 
       <Button onClick={() => probe.mutate()} disabled={probe.isPending}>
         {probe.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
