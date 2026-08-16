@@ -496,6 +496,11 @@ function OrdersList() {
                       // agent comes back from editing it. An id rather than an
                       // offset, because a save can move the row.
                       data-order-id={o.id}
+                      // Present only while the return mark is up. Not styling —
+                      // this is what makes "is the state reaching the row?"
+                      // answerable from DevTools without reading React, which
+                      // is the question that took three attempts to settle.
+                      data-return-highlight={o.id === highlightedOrderId ? "true" : undefined}
                       // One background for every row, in both themes. No
                       // positional striping and no state tint: the only thing
                       // that distinguishes rows is their content — the glyph and

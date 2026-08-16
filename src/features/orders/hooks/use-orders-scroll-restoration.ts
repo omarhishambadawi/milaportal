@@ -61,21 +61,150 @@ let anchor: ReturnAnchor | null = null;
  * or the browser's own scroll restoration having handled the back button — which
  * is most of the ways a return actually happens.
  */
-let returnedOrderId: string | null = null;
+interface PendingReturn {
+  orderId: string;
+  /**
+   * Has the agent actually left the list yet?
+   *
+   * The whole bug lived in the absence of this flag. Opening an order re-mounts
+   * the Orders list once *during the outgoing transition* — the router keeps the
+   * old route rendered while the lazily-split detail component loads — so a
+   * claim that ran on mount consumed the id immediately, on the way out. The row
+   * duly flashed, on a list the agent was already leaving, and by the time they
+   * came back there was nothing left to claim. Measured: `parked` at t=13084,
+   * `claimed` 101ms later at t=13185, and at t=13350 the mark was live and
+   * animating while `location.pathname` was already the detail route.
+   *
+   * Set by the order page mounting — see `armOrderReturn`, which records why
+   * the two cheaper discriminators (arming on unmount, guarding on pathname)
+   * were both measured racing this same transition.
+   */
+  armed: boolean;
+}
+
+let pendingReturn: PendingReturn | null = null;
+
+/**
+ * Where the id is parked while the agent is away.
+ *
+ * `sessionStorage` as well as the module variable, because module state is not
+ * as durable as it looks: it is wiped by a full document load, and the route
+ * back to the list is not guaranteed to be a client-side one — a hard refresh
+ * from the order page, a middle-click, or any navigation that reloads the
+ * document takes the variable with it. `sessionStorage` is per-tab and survives
+ * exactly that, which is the difference between a mark that usually appears and
+ * one that always does.
+ */
+const RETURN_KEY = "milaserv.orders.returnedFrom";
+
+/**
+ * Dev-only trace of the return-state lifecycle.
+ *
+ * Kept rather than removed after the fact. This mechanism spans a navigation,
+ * a module variable, a storage key and a mount, and when it fails it fails
+ * silently and looks identical to a styling problem — which cost three rounds
+ * of diagnosis aimed at the wrong layer. Two log lines make "was it written"
+ * and "was it read" answerable in one reproduction. Stripped from production
+ * builds by the `import.meta.env.DEV` guard.
+ */
+function trace(event: string, detail: Record<string, unknown>): void {
+  if (!import.meta.env.DEV) return;
+  console.info(`[orders/return] ${event}`, detail);
+}
+
+function persist(value: PendingReturn | null): void {
+  try {
+    if (value) sessionStorage.setItem(RETURN_KEY, JSON.stringify(value));
+    else sessionStorage.removeItem(RETURN_KEY);
+  } catch {
+    // Private mode, or storage disabled. The module variable still covers the
+    // ordinary client-side navigation, which is the common path.
+  }
+}
+
+function restore(): PendingReturn | null {
+  try {
+    const raw = sessionStorage.getItem(RETURN_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PendingReturn;
+    return typeof parsed?.orderId === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parkReturnedOrderId(orderId: string): void {
+  pendingReturn = { orderId, armed: false };
+  persist(pendingReturn);
+  trace("parked", { orderId, armed: false });
+}
+
+/**
+ * The order page has mounted, so the agent genuinely got there.
+ *
+ * Called by the order form. This is the only signal in the round trip that
+ * cannot be raced, and both of the cheaper ones were measured failing:
+ *
+ *   * *claim on mount* — the router re-mounts the Orders list during the
+ *     outgoing transition, so the id was consumed on the way out (`parked`
+ *     t=9701, `claimed` t=9807, mark live at t=9967 while `location.pathname`
+ *     was already the detail route);
+ *   * *arm on unmount* — that transition is a full unmount/remount cycle, so
+ *     the unmount armed it and the very next mount claimed it, 6ms later;
+ *   * *guard on pathname* — at t=9967 the Orders table was still rendered with
+ *     `rows: 25` under the detail route's own pathname, so the two are not
+ *     ordered with respect to each other either.
+ *
+ * The order page mounting is downstream of all of that: it cannot happen until
+ * the list has actually been left behind.
+ */
+export function armOrderReturn(): void {
+  if (!pendingReturn) pendingReturn = restore();
+  if (!pendingReturn || pendingReturn.armed) return;
+  pendingReturn = { ...pendingReturn, armed: true };
+  persist(pendingReturn);
+  trace("armed", { orderId: pendingReturn.orderId, by: "order page mounted" });
+}
 
 /**
  * Take the order to highlight, if there is one. Reading it clears it, so one
  * return produces exactly one mark however many times the list re-renders.
  */
 export function takeReturnedOrderId(): string | null {
-  const id = returnedOrderId;
-  returnedOrderId = null;
+  if (!pendingReturn) pendingReturn = restore();
+  // Parked but not armed: this is the mount that happens *while leaving*, not a
+  // return. Leave it where it is — the trip is not over yet.
+  if (!pendingReturn || !pendingReturn.armed) {
+    trace("claim-skipped", {
+      reason: pendingReturn ? "not armed — still leaving" : "nothing parked",
+    });
+    return null;
+  }
+  const id = pendingReturn.orderId;
+  pendingReturn = null;
+  persist(null);
+  trace("claimed", { orderId: id });
   return id;
 }
 
+/**
+ * Is there a trip in progress that has not reached the order page yet?
+ *
+ * True exactly during the mount the router performs while *leaving* the list.
+ * The scroll restore has to ask this for the same reason the highlight does: it
+ * consumes `anchor` and latches `restored`, so running it on that mount threw
+ * away the position and left the real return with nothing to restore — which is
+ * why coming back landed at the top of the list rather than on the row.
+ */
+export function isLeaving(): boolean {
+  if (!pendingReturn) pendingReturn = restore();
+  return !!pendingReturn && !pendingReturn.armed;
+}
+
 /** Test seam: arrange the module as though an order had just been opened. */
-export function setReturnedOrderId(orderId: string | null): void {
-  returnedOrderId = orderId;
+export function setReturnedOrderId(orderId: string | null, armed = true): void {
+  pendingReturn = orderId ? { orderId, armed } : null;
+  persist(pendingReturn);
 }
 
 function findRow(orderId: string): HTMLElement | null {
@@ -99,7 +228,7 @@ export function rememberOrderReturn(orderId: string): void {
   // Same trip, separate lifetime — see `returnedOrderId`. Recorded on the way
   // *out* so it covers every way back in: saving, cancelling, the browser's
   // back button, or closing the form.
-  returnedOrderId = orderId;
+  parkReturnedOrderId(orderId);
 }
 
 /** What the restore should do with the state it finds on a given commit. */
@@ -210,19 +339,34 @@ export function useOrdersScrollRestoration({
   // and still gets it if a save re-sorted it or the list refetched underneath.
   const claimed = useRef(false);
   useLayoutEffect(() => {
-    if (claimed.current) return;
-    claimed.current = true;
-    const id = takeReturnedOrderId();
-    if (id) setHighlighted(id);
+    if (!claimed.current) {
+      claimed.current = true;
+      const id = takeReturnedOrderId();
+      if (id) setHighlighted(id);
+    }
   }, []);
 
-  // Drop the mark after its moment. Keyed on the id so a second return re-arms
-  // the timer rather than inheriting the remains of the first one's.
+  /**
+   * Drop the mark after its moment — but only start counting once the row it
+   * marks is actually on screen.
+   *
+   * The claim above happens on mount, which is routinely *before* the list has
+   * rows: a return that invalidates the orders query lands on an empty or
+   * refetching table. Counting from mount spent the window on an empty table
+   * and, on a slow page, cleared the state before the row had ever rendered —
+   * the mark was live the whole time and had nothing to attach to.
+   *
+   * `rowsKey` is the ids of the rows currently rendered, so this waits for the
+   * commit that actually contains the row and starts the clock there. Keyed on
+   * the id too, so a second return re-arms rather than inheriting the remains of
+   * the first one's timer.
+   */
+  const rowOnScreen = !!highlightedOrderId && rowsKey.split(",").includes(highlightedOrderId);
   useEffect(() => {
-    if (!highlightedOrderId) return;
+    if (!highlightedOrderId || !rowOnScreen) return;
     const timer = setTimeout(() => setHighlighted(null), RETURN_HIGHLIGHT_MS);
     return () => clearTimeout(timer);
-  }, [highlightedOrderId]);
+  }, [highlightedOrderId, rowOnScreen]);
 
   // Continuously remember where the user is while they browse the list. This
   // covers returning from anywhere else in the app; the anchor above covers the
@@ -240,6 +384,10 @@ export function useOrdersScrollRestoration({
   // already at the right offset. Re-runs on every commit that changes the rows.
   useLayoutEffect(() => {
     if (restored.current || !ready) return;
+    // The mount that happens while leaving must not consume the anchor or latch
+    // `restored` — see `isLeaving`. Without this the position was thrown away on
+    // the way out and the real return had nothing left to restore.
+    if (isLeaving()) return;
 
     const target = anchor;
     const fallbackY = target ? target.scrollY : savedScrollY;

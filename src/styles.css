@@ -651,8 +651,20 @@ html.theme-vt * {
   }
 }
 
+/*
+ * No fill mode. `both` held the final keyframe — a fully transparent
+ * background — after the animation ended, which overrode the row's own
+ * `bg-background` for as long as the class stayed on. Letting the animation
+ * simply end hands the row straight back to its utility, and the last keyframe
+ * is already visually identical to it, so nothing flickers.
+ *
+ * The tint carries it alone. The first column already owns a 3px rail for the
+ * Call Centre state, and a second rail in the same place would either overprint
+ * it or read as a change to it — the row's own background is the one surface
+ * here that nothing else is using.
+ */
 .order-row-return {
-  animation: order-row-return 2.8s ease-out both;
+  animation: order-row-return 2.8s ease-out;
 }
 
 /*

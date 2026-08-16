@@ -15,6 +15,7 @@ import { recordInvoiceVerification } from "../record-verification";
 import { defaultTeam, parseInvoiceNumbers } from "../utils";
 import { isAssignableAgent } from "../components/order-assignment";
 import { useOrderInvoices } from "./use-order-invoices";
+import { armOrderReturn } from "./use-orders-scroll-restoration";
 
 /**
  * All state, data and side-effects for the order create/edit form.
@@ -195,6 +196,17 @@ export function useOrderForm(mode: "create" | "edit") {
   useEffect(() => {
     if (mode === "create") setForm((f) => ({ ...f, team: defaultTeam(role) }));
   }, [role, mode]);
+
+  /**
+   * The agent has actually reached the order page.
+   *
+   * This is what lets the Orders list tell "we came back" from "we re-rendered
+   * on the way out" — see `armOrderReturn`. Edit only: arriving at the *create*
+   * form is not a return trip, and nothing was parked for it.
+   */
+  useEffect(() => {
+    if (mode === "edit") armOrderReturn();
+  }, [mode]);
 
   const cityFor = useMemo(
     () => (b: string | null) => branches?.find((x) => x.branch_no === b)?.city ?? "",

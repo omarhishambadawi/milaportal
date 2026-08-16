@@ -4,6 +4,8 @@ import {
   decideRestore,
   isRowVisible,
   scrollTopForRow,
+  armOrderReturn,
+  isLeaving,
   setReturnedOrderId,
   takeReturnedOrderId,
 } from "../hooks/use-orders-scroll-restoration";
@@ -153,5 +155,62 @@ describe("the returned-from order", () => {
   it("outlives the flash it triggers, so the class is not pulled mid-animation", () => {
     // The CSS animation is 2.8s; the state that applies it must last longer.
     expect(RETURN_HIGHLIGHT_MS).toBeGreaterThan(2800);
+  });
+});
+
+/**
+ * The arming rule, which is the whole bug.
+ *
+ * Opening an order re-mounts the Orders list *during the outgoing transition* —
+ * the router keeps the old route rendered while the lazily-split detail
+ * component loads. A claim that ran on mount therefore consumed the id on the
+ * way out, and the row flashed on a list the agent was already leaving; by the
+ * time they came back there was nothing left to claim. Measured in the browser:
+ * `parked` at t=9701, `claimed` at t=9807, and at t=9967 the mark was live and
+ * animating while `location.pathname` was already the detail route.
+ *
+ * Arming on unmount did not fix it either — that transition is a full
+ * unmount/remount cycle, so the unmount armed it and the very next mount claimed
+ * it 6ms later. Only the *order page mounting* is downstream of the whole
+ * transition, so that is what arms the return.
+ *
+ * The same guard covers the scroll anchor, which had been silently losing the
+ * position the same way: the premature mount consumed it and latched `restored`,
+ * so coming back landed at the top of the list.
+ */
+describe("a return is only claimable once the agent has arrived", () => {
+  it("refuses to be claimed while still leaving", () => {
+    setReturnedOrderId("order-8990", false);
+    expect(isLeaving()).toBe(true);
+    // The mid-transition remount asks, and must be told no.
+    expect(takeReturnedOrderId()).toBeNull();
+    // …and asking must not have consumed it.
+    expect(isLeaving()).toBe(true);
+  });
+
+  it("becomes claimable once the order page mounts", () => {
+    setReturnedOrderId("order-8990", false);
+    armOrderReturn();
+    expect(isLeaving()).toBe(false);
+    expect(takeReturnedOrderId()).toBe("order-8990");
+  });
+
+  it("is consumed exactly once, so a refetch cannot re-arm the flash", () => {
+    setReturnedOrderId("order-8990", false);
+    armOrderReturn();
+    expect(takeReturnedOrderId()).toBe("order-8990");
+    expect(takeReturnedOrderId()).toBeNull();
+  });
+
+  it("reports no trip in progress when nothing was parked", () => {
+    setReturnedOrderId(null);
+    expect(isLeaving()).toBe(false);
+    expect(takeReturnedOrderId()).toBeNull();
+  });
+
+  it("arming without a parked order is a no-op", () => {
+    setReturnedOrderId(null);
+    armOrderReturn();
+    expect(takeReturnedOrderId()).toBeNull();
   });
 });
