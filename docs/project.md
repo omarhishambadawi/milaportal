@@ -2589,6 +2589,46 @@ src/lib/shams/sales.server.ts    invoice lookup + query validation + branch disc
 src/lib/shams.functions.ts       authenticated, RBAC-gated server functions
 ```
 
+### Shams CRM — a second Shams system
+
+`shams-crm.cloud` is the backend PharmacyCRM Desktop uses. It is **not** the MIS
+above: different host, different credential, different auth header. It exists in
+this codebase for one reason — `GET /products/names` returns the **whole**
+~8,484-product catalog in one unpaginated response, while the MIS
+`product/search` caps at 50 rows with no pagination, so broad and wildcard
+searches are truncated before the wanted product is ever seen.
+
+```
+src/lib/shams-crm/client.server.ts       login + session (X-Session-Token), 401 -> one re-login -> one retry
+src/lib/shams-crm/catalog.server.ts      full-catalog cache: 6 h TTL, single-flight, stale-on-failure fallback
+src/lib/shams-crm/products.server.ts     the seam: the catalog as the Portal's own ShamsProduct
+src/lib/shams-crm/diagnostics.server.ts  admin-only smoke test (login / catalog / cache reuse)
+src/lib/shams-crm/types.ts               wire shapes + normalized models
+```
+
+**Credentials are `SHAMS_CRM_USERNAME` / `SHAMS_CRM_PASSWORD`, server-only.**
+Temporary and deliberately flagged as such: they are a *person's* Desktop login,
+used with the account holder's authorization until Shams issues a machine
+credential, so every request is attributed to that person. Never `VITE_`, never
+logged, never persisted to Supabase — the session token lives in isolate memory
+and nowhere else.
+
+**No field mapping exists, on purpose.** `ShamsCrmProduct` and `ShamsProduct` are
+the same three fields, so `products.server.ts` converts at the type boundary and
+copies nothing. If either shape gains a field, that file stops compiling and the
+adapter belongs there.
+
+`getCrmProducts()` returns `readonly ShamsProduct[]` — the live cached array, not
+a copy, so a caller cannot sort or splice the catalog out from under every other
+caller in the isolate. A cold-cache failure throws `ShamsCrmError` rather than
+returning an empty list: an outage and an empty catalog lead to opposite
+decisions. A *stale* catalog is not a failure — a failed refresh keeps serving
+the previous rows.
+
+**The MIS is untouched by this.** Nothing in `src/lib/shams/` reads the CRM, and
+the Stock page still searches through `product/search` exactly as before. Wiring
+the CRM catalog into search is a later phase; this one only makes it available.
+
 ### RBAC — one page-level permission
 
 `view_shams_mis` gates every Shams server function, the `/shams` route and the
