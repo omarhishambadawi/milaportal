@@ -5,7 +5,8 @@
  * network and neither is reimplemented in a component:
  *
  *   1. **Wildcard product search** — `mou*n*j*2.5`, run server-side against the
- *      catalog because the MIS API has no wildcard syntax of its own.
+ *      full Shams CRM catalog, which is the only source that holds every
+ *      product; neither backend offers a wildcard syntax of its own.
  *   2. **Branch row filtering** — narrowing an already-loaded stock result to
  *      one branch or city, run client-side because the rows are already there.
  */
@@ -108,101 +109,6 @@ export function matchesWildcard(text: string, fragments: string[]): boolean {
  */
 export function matchesProductWildcard(product: ShamsProduct, fragments: string[]): boolean {
   return productWildcardHaystacks(product).some((text) => matchesWildcard(text, fragments));
-}
-
-/**
- * The fragment to send to the MIS as a plain search term.
- *
- * The API matches a substring and knows nothing about `*`, so a wildcard query
- * cannot be forwarded as typed. Instead one fragment is used to pull candidates
- * and the rest are applied here. Every product matching the whole expression
- * must contain *every* fragment, so any single fragment retrieves a superset —
- * which makes this a matter of selectivity, not correctness.
- *
- * The longest fragment is chosen because a longer substring matches fewer
- * products; ties go to the earliest, which tends to be the part of the name the
- * agent was surest about. `null` when nothing is long enough to search with, so
- * the caller can decline rather than sweep the catalog with one character.
- */
-export function wildcardProbe(fragments: string[], minLength: number): string | null {
-  return wildcardProbes(fragments, minLength, 1)[0] ?? null;
-}
-
-/**
- * The fragments to send to the MIS, most selective first.
- *
- * One probe is *logically* sufficient — every match contains every fragment, so
- * a single-fragment search returns a superset — but only if the API hands back
- * everything it matched. It exposes no `limit`, `page` or `offset` (its whole
- * search signature is `?q=`), so whether it truncates a broad result server-side
- * cannot be established from the client, and a truncated superset is no longer a
- * superset: the product the agent wanted can be cut off before local matching
- * ever sees it.
- *
- * Several probes make that failure mode unlikely instead of invisible. Each
- * returns its own candidate set, the union is filtered, and a product only has
- * to survive *one* probe's truncation to be found. Bounded to `max` — this is
- * insurance against a cap nobody has measured, not a licence to sweep.
- *
- * Ordered longest-first (ties earliest) so the most selective probe runs first
- * and the ones after it are cheap corroboration.
- *
- * ## Why a secondary probe has a higher floor
- *
- * `secondaryMinLength` applies to every probe after the first, and it exists
- * because a short fragment is a *terrible* search term against this catalog.
- * `moun*2.5` split to `["moun", "2.5"]`, and `2.5` matched every 2.5 mg product
- * Shams sells. The endpoint has no `limit`, so that probe asked for thousands of
- * rows, and because the probes are awaited together it held the whole search —
- * including the perfectly good `moun` result — until it timed out. The agent saw
- * a skeleton that never resolved.
- *
- * The first probe keeps the lower floor: it is the one the search *needs*, it is
- * the longest fragment available, and declining it would mean refusing to search
- * at all. Anything after it is optional insurance, and optional work is not
- * worth a broad scan of the catalog.
- */
-export function wildcardProbes(
-  fragments: string[],
-  minLength: number,
-  max: number,
-  secondaryMinLength = minLength,
-): string[] {
-  const usable = fragments
-    .map((fragment, index) => ({ fragment, index }))
-    .filter((f) => f.fragment.length >= minLength);
-
-  usable.sort((a, b) => b.fragment.length - a.fragment.length || a.index - b.index);
-
-  const out: string[] = [];
-  for (const { fragment } of usable) {
-    if (out.length >= max) break;
-    // Every probe after the first must be selective enough to be worth a
-    // request; the first is the search itself and is taken as it comes.
-    if (out.length > 0 && fragment.length < secondaryMinLength) continue;
-    // Two probes where one contains the other retrieve nested sets; the shorter
-    // adds nothing the longer did not already cover.
-    if (out.some((chosen) => chosen.includes(fragment) || fragment.includes(chosen))) continue;
-    out.push(fragment);
-  }
-
-  // The fragments as one space-joined term, appended to — never substituted for
-  // — the probes above.
-  //
-  // `product/search` matches a contiguous substring and returns at most 50 rows
-  // with no pagination, so a broad single fragment is cut long before the wanted
-  // product: `nan` matches 53+ products and the NAN OPTIPRO range falls outside
-  // the 50 that come back, which is why `nan*op` found nothing. `nan op` is a
-  // substring of `NAN OPTIPRO …` and matches four rows, comfortably under the
-  // cap. It is a heuristic — it pays off when a `*` stands where a space does —
-  // so it only ever adds candidates, and the union and matcher decide the rest.
-  // `out.length > 0` keeps the existing guard intact: when no fragment is long
-  // enough to search with, the query is declined rather than swept, and a
-  // compound built from those same too-short fragments must not smuggle it back.
-  const compound = fragments.join(" ");
-  if (out.length > 0 && fragments.length >= 2 && !out.includes(compound)) out.push(compound);
-
-  return out;
 }
 
 /* -------------------------------------------------------------------------- */

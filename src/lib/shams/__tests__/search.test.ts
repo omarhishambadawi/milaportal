@@ -21,8 +21,6 @@ import {
   rankProducts,
   sortInvoiceBranchMatches,
   summariseStock,
-  wildcardProbe,
-  wildcardProbes,
 } from "@/lib/shams/search";
 import type { InvoiceBranchMatch, ShamsBranchStock, ShamsProduct } from "@/lib/shams/types";
 
@@ -126,96 +124,9 @@ describe("matchesProductWildcard", () => {
   });
 });
 
-describe("wildcardProbe", () => {
-  it("sends the longest fragment upstream, since it is the most selective", () => {
-    expect(wildcardProbe(["26", "golden", "3", "1800"], 2)).toBe("golden");
-  });
-
-  it("breaks ties towards the fragment the agent typed first", () => {
-    // `gold` and `1800` are both four characters.
-    expect(wildcardProbe(["26", "gold", "3", "1800"], 2)).toBe("gold");
-    expect(wildcardProbe(["mou", "n", "j", "2.5"], 2)).toBe("mou");
-  });
-
-  it("skips fragments too short to search with", () => {
-    expect(wildcardProbe(["a", "b", "gold"], 2)).toBe("gold");
-  });
-
-  it("declines rather than sweeping the catalog with one character", () => {
-    expect(wildcardProbe(["a", "b", "c"], 2)).toBeNull();
-    expect(wildcardProbe([], 2)).toBeNull();
-  });
-});
-
 describe("normalizeForSearch", () => {
   it("is the single reason matching survives case and spacing", () => {
     expect(normalizeForSearch("  MOUNJARO   2.5  ")).toBe("mounjaro 2.5");
-  });
-});
-
-describe("wildcardProbes", () => {
-  /**
-   * One probe is logically sufficient but only if the API returns everything it
-   * matched — and it exposes no limit/page/offset, so a server-side cap cannot
-   * be ruled out. Several probes mean a product has to survive only one of them.
-   */
-  it("returns several probes, most selective first", () => {
-    expect(wildcardProbes(["26", "golden", "3", "1800"], 2, 3)).toEqual([
-      "golden",
-      "1800",
-      "26",
-      "26 golden 3 1800",
-    ]);
-  });
-
-  it("is bounded by max", () => {
-    expect(wildcardProbes(["mounjaro", "kwikpen", "12.5", "0.6"], 2, 2)).toEqual([
-      "mounjaro",
-      "kwikpen",
-      "mounjaro kwikpen 12.5 0.6",
-    ]);
-  });
-
-  it("skips fragments nested inside a probe already chosen", () => {
-    // "gold" inside "golden" retrieves a superset of the same rows.
-    expect(wildcardProbes(["golden", "gold"], 2, 3)).toEqual(["golden", "golden gold"]);
-  });
-
-  it("skips fragments too short to search with", () => {
-    expect(wildcardProbes(["a", "b", "gold"], 2, 3)).toEqual(["gold", "a b gold"]);
-  });
-
-  /**
-   * A secondary probe may be held to a higher floor than the first. `2.5` is a
-   * fine thing to *match* on and a ruinous thing to *search* on — it retrieves
-   * every 2.5 mg product in the catalog.
-   */
-  it("holds probes after the first to a higher floor", () => {
-    expect(wildcardProbes(["moun", "2.5"], 2, 3, 4)).toEqual(["moun", "moun 2.5"]);
-    expect(wildcardProbes(["gold", "1800", "26"], 2, 3, 4)).toEqual([
-      "gold",
-      "1800",
-      "gold 1800 26",
-    ]);
-  });
-
-  it("still takes the first probe at the lower floor, since it is the search", () => {
-    // Nothing here reaches the secondary floor; refusing the first probe too
-    // would mean declining to search at all.
-    expect(wildcardProbes(["mou", "2.5"], 2, 3, 4)).toEqual(["mou", "mou 2.5"]);
-  });
-
-  it("leaves the floors equal when no secondary floor is given", () => {
-    expect(wildcardProbes(["moun", "2.5"], 2, 3)).toEqual(["moun", "2.5", "moun 2.5"]);
-  });
-
-  it("returns nothing when no fragment is long enough", () => {
-    expect(wildcardProbes(["a", "b"], 2, 3)).toEqual([]);
-  });
-
-  it("agrees with the single-probe helper on its first choice", () => {
-    const fragments = ["mou", "n", "j", "2.5"];
-    expect(wildcardProbe(fragments, 2)).toBe(wildcardProbes(fragments, 2, 3)[0]);
   });
 });
 
@@ -541,9 +452,5 @@ describe("nan*op against the real catalog names", () => {
     for (const row of rows) {
       expect(matchesProductWildcard(row, fragments)).toBe(true);
     }
-  });
-
-  it("sends both fragments upstream, so either can retrieve the set", () => {
-    expect(wildcardProbes(parseWildcardQuery("nan*op"), 2, 3)).toEqual(["nan", "op", "nan op"]);
   });
 });
