@@ -102,7 +102,10 @@ function OrdersList() {
   // the restore after each commit that changes the rows, so it searches a DOM
   // that holds the latest render; `settled` is what tells it a row that is still
   // missing is genuinely absent rather than not fetched yet.
-  useOrdersScrollRestoration({
+  // `highlightedOrderId` marks the row the agent has just come back from, for a
+  // couple of seconds. Same trip, same anchor: it is set when the restore finds
+  // the row, so it survives the order being re-sorted or the list refetching.
+  const { highlightedOrderId } = useOrdersScrollRestoration({
     ready: !isLoading && pageRows.length > 0,
     settled: !isLoading && !data.isFetching,
     rowsKey: pageRows.map((o: any) => o.id).join(","),
@@ -497,7 +500,16 @@ function OrdersList() {
                       // positional striping and no state tint: the only thing
                       // that distinguishes rows is their content — the glyph and
                       // rail in the first column, and the status pill.
-                      className={cn("group bg-background transition-colors hover:bg-accent/50")}
+                      //
+                      // The single exception is temporary and is not state: the
+                      // order just returned from carries a faint tint for a
+                      // couple of seconds so the eye can find it after the
+                      // scroll lands. It fades out through the row's own
+                      // `transition-colors` and leaves nothing behind.
+                      className={cn(
+                        "group transition-colors hover:bg-accent/50",
+                        o.id === highlightedOrderId ? "bg-primary/10" : "bg-background",
+                      )}
                     >
                       <td
                         className={cn("text-center px-2 relative", cellCls)}

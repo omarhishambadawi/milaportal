@@ -13,6 +13,7 @@ import {
   dedupeInvoices,
   eligibleForAutoCompletion,
   invoiceKey,
+  invoiceNoSignature,
   invoicesToRecord,
   needsValueSync,
   summarizeInvoices,
@@ -615,5 +616,34 @@ describe("allCallCentre vs callCentreVerified", () => {
     const all = summarizeInvoices([verified("0169580", 200), verified("0169581", 300)]);
     expect(all.callCentreVerified).toBe(true);
     expect(all.allCallCentre).toBe(true);
+  });
+});
+
+/**
+ * The comparison the edit form runs on every keystroke to answer two questions:
+ * does this number need a fresh lookup, and may what comes back be recorded
+ * against the order? Getting it wrong in either direction is a bug with teeth —
+ * too eager and an unsaved edit writes a total onto the order, too lazy and the
+ * agent stares at the previous invoice.
+ */
+describe("invoiceNoSignature", () => {
+  it("is blind to spelling and order, so retyping the same numbers is not a change", () => {
+    expect(invoiceNoSignature("22138")).toBe(invoiceNoSignature("022138"));
+    expect(invoiceNoSignature("22138, 22139")).toBe(invoiceNoSignature("22139,22138"));
+    expect(invoiceNoSignature(" 22138 ")).toBe(invoiceNoSignature("22138"));
+  });
+
+  it("separates a genuinely different number", () => {
+    // The reported case: 34205 -> 35120 must read as a change.
+    expect(invoiceNoSignature("34205")).not.toBe(invoiceNoSignature("35120"));
+    // And so must adding or removing one of several.
+    expect(invoiceNoSignature("22138")).not.toBe(invoiceNoSignature("22138, 22139"));
+  });
+
+  it("treats an emptied box as its own state, not as unchanged", () => {
+    expect(invoiceNoSignature("")).toBe("");
+    expect(invoiceNoSignature(null)).toBe("");
+    expect(invoiceNoSignature(undefined)).toBe("");
+    expect(invoiceNoSignature("22138")).not.toBe(invoiceNoSignature(""));
   });
 });

@@ -61,6 +61,29 @@ interface UseOrderInvoicesArgs {
   storedStatus: string | null | undefined;
   /** False for agents without `view_shams_mis`; nothing is requested then. */
   enabled: boolean;
+  /**
+   * May what the lookup found be written back to the order?
+   *
+   * Separates *resolving* an invoice number from *committing* it, which the two
+   * were not before: the edit form could only look up the number already stored,
+   * because looking up the one being typed would have recorded an unsaved edit
+   * against the order. With this, the form resolves what is on screen — so a
+   * changed number loads immediately — and withholds the write until the number
+   * on screen is the number in the database.
+   *
+   * Defaults to true, which is every caller that has an order id and is showing
+   * that order's own numbers.
+   */
+  recordEnabled?: boolean;
+  /**
+   * Is the number on screen one the lookup has not caught up with yet?
+   *
+   * True between the agent editing the box and the debounce firing. The invoices
+   * held at that moment belong to the *previous* number, so this reports
+   * `isLoading` and lets the panel show a spinner rather than presenting stale
+   * documents as though they belonged to the number now typed.
+   */
+  settling?: boolean;
 }
 
 export interface OrderInvoicesResult extends InvoiceSummary {
@@ -93,6 +116,8 @@ export function useOrderInvoices({
   storedVerifiedFlag,
   storedStatus,
   enabled,
+  recordEnabled = true,
+  settling = false,
 }: UseOrderInvoicesArgs): OrderInvoicesResult {
   const qc = useQueryClient();
 
@@ -182,7 +207,20 @@ export function useOrderInvoices({
    */
   const record = useMutation({
     mutationFn: (entries: OrderInvoice[]) => recordInvoiceVerification(orderId as string, entries),
-    onSuccess: () => {
+    onSuccess: (result) => {
+      // Only when the server actually did something. Reconciliation is
+      // speculative — it runs whenever an order is opened — so the common
+      // answer is "nothing to do", and invalidating on that answer refetched
+      // the whole orders list and the timeline every time anybody looked at an
+      // order. The RPC reports exactly what it changed; nothing changed means
+      // nothing to refetch.
+      const changed =
+        !!result &&
+        (result.synced ||
+          result.recorded > 0 ||
+          (result.revalued ?? 0) > 0 ||
+          (result.rechannelled ?? 0) > 0);
+      if (!changed) return;
       // The order itself changed (value, flag) and so did its history.
       qc.invalidateQueries({ queryKey: queryKeys.orders.all() });
       qc.invalidateQueries({ queryKey: queryKeys.orders.activity(orderId ?? "") });
@@ -230,6 +268,10 @@ export function useOrderInvoices({
 
   useEffect(() => {
     if (!orderId || !enabled || pendingWrite.length === 0) return;
+    // The numbers on screen are not the order's numbers yet. Whatever they
+    // resolve to describes an edit nobody has saved, and recording it would put
+    // a total and a channel onto the order for a document it does not name.
+    if (!recordEnabled || settling) return;
     // The stored figures are part of the signature, so a reconciliation that
     // succeeds and changes them does not immediately re-arm itself, while a
     // genuinely different disagreement later does get its own attempt.
@@ -256,6 +298,8 @@ export function useOrderInvoices({
   }, [
     orderId,
     enabled,
+    recordEnabled,
+    settling,
     pendingWrite,
     summary.verifiedTotal,
     storedValue,
@@ -282,8 +326,10 @@ export function useOrderInvoices({
 
   return {
     ...summary,
-    isLoading: results.some((r) => r.isPending && r.fetchStatus !== "idle"),
-    isFetching: results.some((r) => r.isFetching),
+    // `settling` counts as loading: the documents currently held answer the
+    // previous number, so the panel must show a spinner rather than them.
+    isLoading: settling || results.some((r) => r.isPending && r.fetchStatus !== "idle"),
+    isFetching: settling || results.some((r) => r.isFetching),
     refresh,
     isRecording: record.isPending,
     syncError: record.error as Error | null,

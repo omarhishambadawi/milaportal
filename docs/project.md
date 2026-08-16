@@ -3325,6 +3325,17 @@ below — so a phone never scrolls sideways. Branch labels come from
     what you hold; never promote false to true) and the positive-evidence case
     (reconcile as normal). Absence of evidence is not evidence of a walk-in.
 
+    **Both derivations read channel corrections** (`20260816120000`). A document
+    recorded as a walk-in used to stay one for ever unless its *price* moved, so
+    the Orders list and the order page could disagree about the same invoice: the
+    page reads the live Shams answer and said Call Centre, the list reads
+    `call_center_verified` derived from a log that had never been told. The RPC
+    now writes `invoice_channel_changed` (`20260815210000`) and
+    `sync_order_invoice_flags` reads it, so the two cannot diverge. Affected
+    orders repair themselves on the next page open — the client has been asking
+    for that reconciliation all along, and it now lands instead of being
+    discarded, which also ends a wasted RPC on every open of such an order.
+
     It is **not** manually tickable from the Orders list any more; the order form
     still offers it to `verify_*` holders, for a document raised outside the
     call centre that operationally belongs to it.

@@ -23,6 +23,17 @@ import { verificationEntries, type OrderInvoice } from "./invoice-verification";
 /** What the server did, so a caller can tell a reconciliation from a no-op. */
 export interface VerificationResult {
   recorded: number;
+  /** Documents whose total the MIS has since changed. */
+  revalued?: number;
+  /**
+   * Documents whose **channel** the MIS has since changed.
+   *
+   * The event that lets a walk-in be corrected to Call Centre on the same
+   * number: without it the flag was decided for ever by the first answer ever
+   * received about a document, which is what let the Orders list and the order
+   * page disagree about the same invoice.
+   */
+  rechannelled?: number;
   verified_count: number;
   verified_total: number;
   call_centre_count: number;

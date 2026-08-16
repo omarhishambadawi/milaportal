@@ -10,6 +10,7 @@ import { useAgentDirectory } from "@/lib/directory";
 import { useDebounced } from "@/features/shams/hooks/use-shams-data";
 import { orderFormSchema } from "../schema";
 import { buildOrderPayload, type PersistedOrder } from "../payload";
+import { invoiceNoSignature } from "../invoice-verification";
 import { recordInvoiceVerification } from "../record-verification";
 import { defaultTeam, parseInvoiceNumbers } from "../utils";
 import { isAssignableAgent } from "../components/order-assignment";
@@ -242,6 +243,47 @@ export function useOrderForm(mode: "create" | "edit") {
   const draftInvoiceNo = useDebounced(invoicesJoined, 500);
 
   /**
+   * Which numbers the lookup should resolve, and whether it may be recorded.
+   *
+   * The edit form used to resolve `existing.invoice_no` — the *stored* value —
+   * so changing the number in the box loaded nothing until the order had been
+   * saved, closed and reopened. The reason was sound: the hook records what it
+   * finds against the order, and an unsaved number must not be able to write a
+   * total onto it. The two concerns are separated instead of traded off.
+   *
+   *   * **which numbers** — whatever is on screen, once it differs from the
+   *     stored value. Until then the stored value is used directly, so opening
+   *     an order still resolves immediately and pays no debounce.
+   *   * **may it be written** — only while the numbers on screen are the numbers
+   *     in the database. Save, and the two agree again and recording resumes.
+   *
+   * `settling` covers the gap between the two: the typed number has changed but
+   * the debounce has not fired, so the invoices in hand still describe the
+   * previous number and must not be shown against this one.
+   */
+  const typedSignature = useMemo(() => invoiceNoSignature(invoicesJoined), [invoicesJoined]);
+  const storedSignature = useMemo(
+    () => invoiceNoSignature(existing?.invoice_no),
+    [existing?.invoice_no],
+  );
+  const draftDiffers = mode === "edit" && typedSignature !== storedSignature;
+  const lookupInvoiceNo =
+    mode === "create" ? draftInvoiceNo : draftDiffers ? draftInvoiceNo : existing?.invoice_no;
+  /** The branch to ask: the one on the form, which is what the agent can change. */
+  const lookupBranchNo = mode === "create" ? form.branch_no : form.branch_no || existing?.branch_no;
+  const settling = invoiceNoSignature(lookupInvoiceNo) !== typedSignature;
+  /**
+   * A draft may be resolved but never recorded. Both the numbers and the branch
+   * have to match the stored row: the same number at a different branch is a
+   * different document, so a changed branch is as much an unsaved edit as a
+   * changed number.
+   */
+  const recordEnabled =
+    mode === "edit" &&
+    !draftDiffers &&
+    (form.branch_no || "") === ((existing?.branch_no as string | null) || "");
+
+  /**
    * The order's invoices in Shams: state, totals, and the automatic recording.
    *
    * Gated on `view_shams_mis`, so an agent without Shams access issues no
@@ -260,8 +302,8 @@ export function useOrderForm(mode: "create" | "edit") {
    */
   const shamsInvoices = useOrderInvoices({
     orderId: mode === "edit" ? id : undefined,
-    invoiceNo: mode === "edit" ? existing?.invoice_no : draftInvoiceNo,
-    branchNo: mode === "edit" ? existing?.branch_no : form.branch_no,
+    invoiceNo: lookupInvoiceNo,
+    branchNo: lookupBranchNo,
     // The stored figures, so the hook can tell whether the order still agrees
     // with what has been verified rather than only whether an invoice is new.
     storedValue: existing?.invoice_value,
@@ -270,6 +312,8 @@ export function useOrderForm(mode: "create" | "edit") {
     // which is the only remaining reason to call the server.
     storedStatus: existing?.status,
     enabled: canViewShams && (mode === "edit" ? !!existing : !!form.branch_no),
+    recordEnabled,
+    settling,
   });
 
   /**
@@ -287,12 +331,16 @@ export function useOrderForm(mode: "create" | "edit") {
   const verifiedTotal = shamsInvoices.verified.length > 0 ? shamsInvoices.verifiedTotal : null;
   useEffect(() => {
     if (verifiedTotal === null || readOnly) return;
+    // The total in hand belongs to the number the lookup last resolved, which is
+    // not the one in the box. Writing it now would put the old invoice's money
+    // against the new invoice number.
+    if (settling) return;
     setForm((f) =>
       f.invoice_value !== "" && Number(f.invoice_value) === verifiedTotal
         ? f
         : { ...f, invoice_value: verifiedTotal.toFixed(2) },
     );
-  }, [verifiedTotal, existing, readOnly]);
+  }, [verifiedTotal, existing, readOnly, settling]);
 
   /**
    * The flag, in step with what the portal has derived.
@@ -306,14 +354,25 @@ export function useOrderForm(mode: "create" | "edit") {
    * invoice has not landed yet would be wiped the moment any refetch arrived.
    */
   useEffect(() => {
-    if ((existing as any)?.call_center_verified) {
+    if ((existing as any)?.call_center_verified && !draftDiffers) {
       setForm((f) => (f.call_center_verified ? f : { ...f, call_center_verified: true }));
       return;
     }
+    // Lowering follows the *documents*, so it must wait until the documents in
+    // hand are the ones the typed number names — otherwise replacing a
+    // call-centre number with one that has not resolved yet would clear the box
+    // on the strength of the invoice being replaced.
+    if (settling) return;
     if (shamsInvoices.verified.length > 0 && !shamsInvoices.callCentreVerified) {
       setForm((f) => (f.call_center_verified ? { ...f, call_center_verified: false } : f));
     }
-  }, [existing, shamsInvoices.verified.length, shamsInvoices.callCentreVerified]);
+  }, [
+    existing,
+    draftDiffers,
+    settling,
+    shamsInvoices.verified.length,
+    shamsInvoices.callCentreVerified,
+  ]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();

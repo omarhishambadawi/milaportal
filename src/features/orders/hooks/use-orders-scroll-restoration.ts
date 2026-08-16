@@ -1,4 +1,4 @@
-import { useLayoutEffect, useEffect, useRef } from "react";
+import { useLayoutEffect, useEffect, useRef, useState } from "react";
 
 /**
  * Puts the agent back where they were after they open an order and come back.
@@ -143,8 +143,41 @@ interface RestorationState {
   rowsKey: string;
 }
 
-export function useOrdersScrollRestoration({ ready, settled, rowsKey }: RestorationState) {
+/**
+ * How long the row the agent was just reviewing stays marked, in milliseconds.
+ *
+ * Long enough to find with the eye after the scroll lands, short enough that it
+ * never reads as a selection. The fade itself is the row's existing
+ * `transition-colors`, so removing the mark is as gradual as applying it.
+ */
+export const RETURN_HIGHLIGHT_MS = 2400;
+
+export interface RestorationResult {
+  /**
+   * The order the agent has just come back from, while it is worth pointing at.
+   *
+   * Null except for the moment after a return. Carried as an id rather than an
+   * index because the row it names may have moved — a save can re-sort it, and
+   * the list may have refetched under it.
+   */
+  highlightedOrderId: string | null;
+}
+
+export function useOrdersScrollRestoration({
+  ready,
+  settled,
+  rowsKey,
+}: RestorationState): RestorationResult {
   const restored = useRef(false);
+  const [highlightedOrderId, setHighlighted] = useState<string | null>(null);
+
+  // Drop the mark after its moment. Keyed on the id so a second return re-arms
+  // the timer rather than inheriting the remains of the first one's.
+  useEffect(() => {
+    if (!highlightedOrderId) return;
+    const timer = setTimeout(() => setHighlighted(null), RETURN_HIGHLIGHT_MS);
+    return () => clearTimeout(timer);
+  }, [highlightedOrderId]);
 
   // Continuously remember where the user is while they browse the list. This
   // covers returning from anywhere else in the app; the anchor above covers the
@@ -183,6 +216,10 @@ export function useOrdersScrollRestoration({ ready, settled, rowsKey }: Restorat
     if (action.kind === "none") return;
 
     if (action.kind === "row" && row && target) {
+      // Found it, so say which one it was. Set here rather than in
+      // `rememberOrderReturn` so an order that never comes back into view is
+      // never marked — the mark is a pointer at something on screen.
+      setHighlighted(target.orderId);
       const rect = row.getBoundingClientRect();
       window.scrollTo({
         top: scrollTopForRow({
@@ -206,4 +243,6 @@ export function useOrdersScrollRestoration({ ready, settled, rowsKey }: Restorat
 
     window.scrollTo({ top: fallbackY, left: 0, behavior: "auto" });
   }, [ready, settled, rowsKey]);
+
+  return { highlightedOrderId };
 }

@@ -20,6 +20,7 @@
 
 import { stripLeadingZeros } from "@/lib/shams/normalize";
 import type { ItemAvailability } from "@/lib/shams/availability";
+import { parseInvoiceNumbers } from "./utils";
 
 /**
  * Where one invoice number has got to.
@@ -103,6 +104,19 @@ export interface InvoiceSummary {
 /** The identity of an invoice number: what makes two spellings one document. */
 export function invoiceKey(invoiceNo: string): string {
   return stripLeadingZeros(invoiceNo.trim());
+}
+
+/**
+ * The identity of a whole `invoice_no` field — the set of documents it names.
+ *
+ * Order-independent and spelling-independent, so `"22138, 22139"`,
+ * `"22139,22138"` and `"022138, 22139"` all produce one signature. Comparing two
+ * of these is how the form tells "the agent has changed the invoice number" from
+ * "the agent has retyped the same number", which decides both whether a fresh
+ * lookup is owed and whether the result may be recorded against the order.
+ */
+export function invoiceNoSignature(invoiceNo: string | null | undefined): string {
+  return parseInvoiceNumbers(invoiceNo).map(invoiceKey).sort().join(",");
 }
 
 /**
