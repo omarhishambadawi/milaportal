@@ -458,6 +458,45 @@ export function useOrderForm(mode: "create" | "edit") {
           .eq("id", id!);
         if (error) throw error;
         toast.success("Order updated");
+        /**
+         * Record what is on screen against the order that now names it.
+         *
+         * The same call `create` makes above, for the same reason, and its
+         * absence here is what let the Orders list contradict the order page.
+         *
+         * An invoice number does not identify a document on its own — the
+         * **branch** identifies it too. `0064714` is a March walk-in worth 18.40
+         * at P0127 and today's Call Centre document worth 110.00 at P0217. An
+         * order raised against the wrong branch therefore records a real but
+         * wrong document, and correcting the branch is as much a change of
+         * document as correcting the number.
+         *
+         * Nothing re-recorded it. `trg_sync_order_invoice_flags` fires on
+         * `invoice_no` alone and re-derives from the activity log, which still
+         * held the old branch's answer; and the page's own reconciliation is
+         * withheld while the form disagrees with the stored row, precisely so an
+         * unsaved edit cannot write to the order. So the correction waited for
+         * whoever next opened the order — which in the reported case was 17
+         * seconds after the agent had already gone back to the list and seen it
+         * still saying Non Call Centre.
+         *
+         * Saving is the moment the edit stops being a draft, so it is the moment
+         * to record: the documents have already been resolved on screen, they
+         * are the ones the order now names, and the server reconciles the value,
+         * the flag and the status from them before the navigation below.
+         *
+         * Not fatal, exactly as on create. The order is saved either way and the
+         * next open still reconciles it.
+         */
+        try {
+          await recordInvoiceVerification(id!, shamsInvoices.invoices);
+        } catch (err: any) {
+          toast.warning(
+            err?.message
+              ? `Order updated. The invoice could not be recorded yet: ${err.message}`
+              : "Order updated. The invoice could not be recorded yet; it will be picked up when the order is next opened.",
+          );
+        }
       }
       qc.invalidateQueries({ queryKey: queryKeys.orders.all() });
       qc.invalidateQueries({ queryKey: queryKeys.dashboard.all() });
