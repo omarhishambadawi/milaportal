@@ -48,3 +48,52 @@ export interface ShamsCrmIdentity {
   branchCode: string | null;
   username: string | null;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Offers                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A branch row of `GET /products/{item_code}/available-branches`.
+ *
+ * The response carries more than this — `available_qty`, `price_without_tax`,
+ * distance, and a `branch` object with address, coordinates, `whatsapp` and
+ * `maps_url`. Only the fields below are declared, because only they are read:
+ * `available_qty` in particular is deliberately absent, so CRM availability
+ * cannot drift into a view where MIS stock is the authority.
+ */
+export interface RawCrmBranchOfferRow {
+  branch?: { code?: string };
+  price?: number;
+  offer_percent?: number;
+  offer_display?: string;
+  after_offer_price?: number;
+}
+
+export interface RawCrmAvailableBranchesResponse {
+  item_code?: string;
+  branches?: RawCrmBranchOfferRow[];
+}
+
+/**
+ * Offer pricing for one item at one branch.
+ *
+ * Separate from `ShamsProduct` on purpose: an offer is branch-specific and
+ * time-varying, while the catalog is reference data cached for six hours.
+ * `docs/shams/api-discovery.md` §11.4.
+ *
+ * There is no offer id, name, validity window or eligibility rule — the API
+ * exposes none, so none is modelled.
+ */
+export interface ShamsCrmOffer {
+  itemCode: string;
+  /** `P` + 4 digits, the same identifier MIS stock rows use. */
+  branchCode: string;
+  /** List price before the offer, as the CRM reports it. */
+  price: number;
+  offerPercent: number;
+  /** Preformatted by the API, e.g. `"25.00%"`. */
+  offerDisplay: string;
+  /** The price to charge. Taken from the API, never recomputed. */
+  afterOfferPrice: number;
+}

@@ -29,6 +29,7 @@ import {
   shamsGetInvoices,
   shamsGetInvoiceStock,
   shamsGetProduct,
+  shamsGetProductOffers,
   shamsSearchProducts,
 } from "@/lib/shams.functions";
 
@@ -46,6 +47,8 @@ const SEARCH_STALE_MS = 5 * 60_000;
 const PRODUCT_STALE_MS = 60_000;
 /** Matches the server's stock cache — the half of an invoice+stock read that moves. */
 const STOCK_STALE_MS = 60_000;
+/** Matches the server's offer cache. A promotional price is not reference data. */
+const OFFERS_STALE_MS = 60_000;
 /**
  * Branch discovery is the most expensive call on the page — one sweep of every
  * branch — and its answer (which branches ever held document N) does not move
@@ -152,6 +155,30 @@ export function useProductDetail(itemCode: string | null, enabled = true) {
     queryFn: ({ signal }) => productFn({ data: { itemCode: itemCode as string }, signal }),
     enabled: enabled && Boolean(itemCode),
     staleTime: PRODUCT_STALE_MS,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+}
+
+/**
+ * CRM offer pricing for one opened product.
+ *
+ * Separate from `useProductDetail` on purpose. Offers are an enhancement: this
+ * query failing, or the CRM not being configured at all, must leave the stock
+ * table exactly as it is — so it loads alongside rather than in front, and its
+ * error state is simply "no offers".
+ *
+ * Held for the server's own 60 s offer TTL rather than the catalog's hours: an
+ * offer is a live price.
+ */
+export function useProductOffers(itemCode: string | null, enabled = true) {
+  const offersFn = useServerFn(shamsGetProductOffers);
+
+  return useQuery({
+    queryKey: queryKeys.shams.productOffers(itemCode ?? ""),
+    queryFn: () => offersFn({ data: { itemCode: itemCode as string } }),
+    enabled: enabled && Boolean(itemCode),
+    staleTime: OFFERS_STALE_MS,
     refetchOnWindowFocus: false,
     retry: false,
   });

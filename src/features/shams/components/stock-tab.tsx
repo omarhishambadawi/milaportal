@@ -40,11 +40,13 @@ import { fmtSAR } from "@/lib/branches";
 import { cn } from "@/lib/utils";
 import { filterBranchStock, summariseStock } from "@/lib/shams/search";
 import type { ShamsBranchStock, ShamsProduct } from "@/lib/shams/types";
+import type { ShamsCrmOffer } from "@/lib/shams-crm/types";
 import {
   MIN_QUERY_LENGTH,
   useBranchLabels,
   useDebounced,
   useProductDetail,
+  useProductOffers,
   useProductSearch,
   type BranchLabel,
 } from "@/features/shams/hooks/use-shams-data";
@@ -179,6 +181,17 @@ export function StockTab({
   const stock = useMemo(() => result?.stock ?? [], [result]);
 
   const { data: branchLabels } = useBranchLabels();
+
+  /**
+   * CRM offer pricing for this item, loaded alongside the MIS stock rather than
+   * after them. A failure here is silent by construction: `offers` is empty and
+   * the table renders exactly as it did before offers existed.
+   */
+  const offersQuery = useProductOffers(selected?.itemCode ?? null);
+  const offers = useMemo(() => {
+    const rows = offersQuery.data?.ok ? offersQuery.data.offers : [];
+    return new Map(rows.map((offer) => [offer.branchCode, offer]));
+  }, [offersQuery.data]);
 
   /** Branch filter over rows already in memory — never a request. */
   const [branchFilter, setBranchFilter] = useState("");
@@ -347,7 +360,7 @@ export function StockTab({
           {visible.length === 0 ? (
             <EmptyState>No branch matches “{deferredFilter.trim()}”.</EmptyState>
           ) : (
-            <StockTable rows={visible} labels={branchLabels} />
+            <StockTable rows={visible} labels={branchLabels} offers={offers} />
           )}
         </>
       )}
@@ -454,6 +467,34 @@ function Stat({
 }
 
 /** `P0304` → `Buraydah`, when the portal knows the branch. */
+/**
+ * One branch's promotional price.
+ *
+ * `afterOfferPrice` is what the branch charges and `price` is what it was, so the
+ * new figure carries the weight and the old one is struck through beside it. The
+ * percentage comes from the API preformatted (`offer_display`), so nothing is
+ * recomputed here — a discount this component derived could disagree with the
+ * one the till applies.
+ *
+ * Renders nothing at all without an offer. A branch with no promotion shows an
+ * em-dash rather than a zero, which would read as "free".
+ */
+function OfferPrice({ offer }: { offer: ShamsCrmOffer | undefined }) {
+  if (!offer) return <span className="text-muted-foreground">—</span>;
+
+  return (
+    <span className="inline-flex items-baseline gap-1.5">
+      <span className="text-xs text-muted-foreground line-through tabular-nums">
+        {fmtSAR(offer.price)}
+      </span>
+      <span className="font-semibold tabular-nums">{fmtSAR(offer.afterOfferPrice)}</span>
+      <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+        {offer.offerDisplay}
+      </span>
+    </span>
+  );
+}
+
 function branchCity(labels: Map<string, BranchLabel> | undefined, code: string): string | null {
   const hit = labels?.get(code);
   if (!hit) return null;
@@ -471,10 +512,20 @@ function branchCity(labels: Map<string, BranchLabel> | undefined, code: string):
 const StockTable = memo(function StockTable({
   rows,
   labels,
+  offers,
 }: {
   rows: ShamsBranchStock[];
   labels: Map<string, BranchLabel> | undefined;
+  /** Offer pricing by branch code. Empty when there is none, or none loaded. */
+  offers: Map<string, ShamsCrmOffer>;
 }) {
+  /**
+   * The Offer column appears only when a visible row actually has one, so a
+   * product without promotions renders the table exactly as before rather than
+   * growing a column of dashes.
+   */
+  const anyOffer = rows.some((row) => offers.has(row.branchCode));
+
   return (
     <>
       <Card className="hidden overflow-hidden md:block">
@@ -483,6 +534,7 @@ const StockTable = memo(function StockTable({
             <colgroup>
               <col className="w-[16%]" />
               <col />
+              {anyOffer && <col className="w-[22%]" />}
               <col className="w-[14%]" />
               <col className="w-[20%]" />
             </colgroup>
@@ -490,6 +542,7 @@ const StockTable = memo(function StockTable({
               <tr className="border-b border-border/60 bg-muted/30 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                 <th className={TH}>Branch</th>
                 <th className={TH}>City</th>
+                {anyOffer && <th className={cn(TH, "text-right")}>Offer</th>}
                 <th className={cn(TH, "text-right")}>Qty</th>
                 <th className={cn(TH, "text-right")}>Status</th>
               </tr>
@@ -507,6 +560,11 @@ const StockTable = memo(function StockTable({
                     <td className={cn(TD, "truncate py-2.5")} dir="auto">
                       {city ?? <span className="text-muted-foreground">—</span>}
                     </td>
+                    {anyOffer && (
+                      <td className={cn(TD, "py-2.5 text-right")}>
+                        <OfferPrice offer={offers.get(row.branchCode)} />
+                      </td>
+                    )}
                     <td
                       className={cn(
                         "px-3 py-2.5 text-right text-base font-semibold tabular-nums",
@@ -532,6 +590,7 @@ const StockTable = memo(function StockTable({
           <ul className="divide-y divide-border/30">
             {rows.map((row) => {
               const city = branchCity(labels, row.branchCode);
+              const offer = offers.get(row.branchCode);
               return (
                 <li
                   key={row.branchCode}
@@ -542,6 +601,11 @@ const StockTable = memo(function StockTable({
                     <p className="mt-0.5 truncate text-[15px]" dir="auto">
                       {city ?? <span className="text-muted-foreground">—</span>}
                     </p>
+                    {offer && (
+                      <p className="mt-1">
+                        <OfferPrice offer={offer} />
+                      </p>
+                    )}
                   </div>
                   <div className="flex shrink-0 items-center gap-3">
                     {row.quantity > 0 && (

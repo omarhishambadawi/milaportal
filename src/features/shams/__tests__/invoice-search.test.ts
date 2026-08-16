@@ -154,6 +154,43 @@ describe("MIS keeps the operational reads", () => {
   });
 });
 
+describe("CRM offer pricing sits beside MIS stock, never on top of it", () => {
+  it("loads offers as their own query, not inside the stock read", () => {
+    // Independent, so a slow or unhappy CRM cannot delay the stock table.
+    expect(stockTab).toContain("useProductOffers(selected?.itemCode ?? null)");
+    expect(stockTab).toContain("useProductDetail(");
+  });
+
+  it("treats an offer failure as no offers rather than an error state", () => {
+    expect(stockTab).toContain("offersQuery.data?.ok ? offersQuery.data.offers : []");
+  });
+
+  it("matches offers to stock rows by branch code", () => {
+    expect(stockTab).toContain("offers.get(row.branchCode)");
+    expect(stockTab).toContain("offers.has(row.branchCode)");
+  });
+
+  it("shows the Offer column only when a row actually has one", () => {
+    expect(stockTab).toContain("const anyOffer = rows.some((row) => offers.has(row.branchCode))");
+    expect(stockTab).toContain("{anyOffer &&");
+  });
+
+  it("renders the API's after-offer price rather than deriving one", () => {
+    expect(stockTab).toContain("fmtSAR(offer.afterOfferPrice)");
+    expect(stockTab).toContain("offer.offerDisplay");
+    // No arithmetic on the discount anywhere in the view.
+    expect(stockTab).not.toMatch(/offerPercent\s*[/*]/);
+  });
+
+  it("still renders quantity from the MIS row", () => {
+    // The stock number is `row.quantity` — an MIS field. CRM availability is not
+    // mapped at all, so it cannot reach this table.
+    expect(stockTab).toContain('{out ? "0" : row.quantity}');
+    expect(stockTab).not.toContain("available_qty");
+    expect(stockTab).not.toContain("availableQty");
+  });
+});
+
 describe("the search survives Back", () => {
   it("keeps the query, the tab and the open product in the URL", () => {
     expect(shamsRoute).toContain("validateSearch:");

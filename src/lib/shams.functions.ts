@@ -36,6 +36,7 @@ import type { InvoiceBranchMatch } from "@/lib/shams/types";
 import type { ItemAvailability } from "@/lib/shams/availability";
 import type { CatalogDiagnostics } from "@/lib/shams/diagnostics.server";
 import type { CrmSearchDiagnostics, CrmSmokeResult } from "@/lib/shams-crm/diagnostics.server";
+import type { ShamsCrmOffer } from "@/lib/shams-crm/types";
 
 /* -------------------------------------------------------------------------- */
 /* Gates                                                                       */
@@ -534,4 +535,44 @@ export const shamsCrmSearchDiagnostic = createServerFn({ method: "POST" })
 
     const { runCrmSearchDiagnostic } = await import("@/lib/shams-crm/diagnostics.server");
     return runCrmSearchDiagnostic();
+  });
+
+export interface ShamsProductOffersResult {
+  ok: boolean;
+  offers: ShamsCrmOffer[];
+  error: ShamsFailure | null;
+}
+
+/**
+ * CRM offer pricing for one opened product.
+ *
+ * Deliberately its own function rather than another field on `shamsGetProduct`:
+ * offers are an optional enhancement, and pairing them with the MIS stock read
+ * would let a slow or unhappy CRM delay the stock table an agent came for. The
+ * two load independently and the page renders without this one.
+ *
+ * Same permission as every other product read. Returns only the fields the row
+ * renders — never a raw CRM response, never CRM availability.
+ */
+export const shamsGetProductOffers = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => itemInput.parse(d))
+  .handler(async ({ context, data }): Promise<ShamsProductOffersResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertPermission(supabase, userId, "view_shams_mis");
+
+    const { isCrmCatalogAvailable } = await import("@/lib/shams-crm/products.server");
+    // Not configured is not an error: the page simply shows no offers.
+    if (!isCrmCatalogAvailable()) return { ok: false, offers: [], error: null };
+
+    try {
+      const { getProductOffer } = await import("@/lib/shams-crm/offers.server");
+      return { ok: true, offers: await getProductOffer(data.itemCode), error: null };
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith("Forbidden")) throw err;
+      const { ShamsCrmError } = await import("@/lib/shams-crm/client.server");
+      const kind = err instanceof ShamsCrmError ? err.kind : "unknown";
+      // The message is this module's, not the CRM's.
+      return { ok: false, offers: [], error: { kind, message: "Offer pricing is unavailable." } };
+    }
   });

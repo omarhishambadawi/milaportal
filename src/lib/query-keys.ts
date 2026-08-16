@@ -243,6 +243,9 @@ export const queryKeys = {
     productSearch: (q: string) => ["shams", "product-search", q] as const,
     /** One item's detail + branch stock, fetched together by the server fn. */
     product: (itemCode: string) => ["shams", "product", itemCode] as const,
+    /** One item's CRM offer pricing. Separate from `product` because it is a
+     *  live price on a 60 s server cache, not catalog reference data. */
+    productOffers: (itemCode: string) => ["shams", "product-offers", itemCode] as const,
     /** One document lookup. Branch is part of the identity — document numbers
      *  repeat across warehouses. */
     invoices: (branchCode: string, docNo: string) =>
