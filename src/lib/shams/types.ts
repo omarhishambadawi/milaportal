@@ -176,6 +176,92 @@ export interface RawSalesResponse extends RawEnvelope {
 }
 
 /* -------------------------------------------------------------------------- */
+/* CRM                                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A row of `GET /api/v2/crm/data?mobileno=&fromdt=&todt=&page=&per_page=`.
+ *
+ * The shape is **denormalized**: there is no customer object and no nested
+ * history. Every row repeats the same five customer fields and then carries one
+ * purchased line. A customer who bought three items on two invoices comes back
+ * as six rows with identical `Id`/`Name`/`Mobileno`/points.
+ *
+ * Two properties of this payload are worth stating before anyone extends it:
+ *
+ * 1. **The branch arrives under an empty key.** The JSON literally contains
+ *    `"": "P0215-JEDDAH"` between `Lm_Availbale_Value` and `Customer` — the
+ *    upstream query has an unaliased column. It is not a capture artefact and it
+ *    is not renamed here, because `""` is the name. TypeScript can hold it and
+ *    `normalize.ts` reads `row[""]`; see `CRM_BRANCH_KEY` there.
+ * 2. **`Lm_Availbale_Points` is spelled that way upstream.** The transposition
+ *    is the API's. Correcting it here would mean reading a field that does not
+ *    exist.
+ *
+ * Numbers arrive as strings, as everywhere else in this API.
+ */
+export interface RawCrmRow {
+  /** Loyalty customer id, e.g. `"333181"`. */
+  Id?: string;
+  /** The loyalty member's name — *not* the invoice's account label. */
+  Name?: string;
+  /** Observed with a leading zero (`"0555555555"`), unlike the query. */
+  Mobileno?: string;
+  /** Available loyalty points, e.g. `"1261.400000"`. */
+  Lm_Availbale_Points?: string;
+  /** Monetary value of those points in SAR, e.g. `"12.614000"`. */
+  Lm_Availbale_Value?: string;
+  /**
+   * The document's account label, e.g. `"CASH IN BOX"`.
+   *
+   * The same document read through `sales/details` reports `Customer_Name`
+   * `"CASH IN BOX-"`, so the two agree on the account but not character for
+   * character. Nothing derives the call-centre flag from this field — that rule
+   * belongs to `sales/details`, whose suffix this one does not reproduce.
+   */
+  Customer?: string;
+  /** Document number, unpadded — e.g. `"22635"`. Pairs with the branch. */
+  InvNo?: string;
+  /** `"2026-07-03 00:00:00"`, no timezone, same as `sales/details`. */
+  InvDate?: string;
+  Itm_Cd?: string;
+  Itm_Name?: string;
+  Qty?: string;
+  /**
+   * The branch, under its empty key: `"P0215-JEDDAH"` — code, hyphen, city.
+   *
+   * Declared as an index signature because `""` cannot be written as a normal
+   * property name in a way that reads clearly. Deliberately not widened to
+   * `[key: string]` over `unknown`: that would let any misspelt field access
+   * type-check.
+   */
+  "": string | undefined;
+}
+
+/**
+ * `GET /api/v2/crm/data` envelope.
+ *
+ * The only endpoint in either capture with a `pagination` block — and the
+ * block is half-empty. `total` and `total_pages` were `null` in every captured
+ * response, including one that returned rows, so **the size of a result set is
+ * not knowable from this API**. `page` and `per_page` are echoed and are real.
+ * See `crm.server.ts` for how "is there another page" is answered without them.
+ */
+export interface RawCrmResponse extends RawEnvelope {
+  pagination?: {
+    page?: number | null;
+    per_page?: number | null;
+    /** Always `null` in every capture. Not relied on. */
+    total?: number | null;
+    /** Always `null` in every capture. Not relied on. */
+    total_pages?: number | null;
+  } | null;
+  /** The API echoes the parameters it actually understood. */
+  parameters?: Record<string, string | null>;
+  data?: RawCrmRow[];
+}
+
+/* -------------------------------------------------------------------------- */
 /* Normalized models — what MilaServ code consumes                             */
 /* -------------------------------------------------------------------------- */
 
@@ -295,4 +381,71 @@ export interface ShamsInvoice {
   totalCost: number;
   profit: number;
   items: ShamsInvoiceItem[];
+}
+
+/* -------------------------------------------------------------------------- */
+/* CRM — normalized                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The loyalty customer behind a mobile number.
+ *
+ * Lifted off the repeated columns of `crm/data` rows — every row carries the
+ * same five — so a result set yields exactly one of these, or none.
+ */
+export interface ShamsCrmCustomer {
+  /** Loyalty customer id, as returned. */
+  customerId: string;
+  name: string | null;
+  /** As the API returns it (leading zero included), not as it was queried. */
+  mobile: string | null;
+  availablePoints: number;
+  /** SAR value of `availablePoints`. */
+  pointsValue: number;
+}
+
+/**
+ * One purchased line from a customer's history.
+ *
+ * A line, not an invoice: `crm/data` returns one row per item, so a two-item
+ * invoice appears twice with the same `docNo`. Nothing is folded into documents
+ * here — unlike `sales/details`, this payload carries no document totals to
+ * fold, and the history is genuinely a list of things the customer bought.
+ */
+export interface ShamsCrmSale {
+  /** Document number, unpadded. Identifies an invoice only with `branchCode`. */
+  docNo: string | null;
+  /** ISO-8601 where parseable, else the raw string. No timezone — see `toIsoDateTime`. */
+  docDate: string | null;
+  /**
+   * Warehouse code parsed out of the branch label, e.g. `P0215`.
+   *
+   * `null` when the label is missing or does not carry a recognisable code —
+   * which is the signal that this row cannot be linked to a document, since
+   * `sales/details` needs a `wh_cd`.
+   */
+  branchCode: string | null;
+  /** The city half of the branch label, e.g. `JEDDAH`. */
+  branchCity: string | null;
+  /** The label verbatim, e.g. `P0215-JEDDAH`. Shown when it cannot be split. */
+  branchLabel: string | null;
+  itemCode: string | null;
+  itemName: string | null;
+  quantity: number;
+}
+
+/**
+ * One page of a customer's sales history.
+ *
+ * `hasMore` rather than a page count, because the API supplies no total —
+ * see `RawCrmResponse`.
+ */
+export interface ShamsCrmHistory {
+  /** `null` when the mobile number matched no customer. */
+  customer: ShamsCrmCustomer | null;
+  sales: ShamsCrmSale[];
+  page: number;
+  perPage: number;
+  /** Whether a further page is worth asking for. Inferred; see `crm.server.ts`. */
+  hasMore: boolean;
 }

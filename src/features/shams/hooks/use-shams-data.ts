@@ -26,6 +26,7 @@ import { stripLeadingZeros } from "@/lib/shams/normalize";
 import { cityEnglish } from "@/features/branches/normalize";
 import {
   shamsFindInvoiceBranches,
+  shamsGetCustomerHistory,
   shamsGetInvoices,
   shamsGetInvoiceStock,
   shamsGetProduct,
@@ -351,6 +352,99 @@ export function useInvoiceLookup(lookup: InvoiceLookup | null, enabled = true) {
       }),
     enabled: enabled && Boolean(lookup?.branchCode && lookup?.docNo),
     staleTime: 0,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* CRM — customer sales history                                                */
+/* -------------------------------------------------------------------------- */
+
+export interface CustomerHistoryQuery {
+  /** As typed. The server canonicalizes it; the browser does not guess. */
+  mobile: string;
+  /** `YYYYMMDD`. */
+  fromDate: string;
+  toDate: string;
+  page: number;
+  perPage: number;
+}
+
+/**
+ * One page of a customer's purchase history.
+ *
+ * `enabled` on a **submitted** query, never on the form state: this is a
+ * customer lookup, so a per-keystroke version would ask the MIS about a
+ * different person on every digit — and about a series of real customers on the
+ * way to the intended one. It runs when the agent submits, and again when they
+ * page.
+ *
+ * `placeholderData` keeps the previous page on screen while the next one loads,
+ * so paging does not blank the table and jump the scroll position back to the
+ * top. The table dims instead — see `isFetching` in the tab.
+ *
+ * Cached for the session but never considered fresh: `staleTime: 0` means
+ * returning to a page the agent has already seen shows it instantly and then
+ * re-checks it, which is right for transactional data that someone may be
+ * reading precisely because it just changed.
+ */
+export function useCustomerHistory(query: CustomerHistoryQuery | null) {
+  const historyFn = useServerFn(shamsGetCustomerHistory);
+
+  return useQuery({
+    queryKey: queryKeys.shams.crmHistory(
+      query?.mobile ?? "",
+      query?.fromDate ?? "",
+      query?.toDate ?? "",
+      query?.page ?? 1,
+      query?.perPage ?? 0,
+    ),
+    queryFn: ({ signal }) =>
+      historyFn({
+        data: {
+          mobile: query?.mobile as string,
+          fromDate: query?.fromDate as string,
+          toDate: query?.toDate as string,
+          page: query?.page as number,
+          perPage: query?.perPage as number,
+        },
+        signal,
+      }),
+    enabled: Boolean(query),
+    staleTime: 0,
+    /**
+     * Keep the previous page on screen while the next one loads — but **only**
+     * when it is the same search.
+     *
+     * A bare `(previous) => previous` is the obvious version and it is wrong
+     * here. It carries data across *any* key change, so searching a second
+     * customer would render the first one's name, mobile number and purchases
+     * until the new response landed: someone else's identity shown under the
+     * number the agent just typed. Paging is the one transition where the rows
+     * on screen still belong to the query being made, so it is the only one
+     * allowed to keep them.
+     *
+     * The key is `[..., mobile, fromDate, toDate, page, perPage]`; everything
+     * but `page` has to match.
+     */
+    placeholderData: (previous, previousQuery) => {
+      if (!previous || !previousQuery) return undefined;
+      const before = previousQuery.queryKey as readonly unknown[];
+      const now = queryKeys.shams.crmHistory(
+        query?.mobile ?? "",
+        query?.fromDate ?? "",
+        query?.toDate ?? "",
+        query?.page ?? 1,
+        query?.perPage ?? 0,
+      );
+      const sameSearch =
+        before[2] === now[2] &&
+        before[3] === now[3] &&
+        before[4] === now[4] &&
+        before[6] === now[6];
+      return sameSearch ? previous : undefined;
+    },
     refetchOnWindowFocus: false,
     retry: false,
   });

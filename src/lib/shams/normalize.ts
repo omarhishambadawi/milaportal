@@ -14,14 +14,25 @@
  *
  * The customer *label* is the deliberate exception, because it carries the sales
  * channel. See `groupInvoices` for which field that is and why.
+ *
+ * `crm/data` is the other exception, and a larger one: identifying a customer is
+ * the entire point of that endpoint, so `groupCrmHistory` keeps the name, the
+ * mobile number and the loyalty id. Nothing is dropped there because there is
+ * nothing incidental to drop — every field it returns was asked for. The
+ * boundary that matters for the CRM is therefore not this one but the
+ * permission gate in `shams.functions.ts` and the rule that a mobile number is
+ * never written into a URL. See `docs/shams/api-discovery.md` §6.
  */
 
 import type {
+  RawCrmRow,
   RawProductInfo,
   RawProductSearchRow,
   RawSalesRow,
   RawStockRow,
   ShamsBranchStock,
+  ShamsCrmCustomer,
+  ShamsCrmSale,
   ShamsInvoice,
   ShamsInvoiceItem,
   ShamsProduct,
@@ -359,4 +370,135 @@ export function groupInvoices(rows: RawSalesRow[] | undefined | null): ShamsInvo
   }
 
   return invoices;
+}
+
+/* -------------------------------------------------------------------------- */
+/* CRM                                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The key the branch label arrives under: the empty string.
+ *
+ * `crm/data` rows carry `"": "P0215-JEDDAH"` — an unaliased column in the
+ * upstream query. Named here so the two places that touch it say why, rather
+ * than leaving a bare `row[""]` that reads like a bug.
+ */
+export const CRM_BRANCH_KEY = "" as const;
+
+/**
+ * `"P0215-JEDDAH"` → `{branchCode: "P0215", branchCity: "JEDDAH"}`.
+ *
+ * The code is what matters: it is the same identifier space as `branches.
+ * branch_no` and as `sales/details`'s `wh_cd`, so it is what makes a history row
+ * linkable to a document. A label that does not start with a branch code yields
+ * `branchCode: null` and keeps the label intact — better to show an agent a
+ * string the MIS printed than to drop the branch entirely, but a `null` code
+ * means nothing downstream will try to look the document up.
+ */
+export function parseCrmBranch(value: unknown): {
+  branchCode: string | null;
+  branchCity: string | null;
+  branchLabel: string | null;
+} {
+  const label = toText(value);
+  if (!label) return { branchCode: null, branchCity: null, branchLabel: null };
+  // Anchored: the code is a prefix, and the rest — however it is punctuated —
+  // is the city. Splitting on every hyphen would mangle a hyphenated city name.
+  const match = /^([A-Za-z]\d{4})\s*-\s*(.*)$/.exec(label);
+  if (!match) return { branchCode: null, branchCity: null, branchLabel: label };
+  return {
+    branchCode: match[1].toUpperCase(),
+    branchCity: toText(match[2]),
+    branchLabel: label,
+  };
+}
+
+/**
+ * A mobile number in the form `crm/data` is queried with.
+ *
+ * The capture is unambiguous about there being *two* forms: the request asked
+ * for `mobileno=555555555` and the response reported `Mobileno: "0555555555"`.
+ * The API is therefore queried in the nine-digit national form without its
+ * leading zero, and every way an agent might have the number written down —
+ * `0555555555`, `+966 55 555 5555`, `00966555555555`, `055-555-5555` — has to
+ * arrive at it.
+ *
+ * So: keep the digits, drop an international prefix, drop the trunk zero.
+ * Returns `null` for anything that does not then look like a Saudi mobile.
+ *
+ * The nine-digits-starting-five shape is this portal's own input guard, not a
+ * rule the API published — `crm/data` answers `200` with `count: 0` for a
+ * number it does not know, so without a guard a typo is indistinguishable from
+ * a customer who has never shopped. It is deliberately the only thing here that
+ * is not read off the wire.
+ */
+export function normalizeCrmMobile(value: unknown): string | null {
+  const text = toText(value);
+  if (!text) return null;
+
+  let digits = text.replace(/\D+/g, "");
+  // `00` then country code, or a bare country code. Applied in that order so
+  // `00966…` loses both and not just the first.
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.startsWith("966")) digits = digits.slice(3);
+  digits = digits.replace(/^0+/, "");
+
+  return /^5\d{8}$/.test(digits) ? digits : null;
+}
+
+/**
+ * Fold a `crm/data` response into one customer and their purchased lines.
+ *
+ * The payload repeats the customer on every row, so the customer is read from
+ * the first row that actually names one and the rest are read as history. Rows
+ * are **not** grouped into documents: unlike `sales/details` there are no
+ * document totals to fold — a row is one item on one invoice, and that is the
+ * granularity the history is genuinely at.
+ *
+ * Order is preserved as returned. The API expresses no other ordering, and
+ * re-sorting client-side would fight the paging, which is server-side.
+ */
+export function groupCrmHistory(rows: RawCrmRow[] | undefined | null): {
+  customer: ShamsCrmCustomer | null;
+  sales: ShamsCrmSale[];
+} {
+  if (!Array.isArray(rows)) return { customer: null, sales: [] };
+
+  let customer: ShamsCrmCustomer | null = null;
+  const sales: ShamsCrmSale[] = [];
+
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+
+    // First row carrying an id wins. An id is the one field that makes the
+    // customer identifiable, so a row without one cannot establish identity —
+    // and the points would then belong to nobody.
+    if (customer === null) {
+      const customerId = toText(row.Id);
+      if (customerId) {
+        customer = {
+          customerId,
+          name: toText(row.Name),
+          mobile: toText(row.Mobileno),
+          availablePoints: toQuantity(row.Lm_Availbale_Points),
+          pointsValue: toMoney(row.Lm_Availbale_Value),
+        };
+      }
+    }
+
+    const branch = parseCrmBranch(row[CRM_BRANCH_KEY]);
+    const docNo = toText(row.InvNo);
+    sales.push({
+      docNo: docNo === null ? null : stripLeadingZeros(docNo),
+      docDate: toIsoDateTime(row.InvDate),
+      branchCode: branch.branchCode,
+      branchCity: branch.branchCity,
+      branchLabel: branch.branchLabel,
+      itemCode: toText(row.Itm_Cd),
+      itemName: toText(row.Itm_Name),
+      quantity: toQuantity(row.Qty),
+    });
+  }
+
+  return { customer, sales };
 }

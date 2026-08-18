@@ -112,6 +112,11 @@ const shamsRoute = readFileSync(
   "utf8",
 );
 
+const customersTab = readFileSync(
+  fileURLToPath(new URL("../components/customers-tab.tsx", import.meta.url)),
+  "utf8",
+);
+
 const catalog = readFileSync(
   fileURLToPath(new URL("../../../lib/shams/catalog.server.ts", import.meta.url)),
   "utf8",
@@ -194,13 +199,32 @@ describe("CRM offer pricing sits beside MIS stock, never on top of it", () => {
 describe("the search survives Back", () => {
   it("keeps the query, the tab and the open product in the URL", () => {
     expect(shamsRoute).toContain("validateSearch:");
-    expect(shamsRoute).toContain('tab: s.tab === "invoices" ? "invoices" : "stock"');
+    // The tab is validated against the known set rather than a two-way
+    // conditional, so adding a tab cannot silently make it unreachable by URL.
+    expect(shamsRoute).toContain("TAB_IDS.includes(s.tab as TabId)");
     expect(shamsRoute).toContain('q: typeof s.q === "string"');
     expect(shamsRoute).toContain('item: typeof s.item === "string"');
   });
 
+  it("carries a handed-over document as identifiers, never as a person", () => {
+    // A document number and a warehouse code may live in the address bar. The
+    // mobile number that found them may not — the Customers tab keeps its
+    // search in local state for exactly that reason.
+    expect(shamsRoute).toContain('doc: typeof s.doc === "string" && DOC_NO.test(s.doc.trim())');
+    expect(shamsRoute).toContain(
+      'typeof s.branch === "string" && BRANCH_CODE.test(s.branch.trim())',
+    );
+    expect(shamsRoute).not.toContain("s.mobile");
+    expect(customersTab).not.toContain("useNavigate");
+    expect(customersTab).not.toContain("navigate({");
+  });
+
   it("pushes when a product is opened, so Back returns to the results", () => {
     expect(shamsRoute).toContain("put({ item: product?.itemCode }, false)");
+  });
+
+  it("pushes when an invoice is opened from a history, so Back returns to it", () => {
+    expect(shamsRoute).toContain('put({ tab: "invoices", doc: docNo, branch: branchCode }, false)');
   });
 
   it("replaces while typing, so Back is not a walk through every keystroke", () => {
@@ -221,5 +245,71 @@ describe("the search survives Back", () => {
   it("publishes only the settled term, not the keystroke", () => {
     expect(stockTab).toContain("const term = useDebounced(draft);");
     expect(stockTab).toContain("if (term !== query) onQueryChange(term);");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Customer enrichment must not become the page's next N+1.
+ *
+ * The failure mode is specific and easy to reintroduce: an invoice view that
+ * "just looks the customer up" turns a page of results into one CRM request per
+ * row — each one a lookup of identifiable data. The design forecloses it by
+ * having no invoice → customer request at all, and these assertions are what
+ * hold that shape in place.
+ */
+describe("enrichment costs no extra requests", () => {
+  it("makes exactly one CRM request per submitted search", () => {
+    // One hook, one page. Not `useQueries`, not a call inside a map.
+    expect(customersTab.match(/useCustomerHistory\(/g)).toHaveLength(1);
+    expect(customersTab).not.toContain("useQueries");
+  });
+
+  it("never asks the CRM from the Invoices tab", () => {
+    // The invoice view reads a link the CRM search already established; it has
+    // no route to the endpoint itself.
+    expect(source).not.toContain("useCustomerHistory");
+    expect(source).not.toContain("shamsGetCustomerHistory");
+    expect(source).toContain("recallInvoiceCustomer(invoice.branchCode, invoice.docNo)");
+  });
+
+  it("only the CRM history writes a customer link", () => {
+    // `rememberInvoiceCustomer` is called with the customer from the same
+    // response that named the document. Nothing derives one from an invoice.
+    expect(customersTab).toContain(
+      "rememberInvoiceCustomer(sale.branchCode, sale.docNo, customer)",
+    );
+    expect(source).not.toContain("rememberInvoiceCustomer");
+  });
+
+  it("opens a handed-over document at its branch, so no sweep runs", () => {
+    // The handoff carries the branch, which is what makes it one request
+    // instead of 137 — the same fast path a manually named branch takes.
+    expect(source).toContain("setSubmittedBranch(handoffBranch)");
+    expect(source).toContain("setBranchCode(handoffBranch)");
+  });
+});
+
+/**
+ * A search must never render the previous customer.
+ *
+ * `placeholderData` exists so paging does not blank the table. The bug it can
+ * quietly introduce is worse than the flicker it fixes: carried across a change
+ * of *number*, it shows one person's name, mobile and purchases under the number
+ * an agent just typed for someone else.
+ */
+describe("customer results never outlive their search", () => {
+  it("keeps the previous page only when the search itself is unchanged", () => {
+    expect(hook).toContain("placeholderData: (previous, previousQuery) =>");
+    // Everything but the page index has to match before rows are reused.
+    expect(hook).toContain("before[2] === now[2]");
+    expect(hook).toContain("before[6] === now[6]");
+    expect(hook).toContain("return sameSearch ? previous : undefined;");
+  });
+
+  it("does not carry data across every key change", () => {
+    expect(hook).not.toContain("placeholderData: (previous) => previous");
+    expect(hook).not.toContain("keepPreviousData");
   });
 });

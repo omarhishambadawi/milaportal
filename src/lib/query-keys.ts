@@ -266,6 +266,21 @@ export const queryKeys = {
      */
     invoiceStock: (branchCode: string, docNo: string) =>
       ["shams", "invoice-stock", branchCode, docNo] as const,
+    /**
+     * One page of one customer's CRM purchase history.
+     *
+     * Every argument is part of the identity because every one of them changes
+     * the upstream request: the same number over a different window, or the
+     * same window at a different page size, is a different answer. Paging
+     * through and back is then free, which is the point — the server does not
+     * cache this read.
+     *
+     * The mobile number lives in this key and therefore in the browser's query
+     * cache, which is memory the agent's own session already holds. It must not
+     * travel any further than that: never into the URL, never into a log.
+     */
+    crmHistory: (mobile: string, fromDate: string, toDate: string, page: number, perPage: number) =>
+      ["shams", "crm-history", mobile, fromDate, toDate, page, perPage] as const,
   },
 
   /**

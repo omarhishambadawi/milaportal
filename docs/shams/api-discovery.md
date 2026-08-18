@@ -1,7 +1,13 @@
 # Shams Pharmacy MIS — API Discovery
 
-**Source of truth:** a HAR capture of `mis.shamspharmacy.com`, 2026-08-13, 21
-requests, captured through Chrome DevTools by a non-privileged MIS account.
+**Source of truth:** HAR captures of `mis.shamspharmacy.com`, taken through
+Chrome DevTools by a non-privileged MIS account —
+
+| date | requests | what it added |
+| --- | --- | --- |
+| 2026-08-13 | 21 | the original surface: catalog, stock, `sales/details` |
+| 2026-08-13 | 27 | the Bearer token exchange (§0) |
+| 2026-08-19 | 22 | the first **populated** `crm/data` row (§6), and the evidence that an invoice cannot identify its customer (§6a) |
 
 Everything below was read off that capture. Anything the capture does not
 demonstrate is marked **`NOT VERIFIED`** rather than inferred — including things
@@ -354,31 +360,141 @@ two decimals in `normalize.ts`; the float noise is the API's, not ours.
 
 ---
 
-## 6. CRM — discovered, deliberately not implemented
+## 6. CRM — customer sales history
 
 ```
-GET /api/v2/crm/data?mobileno=<msisdn>&fromdt=YYYYMMDD&todt=YYYYMMDD&page=1&per_page=100
+GET /api/v2/crm/data?mobileno=<9 digits>&fromdt=YYYYMMDD&todt=YYYYMMDD&page=1&per_page=100
 ```
+
+**Updated 2026-08-19** from a third capture (22 requests) which, unlike the two
+before it, returned a **populated** row. The row schema below is therefore no
+longer `NOT VERIFIED`, and the endpoint is now implemented — see
+`lib/shams/crm.server.ts` and the Customers tab.
+
+**The customer name and mobile number below are placeholders.** The capture holds
+a real person's; this file follows the same rule that keeps the HAR itself out of
+the repository. Every other value is verbatim, including the empty key.
+
+A loyalty lookup keyed on mobile number. It is the only endpoint in any capture
+that takes a date range in a confirmed format and the only one that pages.
+
+### 6.1 The response
 
 ```jsonc
 { "success": true,
   "pagination": { "page": 1, "per_page": 100, "total": null, "total_pages": null },
-  "parameters": { "fromdt": "20260813", "todt": "20260813", "mobileno": "<msisdn>" },
-  "count": 0, "data": [] }
+  "parameters": { "fromdt": "20260602", "todt": "20260818", "mobileno": "555555555" },
+  "count": 1,
+  "data": [{
+    "Id": "333181",
+    "Name": "SAMI",
+    "Mobileno": "0555555555",
+    "Lm_Availbale_Points": "1261.400000",
+    "Lm_Availbale_Value": "12.614000",
+    "": "P0215-JEDDAH",
+    "Customer": "CASH IN BOX",
+    "InvNo": "22635",
+    "InvDate": "2026-07-03 00:00:00",
+    "Itm_Cd": "10611030",
+    "Itm_Name": "MOUNJARO KWIKPEN 10 MG/0.6ML 2.4ML*1 AA",
+    "Qty": "1.00"
+  }] }
 ```
 
-A customer purchase-history lookup keyed on mobile number. This is the **only**
-endpoint in the capture that takes a date range in a confirmed format
-(`YYYYMMDD`) and the only one with a pagination block.
+The shape is **denormalized**: there is no customer object and no nested
+history. Every row repeats the five customer columns and carries one purchased
+line, so a customer with three items across two invoices returns six rows.
 
-**All three captured calls returned `count: 0` with an empty `data` array, so the
-row schema is `NOT VERIFIED`** — it is not known what a populated CRM row
-contains.
+### 6.2 Three things that are easy to get wrong
 
-**Not implemented**, on two grounds: it is not needed for the product/stock/
-invoice objective, and it is a bulk lookup of identifiable customer data sitting
-behind an endpoint that requires no authentication. Implementing it should be a
-separate, deliberate decision.
+1. **The branch arrives under an empty key.** The JSON literally contains
+   `"": "P0215-JEDDAH"` — an unaliased column in the upstream query. It is not a
+   capture artefact. `normalize.ts` reads `row[""]` through `CRM_BRANCH_KEY` and
+   splits it into a code and a city; the code is the same identifier space as
+   `branches.branch_no` and `sales/details`'s `wh_cd`.
+2. **`Lm_Availbale_Points` is spelled that way upstream.** The transposition is
+   the API's. Correcting it reads `undefined`.
+3. **The mobile number has two forms.** The request asked for
+   `mobileno=555555555`; the response reported `Mobileno: "0555555555"`. The
+   query form is the nine-digit national number **without** the trunk zero.
+   `normalizeCrmMobile` converts every way an agent might write it.
+
+### 6.3 Pagination — half a block
+
+`page` and `per_page` are echoed and real. `total` and `total_pages` were
+`null` in **every** captured response, including the one that returned a row, so
+**the size of a result set is not knowable from this API**.
+
+Consequences, accepted rather than papered over:
+
+- No page count and no "jump to last" — rendering "Page 2 of 7" would mean
+  inventing the 7.
+- "Is there another page" is inferred from a full page, measured against the
+  `per_page` the API **echoed** rather than the one requested, so a clamped page
+  size cannot silently truncate a history.
+- `per_page=100` is the only size any capture demonstrates. The UI also offers
+  25 and 50; the parameter is confirmed and honoured, and nothing downstream
+  trusts the requested number.
+
+### 6.4 Authentication — this capture carried none
+
+**No request in the 2026-08-19 capture sent an `Authorization` header or a
+cookie**, including `crm/data` and `sales/details`, and all returned `200`. That
+does not reverse §0 — the portal still performs a token exchange, and a live
+`product/search` without a token still answers `401` — but it means the
+anonymous exposure §0 describes is at least partly still open on these paths.
+
+It changes nothing in this integration: every read goes through the
+Bearer-authenticated client either way, which is correct whether or not the
+endpoint insists.
+
+### 6.5 Access
+
+Gated on `view_shams_mis`, the page-level key. This endpoint returns more
+identifiable data than any other read here — a name, a mobile number and a
+purchase history — so a narrower permission is a defensible follow-up. It was
+not introduced now because a new permission means a migration plus a
+`has_permission()` change plus the parity script, and a key enforced only in the
+frontend would be worse than reusing the one the server already checks.
+
+---
+
+## 6a. Linking a customer to an invoice — one direction only
+
+The obvious enrichment, **invoice → customer, is not available**, and this
+capture is what establishes that.
+
+`sales/details` offers six customer-ish fields. On document 22635 they hold:
+
+| field | value |
+| --- | --- |
+| `PatCd` | `null` (header) / `""` (item row) |
+| `CusName` | `""` |
+| `Customer` | `""` |
+| `Customer_Name` | `"CASH IN BOX-"` |
+| `Customer_Code` | `"14-00-0052"` |
+| `Cus_Cd` | `null` |
+
+**None of them is a mobile number**, and the two that are populated identify the
+*till* (`CASH IN BOX-`) and a ledger account (`14-00-0052`), not the person. The
+CRM says the buyer of that same document was `SAMI`, `0555555555`. There is no
+key to join on, so any invoice → customer lookup would be a guess.
+
+The relationship runs the other way and is explicit: a `crm/data` row names the
+document its line was sold on — `InvNo` `"22635"` with branch `"P0215-JEDDAH"`
+— and the capture shows the MIS operator following exactly that link, calling
+`sales/details?doc_no_start=22635&doc_no_end=22635&wh_cd=p0215` immediately
+afterwards.
+
+So enrichment is implemented in that direction only. Opening a document from a
+customer's history records the pairing in
+`features/shams/invoice-customer-link.ts`, and the Invoices tab shows the
+customer for that document alone. A document reached any other way shows none,
+because for that document nothing has established one.
+
+This also disposes of the N+1 risk: enrichment costs **zero** extra requests.
+The customer was already on screen when the agent clicked, so there is no
+per-invoice CRM call to deduplicate, batch or cache.
 
 ---
 
@@ -394,10 +510,17 @@ none leaks into the serialized model.
 is the label the MIS portal itself displays as "Customer" (§5.2.1), and the only
 field carrying the sales-channel suffix that identifies a call-centre document.
 
+**Partly answered, 2026-08-19.** The open question below was what
+`Customer_Name` holds for a **cash walk-in** document. The 2026-08-19 capture
+contains one — document 22635, `Doc_type: "Cash"` — and the field reads
+`"CASH IN BOX-"`: an account, not a person, even though the CRM knows that
+sale's buyer by name. One document is not a guarantee, so the risk below is
+narrowed rather than closed.
+
 The residual risk is stated rather than hidden: every observed value names an
-*account* (`HOME DELIVERY-Call Centre`, `NUPCO / …-Call Centre`), but no capture
-proves what this field holds for a **cash walk-in** document, where a pharmacy
-system could plausibly put a person's name. If one ever does, it is now visible
+*account* (`HOME DELIVERY-Call Centre`, `NUPCO / …-Call Centre`, `CASH IN BOX-`),
+and no capture yet shows a person's name in this field. If one ever does, it is
+now visible
 in the portal UI, and this decision has to be revisited.
 
 The client logs method, path, status and duration only. **Query values are never
@@ -436,8 +559,11 @@ values: `NOT VERIFIED`.
 | Pure normalization, invoice grouping | `src/lib/shams/normalize.ts` |
 | Product search / info / stock + caching | `src/lib/shams/catalog.server.ts` |
 | Invoice lookup + query validation | `src/lib/shams/sales.server.ts` |
+| CRM customer history + query validation | `src/lib/shams/crm.server.ts` |
 | Authenticated, RBAC-gated server functions | `src/lib/shams.functions.ts` |
-| Tests against captured payloads | `src/lib/shams/__tests__/normalize.test.ts` |
+| Invoice ← customer provenance (browser, in memory) | `src/features/shams/invoice-customer-link.ts` |
+| Customers tab | `src/features/shams/components/customers-tab.tsx` |
+| Tests against captured payloads | `src/lib/shams/__tests__/normalize.test.ts`, `src/lib/shams/__tests__/crm-history.test.ts` |
 
 **Auth:** module-scoped token cache with single-flight, a 60 s refresh skew, and
 on 401 a forced refresh plus one retry (a second 401 raises `auth_failed` rather
@@ -447,8 +573,12 @@ integration out (`errcode 60002`), which is evidenced. Nothing here evidences a
 rate limit, and an L2 tier would mean a migration and a table holding a live
 bearer token.
 
-**Cache TTLs:** search 5 min, info 15 min, stock 60 s, invoices uncached.
-In-memory and per-isolate — no migration, no table of third-party data.
+**Cache TTLs:** search 5 min, info 15 min, stock 60 s, invoices uncached,
+**CRM history uncached**. In-memory and per-isolate — no migration, no table of
+third-party data. The CRM read is left uncached deliberately: it is a submitted
+lookup rather than per-keystroke traffic, and a server-side cache of it would be
+a store of identifiable customer data keyed by mobile number — something to add
+on purpose with a reason, not as a performance reflex.
 
 **Adding an endpoint** means a typed wire shape in `types.ts`, a pure mapper in
 `normalize.ts`, a fetch in the relevant `*.server.ts`, and a gated server

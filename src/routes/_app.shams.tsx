@@ -15,11 +15,17 @@
  * Shams access could not be granted or withdrawn on its own. The check here
  * decides which doors are visible; the server decides which are locked.
  *
- * ## Two tabs, not three
+ * ## The tabs
  *
- * The standalone Products tab was removed: Branch Stock already begins with the
- * same catalog search, and an agent looking a product up almost always wants to
- * know where it is. One flow instead of two that overlapped.
+ * Branch Stock, Invoices, Customers — three questions an agent actually
+ * arrives with. There is no standalone Products tab: Branch Stock already
+ * begins with the same catalog search, and an agent looking a product up almost
+ * always wants to know where it is.
+ *
+ * Customers and Invoices are joined in one direction only. A customer's history
+ * names the documents they bought on, so a row there opens the document; the
+ * reverse is not offered, because `sales/details` returns no way to identify
+ * the person behind a document. See `features/shams/invoice-customer-link.ts`.
  */
 
 import { useEffect, useState } from "react";
@@ -32,6 +38,7 @@ import type { ShamsProduct } from "@/lib/shams/types";
 import { useProductDetail } from "@/features/shams/hooks/use-shams-data";
 import { StockTab } from "@/features/shams/components/stock-tab";
 import { InvoicesTab } from "@/features/shams/components/invoices-tab";
+import { CustomersTab } from "@/features/shams/components/customers-tab";
 
 export const Route = createFileRoute("/_app/shams")({
   head: () => ({ meta: [{ title: "Shams MIS — MilaServ Portal" }] }),
@@ -49,17 +56,26 @@ export const Route = createFileRoute("/_app/shams")({
    * rendering for.
    */
   validateSearch: (s: Record<string, unknown>): ShamsSearch => ({
-    tab: s.tab === "invoices" ? "invoices" : "stock",
+    tab: TAB_IDS.includes(s.tab as TabId) ? (s.tab as TabId) : "stock",
     q: typeof s.q === "string" && s.q.trim() !== "" ? s.q.slice(0, 80) : undefined,
     item: typeof s.item === "string" && ITEM_CODE.test(s.item.trim()) ? s.item.trim() : undefined,
+    doc: typeof s.doc === "string" && DOC_NO.test(s.doc.trim()) ? s.doc.trim() : undefined,
+    branch:
+      typeof s.branch === "string" && BRANCH_CODE.test(s.branch.trim())
+        ? s.branch.trim().toUpperCase()
+        : undefined,
   }),
   component: ShamsPage,
 });
 
-type TabId = "stock" | "invoices";
+type TabId = "stock" | "invoices" | "customers";
+const TAB_IDS: readonly TabId[] = ["stock", "invoices", "customers"];
 
 /** What a URL may carry as an item code. Digits, and not unboundedly many. */
 const ITEM_CODE = /^[0-9]{1,20}$/;
+/** Same shapes the server validates, so a hand-edited URL cannot reach it. */
+const DOC_NO = /^[0-9]{1,12}$/;
+const BRANCH_CODE = /^[A-Za-z][0-9]{4}$/;
 
 interface ShamsSearch {
   tab: TabId;
@@ -67,6 +83,16 @@ interface ShamsSearch {
   q?: string;
   /** The open product's item code. */
   item?: string;
+  /**
+   * A document handed to the Invoices tab, with the branch that holds it.
+   *
+   * Written when an agent opens an invoice from a customer's history. Both are
+   * business identifiers — a document number and a warehouse code — and neither
+   * identifies a person, which is why they are allowed in the address bar when
+   * the mobile number that found them is not.
+   */
+  doc?: string;
+  branch?: string;
 }
 
 function ShamsPage() {
@@ -75,7 +101,7 @@ function ShamsPage() {
 
   const canShams = hasPerm(role, perms, "view_shams_mis");
 
-  const { tab, q, item } = Route.useSearch();
+  const { tab, q, item, doc, branch } = Route.useSearch();
   const navigate = Route.useNavigate();
 
   /**
@@ -129,6 +155,7 @@ function ShamsPage() {
         <TabsList>
           <TabsTrigger value="stock">Branch Stock</TabsTrigger>
           <TabsTrigger value="invoices">Invoices</TabsTrigger>
+          <TabsTrigger value="customers">Customers</TabsTrigger>
         </TabsList>
 
         <TabsContent value="stock" className="space-y-4">
@@ -144,7 +171,25 @@ function ShamsPage() {
         </TabsContent>
 
         <TabsContent value="invoices" className="space-y-4">
-          <InvoicesTab />
+          <InvoicesTab
+            handoff={doc && branch ? { docNo: doc, branchCode: branch } : null}
+            // A search the agent typed themselves replaces the handed-over
+            // document, so the URL stops claiming one. Without this, leaving the
+            // tab and coming back would re-open the document they had moved on
+            // from.
+            onManualSearch={() => put({ doc: undefined, branch: undefined }, true)}
+          />
+        </TabsContent>
+
+        <TabsContent value="customers" className="space-y-4">
+          <CustomersTab
+            // A *push*, so Back returns the agent to the history they came
+            // from — the invoice is a detour from the customer, not a new
+            // starting point.
+            onOpenInvoice={(branchCode, docNo) =>
+              put({ tab: "invoices", doc: docNo, branch: branchCode }, false)
+            }
+          />
         </TabsContent>
       </Tabs>
     </div>

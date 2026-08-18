@@ -37,6 +37,7 @@ import type { ItemAvailability } from "@/lib/shams/availability";
 import type { CatalogDiagnostics } from "@/lib/shams/diagnostics.server";
 import type { CrmSearchDiagnostics, CrmSmokeResult } from "@/lib/shams-crm/diagnostics.server";
 import type { ShamsCrmOffer } from "@/lib/shams-crm/types";
+import type { ShamsCrmHistory } from "@/lib/shams/types";
 
 /* -------------------------------------------------------------------------- */
 /* Gates                                                                       */
@@ -135,6 +136,23 @@ const invoiceInput = z.object({
 const invoiceStockInput = z.object({
   branchCode: z.string().min(1).max(16),
   docNo: z.string().min(1).max(12),
+});
+/**
+ * One page of one customer's history.
+ *
+ * `mobile` is accepted in whatever form the agent typed and canonicalized
+ * server-side — the browser is not trusted to know the wire format, and a
+ * rejected number should say so through the same `invalid_query` path as a bad
+ * date. `perPage` is bounded here as well as in `crm.server.ts`: this is the
+ * boundary the browser actually reaches, and it decides how much of the MIS one
+ * call reads.
+ */
+const crmHistoryInput = z.object({
+  mobile: z.string().min(1).max(24),
+  fromDate: z.string().length(8),
+  toDate: z.string().length(8),
+  page: z.number().int().min(1).max(1000).optional(),
+  perPage: z.number().int().min(1).max(100).optional(),
 });
 
 /* -------------------------------------------------------------------------- */
@@ -416,6 +434,73 @@ export const shamsFindInvoiceBranches = createServerFn({ method: "POST" })
         probed: 0,
         error: await toFailure(err),
       };
+    }
+  });
+
+/* -------------------------------------------------------------------------- */
+/* CRM — customer sales history                                                */
+/* -------------------------------------------------------------------------- */
+
+export interface ShamsCustomerHistoryResult {
+  ok: boolean;
+  configured: boolean;
+  /** `null` for a failure *and* for a number that matched nobody. */
+  history: ShamsCrmHistory | null;
+  error: ShamsFailure | null;
+}
+
+/**
+ * One page of a customer's purchase history, by mobile number.
+ *
+ * Note which CRM this is. The portal talks to two systems whose names collide:
+ * `lib/shams-crm/*` is PharmacyCRM at `shams-crm.cloud`, which supplies the
+ * product catalog and offer pricing, while this is the MIS's own
+ * `/api/v2/crm/data` — the loyalty and purchase-history endpoint on the same
+ * host as `sales/details`. They share no transport, no credentials and no
+ * types.
+ *
+ * ## Access
+ *
+ * `view_shams_mis`, the page-level key every other handler in this file uses.
+ * That is a deliberate choice rather than an oversight: this endpoint returns
+ * more identifiable data than any other read here — a name, a mobile number and
+ * a purchase history — and the case for a narrower key is real. It is not made
+ * here because a new permission is a migration plus a `has_permission()` change
+ * plus the parity script, and inventing one that only the frontend enforces
+ * would be worse than reusing the one the server already checks. See
+ * `docs/shams/api-discovery.md` §6.
+ *
+ * ## Why one page per call
+ *
+ * Paging is the API's, and it stays the API's. Fetching every page server-side
+ * to hand the browser one array would turn an agent's first search into an
+ * unbounded number of upstream requests for a history they will read the first
+ * screen of.
+ */
+export const shamsGetCustomerHistory = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => crmHistoryInput.parse(d))
+  .handler(async ({ context, data }): Promise<ShamsCustomerHistoryResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertPermission(supabase, userId, "view_shams_mis");
+
+    const { isConfigured } = await import("@/lib/shams/client.server");
+    if (!isConfigured()) {
+      return { ok: false, configured: false, history: null, error: null };
+    }
+
+    try {
+      const { getCustomerHistory } = await import("@/lib/shams/crm.server");
+      const history = await getCustomerHistory({
+        mobile: data.mobile,
+        fromDate: data.fromDate,
+        toDate: data.toDate,
+        page: data.page,
+        perPage: data.perPage,
+      });
+      return { ok: true, configured: true, history, error: null };
+    } catch (err) {
+      return { ok: false, configured: true, history: null, error: await toFailure(err) };
     }
   });
 

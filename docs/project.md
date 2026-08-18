@@ -2643,10 +2643,12 @@ layer: it changes only where the rows they consume come from.
 ## Shams Pharmacy MIS Integration
 
 Read access to the pharmacy chain's own MIS: product catalog, per-branch stock,
-and sales documents. Discovery evidence and the full field-by-field schema are in
-[`docs/shams/api-discovery.md`](./shams/api-discovery.md), derived from a HAR
-capture of the live portal (2026-08-13, 21 requests). The HAR is **not** in the
-repository and must never be committed.
+sales documents, and customer loyalty history. Discovery evidence and the full
+field-by-field schema are in
+[`docs/shams/api-discovery.md`](./shams/api-discovery.md), derived from three HAR
+captures of the live portal (2026-08-13 ×2, 2026-08-19). The HARs are **not** in
+the repository and must never be committed — they contain a live credential
+exchange and customer mobile numbers.
 
 ### Authentication — Bearer token
 
@@ -2695,8 +2697,62 @@ src/lib/shams/search.ts          PURE: wildcard product matching, branch filter,
 src/lib/shams/availability.ts    PURE: invoice line ↔ branch stock join, the four stock states
 src/lib/shams/catalog.server.ts  product search (over the CRM catalog) / info / stock + caches
 src/lib/shams/sales.server.ts    invoice lookup + query validation + branch discovery fan-out
+src/lib/shams/crm.server.ts      customer sales history (crm/data) + query validation, uncached
 src/lib/shams.functions.ts       authenticated, RBAC-gated server functions
 ```
+
+### CRM Sales History — `GET /api/v2/crm/data`
+
+A loyalty lookup keyed on **mobile number** over a date range, paged. It backs
+the **Customers** tab on `/shams`: search a number and a From/To range, see the
+customer summary (name, mobile, customer ID, available points and their SAR
+value) and their purchase history — invoice number, date, branch, item code,
+item name, quantity.
+
+Three properties of the payload drive the implementation, all read off the
+2026-08-19 capture rather than assumed:
+
+- **The branch arrives under an empty JSON key** (`"": "P0215-JEDDAH"`) — an
+  unaliased upstream column. `normalize.ts` reads it via `CRM_BRANCH_KEY` and
+  splits it into a branch code and a city.
+- **`total` and `total_pages` are always `null`**, so there is no page count to
+  render. Paging offers Previous/Next only, and "another page exists" is inferred
+  from a full page measured against the `per_page` the API **echoed**.
+- **The mobile number has two forms**: queried as nine digits (`555555555`),
+  returned with the trunk zero (`0555555555`). `normalizeCrmMobile` accepts every
+  way an agent writes it and canonicalizes server-side.
+
+The read is **uncached server-side** on purpose — a submitted lookup, not
+per-keystroke traffic, and a cache would be a store of identifiable customer data
+keyed by mobile number. **The mobile number is never written to the URL**; the
+Customers tab keeps its search in local state, unlike the other tabs.
+
+### Invoice ↔ customer — one direction only
+
+**An invoice cannot identify its customer, and the portal does not pretend
+otherwise.** `sales/details` returns six customer-ish fields and none is a mobile
+number: on the captured document they hold `Customer_Name: "CASH IN BOX-"` (a
+till) and `Customer_Code: "14-00-0052"` (a ledger account), while the CRM knows
+that same sale's buyer as `SAMI / 0555555555`. There is no key to join on.
+
+The relationship the API *does* establish runs the other way: a `crm/data` row
+names the document its line was sold on (`InvNo` + branch). So opening an invoice
+from a customer's history records that pairing in
+`src/features/shams/invoice-customer-link.ts` — an in-memory, tab-local map keyed
+`(branchCode, docNo)` — and the Invoices tab shows Customer Name / Mobile /
+Customer ID for that document alone. A document reached by typing its number
+shows none, because nothing has established one.
+
+Consequences worth keeping true:
+
+- **Enrichment costs zero extra requests.** The customer was already on screen
+  when the agent clicked, so there is no per-invoice CRM call and therefore no
+  N+1 to batch or deduplicate.
+- The handoff travels as `?doc=&branch=` — business identifiers, not a person.
+- The invoice's own label is now shown as **Account** rather than Customer,
+  because that is what it is.
+- Points are shown on the customer summary only, never on an invoice: a live
+  loyalty balance is not a property of a past document.
 
 ### Shams CRM — a second Shams system
 
@@ -2863,9 +2919,16 @@ document (`getStockForItems`, which reuses the same 60 s entries).
 ### UI — `/shams`
 
 Route `src/routes/_app.shams.tsx`, feature module `src/features/shams/`
-(`components/`, `hooks/use-shams-data.ts`, `constants.ts`). **Two** tabs —
-Branch Stock and Invoices — reading exclusively through the server functions in
+(`components/`, `hooks/use-shams-data.ts`, `constants.ts`,
+`invoice-customer-link.ts`). **Three** tabs — Branch Stock, Invoices and
+Customers — reading exclusively through the server functions in
 `lib/shams.functions.ts`; no Shams request is ever made from the browser.
+
+Tab, product and a handed-over document live in the URL (`?tab=&q=&item=&doc=&branch=`),
+validated on the way in so a hand-edited address cannot reach a state the page
+cannot render. The Customers tab's own search deliberately does **not**: a mobile
+number in the address bar ends up in history, in a pasted link and in a
+screen-share.
 
 The standalone **Products** tab was removed: Branch Stock already opens with the
 same `product/search` lookup, and an agent who finds a product almost always

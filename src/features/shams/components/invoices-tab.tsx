@@ -32,7 +32,7 @@
  * number alone still works exactly as before — it is simply the difference
  * between asking every warehouse and asking the right one.
  *
- * ## Customer and Call Centre status
+ * ## Account and Call Centre status
  *
  * Both are shown, and the raw `customer` label is shown *unaltered* next to the
  * derived status rather than being replaced by it. The label is what a person
@@ -43,6 +43,11 @@
  *
  * `Non Call Centre` is destructive-toned on purpose: it is the state that makes
  * an invoice ineligible, and an agent needs to see that without reading.
+ *
+ * It is labelled **Account** rather than Customer because that is what it is: a
+ * till or channel account (`CASH IN BOX-`, `HOME DELIVERY-Call Centre`), not a
+ * person. The row above it names a person, and only when Shams has said who —
+ * see `CrmCustomerRow`.
  */
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
@@ -71,7 +76,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { fmtSAR } from "@/lib/branches";
 import { cn } from "@/lib/utils";
-import type { InvoiceBranchMatch, ShamsInvoice } from "@/lib/shams/types";
+import type { InvoiceBranchMatch, ShamsCrmCustomer, ShamsInvoice } from "@/lib/shams/types";
+import { recallInvoiceCustomer } from "@/features/shams/invoice-customer-link";
 import {
   useBranchLabels,
   useInvoiceBranches,
@@ -81,7 +87,26 @@ import {
 import { TD, TH } from "@/features/shams/constants";
 import { EmptyState, ErrorState, NotConfiguredState } from "./states";
 
-export function InvoicesTab() {
+export interface InvoiceHandoff {
+  docNo: string;
+  branchCode: string;
+}
+
+export function InvoicesTab({
+  handoff = null,
+  onManualSearch,
+}: {
+  /**
+   * A document opened from a customer's history, with the branch that holds it.
+   *
+   * Both halves come from one `crm/data` row, so this is the direct path: the
+   * branch is known, the 137-branch sweep is skipped, and the document is one
+   * request away.
+   */
+  handoff?: InvoiceHandoff | null;
+  /** Called when the agent searches for something themselves instead. */
+  onManualSearch?: () => void;
+} = {}) {
   const [docNo, setDocNo] = useState("");
   /** The number actually searched for. Typing never triggers a sweep. */
   const [submitted, setSubmitted] = useState<string | null>(null);
@@ -126,6 +151,26 @@ export function InvoicesTab() {
   const invoiceResult = invoiceQuery.data;
   const invoices = useMemo(() => invoiceResult?.invoices ?? [], [invoiceResult]);
 
+  /**
+   * Adopt a document handed over from a customer's history.
+   *
+   * Sets exactly the state a manual search with the branch named would set, so
+   * everything below — the direct lookup, the empty state, the wording under
+   * the form — behaves identically whether the agent typed the pair or arrived
+   * with it. The dependencies are the two values themselves, so this runs when
+   * a *different* document is handed over and not on every render.
+   */
+  const handoffDoc = handoff?.docNo ?? null;
+  const handoffBranch = handoff?.branchCode ?? null;
+  useEffect(() => {
+    if (!handoffDoc || !handoffBranch) return;
+    setDocNo(handoffDoc);
+    setBranchFilter(handoffBranch);
+    setSubmittedBranch(handoffBranch);
+    setBranchCode(handoffBranch);
+    setSubmitted(handoffDoc);
+  }, [handoffDoc, handoffBranch]);
+
   const canSubmit = docNo.trim() !== "";
 
   const submit = (e: FormEvent) => {
@@ -136,6 +181,9 @@ export function InvoicesTab() {
     setBranchCode(branchFilter);
     setSubmittedBranch(branchFilter);
     setSubmitted(docNo.trim());
+    // This search is the agent's own, so the handed-over document is no longer
+    // what the tab is about.
+    onManualSearch?.();
   };
 
   const reset = () => {
@@ -630,6 +678,41 @@ function CallCentreBadge({ isCallCentre, compact }: { isCallCentre: boolean; com
   );
 }
 
+/**
+ * The loyalty customer behind this document — when one has been established.
+ *
+ * Not a lookup. `recallInvoiceCustomer` answers from what a CRM history already
+ * said about this exact `(branch, document)` pair, so this costs no request and
+ * returns `null` for every document reached by number. That `null` is the
+ * normal case and renders as nothing at all: there is no "customer unknown"
+ * row, because `sales/details` was never going to tell us.
+ *
+ * Shown *beside* the document's own account label rather than instead of it.
+ * They are different facts — `CASH IN BOX-` is the till the sale rang through,
+ * `SAMI` is the person who earned the points — and collapsing them would lose
+ * the channel information the Invoices tab exists to show.
+ */
+function CrmCustomerRow({ customer }: { customer: ShamsCrmCustomer }) {
+  return (
+    <div className="flex flex-wrap items-start gap-x-6 gap-y-3 border-b border-border/60 bg-primary/[0.03] px-4 py-3">
+      <Meta label="Customer Name">
+        <span className="break-words" dir="auto">
+          {customer.name ?? "—"}
+        </span>
+      </Meta>
+      <Meta label="Mobile Number">
+        <span className="font-mono">{customer.mobile ?? "—"}</span>
+      </Meta>
+      <Meta label="Customer ID">
+        <span className="font-mono">{customer.customerId}</span>
+      </Meta>
+      <p className="basis-full text-[11px] leading-snug text-muted-foreground">
+        From this customer's Shams loyalty history, which lists this invoice.
+      </p>
+    </div>
+  );
+}
+
 function InvoiceCard({
   invoice,
   branchCity,
@@ -637,6 +720,8 @@ function InvoiceCard({
   invoice: ShamsInvoice;
   branchCity: string | null;
 }) {
+  const crmCustomer = recallInvoiceCustomer(invoice.branchCode, invoice.docNo);
+
   return (
     <Card className={cn("overflow-hidden", invoice.cancelled && "border-destructive/50")}>
       <CardContent className="p-0">
@@ -656,8 +741,10 @@ function InvoiceCard({
           </Meta>
         </div>
 
+        {crmCustomer && <CrmCustomerRow customer={crmCustomer} />}
+
         <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3 border-b border-border/60 px-4 py-3">
-          <Meta label="Customer">
+          <Meta label="Account">
             {/* Never truncated: the suffix that decides the status lives at the
                 end of the label, and Arabic account names are long. */}
             <span className="break-words" dir="auto">
