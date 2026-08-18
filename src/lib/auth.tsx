@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import { hasPerm } from "@/lib/permissions";
@@ -64,16 +64,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<AppRole | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const loadProfile = async (uid: string) => {
-    const [{ data: p }, { data: r }] = await Promise.all([
-      // Uses SECURITY DEFINER RPC so sensitive columns (permissions,
-      // yeastar_ext) remain hidden from broad authenticated SELECT while
-      // still readable for the caller's own row.
-      supabase.rpc("get_my_profile" as any),
-      supabase.from("user_roles").select("role").eq("user_id", uid).maybeSingle(),
-    ]);
-    setProfile((Array.isArray(p) ? p[0] : p) as Profile | null);
-    setRole((r?.role as AppRole) ?? null);
+  /**
+   * The profile fetch currently in flight, if any, keyed by user.
+   *
+   * Bootstrap triggers this three times, which was measured rather than
+   * suspected: `onAuthStateChange` emits `SIGNED_IN` *and* `INITIAL_SESSION`
+   * for a restored session, each scheduling a load, and `getSession().then`
+   * awaits a third. Six requests — three `get_my_profile`, three `user_roles` —
+   * on every page load, all firing within about 7ms of one another.
+   *
+   * Coalescing the overlap is deliberately all this does. A later event with the
+   * same user (a token refresh an hour in, say) still re-reads the profile once
+   * the in-flight one settles, because that read is what notices an account
+   * deactivated or a password expired mid-session. Caching the result and
+   * skipping those would have removed four requests instead of two and quietly
+   * weakened a security gate; this removes exactly the duplicates.
+   */
+  const inFlight = useRef<{ uid: string; promise: Promise<void> } | null>(null);
+
+  const loadProfile = (uid: string, force = false): Promise<void> => {
+    const current = inFlight.current;
+    if (!force && current && current.uid === uid) return current.promise;
+
+    const promise = (async () => {
+      const [{ data: p }, { data: r }] = await Promise.all([
+        // Uses SECURITY DEFINER RPC so sensitive columns (permissions,
+        // yeastar_ext) remain hidden from broad authenticated SELECT while
+        // still readable for the caller's own row.
+        supabase.rpc("get_my_profile" as any),
+        supabase.from("user_roles").select("role").eq("user_id", uid).maybeSingle(),
+      ]);
+      setProfile((Array.isArray(p) ? p[0] : p) as Profile | null);
+      setRole((r?.role as AppRole) ?? null);
+    })().finally(() => {
+      if (inFlight.current?.promise === promise) inFlight.current = null;
+    });
+
+    inFlight.current = { uid, promise };
+    return promise;
   };
 
   useEffect(() => {
@@ -104,7 +132,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await supabase.auth.signOut();
     },
     refresh: async () => {
-      if (session?.user) await loadProfile(session.user.id);
+      // `force`, because the callers of this are observing a write they just
+      // made — `ForcePasswordChange` calls it to see its own
+      // `must_change_password` clear. Handing them a read that was already in
+      // flight before that write could return the pre-write row and leave the
+      // user staring at the change-password screen they just satisfied.
+      if (session?.user) await loadProfile(session.user.id, true);
     },
     hasPermission: (permission: string) => hasPerm(role, profile?.permissions, permission),
   };
