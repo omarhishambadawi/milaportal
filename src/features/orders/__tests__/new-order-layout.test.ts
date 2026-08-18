@@ -7,6 +7,12 @@
  * handful of decisions that are invisible in a type check, break silently, and
  * are exactly what a later edit tidying up class names would undo.
  *
+ * The source is `features/orders/components/order-form.tsx`. It used to be
+ * `routes/_app.orders.new.tsx`, which is also where the form itself used to
+ * live; the form moved out of the route file so it would stop shipping in the
+ * entry bundle, and this contract moved with it. Reading a route file that no
+ * longer holds the markup would make every assertion below vacuously pass.
+ *
  * Each one exists for a reason:
  *
  *   * the two columns must appear only where there is width for them, or a
@@ -24,7 +30,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const source = readFileSync(
-  fileURLToPath(new URL("../../../routes/_app.orders.new.tsx", import.meta.url)),
+  fileURLToPath(new URL("../components/order-form.tsx", import.meta.url)),
   "utf8",
 );
 

@@ -114,7 +114,7 @@ Nitro server entry  (src/server.ts)
 │   ├── components/              app shell + shared widgets
 │   │   └── ui/                  shadcn/ui (new-york style, 46 primitives)
 │   ├── features/                feature modules (see below)
-│   │   ├── branches/  call-center/  calls/  dashboard/
+│   │   ├── branches/  call-center/  calls/  complaints/  dashboard/
 │   │   ├── orders/    profile/      users/  yeastar-diagnostics/
 │   ├── hooks/use-mobile.tsx
 │   ├── integrations/supabase/   GENERATED: client, client.server, middleware, types
@@ -954,8 +954,11 @@ unmodified in structure and consumed through the `@/components/ui/*` alias.
   per aggregation query that settles (eleven of them) and each panel's props are
   `useMemo`d in `use-dashboard-data` / `use-monthly-growth`.
 - **Orders:** `copyable-order-no`, `invoice-cell`, `kpi-card`, `order-row`
-  (`memo`, one table row — see Orders Module → List), `order-activity-timeline`,
-  `status-badge`, `team-badge`.
+  (`memo`, one table row — see Orders Module → List), `order-form` (the whole
+  create/edit form, shared by `/orders/new` and `/orders/$id`),
+  `order-activity-timeline`, `status-badge`, `team-badge`.
+- **Complaints:** `complaint-form`, shared by `/complaints/$id` and
+  `/complaints/new` for the same reason as `order-form`.
 - **Users:** `users-table`, `users-toolbar`, `users-stat-cards`,
   `users-pagination`, `user-row-actions`, `create-user-dialog`,
   `edit-user-dialog`, `password-dialog`, `grant-owner-dialog`,
@@ -1890,6 +1893,26 @@ database. Every write invalidates both `orders.all()` and `dashboard.all()`.
 in `Asia/Riyadh` — `Today 12:31 PM` within the business day, the date before it.
 Rows carrying `details.automated` are attributed to their `source` (MilaPortal)
 and dotted in `success`; everything else names its actor.
+
+### The form lives in the feature module, not the route file
+
+`OrderForm` was exported from `routes/_app.orders.new.tsx` so `/orders/$id` could
+reuse it, and `ComplaintForm` from `routes/_app.complaints.$id.tsx` for
+`/complaints/new`. That is the one export shape this router punishes: the
+TanStack splitter moves a route's own `component` into a lazy chunk, but a second
+export has to stay in the route **shell**, and `routeTree.gen.ts` imports every
+shell eagerly. Both forms — and with them cmdk, zod, the invoice panel and the
+branch picker — were therefore in the entry bundle of every page, Dashboard
+included, and emitted a second time in the split chunk that referenced them.
+
+They live in `features/orders/components/order-form.tsx` and
+`features/complaints/components/complaint-form.tsx` now. Each route file is four
+lines: the route definition and a `component` that renders the form. Measured
+effect in the Bundle section below.
+
+`features/orders/__tests__/new-order-layout.test.ts` asserts the form's layout
+contract by reading its source, so it reads the new path — pointed at the old
+route file it would have gone on passing while asserting nothing.
 
 ### Complaints (sibling module)
 

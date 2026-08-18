@@ -36,9 +36,9 @@ import {
 } from "lucide-react";
 
 import { DateRangePicker } from "@/components/date-range-picker";
-import { SaudiSalesMap } from "@/components/saudi-sales-map";
 import { exportDashboard } from "@/features/dashboard/export";
 import { SalesChartsSkeleton } from "@/features/dashboard/components/sales-charts-skeleton";
+import { SaudiMapSkeleton } from "@/features/dashboard/components/saudi-map-skeleton";
 import { AnalyticsCard } from "@/features/dashboard/components/analytics-card";
 import {
   AnalyticsTable,
@@ -71,6 +71,19 @@ import { useMonthlyGrowth } from "@/features/dashboard/hooks/use-monthly-growth"
  */
 const SalesCharts = lazy(() =>
   import("@/features/dashboard/components/sales-charts").then((m) => ({ default: m.SalesCharts })),
+);
+
+/**
+ * The heat map, deferred for the same reason as the charts above.
+ *
+ * At 19.7KB it was the single largest source in this route's chunk — larger than
+ * the route component itself — and it sits below the charts, which are already
+ * behind a lazy boundary. Loading it eagerly meant the KPI cards at the top of
+ * the page waited on a map that is several screens down. `SaudiMapSkeleton`
+ * holds its exact geometry while it arrives, so nothing reflows.
+ */
+const SaudiSalesMap = lazy(() =>
+  import("@/components/saudi-sales-map").then((m) => ({ default: m.SaudiSalesMap })),
 );
 
 export const Route = createFileRoute("/_app/dashboard")({
@@ -294,7 +307,9 @@ function Dashboard() {
       <div>
         <SectionTitle title="Geographic distribution" icon={MapIcon} />
         <div className="mt-3">
-          <SaudiSalesMap cities={d.cityMapData} />
+          <Suspense fallback={<SaudiMapSkeleton />}>
+            <SaudiSalesMap cities={d.cityMapData} />
+          </Suspense>
         </div>
       </div>
 
