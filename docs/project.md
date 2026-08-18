@@ -504,11 +504,27 @@ Indexes include `orders_team_date_idx (team, order_date) INCLUDE (agent_id,
 status, order_type, invoice_value)` and `orders_agent_date_idx (agent_id,
 order_date) INCLUDE (…)` — index-only plans for the Calls conversion join.
 
+Plus six `gin_trgm_ops` indexes (`orders_*_trgm_idx`) on the columns
+`buildSearchOr()` and `orders_kpi_summary()` both search: `customer_name`,
+`customer_phone`, `invoice_no`, `display_no`, `branch_no`, `notes`. A search
+deliberately drops the date window, so what is left is a six-way OR of
+`ILIKE '%term%'` — unindexable by btree, and therefore a sequential scan for the
+page fetch, the KPI RPC and the export alike. All six columns are indexed and
+not just the likely ones, because the planner can only turn the OR into a
+`BitmapOr` if every branch has an index; one missing column sends the whole
+disjunction back to a seq scan. Orders are typed in by hand, so the GIN write
+cost is paid tens of times a day against a read that runs on every settled
+keystroke.
+
 ### `complaints`
 
 `id`, `display_no`, `complaint_date`, `agent_id`, `branch_no`, `category`,
 `status`, `resolution`, `description`, `customer_name`, `customer_phone`,
-timestamps.
+timestamps. The list and export name their columns rather than `select("*")`,
+leaving out `description` and `resolution` — the two unbounded text columns,
+neither of which the table renders. Search is indexed the same way as `orders`:
+six `complaints_*_trgm_idx` GIN indexes over `display_no`, `customer_name`,
+`customer_phone`, `branch_no`, `category`, `description`.
 
 ### `order_activity` / `complaint_activity`
 
@@ -888,9 +904,14 @@ unmodified in structure and consumed through the `@/components/ui/*` alias.
 - **Dashboard:** `stat-card`, `dash-kpi-card`, `analytics-card`,
   `analytics-table` (+ `Thead/Tbody/Th/Td/EmptyRow`), `delivery-matrix`,
   `horizontal-bar-panel`, `sales-charts` (lazy) + `sales-charts-skeleton`,
-  `section-title`.
-- **Orders:** `copyable-order-no`, `invoice-cell`, `kpi-card`,
-  `order-activity-timeline`, `status-badge`, `team-badge`.
+  `section-title`. The four heavy panels — `delivery-matrix`,
+  `horizontal-bar-panel`, `sales-charts`, `monthly-growth-section`, plus the
+  shared `saudi-sales-map` — are `memo`ised, because the route re-renders once
+  per aggregation query that settles (eleven of them) and each panel's props are
+  `useMemo`d in `use-dashboard-data` / `use-monthly-growth`.
+- **Orders:** `copyable-order-no`, `invoice-cell`, `kpi-card`, `order-row`
+  (`memo`, one table row — see Orders Module → List), `order-activity-timeline`,
+  `status-badge`, `team-badge`.
 - **Users:** `users-table`, `users-toolbar`, `users-stat-cards`,
   `users-pagination`, `user-row-actions`, `create-user-dialog`,
   `edit-user-dialog`, `password-dialog`, `grant-owner-dialog`,
@@ -1482,6 +1503,27 @@ Filters: date range, team, agent, status, **fulfillment**, "mine only",
 **"starred only"**, free-text search — all composable, all applied server-side
 through one `applyOrderFilters`. Page size (25/50/100) persists at
 `orders.pageSize`.
+
+**The page fetch names its columns** (`ORDER_LIST_COLUMNS` in
+`features/orders/constants.ts`), rather than `select("*")`. The five it leaves
+out are the five the table has no cell for — `created_at`, `created_by`,
+`updated_at`, `delivery_type` and `notes` — and `notes` is unbounded free text,
+so at 100 rows a page it was routinely the largest part of the response. Sorting
+is unaffected: the ORDER BY runs in Postgres whether or not the key is
+projected. `ORDER_EXPORT_COLUMNS` does the same for the XLSX export, which walks
+the whole filtered set in 1000-row batches.
+
+**Each row is a `memo`ised `OrderRow`.** The markup is unchanged; it is a
+component so that React can skip it. Every re-render of the page — a keystroke
+in the search box (which re-renders on every character, ahead of the 300ms
+debounce that gates the *query*), opening a filter dropdown, a background
+refetch settling, the return highlight arming and disarming — used to re-render
+all 25-100 rows, each carrying a Radix `Select`, two tooltips and a copy button.
+The memo only pays off if the props are stable, so that is enforced at the
+source: `updateStatus` / `canEditOrder` are `useCallback`ed in
+`use-orders-mutations`, `toggleStar` reads the shortlist through a ref in
+`use-starred-orders` so it does not change identity when a star is toggled, and
+`openOrder` is `useCallback`ed on the route's stable `navigate`.
 
 **Page header**, split into two groups by a hairline divider:
 

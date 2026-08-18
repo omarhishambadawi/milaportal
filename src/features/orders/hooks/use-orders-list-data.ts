@@ -3,6 +3,7 @@ import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { queryKeys } from "@/lib/query-keys";
 import type { OrdersFilters } from "@/lib/query-keys";
+import { ORDER_LIST_COLUMNS } from "../constants";
 
 interface UseOrdersListDataArgs {
   from: string;
@@ -68,7 +69,10 @@ export function useOrdersListData({
     placeholderData: keepPreviousData,
     queryFn: async () => {
       const offset = page * pageSize;
-      let qb = supabase.from("orders").select("*", { count: "exact" });
+      // Named columns, not `*` — see ORDER_LIST_COLUMNS. The count stays exact
+      // because the pager prints "Showing 26–50 of 431" and an estimate would
+      // make that sentence a guess.
+      let qb = supabase.from("orders").select(ORDER_LIST_COLUMNS, { count: "exact" });
       qb = applyFilters(qb);
       qb = qb.order("order_date", { ascending: false }).order("created_at", { ascending: false });
       qb = qb.range(offset, offset + pageSize - 1);

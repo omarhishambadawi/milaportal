@@ -1,10 +1,19 @@
+import { memo } from "react";
 import type { LucideIcon } from "lucide-react";
 import { fmtSAR } from "@/lib/branches";
 import { AnalyticsCard } from "./analytics-card";
 import { AnalyticsTable, EmptyRow, Tbody, Td, Th, Thead } from "./analytics-table";
 
-/** Location × delivery-method crosstab (top 10 by total). */
-export function DeliveryMatrix({
+/**
+ * Location × delivery-method crosstab (top 10 by total).
+ *
+ * Memoised: two of these render side by side on the Dashboard, each sorting and
+ * slicing its matrix on every render, and the route re-renders once per
+ * aggregation query that settles. `matrix` and `methods` are both `useMemo`d in
+ * `use-dashboard-data`, and `title`/`icon` are module constants, so the default
+ * shallow compare hits whenever the crosstab itself has not changed.
+ */
+function DeliveryMatrixImpl({
   title,
   icon,
   matrix,
@@ -61,3 +70,5 @@ export function DeliveryMatrix({
     </AnalyticsCard>
   );
 }
+
+export const DeliveryMatrix = memo(DeliveryMatrixImpl);

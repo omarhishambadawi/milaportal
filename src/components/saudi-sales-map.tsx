@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fmtSAR } from "@/lib/branches";
@@ -194,7 +194,18 @@ function usePrefersReducedMotion() {
   return reduced;
 }
 
-export function SaudiSalesMap({ cities }: { cities: CitySales[] }) {
+/**
+ * Memoised, because it is the most expensive subtree on the Dashboard and the
+ * cheapest one to skip.
+ *
+ * The route runs eleven independent aggregation queries, so a single visit
+ * re-renders it up to eleven times as they settle — and each render re-projects
+ * every city, re-runs the collision-aware label placement and rebuilds the
+ * portal-mounted detail card, for a `cities` array that changed on exactly one
+ * of those eleven. The prop comes from the `cityMapData` memo in
+ * `use-dashboard-data`, so a reference compare is both correct and sufficient.
+ */
+function SaudiSalesMapImpl({ cities }: { cities: CitySales[] }) {
   const [hoverName, setHoverName] = useState<string | null>(null);
   const [pinned, setPinned] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
@@ -1225,3 +1236,5 @@ function FloatingCityCard({
     document.body,
   );
 }
+
+export const SaudiSalesMap = memo(SaudiSalesMapImpl);

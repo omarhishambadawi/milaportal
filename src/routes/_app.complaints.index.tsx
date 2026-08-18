@@ -48,6 +48,22 @@ export const Route = createFileRoute("/_app/complaints/")({
   component: ComplaintsList,
 });
 
+/**
+ * The columns the complaints **table** reads, rather than `select("*")`.
+ *
+ * The two left out are the expensive ones: `description` is the complaint text
+ * and `resolution` is the reply to it, both unbounded, neither with a cell in
+ * this table. On a 100-row page they were the bulk of the response. `category`,
+ * `created_at` and `updated_at` are not read either; the ORDER BY still runs on
+ * `created_at` server-side, which does not require projecting it.
+ */
+const COMPLAINT_LIST_COLUMNS =
+  "id,display_no,complaint_date,customer_name,customer_phone,branch_no,agent_id,status";
+
+/** The columns the XLSX export maps — the list's, plus the description. */
+const COMPLAINT_EXPORT_COLUMNS =
+  "display_no,complaint_date,customer_name,customer_phone,branch_no,agent_id,description,status";
+
 const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 const DEFAULT_PAGE_SIZE = 25;
 const PAGE_SIZE_STORAGE_KEY = "complaints.pageSize";
@@ -177,7 +193,9 @@ function ComplaintsList() {
     placeholderData: keepPreviousData,
     queryFn: async () => {
       const offset = page * pageSize;
-      let qb = supabase.from("complaints" as any).select("*", { count: "exact" });
+      let qb = supabase
+        .from("complaints" as any)
+        .select(COMPLAINT_LIST_COLUMNS, { count: "exact" });
       qb = applyFilters(qb);
       qb = qb.order("created_at", { ascending: false });
       qb = qb.range(offset, offset + pageSize - 1);
@@ -233,7 +251,7 @@ function ComplaintsList() {
     const BATCH = 1000;
     const all: any[] = [];
     for (let start = 0; ; start += BATCH) {
-      let qb = supabase.from("complaints" as any).select("*");
+      let qb = supabase.from("complaints" as any).select(COMPLAINT_EXPORT_COLUMNS);
       qb = applyFilters(qb);
       qb = qb.order("created_at", { ascending: false });
       qb = qb.range(start, start + BATCH - 1);

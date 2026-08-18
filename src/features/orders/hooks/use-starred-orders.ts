@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -96,12 +96,28 @@ export function useStarredOrders(userId: string | undefined) {
     // restores the truth instead.
   });
 
+  /**
+   * The current shortlist, for the toggle to read without depending on it.
+   *
+   * `toggleStar` is a prop of every `memo`ised `OrderRow`, so its identity has to
+   * survive a render. Closing over `starred` directly would change it on every
+   * star click — and on the first arrival of the query — re-rendering all 25–100
+   * rows to flip one glyph. The ref is written during commit, before any click
+   * can read it, so the value the toggle sees is the same one the closure would
+   * have held.
+   */
+  const starredRef = useRef(starred);
+  useEffect(() => {
+    starredRef.current = starred;
+  }, [starred]);
+
   const toggleStar = useCallback(
     (orderId: string) => {
       if (!userId || !orderId) return;
-      mutation.mutate({ orderId, next: !starred.has(orderId) });
+      mutation.mutate({ orderId, next: !starredRef.current.has(orderId) });
     },
-    [mutation, starred, userId],
+    // `mutation.mutate` is stable across renders; the `mutation` object is not.
+    [mutation.mutate, userId],
   );
 
   return {

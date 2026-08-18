@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState } from "react";
+import { Suspense, lazy, memo, useState } from "react";
 import { Coins, Sparkles, Table2, TrendingUp, Users } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
@@ -328,7 +328,14 @@ function KeyInsights({ insights }: { insights: readonly Insight[] }) {
 
 /* -------------------------------------------------------------------------- */
 
-export function MonthlyGrowthSection({
+/**
+ * Memoised. The section filters its rows, resolves the current and previous
+ * complete months and renders a table plus (lazily) its charts — all of which
+ * the Dashboard was redoing every time one of its eleven aggregation queries
+ * settled, even though `rows` and `insights` come from `useMemo`s in
+ * `use-monthly-growth` that only change when the growth series itself does.
+ */
+function MonthlyGrowthSectionImpl({
   rows,
   insights,
   isLoading,
@@ -454,3 +461,5 @@ export function MonthlyGrowthSection({
     </div>
   );
 }
+
+export const MonthlyGrowthSection = memo(MonthlyGrowthSectionImpl);

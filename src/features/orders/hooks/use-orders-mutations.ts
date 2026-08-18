@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -17,25 +18,38 @@ interface UseOrdersMutationsArgs {
 export function useOrdersMutations({ userId, canEditAll, canEditOwn }: UseOrdersMutationsArgs) {
   const qc = useQueryClient();
 
-  const canEditOrder = (order: any) => canEditAll || (userId === order.agent_id && canEditOwn);
+  /**
+   * Both are `useCallback`ed, and that is load-bearing rather than habit: every
+   * row of the Orders table is a `memo`ised `OrderRow` that takes `onUpdateStatus`
+   * as a prop, so a fresh function identity here would defeat the memo on all
+   * 25–100 rows on every keystroke in the search box. The permission rule and the
+   * write itself are unchanged.
+   */
+  const canEditOrder = useCallback(
+    (order: any) => canEditAll || (userId === order.agent_id && canEditOwn),
+    [canEditAll, canEditOwn, userId],
+  );
 
-  const updateStatus = async (order: any, newStatus: string) => {
-    if (!canEditOrder(order)) {
-      toast.error("You don't have permission to edit this order");
-      return;
-    }
-    const { error } = await supabase
-      .from("orders")
-      .update({ status: newStatus })
-      .eq("id", order.id);
-    if (error) {
-      toast.error(error.message);
-      return;
-    }
-    toast.success("Status updated");
-    qc.invalidateQueries({ queryKey: queryKeys.orders.all() });
-    qc.invalidateQueries({ queryKey: queryKeys.dashboard.all() });
-  };
+  const updateStatus = useCallback(
+    async (order: any, newStatus: string) => {
+      if (!canEditOrder(order)) {
+        toast.error("You don't have permission to edit this order");
+        return;
+      }
+      const { error } = await supabase
+        .from("orders")
+        .update({ status: newStatus })
+        .eq("id", order.id);
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+      toast.success("Status updated");
+      qc.invalidateQueries({ queryKey: queryKeys.orders.all() });
+      qc.invalidateQueries({ queryKey: queryKeys.dashboard.all() });
+    },
+    [canEditOrder, qc],
+  );
 
   /**
    * `toggleVerified` and `canVerifyOrder` are both gone.

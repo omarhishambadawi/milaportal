@@ -1,6 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { CURRENCY, formatOrderNo } from "@/lib/branches";
+import { ORDER_EXPORT_COLUMNS } from "../constants";
 import { fmtOrderDate } from "../utils";
 
 interface UseOrdersExportArgs {
@@ -37,7 +38,8 @@ export function useOrdersExport({
     const BATCH = 1000;
     const all: any[] = [];
     for (let start = 0; ; start += BATCH) {
-      let qb = supabase.from("orders").select("*");
+      // The workbook's own columns and no others — see ORDER_EXPORT_COLUMNS.
+      let qb = supabase.from("orders").select(ORDER_EXPORT_COLUMNS);
       qb = applyFilters(qb);
       qb = qb.order("order_date", { ascending: false }).order("created_at", { ascending: false });
       qb = qb.range(start, start + BATCH - 1);
