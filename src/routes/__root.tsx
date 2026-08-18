@@ -7,7 +7,7 @@ import {
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { AuthProvider } from "@/lib/auth";
@@ -182,12 +182,53 @@ function RootShell({ children }: { children: ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   const router = useRouter();
+  /**
+   * The account the cache currently belongs to.
+   *
+   * `undefined` until the first auth event is seen, which is deliberately
+   * distinct from `null` (signed out) — see the guard below.
+   */
+  const cacheOwnerRef = useRef<string | null | undefined>(undefined);
   useEffect(() => {
-    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "USER_UPDATED") {
-        router.invalidate();
-        if (event !== "SIGNED_OUT") queryClient.invalidateQueries();
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event !== "SIGNED_IN" && event !== "SIGNED_OUT" && event !== "USER_UPDATED") return;
+
+      /**
+       * `SIGNED_IN` is not "somebody just signed in".
+       *
+       * supabase-js emits it whenever it recovers or revalidates a stored
+       * session — on every page load, and again whenever something calls
+       * `getSession()`, which a route that invokes a server function does. This
+       * handler used to answer every one of those with an unscoped
+       * `invalidateQueries()`, which invalidates the entire cache regardless of
+       * key and refetches every *active* query.
+       *
+       * Measured in production before this guard: a hard load of /dashboard
+       * issued 40-61 Supabase requests, every endpoint running 2-3 times and
+       * taking 14-18s to settle; and navigating away from the Dashboard refetched
+       * all 15 of its RPCs — even to /admin/users, which shares none of them, and
+       * even when the data was seven seconds old against a 60s `staleTime`. The
+       * giveaway was `useAgentDirectory`, whose key is the constant
+       * `["agent-directory"]`: a static key cannot churn, so only an explicit
+       * unscoped invalidation could refetch it.
+       *
+       * So the cache is dropped when the *account* changes, which is what this
+       * was protecting against, and not when the same session is merely seen
+       * again. `undefined` means this is the first event of the page load: the
+       * cache was created moments ago and holds nothing from another user, so
+       * there is nothing to clear.
+       */
+      if (event === "SIGNED_IN") {
+        const nextOwner = session?.user?.id ?? null;
+        const prevOwner = cacheOwnerRef.current;
+        cacheOwnerRef.current = nextOwner;
+        if (prevOwner === undefined || prevOwner === nextOwner) return;
+      } else {
+        cacheOwnerRef.current = session?.user?.id ?? null;
       }
+
+      router.invalidate();
+      if (event !== "SIGNED_OUT") queryClient.invalidateQueries();
     });
     return () => sub.subscription.unsubscribe();
   }, [router, queryClient]);
