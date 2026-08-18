@@ -678,6 +678,50 @@ come with the extension.
 `orders_delivery_matrix`, `orders_verification`; and for complaints
 `complaints_in_scope`, `complaints_kpis`, `complaints_locations`.
 
+#### The two scope functions return only what their callers aggregate
+
+`orders_in_scope` is the single definition of the analytics filter — nine RPCs
+select from it, and `complaints_in_scope` serves the other two. Both are
+`SECURITY INVOKER`, so RLS on the base table is what decides which rows come
+back, and both carry `SET search_path TO 'public'`.
+
+That `SET` clause has a consequence worth knowing about: it makes a
+set-returning SQL function **non-inlinable**
+(`inline_set_returning_function()` refuses when `pg_proc.proconfig` is
+non-null), so each of the eleven RPCs runs its scope function as an opaque
+**Function Scan** — every qualifying row materialised into a tuplestore before
+the caller aggregates it.
+
+They used to be `RETURNS SETOF public.orders` / `SETOF public.complaints` doing
+`SELECT *`, which made that tuplestore as wide as the widest column in the table.
+They now return exactly the union of the columns their callers reference — nine
+for orders, two for complaints — which leaves out `notes`, `customer_name`,
+`invoice_no`, `description`, `resolution` and every other column no aggregation
+reads. **The predicate, the security properties and every returned figure are
+unchanged**; only the width of the intermediate result is.
+
+Measured on PostgreSQL 18.3 with 120k synthetic orders (not production
+hardware — see `20260818140000_narrow_analytics_scope.sql`), summing all nine
+`orders_*` RPCs for one window:
+
+| window    | rows in window | exec before | exec after | temp blocks before | temp blocks after |
+| --------- | -------------- | ----------- | ---------- | ------------------ | ----------------- |
+| 1 month   | 5,084          | 68.8 ms     | 57.3 ms    | 0                  | 0                 |
+| 1 quarter | 15,088         | 291.2 ms    | 159.7 ms   | 22,212             | 0                 |
+| 1 year    | 59,860         | 1,193.7 ms  | 761.8 ms   | 87,984             | 18,972            |
+
+Shared buffer counts are **identical** before and after, which is the part worth
+remembering: Postgres is a row store, so narrowing a projection saves no reads
+against the heap. The win is that wide tuples fill `work_mem` sooner, and past
+roughly fifteen thousand rows in the window the Function Scan starts spilling to
+temp files. Narrowing the scope is what stops the spill.
+
+A covering index over the nine analytic columns was measured and **rejected**:
+it cut shared buffers 8.5x (5,451 to 639) but moved execution time about 5%,
+because those buffers were already cache hits — for +34% on the table's index
+footprint and only while the visibility map is fresh enough for an index-only
+scan.
+
 **Spatial:** `branches_nearby(_lat, _lng, _radius_m = 50000, _limit = 10,
 _scooter_only = false)` — `SECURITY DEFINER`, granted to `authenticated` only,
 `REVOKE ALL … FROM PUBLIC`. Uses `ST_DWithin` for the index-bounded predicate and
