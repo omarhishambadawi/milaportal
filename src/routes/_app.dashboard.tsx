@@ -13,7 +13,20 @@ import {
   CircleAlert,
   Download,
   LayoutDashboard,
-  Map,
+  // Aliased, and not for tidiness. The TanStack router plugin splits the
+  // component out of this file but leaves the route shell behind, and appends a
+  // dev-only fast-refresh shim to that shell which runs `new Map()`. As a bare
+  // `Map` the icon was still imported into the shell, where it shadowed the
+  // global constructor for the whole module and turned that line into
+  // "TypeError: Map is not a constructor".
+  //
+  // It only fires when this shell is the first to install the shim (it is
+  // guarded by `window.__TSR_REACT_REFRESH__ ??=`), so a normal /dashboard page
+  // load is unaffected — the route tree evaluates other shells first. What it
+  // did break was loading this module on its own, which is what dev tooling
+  // does. Aliasing removes the import from the shell entirely, since `MapIcon`
+  // is only referenced in the split half. Same reason as `Route` below.
+  Map as MapIcon,
   MessageSquareWarning,
   Route as RouteIcon,
   ShieldAlert,
@@ -279,7 +292,7 @@ function Dashboard() {
 
       {/* Geographic heat map */}
       <div>
-        <SectionTitle title="Geographic distribution" icon={Map} />
+        <SectionTitle title="Geographic distribution" icon={MapIcon} />
         <div className="mt-3">
           <SaudiSalesMap cities={d.cityMapData} />
         </div>
