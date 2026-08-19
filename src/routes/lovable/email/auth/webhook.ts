@@ -31,7 +31,7 @@ const EMAIL_TEMPLATES: Record<string, React.ComponentType<any>> = {
 };
 
 // Configuration
-const SITE_NAME = "msdailylog";
+const SITE_NAME = "MilaPortal";
 const SENDER_DOMAIN = "notify.milaportal.live";
 const ROOT_DOMAIN = "milaportal.live";
 const FROM_DOMAIN = "milaportal.live";
