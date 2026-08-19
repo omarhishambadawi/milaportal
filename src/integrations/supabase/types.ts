@@ -654,6 +654,66 @@ export type Database = {
           },
         ]
       }
+      orders_verification_snapshot_20260815: {
+        Row: {
+          agent_id: string | null
+          captured_at: string | null
+          created_at: string | null
+          display_no: string | null
+          has_manual_history: boolean | null
+          invoice_no: string | null
+          last_manual_actor: string | null
+          last_manual_at: string | null
+          last_manual_verified: boolean | null
+          order_date: string | null
+          order_id: string | null
+          snapshot_call_center_verified: boolean | null
+          snapshot_invoice_value: number | null
+          snapshot_invoices_verified: boolean | null
+          status: string | null
+          team: Database["public"]["Enums"]["app_role"] | null
+          updated_at: string | null
+        }
+        Insert: {
+          agent_id?: string | null
+          captured_at?: string | null
+          created_at?: string | null
+          display_no?: string | null
+          has_manual_history?: boolean | null
+          invoice_no?: string | null
+          last_manual_actor?: string | null
+          last_manual_at?: string | null
+          last_manual_verified?: boolean | null
+          order_date?: string | null
+          order_id?: string | null
+          snapshot_call_center_verified?: boolean | null
+          snapshot_invoice_value?: number | null
+          snapshot_invoices_verified?: boolean | null
+          status?: string | null
+          team?: Database["public"]["Enums"]["app_role"] | null
+          updated_at?: string | null
+        }
+        Update: {
+          agent_id?: string | null
+          captured_at?: string | null
+          created_at?: string | null
+          display_no?: string | null
+          has_manual_history?: boolean | null
+          invoice_no?: string | null
+          last_manual_actor?: string | null
+          last_manual_at?: string | null
+          last_manual_verified?: boolean | null
+          order_date?: string | null
+          order_id?: string | null
+          snapshot_call_center_verified?: boolean | null
+          snapshot_invoice_value?: number | null
+          snapshot_invoices_verified?: boolean | null
+          status?: string | null
+          team?: Database["public"]["Enums"]["app_role"] | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           active: boolean
