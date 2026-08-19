@@ -2701,6 +2701,45 @@ src/lib/shams/crm.server.ts      customer sales history (crm/data) + query valid
 src/lib/shams.functions.ts       authenticated, RBAC-gated server functions
 ```
 
+### Offer coverage on the result list — all / some / none
+
+An agent can see which search results carry a promotion **without opening
+them**, and the badge always names its scope: `all branches` (every branch
+holding the item also has the offer) or `some branches` (only a subset). "On
+offer" alone would be a promise that fails at whichever branch the customer
+walks into.
+
+Scope is classified once, server-side, by `classifyOfferScope` in
+`lib/shams-crm/offers.server.ts`. The denominator is **branches that hold the
+item**, read from `available_qty` on the availability response — the endpoint
+returns a row for every branch in the chain, so counting rows would make every
+offer look partial. That quantity is consumed there and dropped; it is never
+rendered, and MIS `product/stock` remains the only stock number on screen.
+
+**The cap is the load-bearing part.** There is no bulk offers endpoint
+(`api-discovery.md` §11.5): each item is its own ~62 KB CRM request. A badge on
+every row of an unbounded result set would be up to 100 upstream requests per
+search, so `shamsGetOfferScopes` accepts at most **12** item codes, fans them out
+server-side at 4 concurrent against the existing 60 s offer cache, and returns
+one browser response. Above 12 the list says *"Offers not checked — narrow to 12
+results or fewer"* rather than rendering blanks that would read as "no offer".
+An item the CRM could not answer for is absent from the result, never reported
+as having none.
+
+An opened product gets its scope from the same response as its per-branch
+prices (`shamsGetProductOffers` returns both), so the header badge and the price
+rows cannot disagree, and no second request is made.
+
+### Branch stock — status cards
+
+The per-branch view is a responsive card grid rather than a table. As a table,
+branch code, city, quantity and status all sat at roughly the same small muted
+weight, so nothing could be scanned and a 137-row table had nowhere to go on a
+phone. Each card now fixes one hierarchy — **branch → status → quantity →
+offer** — with the quantity as the largest element and the offer as a footer
+line only where one exists. Cards reflow rather than scroll sideways at any
+width.
+
 ### CRM Sales History — `GET /api/v2/crm/data`
 
 A loyalty lookup keyed on **mobile number** over a date range, paged. It backs
@@ -2722,7 +2761,20 @@ Three properties of the payload drive the implementation, all read off the
   returned with the trunk zero (`0555555555`). `normalizeCrmMobile` accepts every
   way an agent writes it and canonicalizes server-side.
 
-The read is **uncached server-side** on purpose — a submitted lookup, not
+The default range is a **rolling 12 months**, with 1/3/6/12-month quick ranges
+beside the picker; a quick range re-runs an existing search and otherwise just
+fills the dates. Purchases are sorted **newest first in the normalization layer**
+(`sortSalesNewestFirst`) rather than in a component, and grouped into month
+headings by `lib/shams/crm-history.ts`, which preserves that order instead of
+sorting again. The honest limit: the API exposes no sort parameter, so ordering
+is guaranteed *within a page* — with the default 100-row page a year usually
+fits in one. Month grouping is per page for the same reason; a month spanning a
+page boundary gets a heading on both, and no row appears twice.
+
+Client-side the history is held for 2 minutes (`staleTime`) with a 15-minute
+`gcTime`, which is the actual search-performance fix: it was `0`, so every
+return to a customer paid the full 1.8–2.2 s round trip again. The read is
+**uncached server-side** on purpose — a submitted lookup, not
 per-keystroke traffic, and a cache would be a store of identifiable customer data
 keyed by mobile number. **The mobile number is never written to the URL**; the
 Customers tab keeps its search in local state, unlike the other tabs.
@@ -2929,6 +2981,22 @@ validated on the way in so a hand-edited address cannot reach a state the page
 cannot render. The Customers tab's own search deliberately does **not**: a mobile
 number in the address bar ends up in history, in a pasted link and in a
 screen-share.
+
+**All three tabs stay mounted** (`forceMount` on every `TabsContent`). Radix
+unmounts an inactive tab by default, and that unmount was throwing away every
+`useState` in the tab *and* every React Query observer with it — so switching to
+Invoices and back re-ran the Branch Stock search from zero. Held mounted, a
+return is instant and costs no request. Nothing about refetching is disabled:
+`staleTime` still governs freshness, an explicit search or Retry still goes to
+the network. The one cost is that three tabs mount together, so each is passed
+`active` and only the visible one takes `autoFocus`.
+
+**Change product is one click.** It used to take two: the click cleared
+`stockProduct` immediately while the router's `?item=` cleared a tick later, and
+in that gap the restore effect saw "URL has an item, state does not", refetched
+it from cache and put it straight back. A deselect is now a URL change only, and
+the rendered product is gated on `?item=` agreeing with the loaded row
+(`openProduct`), so state and URL can never disagree.
 
 The standalone **Products** tab was removed: Branch Stock already opens with the
 same `product/search` lookup, and an agent who finds a product almost always

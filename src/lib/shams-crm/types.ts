@@ -56,11 +56,24 @@ export interface ShamsCrmIdentity {
 /**
  * A branch row of `GET /products/{item_code}/available-branches`.
  *
- * The response carries more than this — `available_qty`, `price_without_tax`,
- * distance, and a `branch` object with address, coordinates, `whatsapp` and
- * `maps_url`. Only the fields below are declared, because only they are read:
- * `available_qty` in particular is deliberately absent, so CRM availability
- * cannot drift into a view where MIS stock is the authority.
+ * The response carries more than this — `price_without_tax`, distance, and a
+ * `branch` object with address, coordinates, `whatsapp` and `maps_url`. Only
+ * the fields below are declared, because only they are read.
+ *
+ * ## `available_qty` — read for one purpose, and only one
+ *
+ * It was deliberately absent, so CRM availability could not drift into a view
+ * where MIS stock is the authority. It is declared now because answering
+ * "does this offer cover **every branch that has the product**, or only some?"
+ * needs a denominator, and this response is the only place that carries the
+ * offer and the availability together — the endpoint returns a row for every
+ * branch in the chain, not only stocked ones, so counting rows would answer a
+ * different question.
+ *
+ * **It is never rendered as stock and never reaches a stock view.** It is
+ * consumed inside `offers.server.ts` to produce two integers and is dropped
+ * there; `ShamsCrmOffer` still has no quantity field, and MIS `product/stock`
+ * remains the only source of the numbers an agent reads.
  */
 export interface RawCrmBranchOfferRow {
   branch?: { code?: string };
@@ -68,11 +81,52 @@ export interface RawCrmBranchOfferRow {
   offer_percent?: number;
   offer_display?: string;
   after_offer_price?: number;
+  /** Branch availability. Scope denominator only — see above. */
+  available_qty?: number;
 }
 
 export interface RawCrmAvailableBranchesResponse {
   item_code?: string;
   branches?: RawCrmBranchOfferRow[];
+}
+
+/* -------------------------------------------------------------------------- */
+/* Offer scope                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How widely an item's offer applies, as a single word.
+ *
+ * `unknown` is a real member and not a failure: offers cost one 62 KB request
+ * per item with no bulk form, so a large result set is deliberately not
+ * checked. A UI that rendered "no offer" for an item nobody asked about would
+ * be stating something it does not know.
+ */
+export type ShamsOfferScopeKind = "all" | "some" | "none" | "unknown";
+
+/**
+ * One item's offer coverage, summarised for a list.
+ *
+ * Deliberately small. The underlying response is ~62 KB of per-branch rows and
+ * none of it needs to reach a browser that is only asking whether a badge
+ * belongs on a row.
+ */
+export interface ShamsOfferScope {
+  itemCode: string;
+  kind: ShamsOfferScopeKind;
+  /** Branches holding the item, per the CRM's own availability rows. */
+  branchesAvailable: number;
+  /** How many of those also carry an offer. */
+  branchesWithOffer: number;
+  /**
+   * The discount to show, preformatted by the API (e.g. `"25.00%"`).
+   *
+   * `null` when there is no offer, or when branches disagree — a single figure
+   * would be wrong in that case, and §11.4 records that whether offers vary by
+   * branch is NOT VERIFIED, so the disagreeing case is handled rather than
+   * assumed away.
+   */
+  offerDisplay: string | null;
 }
 
 /**

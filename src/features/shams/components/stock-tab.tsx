@@ -33,18 +33,20 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { Boxes, Loader2, PackageX, Search, X } from "lucide-react";
+import { Boxes, Loader2, PackageX, Search, Tag, X } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { fmtSAR } from "@/lib/branches";
 import { cn } from "@/lib/utils";
 import { filterBranchStock, summariseStock } from "@/lib/shams/search";
 import type { ShamsBranchStock, ShamsProduct } from "@/lib/shams/types";
-import type { ShamsCrmOffer } from "@/lib/shams-crm/types";
+import type { ShamsCrmOffer, ShamsOfferScope } from "@/lib/shams-crm/types";
 import {
+  MAX_OFFER_SCOPE_ITEMS,
   MIN_QUERY_LENGTH,
   useBranchLabels,
   useDebounced,
+  useOfferScopes,
   useProductDetail,
   useProductOffers,
   useProductSearch,
@@ -104,11 +106,21 @@ export function ProductSearchField({
 }
 
 export function StockTab({
+  active = true,
   selected,
   onSelect,
   query,
   onQueryChange,
 }: {
+  /**
+   * Whether this tab is the one on screen.
+   *
+   * All three tabs are mounted at once so their state and cached data survive a
+   * switch, which means `autoFocus` can no longer be unconditional: three
+   * inputs claiming focus on one mount would hand it to whichever rendered
+   * last, quite possibly one the agent cannot see.
+   */
+  active?: boolean;
   selected: ShamsProduct | null;
   onSelect: (product: ShamsProduct | null) => void;
   /**
@@ -192,6 +204,21 @@ export function StockTab({
     const rows = offersQuery.data?.ok ? offersQuery.data.offers : [];
     return new Map(rows.map((offer) => [offer.branchCode, offer]));
   }, [offersQuery.data]);
+  /** Coverage for the opened product, from the same response as `offers`. */
+  const openScope = offersQuery.data?.ok ? offersQuery.data.scope : null;
+
+  /**
+   * Offer coverage for the products in the result list.
+   *
+   * So an agent can see which results are on promotion *before* opening one —
+   * previously the only way to find out was to open each in turn.
+   *
+   * `!selected` is doing real work: once a product is open the result list is
+   * gone, but its query data is still cached, so without this the tab would
+   * keep asking about a list nobody is looking at.
+   */
+  const resultCodes = useMemo(() => matches.map((p) => p.itemCode), [matches]);
+  const scopes = useOfferScopes(resultCodes, !selected);
 
   /** Branch filter over rows already in memory — never a request. */
   const [branchFilter, setBranchFilter] = useState("");
@@ -221,7 +248,8 @@ export function StockTab({
               }}
               onKeyDown={onSearchKeyDown}
               placeholder="Search a product — try mou*n*j*2.5"
-              autoFocus
+              // Only when this tab is the visible one: all three are mounted.
+              autoFocus={active}
             />
             <p className="mt-2 text-xs leading-snug text-muted-foreground">
               Search by product name or item code — paste{" "}
@@ -254,6 +282,9 @@ export function StockTab({
             onHover={setActiveIndex}
             onSelect={onSelect}
             busy={searchQuery.isFetching}
+            offerScopes={scopes.byItemCode}
+            offersSkipped={scopes.skipped}
+            offersLoading={scopes.loading}
           />
         )}
 
@@ -273,7 +304,13 @@ export function StockTab({
           <div className="min-w-0">
             <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Product</p>
             <p className="mt-0.5 text-base font-semibold leading-snug">{selected.itemName}</p>
-            <p className="mt-0.5 font-mono text-xs text-muted-foreground">{selected.itemCode}</p>
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="font-mono text-xs text-muted-foreground">{selected.itemCode}</span>
+              {/* The same badge the result row carried, from the same response
+                  as the per-branch prices below — so the summary and the detail
+                  cannot tell an agent two different things. */}
+              <OfferScopeBadge scope={openScope ?? undefined} />
+            </div>
           </div>
           <button
             type="button"
@@ -360,7 +397,7 @@ export function StockTab({
           {visible.length === 0 ? (
             <EmptyState>No branch matches “{deferredFilter.trim()}”.</EmptyState>
           ) : (
-            <StockTable rows={visible} labels={branchLabels} offers={offers} />
+            <BranchStockCards rows={visible} labels={branchLabels} offers={offers} />
           )}
         </>
       )}
@@ -386,17 +423,25 @@ const ProductResults = memo(function ProductResults({
   onHover,
   onSelect,
   busy,
+  offerScopes,
+  offersSkipped,
+  offersLoading,
 }: {
   products: ShamsProduct[];
   activeIndex: number;
   onHover: (index: number) => void;
   onSelect: (product: ShamsProduct) => void;
   busy: boolean;
+  /** Offer coverage by item code. Absent means "not checked", never "no offer". */
+  offerScopes: Map<string, ShamsOfferScope>;
+  /** True when the result set was too large to check — see the header line. */
+  offersSkipped: boolean;
+  offersLoading: boolean;
 }) {
   return (
     <Card className="overflow-hidden">
       <CardContent className="p-0">
-        <div className="flex items-center justify-between gap-3 border-b border-border/60 px-4 py-2 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-border/60 px-4 py-2 text-xs text-muted-foreground">
           <span>
             {products.length} {products.length === 1 ? "product" : "products"}
           </span>
@@ -406,6 +451,25 @@ const ProductResults = memo(function ProductResults({
             <span className="inline-flex items-center gap-1.5">
               <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
               searching
+            </span>
+          )}
+          {/*
+            Said once, here, rather than as a badge on every row.
+
+            Offers have no bulk endpoint — one request per item — so a wide
+            result set is deliberately not checked. Without this line a row with
+            no badge would read as "no offer", which is a claim nobody made.
+          */}
+          {!busy && offersSkipped && (
+            <span className="inline-flex items-center gap-1.5">
+              <Tag className="h-3 w-3" aria-hidden="true" />
+              Offers not checked — narrow to {MAX_OFFER_SCOPE_ITEMS} results or fewer
+            </span>
+          )}
+          {!busy && !offersSkipped && offersLoading && (
+            <span className="inline-flex items-center gap-1.5">
+              <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+              checking offers
             </span>
           )}
         </div>
@@ -425,8 +489,11 @@ const ProductResults = memo(function ProductResults({
               >
                 <span className="min-w-0 flex-1">
                   <span className="block text-[15px] font-medium leading-snug">{p.itemName}</span>
-                  <span className="mt-0.5 block font-mono text-xs text-muted-foreground">
-                    {p.itemCode}
+                  {/* Code and offer share the secondary line, so a promotion is
+                      visible from the list without adding a row of its own. */}
+                  <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="font-mono text-xs text-muted-foreground">{p.itemCode}</span>
+                    <OfferScopeBadge scope={offerScopes.get(p.itemCode)} />
                   </span>
                 </span>
                 <span className="shrink-0 text-sm font-semibold tabular-nums">
@@ -440,6 +507,46 @@ const ProductResults = memo(function ProductResults({
     </Card>
   );
 });
+
+/**
+ * Whether a product is on offer, and how widely.
+ *
+ * The distinction is the entire point of the badge. "On offer" alone would be a
+ * promise an agent could not keep: an offer at 3 of 40 stocking branches is a
+ * different fact from an offer everywhere, and the branch the customer is
+ * standing in decides which one applies. So the scope is in the label, always.
+ *
+ * Three visible states and one invisible one:
+ *
+ *   all      every branch holding the item also has the offer
+ *   some     only a subset — the agent must check the branch
+ *   none     renders nothing; a row without a badge has no promotion
+ *   unknown  also renders nothing, but the *list* says why (see the header)
+ *
+ * `none` and `unknown` both render nothing here on purpose — the difference is
+ * a property of the whole result set, not of one row, so it is stated once
+ * above the list rather than repeated as a shrug on every line.
+ */
+function OfferScopeBadge({ scope }: { scope: ShamsOfferScope | undefined }) {
+  if (!scope || scope.kind === "none" || scope.kind === "unknown") return null;
+
+  const all = scope.kind === "all";
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold",
+        all ? "bg-success/10 text-success" : "bg-warning/10 text-warning",
+      )}
+      // The counts are the evidence behind the word, available on hover for
+      // anyone who wants to know how far "some" goes without opening the item.
+      title={`${scope.branchesWithOffer} of ${scope.branchesAvailable} branches holding this item`}
+    >
+      <Tag className="h-3 w-3" aria-hidden="true" />
+      {scope.offerDisplay ? `${scope.offerDisplay} off` : "Offer"}
+      <span className="font-medium opacity-80">{all ? "· all branches" : "· some branches"}</span>
+    </span>
+  );
+}
 
 function Stat({
   label,
@@ -502,14 +609,37 @@ function branchCity(labels: Map<string, BranchLabel> | undefined, code: string):
 }
 
 /**
- * The stock table.
+ * Branch availability, as cards rather than a table.
  *
- * Column widths are declared rather than left to the browser: quantity is the
- * column being scanned, so it is pinned narrow and right-aligned against the
- * edge, and the branch column takes the space that used to sit empty in the
- * middle of the row.
+ * ## Why this stopped being a table
+ *
+ * It was one, and the complaint was that nothing on it could be read: branch
+ * code, city, quantity and status were all set at roughly the same small,
+ * muted weight, so a row gave the eye nothing to land on and finding "which
+ * branches actually have this" meant reading every line. Widening the type in
+ * a five-column table was not available — the columns were already tight, and
+ * a 137-row table on a phone had nowhere left to go.
+ *
+ * As cards, each branch gets a block with its own hierarchy, and the four facts
+ * an agent is joining up — **branch, status, quantity, offer** — sit in a fixed
+ * arrangement they can learn once:
+ *
+ *   - the **code** leads, at readable size, because it is the identifier the
+ *     rest of the portal uses;
+ *   - the **city** sits under it, because it is how the branch is spoken about;
+ *   - the **quantity** is the largest thing on the card, right-aligned, so a
+ *     column of cards can be scanned down for a number;
+ *   - the **status** is a badge beside it, so zero is unmissable;
+ *   - the **offer**, when there is one, is a footer line rather than a column
+ *     that would be empty for most branches.
+ *
+ * A grid rather than a list, so a wide screen uses its width instead of showing
+ * three columns of whitespace, and no width creates horizontal overflow: cards
+ * reflow, they do not scroll sideways.
+ *
+ * Still no invented thresholds. A branch has a number or it has none.
  */
-const StockTable = memo(function StockTable({
+const BranchStockCards = memo(function BranchStockCards({
   rows,
   labels,
   offers,
@@ -519,110 +649,75 @@ const StockTable = memo(function StockTable({
   /** Offer pricing by branch code. Empty when there is none, or none loaded. */
   offers: Map<string, ShamsCrmOffer>;
 }) {
-  /**
-   * The Offer column appears only when a visible row actually has one, so a
-   * product without promotions renders the table exactly as before rather than
-   * growing a column of dashes.
-   */
-  const anyOffer = rows.some((row) => offers.has(row.branchCode));
-
   return (
-    <>
-      <Card className="hidden overflow-hidden md:block">
-        <CardContent className="p-0">
-          <table className="w-full table-fixed text-[15px]">
-            <colgroup>
-              <col className="w-[16%]" />
-              <col />
-              {anyOffer && <col className="w-[22%]" />}
-              <col className="w-[14%]" />
-              <col className="w-[20%]" />
-            </colgroup>
-            <thead>
-              <tr className="border-b border-border/60 bg-muted/30 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                <th className={TH}>Branch</th>
-                <th className={TH}>City</th>
-                {anyOffer && <th className={cn(TH, "text-right")}>Offer</th>}
-                <th className={cn(TH, "text-right")}>Qty</th>
-                <th className={cn(TH, "text-right")}>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => {
-                const city = branchCity(labels, row.branchCode);
-                const out = row.quantity <= 0;
-                return (
-                  <tr
-                    key={row.branchCode}
-                    className="border-b border-border/30 transition-colors last:border-0 hover:bg-muted/40"
-                  >
-                    <td className={cn(TD, "py-2.5 font-mono font-semibold")}>{row.branchCode}</td>
-                    <td className={cn(TD, "truncate py-2.5")} dir="auto">
-                      {city ?? <span className="text-muted-foreground">—</span>}
-                    </td>
-                    {anyOffer && (
-                      <td className={cn(TD, "py-2.5 text-right")}>
-                        <OfferPrice offer={offers.get(row.branchCode)} />
-                      </td>
-                    )}
-                    <td
-                      className={cn(
-                        "px-3 py-2.5 text-right text-base font-semibold tabular-nums",
-                        out ? "text-muted-foreground" : "text-foreground",
-                      )}
-                    >
-                      {out ? "0" : row.quantity}
-                    </td>
-                    <td className={cn(TD, "py-2.5 text-right")}>
-                      <StockStatus quantity={row.quantity} />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </CardContent>
-      </Card>
+    <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {rows.map((row) => {
+        const city = branchCity(labels, row.branchCode);
+        const offer = offers.get(row.branchCode);
+        const out = row.quantity <= 0;
 
-      {/* Mobile: the same rows as a list, so nothing scrolls sideways. */}
-      <Card className="overflow-hidden md:hidden">
-        <CardContent className="p-0">
-          <ul className="divide-y divide-border/30">
-            {rows.map((row) => {
-              const city = branchCity(labels, row.branchCode);
-              const offer = offers.get(row.branchCode);
-              return (
-                <li
-                  key={row.branchCode}
-                  className="flex items-center justify-between gap-3 px-4 py-2.5"
-                >
+        return (
+          <li key={row.branchCode}>
+            <Card
+              className={cn(
+                "h-full overflow-hidden transition-colors",
+                // A stocked branch is the useful one, so it keeps the ordinary
+                // card surface and an out-of-stock branch recedes. Muting the
+                // negative case reads faster than colouring the positive one,
+                // which would leave a wall of green.
+                out && "border-border/50 bg-muted/30",
+              )}
+            >
+              <CardContent className="flex h-full flex-col gap-3 p-3.5">
+                <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="font-mono text-sm font-semibold">{row.branchCode}</p>
-                    <p className="mt-0.5 truncate text-[15px]" dir="auto">
-                      {city ?? <span className="text-muted-foreground">—</span>}
+                    <p className="font-mono text-base font-semibold leading-none">
+                      {row.branchCode}
                     </p>
-                    {offer && (
-                      <p className="mt-1">
-                        <OfferPrice offer={offer} />
-                      </p>
-                    )}
+                    <p
+                      className="mt-1.5 truncate text-sm text-muted-foreground"
+                      dir="auto"
+                      title={city ?? undefined}
+                    >
+                      {city ?? "—"}
+                    </p>
                   </div>
-                  <div className="flex shrink-0 items-center gap-3">
-                    {row.quantity > 0 && (
-                      <span className="text-base font-semibold tabular-nums">{row.quantity}</span>
+                  <StockStatus quantity={row.quantity} />
+                </div>
+
+                <div className="mt-auto flex items-baseline justify-between gap-3">
+                  {/* Not "In stock" — the badge above already says that, and a
+                      card repeating it twice gives the eye two identical things
+                      to read. This names the *number* beside it instead. */}
+                  <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                    {out ? "None on hand" : "On hand"}
+                  </span>
+                  <span
+                    className={cn(
+                      "text-2xl font-semibold leading-none tabular-nums",
+                      out ? "text-muted-foreground/70" : "text-foreground",
                     )}
-                    <StockStatus quantity={row.quantity} />
+                  >
+                    {out ? "0" : row.quantity}
+                  </span>
+                </div>
+
+                {/* Only when this branch actually has a promotion — an empty
+                    offer slot on every card would be the column of dashes the
+                    table already avoided. */}
+                {offer && (
+                  <div className="-mx-3.5 -mb-3.5 mt-1 border-t border-border/60 bg-primary/[0.04] px-3.5 py-2">
+                    <OfferPrice offer={offer} />
                   </div>
-                </li>
-              );
-            })}
-          </ul>
-        </CardContent>
-      </Card>
-    </>
+                )}
+              </CardContent>
+            </Card>
+          </li>
+        );
+      })}
+    </ul>
   );
 });
-
 /**
  * Whether a branch has the item.
  *

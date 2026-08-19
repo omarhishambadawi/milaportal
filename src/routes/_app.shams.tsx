@@ -122,12 +122,41 @@ function ShamsPage() {
     if (product) setStockProduct(product);
   }, [restoring, restored.data]);
 
+  /**
+   * The product actually on screen.
+   *
+   * Gated on the URL agreeing, rather than being `stockProduct` directly. The
+   * two update at different moments — one is React state, the other is a router
+   * navigation — and this is what makes the difference invisible: while a
+   * selection is being restored, or has just been cleared, the URL is the
+   * authority and a stale row is never rendered against the wrong `?item=`.
+   */
+  const openProduct = item && stockProduct?.itemCode === item ? stockProduct : null;
+
   /** Write one part of the search, leaving the rest of the URL alone. */
   const put = (next: Partial<ShamsSearch>, replace: boolean) =>
     navigate({ search: (prev) => ({ ...prev, ...next }), replace });
 
+  /**
+   * Open a product, or go back to the results.
+   *
+   * ## Why deselecting does not clear `stockProduct`
+   *
+   * It used to, and that was the "Change product needs two clicks" bug. The
+   * sequence: the click set `stockProduct` to `null` immediately, but the
+   * router's `?item=` only cleared a tick later. In between, `restoring`
+   * evaluated to `Boolean(item) && undefined !== item` — **true** — so the
+   * restore effect above fetched the product from cache and put it straight
+   * back. The first click appeared to do nothing; the second worked only
+   * because by then the URL had caught up.
+   *
+   * So a deselect is now a URL change and nothing else. `stockProduct` is left
+   * holding the last product it loaded, which costs nothing because
+   * `openProduct` will not render it without a matching `?item=`, and the
+   * restore effect stays quiet because state and URL never disagree.
+   */
   const selectProduct = (product: ShamsProduct | null) => {
-    setStockProduct(product);
+    if (product) setStockProduct(product);
     // A *push*, so Back returns to the results the agent came from. Typing is
     // the opposite — see below — or every keystroke would be a history entry.
     put({ item: product?.itemCode }, false);
@@ -158,9 +187,32 @@ function ShamsPage() {
           <TabsTrigger value="customers">Customers</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="stock" className="space-y-4">
+        {/*
+          `forceMount` on all three, which is the whole of "switching tabs does
+          not throw away what you loaded".
+
+          Radix unmounts an inactive tab's content by default, and unmounting is
+          what actually cost the work: every `useState` in the tab was
+          discarded — the typed search, the chosen branch, the page you were on
+          — and every React Query observer went with it, so coming back
+          remounted the component and refetched from zero. Held mounted, the
+          queries keep their observers and their cached data, and returning to a
+          tab renders instantly with no request at all.
+
+          Nothing here disables refetching. `staleTime` still governs freshness
+          exactly as before, an explicit search or Retry still goes to the
+          network, and a genuinely stale query still updates — this only stops
+          the *remount* that was making that machinery moot.
+
+          The cost is that all three mount at once, so each tab is told whether
+          it is `active`; see `autoFocus` inside them. Their queries are all
+          `enabled`-gated on a search having been made, so mounting three tabs
+          issues no requests.
+        */}
+        <TabsContent value="stock" forceMount className="space-y-4 data-[state=inactive]:hidden">
           <StockTab
-            selected={stockProduct}
+            active={tab === "stock"}
+            selected={openProduct}
             onSelect={selectProduct}
             query={q ?? ""}
             // `replace`, so a search does not bury the page in history: the
@@ -170,8 +222,9 @@ function ShamsPage() {
           />
         </TabsContent>
 
-        <TabsContent value="invoices" className="space-y-4">
+        <TabsContent value="invoices" forceMount className="space-y-4 data-[state=inactive]:hidden">
           <InvoicesTab
+            active={tab === "invoices"}
             handoff={doc && branch ? { docNo: doc, branchCode: branch } : null}
             // A search the agent typed themselves replaces the handed-over
             // document, so the URL stops claiming one. Without this, leaving the
@@ -181,8 +234,13 @@ function ShamsPage() {
           />
         </TabsContent>
 
-        <TabsContent value="customers" className="space-y-4">
+        <TabsContent
+          value="customers"
+          forceMount
+          className="space-y-4 data-[state=inactive]:hidden"
+        >
           <CustomersTab
+            active={tab === "customers"}
             // A *push*, so Back returns the agent to the history they came
             // from — the invoice is a detour from the customer, not a new
             // starting point.

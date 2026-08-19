@@ -838,6 +838,26 @@ per-branch shape should be preserved until it is.
 an offers read is `crmFetch("/products/<code>/available-branches")` — no new
 credential, no new client, no new auth flow.
 
+### 11.6 Offer scope — and why it is capped
+
+Coverage ("is this on offer at every branch that has it, or only some?") is
+computed by `classifyOfferScope` from a **single** availability response: the
+offers it lists, over the branches whose `available_qty` is positive.
+
+`available_qty` was previously declared off-limits so CRM availability could not
+drift into a view where MIS stock is the authority. It is read now for this one
+purpose — the response returns a row for every branch in the chain, not only
+stocked ones, so row count answers "how many branches exist" rather than the
+question a badge claims to answer. It is consumed inside `offers.server.ts`,
+never returned, and never rendered; `ShamsCrmOffer` still carries no quantity.
+
+Because §11.5 holds — one item per request, ~62 KB, no bulk form —
+`getOfferScopes` accepts at most **12** item codes and runs them 4 at a time
+against the same 60 s cache. Search returns up to 100 products, so an
+uncapped badge-per-row would be ~100 requests and megabytes of traffic per
+search. Above the cap the UI states that offers were not checked; a missing
+entry is never rendered as "no offer".
+
 **There is no bulk form.** The endpoint takes one item code and returned ~62 KB
 for it. Offers for a result set of *n* products would cost *n* requests; there is
 no observed way to ask for many at once, and no pagination or `limit` parameter.

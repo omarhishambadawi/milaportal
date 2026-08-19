@@ -93,9 +93,18 @@ export interface InvoiceHandoff {
 }
 
 export function InvoicesTab({
+  active = true,
   handoff = null,
   onManualSearch,
 }: {
+  /**
+   * Whether this tab is the one on screen.
+   *
+   * All three tabs stay mounted so a switch does not discard the search or its
+   * results, which means `autoFocus` has to be conditional — otherwise three
+   * inputs claim focus on the same mount and one the agent cannot see wins.
+   */
+  active?: boolean;
   /**
    * A document opened from a customer's history, with the branch that holds it.
    *
@@ -219,7 +228,8 @@ export function InvoicesTab({
                   placeholder="e.g. 22138"
                   inputMode="numeric"
                   autoComplete="off"
-                  autoFocus
+                  // Only when this tab is the visible one: all three are mounted.
+                  autoFocus={active}
                   className="h-11 pl-9 font-mono text-base"
                 />
               </div>

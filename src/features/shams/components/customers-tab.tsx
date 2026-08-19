@@ -7,6 +7,13 @@
  * a per-keystroke version would look up a series of unrelated customers on the
  * way to the intended one.
  *
+ * ## The shape of the screen
+ *
+ * Search, then who they are, then what they bought — in that order, because it
+ * is the order an agent needs them on a call. The summary is a band of facts
+ * rather than a table, so name, number and points are readable at a glance; the
+ * history below it is the primary content and gets the space.
+ *
  * ## What the API gives, and what it withholds
  *
  * The response is flat: every row repeats the customer and carries one
@@ -18,6 +25,16 @@
  * says which page is open and offers Previous/Next, and Next is offered exactly
  * when the page came back full — see `getCustomerHistory`. Rendering "Page 2 of
  * 7" would mean inventing the 7.
+ *
+ * The same absence governs the summary. "Total purchases" is only knowable when
+ * the whole range fits in one page; when it does not, the figure says it counts
+ * the page, because a number labelled as a total that is really a page is worse
+ * than no number.
+ *
+ * **There are no per-purchase points.** The endpoint returns a customer-level
+ * balance and nothing per line, so the history has no points column. A value
+ * derived from the line total would be a guess about a loyalty scheme this
+ * portal has no rules for.
  *
  * ## Where a mobile number is allowed to go
  *
@@ -31,7 +48,19 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { format } from "date-fns";
 import type { DateRange } from "react-day-picker";
-import { ChevronLeft, ChevronRight, FileText, Loader2, Phone, Search, User } from "lucide-react";
+import {
+  CalendarClock,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  FileText,
+  Loader2,
+  Phone,
+  Receipt,
+  Search,
+  Star,
+  User,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -46,6 +75,7 @@ import { DateRangePicker } from "@/components/date-range-picker";
 import { fmtSAR } from "@/lib/branches";
 import { cn } from "@/lib/utils";
 import type { ShamsCrmCustomer, ShamsCrmSale } from "@/lib/shams/types";
+import { countInvoices, groupSalesByMonth, latestSaleDate } from "@/lib/shams/crm-history";
 import {
   useCustomerHistory,
   type CustomerHistoryQuery,
@@ -62,26 +92,77 @@ import { EmptyState, ErrorState, NotConfiguredState, TableSkeleton } from "./sta
  * shorter page is quicker to scan. Nothing downstream trusts the number that
  * was asked for — `hasMore` is measured against the size the API echoes back —
  * so a size the endpoint chose to clamp cannot truncate a history.
+ *
+ * 100 also does the most for correctness: the more of a range that fits in one
+ * page, the more often the newest-first ordering below is globally true rather
+ * than true within a page. See `sortSalesNewestFirst`.
  */
 const PER_PAGE_OPTIONS = [25, 50, 100] as const;
 const DEFAULT_PER_PAGE = 100;
 
-/** How far back an unset search looks. */
-const DEFAULT_WINDOW_DAYS = 90;
-
 /** The API's date format. Formatted locally — a window is calendar days, not instants. */
 const toApiDate = (d: Date) => format(d, "yyyyMMdd");
 
-function defaultRange(): DateRange {
+/**
+ * Ranges offered as one click.
+ *
+ * Months rather than day counts, so "3 months" means the same three months an
+ * agent means, across months of different lengths.
+ */
+const QUICK_RANGES = [
+  { months: 1, label: "1 month" },
+  { months: 3, label: "3 months" },
+  { months: 6, label: "6 months" },
+  { months: 12, label: "12 months" },
+] as const;
+
+/**
+ * A window of the last `months` months, ending today.
+ *
+ * `setMonth` with a negative overflow rolls the year correctly, and clamping the
+ * day guards the case JavaScript gets wrong on its own: 31 March minus one month
+ * is 31 February, which `Date` silently turns into 3 March and would quietly
+ * drop two days off the start of the range.
+ */
+function rangeOfMonths(months: number): DateRange {
   const to = new Date();
-  const from = new Date();
-  from.setDate(from.getDate() - (DEFAULT_WINDOW_DAYS - 1));
+  const from = new Date(to);
+  from.setDate(1);
+  from.setMonth(from.getMonth() - months);
+  from.setDate(Math.min(to.getDate(), daysInMonth(from.getFullYear(), from.getMonth())));
   return { from, to };
 }
 
+function daysInMonth(year: number, monthIndex: number): number {
+  // Day 0 of the next month is the last day of this one.
+  return new Date(year, monthIndex + 1, 0).getDate();
+}
+
+/**
+ * How far back an unsearched form looks: one rolling year.
+ *
+ * A pharmacy customer's useful history is seasonal — a repeat prescription, a
+ * baby formula, an annual course — and a shorter default made an agent widen
+ * the range and search a second time on almost every call. One year is one
+ * request that usually answers the question.
+ *
+ * It costs nothing extra to *offer*: the range is a parameter on a request that
+ * is made once per submitted search either way, and paging is unchanged.
+ */
+const DEFAULT_RANGE_MONTHS = 12;
+
 export function CustomersTab({
+  active = true,
   onOpenInvoice,
 }: {
+  /**
+   * Whether this tab is the one on screen.
+   *
+   * All three tabs stay mounted so a switch does not discard a loaded history,
+   * which means `autoFocus` has to be conditional — otherwise three inputs
+   * claim focus on one mount and a hidden one can win.
+   */
+  active?: boolean;
   /**
    * Open a document from the history in the Invoices tab.
    *
@@ -92,7 +173,9 @@ export function CustomersTab({
   onOpenInvoice: (branchCode: string, docNo: string) => void;
 }) {
   const [mobile, setMobile] = useState("");
-  const [range, setRange] = useState<DateRange | undefined>(defaultRange);
+  const [range, setRange] = useState<DateRange | undefined>(() =>
+    rangeOfMonths(DEFAULT_RANGE_MONTHS),
+  );
   const [perPage, setPerPage] = useState<number>(DEFAULT_PER_PAGE);
 
   /**
@@ -115,16 +198,35 @@ export function CustomersTab({
   const rangeReady = Boolean(range?.from && range?.to);
   const canSubmit = mobile.trim() !== "" && rangeReady;
 
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    if (!canSubmit || !range?.from || !range?.to) return;
+  const runSearch = (next: DateRange | undefined = range, page = 1) => {
+    if (mobile.trim() === "" || !next?.from || !next?.to) return;
     setQuery({
       mobile: mobile.trim(),
-      fromDate: toApiDate(range.from),
-      toDate: toApiDate(range.to),
-      page: 1,
+      fromDate: toApiDate(next.from),
+      toDate: toApiDate(next.to),
+      page,
       perPage,
     });
+  };
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    runSearch();
+  };
+
+  /**
+   * A quick range sets the dates — and re-runs only if a search is already up.
+   *
+   * Re-running is the useful behaviour once results are on screen ("same
+   * customer, wider window") and it is one request the agent asked for by
+   * clicking. Before any search there is nothing to re-run, so it only fills
+   * the picker.
+   */
+  const applyQuickRange = (months: number) => {
+    const next = rangeOfMonths(months);
+    setRange(next);
+    if (query) runSearch(next);
   };
 
   /** Paging keeps everything but the page — see `placeholderData` in the hook. */
@@ -158,11 +260,21 @@ export function CustomersTab({
   /** A first load has no previous page to keep on screen; paging does. */
   const firstLoad = searching && !result;
 
+  const page = history?.page ?? 1;
+  const hasMore = history?.hasMore ?? false;
+  /**
+   * Is everything the range holds on this one page?
+   *
+   * Only then can a count be called a total. Page 1 with no next page is the
+   * whole answer; anything else is a page of it, and the summary says so.
+   */
+  const wholeRangeLoaded = page === 1 && !hasMore;
+
   return (
     <div className="space-y-4">
       <Card>
-        <CardContent className="p-4">
-          <form onSubmit={submit} className="flex flex-col gap-3 sm:flex-row sm:items-end">
+        <CardContent className="space-y-3 p-4">
+          <form onSubmit={submit} className="flex flex-col gap-3 lg:flex-row lg:items-end">
             <label className="flex min-w-0 flex-1 flex-col gap-1">
               <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                 Customer Mobile Number
@@ -178,6 +290,8 @@ export function CustomersTab({
                   placeholder="e.g. 0555555555"
                   inputMode="tel"
                   autoComplete="off"
+                  // Only when this tab is the visible one: all three are mounted.
+                  autoFocus={active}
                   // Not `type="tel"` with a pattern: the number is accepted in
                   // whatever form the agent has it written down and canonicalized
                   // server-side, so browser-level validation would reject inputs
@@ -196,7 +310,7 @@ export function CustomersTab({
               <DateRangePicker range={range} onChange={setRange} />
             </div>
 
-            <Button type="submit" disabled={!canSubmit || searching} className="h-11 sm:w-40">
+            <Button type="submit" disabled={!canSubmit || searching} className="h-11 lg:w-40">
               {searching ? (
                 <Loader2 className="mr-1.5 h-4 w-4 animate-spin" aria-hidden="true" />
               ) : (
@@ -206,11 +320,29 @@ export function CustomersTab({
             </Button>
           </form>
 
-          <p className="mt-2 text-xs leading-snug text-muted-foreground">
-            Search a customer by mobile number over a date range. Any format works —{" "}
-            <span className="font-mono">0555555555</span>,{" "}
-            <span className="font-mono">+966 55 555 5555</span> — and the history covers only the
-            dates chosen.
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Quick range
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {QUICK_RANGES.map((r) => (
+                <button
+                  key={r.months}
+                  type="button"
+                  onClick={() => applyQuickRange(r.months)}
+                  disabled={searching}
+                  className="rounded-full border border-border/70 px-2.5 py-1 text-xs font-medium transition-colors hover:bg-muted focus:bg-muted focus:outline-none disabled:opacity-50"
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <p className="text-xs leading-snug text-muted-foreground">
+            Any number format works — <span className="font-mono">0555555555</span>,{" "}
+            <span className="font-mono">+966 55 555 5555</span>. The history covers only the dates
+            chosen, and opens on the last {DEFAULT_RANGE_MONTHS} months.
           </p>
         </CardContent>
       </Card>
@@ -225,7 +357,14 @@ export function CustomersTab({
 
       {firstLoad && <TableSkeleton rows={8} />}
 
-      {customer && <CustomerSummary customer={customer} />}
+      {customer && (
+        <CustomerSummary
+          customer={customer}
+          sales={sales}
+          wholeRangeLoaded={wholeRangeLoaded}
+          onPage={page}
+        />
+      )}
 
       {/* A number nobody recognises and a customer with nothing in the window
           are different facts, and an agent needs to tell them apart: the first
@@ -245,9 +384,9 @@ export function CustomersTab({
       {sales.length > 0 && (
         <SalesHistory
           sales={sales}
-          page={history?.page ?? 1}
+          page={page}
           perPage={perPage}
-          hasMore={history?.hasMore ?? false}
+          hasMore={hasMore}
           // Dim rather than unmount: paging should not blank the table and
           // throw the agent's scroll position back to the top.
           busy={searching}
@@ -271,44 +410,107 @@ export function CustomersTab({
 /* -------------------------------------------------------------------------- */
 
 /**
- * Who the number belongs to.
+ * Who the number belongs to, and the shape of what they bought.
+ *
+ * Every figure here is read off the response already on screen — there is no
+ * second request behind this card, and nothing in it is derived from anything
+ * the API did not return. In particular there is no lifetime spend, no order
+ * frequency and no segment: `crm/data` supplies no line totals, so a currency
+ * figure would have to be invented.
  *
  * Points are shown here and **only** here. They are a property of the customer,
  * not of any one purchase, so repeating them down a history table — or carrying
  * them onto an invoice — would attach a live loyalty balance to a document that
  * has nothing to do with it.
  */
-function CustomerSummary({ customer }: { customer: ShamsCrmCustomer }) {
+function CustomerSummary({
+  customer,
+  sales,
+  wholeRangeLoaded,
+  onPage,
+}: {
+  customer: ShamsCrmCustomer;
+  sales: ShamsCrmSale[];
+  /** True when the range fits in one page, so a count is a total. */
+  wholeRangeLoaded: boolean;
+  onPage: number;
+}) {
+  // Distinct documents, not rows: the API returns one row per item, so counting
+  // rows would report a three-item purchase as three purchases.
+  const invoices = useMemo(() => countInvoices(sales), [sales]);
+  const latest = useMemo(() => latestSaleDate(sales), [sales]);
+
   return (
     <Card>
-      <CardContent className="flex flex-wrap items-start gap-x-8 gap-y-3 p-4">
-        <Field label="Customer">
-          <span className="break-words" dir="auto">
-            {customer.name ?? "—"}
+      <CardContent className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:gap-6">
+        <div className="flex min-w-0 items-center gap-3">
+          <span
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-primary/10 text-primary"
+            aria-hidden="true"
+          >
+            <User className="h-5 w-5" />
           </span>
-        </Field>
-        <Field label="Mobile">
-          <span className="font-mono">{customer.mobile ?? "—"}</span>
-        </Field>
-        <Field label="Customer ID">
-          <span className="font-mono">{customer.customerId}</span>
-        </Field>
-        <Field label="Available Points">
-          <span className="tabular-nums">{fmtSAR(customer.availablePoints, { bare: true })}</span>
-        </Field>
-        <Field label="Points Value">
-          <span className="tabular-nums">{fmtSAR(customer.pointsValue)}</span>
-        </Field>
+          <div className="min-w-0">
+            <p className="truncate text-lg font-semibold leading-tight" dir="auto">
+              {customer.name ?? "Unnamed customer"}
+            </p>
+            <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+              <span>
+                ID <span className="font-mono text-foreground">{customer.customerId}</span>
+              </span>
+              <span aria-hidden="true">·</span>
+              <span className="font-mono text-foreground">{customer.mobile ?? "—"}</span>
+            </p>
+          </div>
+        </div>
+
+        {/* Wraps rather than scrolls, so a phone stacks these instead of
+            hiding the last one off the right edge. */}
+        <div className="grid flex-1 grid-cols-2 gap-3 sm:grid-cols-4 lg:gap-5">
+          <SummaryStat
+            icon={<Star className="h-3.5 w-3.5" aria-hidden="true" />}
+            label="Available points"
+            value={fmtSAR(customer.availablePoints, { bare: true })}
+          />
+          <SummaryStat
+            icon={<Star className="h-3.5 w-3.5" aria-hidden="true" />}
+            label="Points value"
+            value={fmtSAR(customer.pointsValue)}
+          />
+          <SummaryStat
+            icon={<Receipt className="h-3.5 w-3.5" aria-hidden="true" />}
+            // The label carries the caveat rather than a footnote: when the
+            // range spills over a page this counts the page, and says so.
+            label={wholeRangeLoaded ? "Invoices in range" : `Invoices on page ${onPage}`}
+            value={String(invoices)}
+          />
+          <SummaryStat
+            icon={<CalendarClock className="h-3.5 w-3.5" aria-hidden="true" />}
+            label={wholeRangeLoaded ? "Last purchase" : "Latest on page"}
+            value={formatSaleDate(latest)}
+          />
+        </div>
       </CardContent>
     </Card>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function SummaryStat({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+}) {
   return (
     <div className="min-w-0">
-      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
-      <div className="mt-0.5 text-sm font-medium">{children}</div>
+      <p className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+        {icon}
+        <span className="truncate">{label}</span>
+      </p>
+      <p className="mt-1 truncate text-lg font-semibold tabular-nums">{value}</p>
     </div>
   );
 }
@@ -332,6 +534,30 @@ function formatSaleDate(value: string | null): string {
   return `${Number(match[3])} ${MONTHS[Number(match[2]) - 1] ?? match[2]} ${match[1]}`;
 }
 
+/** `"2026-07-03T00:00:00"` → `"3 Jul"`. Inside a month group the year is noise. */
+function formatDayInMonth(value: string | null): string {
+  if (!value) return "—";
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!match) return formatSaleDate(value);
+  return `${Number(match[3])} ${MONTHS[Number(match[2]) - 1] ?? match[2]}`;
+}
+
+/**
+ * The purchase history, grouped by month.
+ *
+ * Months come from `groupSalesByMonth`, which preserves the newest-first order
+ * the data layer already established rather than sorting again — one comparator
+ * for the whole feature, so the headings and the rows under them cannot drift
+ * apart.
+ *
+ * The grouping is per page, because the API pages. A month that spans a page
+ * boundary gets a heading on both, which is the honest rendering: the second
+ * page really is showing more of that month. No row appears twice.
+ *
+ * One table with a `<tbody>` per month rather than a table per month, so every
+ * column stays aligned down the whole history and `table-fixed` has one set of
+ * widths to honour.
+ */
 function SalesHistory({
   sales,
   page,
@@ -351,20 +577,24 @@ function SalesHistory({
   onPage: (page: number) => void;
   onPerPage: (perPage: number) => void;
 }) {
+  const months = useMemo(() => groupSalesByMonth(sales), [sales]);
+
   return (
     <Card className="overflow-hidden">
       <CardContent className="p-0">
-        <div
-          className={cn("transition-opacity", busy && "pointer-events-none opacity-60")}
-          aria-busy={busy}
-        >
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 px-4 py-3">
+          <h2 className="text-sm font-semibold">Purchase History</h2>
+          <span className="text-xs text-muted-foreground">Newest first</span>
+        </div>
+
+        <div className={cn("transition-opacity", busy && "pointer-events-none opacity-60")}>
           <table className="hidden w-full table-fixed text-sm md:table">
             <colgroup>
-              <col className="w-[13%]" />
               <col className="w-[11%]" />
-              <col className="w-[16%]" />
-              <col className="w-[12%]" />
+              <col className="w-[11%]" />
+              <col className="w-[17%]" />
               <col />
+              <col className="w-[7%]" />
               <col className="w-[8%]" />
             </colgroup>
             <thead>
@@ -372,58 +602,100 @@ function SalesHistory({
                 <th className={TH}>Date</th>
                 <th className={TH}>Invoice</th>
                 <th className={TH}>Branch</th>
-                <th className={TH}>Item Code</th>
                 <th className={TH}>Item</th>
                 <th className={cn(TH, "text-right")}>Qty</th>
+                <th className={cn(TH, "text-right")}>Actions</th>
               </tr>
             </thead>
-            <tbody>
-              {sales.map((sale, i) => (
-                <tr
-                  key={`${sale.docNo}-${sale.itemCode}-${i}`}
-                  className="border-b border-border/40 last:border-0"
-                >
-                  <td className={cn(TD, "py-2.5 whitespace-nowrap")}>
-                    {formatSaleDate(sale.docDate)}
-                  </td>
-                  <td className={cn(TD, "py-2.5")}>
-                    <InvoiceLink sale={sale} onOpen={onOpenInvoice} />
-                  </td>
-                  <td className={cn(TD, "py-2.5 text-xs")}>
-                    <BranchLabel sale={sale} />
-                  </td>
-                  <td className={cn(TD, "py-2.5 font-mono text-xs text-muted-foreground")}>
-                    {sale.itemCode ?? "—"}
-                  </td>
-                  <td className={cn(TD, "py-2.5 font-medium")} dir="auto">
-                    {sale.itemName ?? "—"}
-                  </td>
-                  <td className={cn(TD, "py-2.5 text-right tabular-nums")}>{sale.quantity}</td>
+
+            {months.map((month) => (
+              <tbody key={month.key}>
+                <tr>
+                  {/* The separator an agent scans for. Sticky so the month
+                      stays named while a long one scrolls past. */}
+                  <th
+                    colSpan={6}
+                    scope="colgroup"
+                    className="sticky top-0 z-10 border-y border-border/60 bg-muted/60 px-4 py-2 text-left backdrop-blur"
+                  >
+                    <span className="text-[13px] font-semibold">{month.label}</span>
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">
+                      {month.invoices} {month.invoices === 1 ? "invoice" : "invoices"} ·{" "}
+                      {month.sales.length} {month.sales.length === 1 ? "item" : "items"}
+                    </span>
+                  </th>
                 </tr>
-              ))}
-            </tbody>
+                {month.sales.map((sale, i) => (
+                  <tr
+                    key={`${sale.branchCode}-${sale.docNo}-${sale.itemCode}-${i}`}
+                    className="border-b border-border/40 last:border-0"
+                  >
+                    <td className={cn(TD, "whitespace-nowrap py-2.5")}>
+                      {formatDayInMonth(sale.docDate)}
+                    </td>
+                    <td className={cn(TD, "py-2.5 font-mono text-xs")}>{sale.docNo ?? "—"}</td>
+                    <td className={cn(TD, "py-2.5 text-xs")}>
+                      <BranchLabel sale={sale} />
+                    </td>
+                    <td className={cn(TD, "py-2.5 font-medium")} dir="auto">
+                      {sale.itemName ?? "—"}
+                      <span className="mt-0.5 block font-mono text-xs font-normal text-muted-foreground">
+                        {sale.itemCode ?? "—"}
+                      </span>
+                    </td>
+                    <td className={cn(TD, "py-2.5 text-right tabular-nums")}>{sale.quantity}</td>
+                    <td className={cn(TD, "py-2.5 text-right")}>
+                      <OpenInvoiceButton sale={sale} onOpen={onOpenInvoice} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            ))}
           </table>
 
-          <ul className="divide-y divide-border/40 md:hidden">
-            {sales.map((sale, i) => (
-              <li key={`${sale.docNo}-${sale.itemCode}-${i}`} className="p-4">
-                <p className="text-sm font-medium leading-snug" dir="auto">
-                  {sale.itemName ?? "—"}
-                </p>
-                <p className="mt-0.5 font-mono text-xs text-muted-foreground">
-                  {sale.itemCode ?? "—"}
-                </p>
-                <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs">
-                  <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <span className="text-muted-foreground">{formatSaleDate(sale.docDate)}</span>
-                    <InvoiceLink sale={sale} onOpen={onOpenInvoice} />
-                    <BranchLabel sale={sale} />
+          {/* Mobile: the same months, as sections. Nothing scrolls sideways. */}
+          <div className="md:hidden">
+            {months.map((month) => (
+              <section key={month.key}>
+                <h3 className="sticky top-0 z-10 border-y border-border/60 bg-muted/60 px-4 py-2 text-[13px] font-semibold backdrop-blur">
+                  {month.label}
+                  <span className="ml-2 text-xs font-normal text-muted-foreground">
+                    {month.invoices} {month.invoices === 1 ? "invoice" : "invoices"}
                   </span>
-                  <span className="text-sm font-semibold tabular-nums">× {sale.quantity}</span>
-                </div>
-              </li>
+                </h3>
+                <ul className="divide-y divide-border/40">
+                  {month.sales.map((sale, i) => (
+                    <li
+                      key={`${sale.branchCode}-${sale.docNo}-${sale.itemCode}-${i}`}
+                      className="px-4 py-3"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="min-w-0 flex-1 text-sm font-medium leading-snug" dir="auto">
+                          {sale.itemName ?? "—"}
+                        </p>
+                        <span className="shrink-0 text-sm font-semibold tabular-nums">
+                          × {sale.quantity}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 font-mono text-xs text-muted-foreground">
+                        {sale.itemCode ?? "—"}
+                      </p>
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
+                        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className="text-muted-foreground">
+                            {formatDayInMonth(sale.docDate)}
+                          </span>
+                          <span className="font-mono">{sale.docNo ?? "—"}</span>
+                          <BranchLabel sale={sale} />
+                        </span>
+                        <OpenInvoiceButton sale={sale} onOpen={onOpenInvoice} withLabel />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
             ))}
-          </ul>
+          </div>
         </div>
 
         <Pager
@@ -441,29 +713,46 @@ function SalesHistory({
 }
 
 /**
- * The invoice number, as a way into the document.
+ * The way into a document from a history row.
  *
- * A link only when the row carries a branch: `sales/details` is scoped to one
- * warehouse, so without a branch code there is nothing to open. The number is
- * still shown in that case — it is real information — just not clickable.
+ * Rendered only when the row carries a branch: `sales/details` is scoped to one
+ * warehouse, so without a branch code there is nothing to open. The invoice
+ * number itself stays plain text in its own column — one affordance per row
+ * rather than two controls that do the same thing.
  */
-function InvoiceLink({
+function OpenInvoiceButton({
   sale,
   onOpen,
+  withLabel,
 }: {
   sale: ShamsCrmSale;
   onOpen: (sale: ShamsCrmSale) => void;
+  withLabel?: boolean;
 }) {
-  if (!sale.docNo) return <span className="text-muted-foreground">—</span>;
-  if (!sale.branchCode) return <span className="font-mono">{sale.docNo}</span>;
+  if (!sale.branchCode || !sale.docNo) return null;
+
+  if (withLabel) {
+    return (
+      <button
+        type="button"
+        onClick={() => onOpen(sale)}
+        className="inline-flex items-center gap-1.5 font-medium text-primary underline-offset-2 hover:underline"
+      >
+        <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+        Open invoice
+      </button>
+    );
+  }
+
   return (
     <button
       type="button"
       onClick={() => onOpen(sale)}
-      className="font-mono font-medium text-primary underline-offset-2 hover:underline"
+      aria-label={`Open invoice ${sale.docNo}`}
       title={`Open invoice ${sale.docNo}`}
+      className="inline-grid h-7 w-7 place-items-center rounded-md border border-border/70 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:bg-muted focus:outline-none"
     >
-      {sale.docNo}
+      <Eye className="h-3.5 w-3.5" aria-hidden="true" />
     </button>
   );
 }
@@ -477,7 +766,7 @@ function BranchLabel({ sale }: { sale: ShamsCrmSale }) {
     <span className="flex flex-wrap items-baseline gap-x-1.5">
       <span className="font-mono">{sale.branchCode}</span>
       {sale.branchCity && (
-        <span className="text-muted-foreground" dir="auto">
+        <span className="truncate text-muted-foreground" dir="auto">
           {sale.branchCity}
         </span>
       )}
@@ -531,7 +820,7 @@ function Pager({
       <div className="flex items-center gap-3">
         <span className="text-xs text-muted-foreground">
           Page <span className="font-medium text-foreground">{page}</span> · {rows}{" "}
-          {rows === 1 ? "row" : "rows"}
+          {rows === 1 ? "item" : "items"}
         </span>
         <div className="flex items-center gap-1">
           <Button

@@ -170,14 +170,16 @@ describe("CRM offer pricing sits beside MIS stock, never on top of it", () => {
     expect(stockTab).toContain("offersQuery.data?.ok ? offersQuery.data.offers : []");
   });
 
-  it("matches offers to stock rows by branch code", () => {
+  it("matches offers to branch rows by branch code", () => {
     expect(stockTab).toContain("offers.get(row.branchCode)");
-    expect(stockTab).toContain("offers.has(row.branchCode)");
   });
 
-  it("shows the Offer column only when a row actually has one", () => {
-    expect(stockTab).toContain("const anyOffer = rows.some((row) => offers.has(row.branchCode))");
-    expect(stockTab).toContain("{anyOffer &&");
+  it("shows an offer only on the branch that actually has one", () => {
+    // The branch view is cards now rather than a table, so this is a per-card
+    // condition instead of a conditional column — the rule is unchanged: a
+    // branch with no promotion renders no offer slot at all.
+    expect(stockTab).toContain("{offer && (");
+    expect(stockTab).toContain("<OfferPrice offer={offer} />");
   });
 
   it("renders the API's after-offer price rather than deriving one", () => {
@@ -311,5 +313,128 @@ describe("customer results never outlive their search", () => {
   it("does not carry data across every key change", () => {
     expect(hook).not.toContain("placeholderData: (previous) => previous");
     expect(hook).not.toContain("keepPreviousData");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Switching tabs must not throw away what a tab already loaded.
+ *
+ * Radix unmounts an inactive tab by default, and unmounting was the whole
+ * problem: it discarded every `useState` in the tab — the typed search, the
+ * chosen branch, the page — and every React Query observer with it, so coming
+ * back remounted and refetched from zero. `forceMount` is the fix, and these
+ * assertions are what keep it.
+ *
+ * The autoFocus rule is the cost of that fix and belongs in the same place:
+ * three tabs mounting at once means three inputs can claim focus, and the one
+ * that wins may be on a tab nobody can see.
+ */
+describe("tab state survives a switch", () => {
+  it("keeps all three tabs mounted", () => {
+    // Counted on the elements, not in prose: the comment above them uses the
+    // word too.
+    const mounted = shamsRoute.match(/<TabsContent[\s\S]{0,120}?forceMount/g) ?? [];
+    expect(mounted).toHaveLength(3);
+    // Hidden rather than unmounted, so nothing is visible from an inactive tab.
+    expect(shamsRoute).toContain("data-[state=inactive]:hidden");
+  });
+
+  it("tells each tab whether it is the visible one", () => {
+    expect(shamsRoute).toContain('active={tab === "stock"}');
+    expect(shamsRoute).toContain('active={tab === "invoices"}');
+    expect(shamsRoute).toContain('active={tab === "customers"}');
+  });
+
+  it("focuses only the visible tab's input", () => {
+    // Unconditional `autoFocus` would hand focus to whichever of the three
+    // mounted last.
+    expect(source).toContain("autoFocus={active}");
+    expect(stockTab).toContain("autoFocus={active}");
+    expect(customersTab).toContain("autoFocus={active}");
+    expect(stockTab).not.toMatch(/autoFocus\s*\n\s*\/>/);
+  });
+
+  it("does not buy preservation by disabling refetching", () => {
+    // The queries keep their own staleness rules; only the remount is gone.
+    expect(hook).not.toContain("refetchOnMount: false");
+    expect(hook).not.toContain("staleTime: Infinity");
+  });
+
+  it("still asks for nothing until a search is made", () => {
+    // Three tabs mounting at once must not become three requests on page load.
+    expect(hook).toContain("enabled: enabled && searchable");
+    expect(hook).toContain("enabled: Boolean(query)");
+    expect(hook).toContain("enabled: enabled && Boolean(lookup?.branchCode && lookup?.docNo)");
+  });
+});
+
+/**
+ * Change product: one click, one change.
+ *
+ * The bug was a race, not a missing handler. Clearing `stockProduct` on the
+ * click made `restoring` true — the URL still carried `?item=` for a tick — so
+ * the restore effect refetched the product from cache and put it straight back.
+ * The second click only worked because the URL had caught up by then.
+ */
+describe("change product takes one click", () => {
+  it("does not clear the local product on deselect", () => {
+    // `if (product)` is the fix: a deselect is a URL change and nothing else,
+    // so state and URL never disagree and the restore effect stays quiet.
+    expect(shamsRoute).toContain("if (product) setStockProduct(product);");
+    // The unguarded assignment is what reinstated the product on the first
+    // click, and clearing it explicitly is the same bug written differently.
+    expect(shamsRoute).not.toMatch(/^\s*setStockProduct\(product\);$/m);
+    expect(shamsRoute).not.toContain("setStockProduct(null)");
+  });
+
+  it("renders the open product only when the URL agrees", () => {
+    expect(shamsRoute).toContain(
+      "const openProduct = item && stockProduct?.itemCode === item ? stockProduct : null;",
+    );
+    expect(shamsRoute).toContain("selected={openProduct}");
+  });
+
+  it("still clears the selection through the URL", () => {
+    expect(shamsRoute).toContain("put({ item: product?.itemCode }, false)");
+  });
+});
+
+/**
+ * Offers on the result list, without turning a search into a hundred requests.
+ */
+describe("offer badges are bounded", () => {
+  it("asks for a whole result set in one call, not one call per row", () => {
+    expect(stockTab).toContain("useOfferScopes(resultCodes, !selected)");
+    expect(stockTab.match(/useOfferScopes\(/g)).toHaveLength(1);
+  });
+
+  it("stops asking once a product is open", () => {
+    // The result list is gone but its query data is still cached, so without
+    // the `!selected` gate the tab would keep checking a list nobody sees.
+    expect(stockTab).toContain("!selected");
+  });
+
+  it("says when a set was too large to check, rather than showing blanks", () => {
+    // A row with no badge would otherwise read as "no offer", which is a claim
+    // nobody made.
+    expect(stockTab).toContain("offersSkipped");
+    expect(stockTab).toContain("Offers not checked");
+  });
+
+  it("distinguishes all branches from some branches in the label", () => {
+    expect(stockTab).toContain("· all branches");
+    expect(stockTab).toContain("· some branches");
+  });
+
+  it("renders nothing for an item with no offer and for one not checked", () => {
+    expect(stockTab).toContain(
+      'if (!scope || scope.kind === "none" || scope.kind === "unknown") return null;',
+    );
+  });
+
+  it("reuses the opened product's own response rather than asking again", () => {
+    expect(stockTab).toContain("offersQuery.data.scope");
   });
 });

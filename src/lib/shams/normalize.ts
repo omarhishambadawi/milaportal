@@ -455,8 +455,24 @@ export function normalizeCrmMobile(value: unknown): string | null {
  * document totals to fold — a row is one item on one invoice, and that is the
  * granularity the history is genuinely at.
  *
- * Order is preserved as returned. The API expresses no other ordering, and
- * re-sorting client-side would fight the paging, which is server-side.
+ * ## Ordering — newest first, and the limit of that promise
+ *
+ * Rows are sorted **newest first** here rather than in a component, so every
+ * consumer sees one order and no view can quietly disagree with another.
+ *
+ * The honest caveat: this sorts *a response*, and a response is one page. The
+ * API exposes no sort parameter — `crm/data` takes `mobileno`, `fromdt`,
+ * `todt`, `page` and `per_page`, and nothing else — so **whether page 2 is
+ * older than page 1 is the API's own ordering and is NOT VERIFIED**. Sorting
+ * each page is what can be guaranteed without fetching a customer's entire
+ * history to sort it, which for a long history is an unbounded fan-out.
+ *
+ * In practice the default page holds 100 lines, which covers a year for most
+ * customers in a single page, where the order is exactly right.
+ *
+ * Ties break on document number, descending: two lines bought on the same day
+ * are ordered by the later invoice, and a stable tiebreak keeps a re-render from
+ * shuffling equal rows.
  */
 export function groupCrmHistory(rows: RawCrmRow[] | undefined | null): {
   customer: ShamsCrmCustomer | null;
@@ -500,5 +516,31 @@ export function groupCrmHistory(rows: RawCrmRow[] | undefined | null): {
     });
   }
 
-  return { customer, sales };
+  return { customer, sales: sortSalesNewestFirst(sales) };
+}
+
+/**
+ * Newest purchase first. Pure, total, and stable.
+ *
+ * Dates are compared as **strings**, which is correct rather than lazy: they are
+ * ISO-8601 (`2026-07-03T00:00:00`), so lexicographic order is chronological
+ * order, and no `Date` is constructed — parsing a timezone-less timestamp to an
+ * instant is the bug this codebase avoids everywhere else.
+ *
+ * A row with no date sorts last. It cannot be placed among dated rows honestly,
+ * and dropping it would lose a purchase.
+ */
+export function sortSalesNewestFirst(sales: readonly ShamsCrmSale[]): ShamsCrmSale[] {
+  return [...sales].sort((a, b) => {
+    if (a.docDate !== b.docDate) {
+      if (!a.docDate) return 1;
+      if (!b.docDate) return -1;
+      return a.docDate < b.docDate ? 1 : -1;
+    }
+    // Same day: the later document first. Numeric, so 9 sorts below 10.
+    const an = Number(a.docNo ?? "");
+    const bn = Number(b.docNo ?? "");
+    if (Number.isFinite(an) && Number.isFinite(bn) && an !== bn) return bn - an;
+    return 0;
+  });
 }

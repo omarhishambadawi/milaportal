@@ -36,7 +36,7 @@ import type { InvoiceBranchMatch } from "@/lib/shams/types";
 import type { ItemAvailability } from "@/lib/shams/availability";
 import type { CatalogDiagnostics } from "@/lib/shams/diagnostics.server";
 import type { CrmSearchDiagnostics, CrmSmokeResult } from "@/lib/shams-crm/diagnostics.server";
-import type { ShamsCrmOffer } from "@/lib/shams-crm/types";
+import type { ShamsCrmOffer, ShamsOfferScope } from "@/lib/shams-crm/types";
 import type { ShamsCrmHistory } from "@/lib/shams/types";
 
 /* -------------------------------------------------------------------------- */
@@ -153,6 +153,18 @@ const crmHistoryInput = z.object({
   toDate: z.string().length(8),
   page: z.number().int().min(1).max(1000).optional(),
   perPage: z.number().int().min(1).max(100).optional(),
+});
+/**
+ * Items to check offer coverage for.
+ *
+ * The `max(12)` is the load-bearing part and it is asserted here as well as in
+ * `getOfferScopes`. There is no bulk offers endpoint, so every code in this
+ * array is one ~62 KB CRM request: the browser does not get to decide how many
+ * of those a single call makes. Anything longer is a rejected request rather
+ * than a silently truncated one, so a caller that outgrows the cap finds out.
+ */
+const offerScopesInput = z.object({
+  itemCodes: z.array(z.string().min(1).max(40)).min(1).max(12),
 });
 
 /* -------------------------------------------------------------------------- */
@@ -625,6 +637,14 @@ export const shamsCrmSearchDiagnostic = createServerFn({ method: "POST" })
 export interface ShamsProductOffersResult {
   ok: boolean;
   offers: ShamsCrmOffer[];
+  /**
+   * How widely the offer applies, from the same response as `offers`.
+   *
+   * Returned alongside rather than through `shamsGetOfferScopes` so an opened
+   * product costs one call, not two — and so the badge on the product header
+   * cannot disagree with the per-branch prices underneath it.
+   */
+  scope: ShamsOfferScope | null;
   error: ShamsFailure | null;
 }
 
@@ -648,16 +668,73 @@ export const shamsGetProductOffers = createServerFn({ method: "POST" })
 
     const { isCrmCatalogAvailable } = await import("@/lib/shams-crm/products.server");
     // Not configured is not an error: the page simply shows no offers.
-    if (!isCrmCatalogAvailable()) return { ok: false, offers: [], error: null };
+    if (!isCrmCatalogAvailable()) return { ok: false, offers: [], scope: null, error: null };
 
     try {
-      const { getProductOffer } = await import("@/lib/shams-crm/offers.server");
-      return { ok: true, offers: await getProductOffer(data.itemCode), error: null };
+      const { getProductOffer, getProductOfferScope } =
+        await import("@/lib/shams-crm/offers.server");
+      // Both read the same cached response — one upstream request, two answers.
+      const [offers, scope] = await Promise.all([
+        getProductOffer(data.itemCode),
+        getProductOfferScope(data.itemCode),
+      ]);
+      return { ok: true, offers, scope, error: null };
     } catch (err) {
       if (err instanceof Error && err.message.startsWith("Forbidden")) throw err;
       const { ShamsCrmError } = await import("@/lib/shams-crm/client.server");
       const kind = err instanceof ShamsCrmError ? err.kind : "unknown";
       // The message is this module's, not the CRM's.
-      return { ok: false, offers: [], error: { kind, message: "Offer pricing is unavailable." } };
+      return {
+        ok: false,
+        offers: [],
+        scope: null,
+        error: { kind, message: "Offer pricing is unavailable." },
+      };
+    }
+  });
+
+export interface ShamsOfferScopesResult {
+  ok: boolean;
+  /** Only the items that were actually answered for. */
+  scopes: ShamsOfferScope[];
+  error: ShamsFailure | null;
+}
+
+/**
+ * Offer coverage for a set of items, in one call.
+ *
+ * This exists so an agent can see *from the result list* whether a product is
+ * on offer, without opening it — and it is capped rather than open-ended,
+ * because there is no bulk offers endpoint. Each item is its own ~62 KB CRM
+ * request, so the cap in `getOfferScopes` is what stops a badge on every row
+ * from turning one search into a hundred upstream reads.
+ *
+ * One browser request regardless of how many items are asked about. The fan-out,
+ * its concurrency limit and its cache all live server-side, next to the CRM
+ * client that owns them.
+ *
+ * Items the CRM could not answer for are **absent** from `scopes` rather than
+ * reported as having no offer. The distinction is the point: the caller renders
+ * a missing entry as "not checked".
+ */
+export const shamsGetOfferScopes = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => offerScopesInput.parse(d))
+  .handler(async ({ context, data }): Promise<ShamsOfferScopesResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertPermission(supabase, userId, "view_shams_mis");
+
+    const { isCrmCatalogAvailable } = await import("@/lib/shams-crm/products.server");
+    // Not configured is not an error: the list simply shows no offer badges.
+    if (!isCrmCatalogAvailable()) return { ok: false, scopes: [], error: null };
+
+    try {
+      const { getOfferScopes } = await import("@/lib/shams-crm/offers.server");
+      return { ok: true, scopes: await getOfferScopes(data.itemCodes), error: null };
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith("Forbidden")) throw err;
+      const { ShamsCrmError } = await import("@/lib/shams-crm/client.server");
+      const kind = err instanceof ShamsCrmError ? err.kind : "unknown";
+      return { ok: false, scopes: [], error: { kind, message: "Offer pricing is unavailable." } };
     }
   });

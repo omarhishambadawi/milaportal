@@ -28,6 +28,7 @@ import {
   shamsFindInvoiceBranches,
   shamsGetCustomerHistory,
   shamsGetInvoices,
+  shamsGetOfferScopes,
   shamsGetInvoiceStock,
   shamsGetProduct,
   shamsGetProductOffers,
@@ -56,6 +57,24 @@ const OFFERS_STALE_MS = 60_000;
  * within a shift. Held long enough that going back to a number is free.
  */
 const DISCOVERY_STALE_MS = 10 * 60_000;
+/**
+ * How long a customer's history stays usable without re-asking.
+ *
+ * It was `0`, which meant *every* return to a customer paid the full round trip
+ * again — and `crm/data` is the slowest endpoint in the capture at 1.8–2.2 s.
+ * Combined with the tab unmounting on a switch, an agent who looked at a
+ * customer, checked an invoice and came back waited for the same answer twice.
+ *
+ * Two minutes, which is chosen against what the data is. A purchase history
+ * over a date range is a record of things that have already happened; the only
+ * way it changes inside two minutes is a purchase made during the call, and an
+ * agent who needs to see that presses Search again — which, being an explicit
+ * user action on the same key, refetches regardless of this number.
+ *
+ * This is a *client* cache in the agent's own session. The server read stays
+ * uncached on purpose; see `crm.server.ts`.
+ */
+const CRM_HISTORY_STALE_MS = 2 * 60_000;
 
 /** Trailing-edge debounce over a text input. */
 export function useDebounced(value: string, delayMs = DEBOUNCE_MS): string {
@@ -412,7 +431,11 @@ export function useCustomerHistory(query: CustomerHistoryQuery | null) {
         signal,
       }),
     enabled: Boolean(query),
-    staleTime: 0,
+    staleTime: CRM_HISTORY_STALE_MS,
+    // Long enough to survive a detour into another tab and back. Without it the
+    // cache is dropped while the agent is away and the next look costs a fresh
+    // 2 s round trip for a history they were reading a moment ago.
+    gcTime: 15 * 60_000,
     /**
      * Keep the previous page on screen while the next one loads — but **only**
      * when it is the same search.
@@ -448,4 +471,67 @@ export function useCustomerHistory(query: CustomerHistoryQuery | null) {
     refetchOnWindowFocus: false,
     retry: false,
   });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Offer coverage for a result set                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The most items one lookup may cover. Mirrors the server's own cap.
+ *
+ * Exported because the UI has to *say* when a result set is too large to check
+ * rather than quietly showing rows with no badge, which would read as "no
+ * offer". See `MAX_OFFER_SCOPE_ITEMS` in `lib/shams-crm/offers.server.ts` for
+ * why the ceiling exists at all.
+ */
+export const MAX_OFFER_SCOPE_ITEMS = 12;
+
+/**
+ * Whether each product in a result set has an offer, and how widely it applies.
+ *
+ * This is the hook that could have been the page's worst N+1, so the rules are
+ * strict:
+ *
+ *   1. **One query for the whole set**, not one per row. The fan-out happens
+ *      server-side under a concurrency limit and a shared 60 s cache.
+ *   2. **Disabled above `MAX_OFFER_SCOPE_ITEMS`.** Offers have no bulk endpoint
+ *      and each item is a ~62 KB request, so a broad search asks for nothing at
+ *      all and the list says so.
+ *   3. **Keyed on the sorted set**, so re-ranking the same products is a cache
+ *      hit rather than a second fan-out.
+ *
+ * Held for the same 60 s the server holds an offer: this is a live price, and a
+ * badge that outlived it would be a promise about money.
+ */
+export function useOfferScopes(itemCodes: readonly string[], enabled = true) {
+  const scopesFn = useServerFn(shamsGetOfferScopes);
+
+  // Sorted and deduplicated here so the key is order-insensitive; `codes` is
+  // also what gets sent, so the request and the key cannot disagree.
+  const codes = useMemo(() => [...new Set(itemCodes.filter(Boolean))].sort(), [itemCodes]);
+  const within = codes.length > 0 && codes.length <= MAX_OFFER_SCOPE_ITEMS;
+
+  const query = useQuery({
+    queryKey: queryKeys.shams.offerScopes(codes.join(",")),
+    queryFn: ({ signal }) => scopesFn({ data: { itemCodes: codes }, signal }),
+    enabled: enabled && within,
+    staleTime: OFFERS_STALE_MS,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+
+  return useMemo(() => {
+    const rows = query.data?.ok ? query.data.scopes : [];
+    return {
+      /**
+       * Scope by item code. An item **absent** from this map was not answered
+       * for — never render that as "no offer"; `none` is its own kind.
+       */
+      byItemCode: new Map(rows.map((scope) => [scope.itemCode, scope])),
+      /** True when the set was too large to check, so the UI can say why. */
+      skipped: codes.length > MAX_OFFER_SCOPE_ITEMS,
+      loading: query.isFetching,
+    };
+  }, [query.data, query.isFetching, codes.length]);
 }

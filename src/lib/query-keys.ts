@@ -281,6 +281,15 @@ export const queryKeys = {
      */
     crmHistory: (mobile: string, fromDate: string, toDate: string, page: number, perPage: number) =>
       ["shams", "crm-history", mobile, fromDate, toDate, page, perPage] as const,
+    /**
+     * Offer coverage for a set of items, keyed on the set itself.
+     *
+     * The codes are sorted and joined by the caller so that the same products
+     * in a different order are one cache entry rather than two — a re-search
+     * that reorders results by relevance must not re-ask the CRM about items it
+     * just asked about.
+     */
+    offerScopes: (itemCodesKey: string) => ["shams", "offer-scopes", itemCodesKey] as const,
   },
 
   /**
