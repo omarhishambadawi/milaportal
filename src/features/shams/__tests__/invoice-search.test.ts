@@ -175,11 +175,24 @@ describe("CRM offer pricing sits beside MIS stock, never on top of it", () => {
   });
 
   it("shows an offer only on the branch that actually has one", () => {
-    // The branch view is cards now rather than a table, so this is a per-card
-    // condition instead of a conditional column — the rule is unchanged: a
-    // branch with no promotion renders no offer slot at all.
-    expect(stockTab).toContain("{offer && (");
-    expect(stockTab).toContain("<OfferPrice offer={offer} />");
+    // The rule has outlived two layouts — a conditional column, then a card
+    // footer, now a table cell. A branch with no promotion renders no offer at
+    // all, and the cell is left blank rather than filled with a dash that would
+    // read as data.
+    expect(stockTab).toContain("{offer ? <OfferPrice offer={offer} /> : null}");
+    expect(stockTab).toContain("{offer && <OfferPrice offer={offer} />}");
+  });
+
+  it("keeps the branch view a table rather than a surface per branch", () => {
+    // ~140 branches is a register, not a gallery: one table with fixed columns,
+    // and a dense list below `md` instead of a sideways-scrolling table.
+    expect(stockTab).toContain("const BranchStockTable = memo(");
+    expect(stockTab).toContain("<BranchStockTable rows={visible}");
+    expect(stockTab).not.toContain("BranchStockCards");
+    expect(stockTab).toContain("md:hidden");
+    // No `overflow-x` anywhere in the branch view — the page must never scroll
+    // sideways, and neither must the table region.
+    expect(stockTab).not.toContain("overflow-x");
   });
 
   it("renders the API's after-offer price rather than deriving one", () => {

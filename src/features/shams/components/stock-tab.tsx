@@ -9,9 +9,13 @@
  * Three decisions worth stating.
  *
  * **No invented thresholds.** The application defines no "low stock" boundary,
- * so none is shown. A branch either has none — a fact, rendered as a destructive
- * "Out of stock" badge because it is the answer an agent is scanning for — or it
- * has a number, rendered as that number.
+ * so none is shown. A branch either has none — a fact, marked destructive
+ * because it is the answer an agent is scanning for — or it has a number,
+ * rendered as that number.
+ *
+ * **The branch results are a register, not a gallery.** One product against
+ * ~140 branches is operational data read by scanning a column, so it is a dense
+ * table with fixed columns and reserved colour. See `BranchStockTable`.
  *
  * **Branch names come from MilaServ.** The MIS returns `branchName` identical to
  * `branchCode` on every row, so it is not a display name. Discovery established
@@ -300,16 +304,23 @@ export function StockTab({
   return (
     <div className="space-y-4">
       <Card>
-        <CardContent className="flex flex-wrap items-start justify-between gap-3 p-4">
+        {/* Deliberately tight. This is a context bar naming what the table
+            below is about, not a product card — the branch data is the content
+            of this screen, and the header should cost as little vertical space
+            as it can while still being unambiguous. */}
+        <CardContent className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 px-4 py-3">
           <div className="min-w-0">
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Product</p>
-            <p className="mt-0.5 text-base font-semibold leading-snug">{selected.itemName}</p>
+            <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              Product
+            </p>
+            <p className="mt-1 text-[15px] font-semibold leading-snug">{selected.itemName}</p>
             <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
               <span className="font-mono text-xs text-muted-foreground">{selected.itemCode}</span>
-              {/* The same badge the result row carried, from the same response
-                  as the per-branch prices below — so the summary and the detail
-                  cannot tell an agent two different things. */}
-              <OfferScopeBadge scope={openScope ?? undefined} />
+              {/* Spelled out here and only here — the rows below carry the bare
+                  percentage. Same response as the per-branch prices, so the
+                  summary and the detail cannot tell an agent two different
+                  things. */}
+              <OfferScopeBadge scope={openScope ?? undefined} variant="summary" />
             </div>
           </div>
           <button
@@ -373,15 +384,21 @@ export function StockTab({
 
               {/* Counts for what is on screen, always. When a filter is active
                   it says so, and the chain-wide figure is kept beside it rather
-                  than replacing it, so neither number can be read as the other. */}
-              <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm">
-                <Stat
-                  label={filtering ? "matching branches" : "branches"}
+                  than replacing it, so neither number can be read as the other.
+
+                  One strip divided into four, rather than four separate
+                  surfaces: these are parts of a single answer about one product,
+                  and boxing each one implies they are independent readings.
+                  `divide-x` carries the separation at a fraction of the weight a
+                  border-plus-shadow would. */}
+              <div className="grid grid-cols-2 divide-x divide-y divide-border/60 border-y border-border/60 sm:grid-cols-4 sm:divide-y-0 sm:border-y-0 sm:border-t sm:pt-1">
+                <Kpi
+                  label={filtering ? "Matching branches" : "Branches"}
                   value={summary.branches}
                 />
-                <Stat label="in stock" value={summary.withStock} tone="good" />
-                <Stat label="out of stock" value={summary.without} tone="muted" />
-                <Stat label="units" value={summary.units} />
+                <Kpi label="In stock" value={summary.withStock} tone="good" />
+                <Kpi label="Out of stock" value={summary.without} tone="muted" />
+                <Kpi label="Total units" value={summary.units} />
               </div>
               {filtering && (
                 <p className="text-xs text-muted-foreground">
@@ -397,7 +414,7 @@ export function StockTab({
           {visible.length === 0 ? (
             <EmptyState>No branch matches “{deferredFilter.trim()}”.</EmptyState>
           ) : (
-            <BranchStockCards rows={visible} labels={branchLabels} offers={offers} />
+            <BranchStockTable rows={visible} labels={branchLabels} offers={offers} />
           )}
         </>
       )}
@@ -527,14 +544,25 @@ const ProductResults = memo(function ProductResults({
  * a property of the whole result set, not of one row, so it is stated once
  * above the list rather than repeated as a shrug on every line.
  */
-function OfferScopeBadge({ scope }: { scope: ShamsOfferScope | undefined }) {
+function OfferScopeBadge({
+  scope,
+  /**
+   * `summary` spells the coverage out for the one place it is stated about the
+   * product as a whole; `compact` is the chip a row carries. Same classified
+   * `kind` behind both — the wording differs, the claim does not.
+   */
+  variant = "compact",
+}: {
+  scope: ShamsOfferScope | undefined;
+  variant?: "compact" | "summary";
+}) {
   if (!scope || scope.kind === "none" || scope.kind === "unknown") return null;
 
   const all = scope.kind === "all";
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold",
+        "inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-semibold",
         all ? "bg-success/10 text-success" : "bg-warning/10 text-warning",
       )}
       // The counts are the evidence behind the word, available on hover for
@@ -542,13 +570,31 @@ function OfferScopeBadge({ scope }: { scope: ShamsOfferScope | undefined }) {
       title={`${scope.branchesWithOffer} of ${scope.branchesAvailable} branches holding this item`}
     >
       <Tag className="h-3 w-3" aria-hidden="true" />
-      {scope.offerDisplay ? `${scope.offerDisplay} off` : "Offer"}
-      <span className="font-medium opacity-80">{all ? "· all branches" : "· some branches"}</span>
+      {scope.offerDisplay ? `${scope.offerDisplay} OFF` : "OFFER"}
+      <span className="font-medium opacity-80">
+        {variant === "summary"
+          ? all
+            ? "· Available in all branches"
+            : "· Available in some branches"
+          : all
+            ? "· all branches"
+            : "· some branches"}
+      </span>
     </span>
   );
 }
 
-function Stat({
+/**
+ * One figure in the summary strip.
+ *
+ * Number over label, not number beside it: four inline pairs read as a
+ * sentence, and this is a row of independent measures an operator scans down
+ * rather than across. Restrained on purpose — the figure is set large enough to
+ * find and no larger, with no card, no shadow and no icon, because four of
+ * these sitting in a bordered strip is an inventory summary and four of them in
+ * boxes is a marketing dashboard.
+ */
+function Kpi({
   label,
   value,
   tone = "default",
@@ -558,18 +604,20 @@ function Stat({
   tone?: "default" | "good" | "muted";
 }) {
   return (
-    <span className="inline-flex items-baseline gap-1.5">
-      <span
+    <div className="min-w-0 px-3 py-2 first:pl-0 sm:px-4">
+      <p
         className={cn(
-          "text-lg font-semibold tabular-nums",
+          "text-xl font-semibold leading-none tabular-nums sm:text-2xl",
           tone === "good" && "text-success",
           tone === "muted" && "text-muted-foreground",
         )}
       >
         {value}
-      </span>
-      <span className="text-xs text-muted-foreground">{label}</span>
-    </span>
+      </p>
+      <p className="mt-1.5 truncate text-[11px] uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
+    </div>
   );
 }
 
@@ -577,26 +625,28 @@ function Stat({
 /**
  * One branch's promotional price.
  *
- * `afterOfferPrice` is what the branch charges and `price` is what it was, so the
- * new figure carries the weight and the old one is struck through beside it. The
- * percentage comes from the API preformatted (`offer_display`), so nothing is
- * recomputed here — a discount this component derived could disagree with the
- * one the till applies.
+ * Two things and no more: the discount, and the price the branch charges.
  *
- * Renders nothing at all without an offer. A branch with no promotion shows an
- * em-dash rather than a zero, which would read as "free".
+ * The struck-through list price was dropped here. In a card it was a useful
+ * second reading; in a 140-row column it is a third number competing with the
+ * two that matter, and the one an agent reads out loud is `afterOfferPrice`.
+ * The percentage carries the "this is discounted" signal on its own.
+ *
+ * The percentage comes from the API preformatted (`offer_display`), and the
+ * price is `afterOfferPrice` verbatim — nothing is recomputed here, because a
+ * discount this component derived could disagree with the one the till applies.
+ *
+ * Only rendered where there is an offer; the caller leaves the cell blank
+ * otherwise, which is quieter than a column of dashes.
  */
-function OfferPrice({ offer }: { offer: ShamsCrmOffer | undefined }) {
-  if (!offer) return <span className="text-muted-foreground">—</span>;
-
+function OfferPrice({ offer }: { offer: ShamsCrmOffer }) {
   return (
     <span className="inline-flex items-baseline gap-1.5">
-      <span className="text-xs text-muted-foreground line-through tabular-nums">
-        {fmtSAR(offer.price)}
-      </span>
-      <span className="font-semibold tabular-nums">{fmtSAR(offer.afterOfferPrice)}</span>
       <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
-        {offer.offerDisplay}
+        {offer.offerDisplay} OFF
+      </span>
+      <span className="text-[13px] font-semibold tabular-nums">
+        {fmtSAR(offer.afterOfferPrice)}
       </span>
     </span>
   );
@@ -609,37 +659,43 @@ function branchCity(labels: Map<string, BranchLabel> | undefined, code: string):
 }
 
 /**
- * Branch availability, as cards rather than a table.
+ * Branch availability, as an operational table.
  *
- * ## Why this stopped being a table
+ * ## What this is for
  *
- * It was one, and the complaint was that nothing on it could be read: branch
- * code, city, quantity and status were all set at roughly the same small,
- * muted weight, so a row gave the eye nothing to land on and finding "which
- * branches actually have this" meant reading every line. Widening the type in
- * a five-column table was not available — the columns were already tight, and
- * a 137-row table on a phone had nowhere left to go.
+ * One product, up to ~140 branches, and an operator answering "who has it and
+ * is it discounted there". That is a register, and a register is read by
+ * scanning one column at a time — so the layout that serves it is a dense table
+ * with fixed columns, not a surface per branch. A card grid turns 140 rows into
+ * 140 bordered boxes and roughly five screens of scrolling, and it makes the
+ * page read like a storefront rather than an inventory system.
  *
- * As cards, each branch gets a block with its own hierarchy, and the four facts
- * an agent is joining up — **branch, status, quantity, offer** — sit in a fixed
- * arrangement they can learn once:
+ * ## The density rules
  *
- *   - the **code** leads, at readable size, because it is the identifier the
- *     rest of the portal uses;
- *   - the **city** sits under it, because it is how the branch is spoken about;
- *   - the **quantity** is the largest thing on the card, right-aligned, so a
- *     column of cards can be scanned down for a number;
- *   - the **status** is a badge beside it, so zero is unmissable;
- *   - the **offer**, when there is one, is a footer line rather than a column
- *     that would be empty for most branches.
+ * - **Rows separate, cells do not.** A hairline between rows is enough to keep
+ *   the eye on one line; ruling every cell would draw a grid the data does not
+ *   need.
+ * - **The branch code is the strongest thing in the row**, because it is the
+ *   identifier the rest of the portal joins on.
+ * - **Stock is right-aligned and tabular**, so a column of quantities lines up
+ *   on the decimal and can be compared without reading.
+ * - **Colour is reserved.** It appears on availability and on an offer, and
+ *   nowhere else — a row is never tinted as a whole, so the two things that do
+ *   carry colour keep their meaning.
+ * - **The offer cell is quiet when empty.** Most branches will have no
+ *   promotion, and a column of dashes is noise; the cell simply stays blank.
  *
- * A grid rather than a list, so a wide screen uses its width instead of showing
- * three columns of whitespace, and no width creates horizontal overflow: cards
- * reflow, they do not scroll sideways.
+ * ## Small screens
+ *
+ * The table is replaced, not scrolled. Five columns cannot be honest at 375px,
+ * and a sideways-scrolling table hides the offer column exactly where it
+ * matters. Below `md` the same rows render as a dense two-line list — branch
+ * and city, then stock, availability and offer — so nothing is lost and the
+ * page itself never scrolls horizontally.
  *
  * Still no invented thresholds. A branch has a number or it has none.
  */
-const BranchStockCards = memo(function BranchStockCards({
+const BranchStockTable = memo(function BranchStockTable({
   rows,
   labels,
   offers,
@@ -650,94 +706,128 @@ const BranchStockCards = memo(function BranchStockCards({
   offers: Map<string, ShamsCrmOffer>;
 }) {
   return (
-    <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {rows.map((row) => {
-        const city = branchCity(labels, row.branchCode);
-        const offer = offers.get(row.branchCode);
-        const out = row.quantity <= 0;
+    <Card className="overflow-hidden">
+      <CardContent className="p-0">
+        {/* Desktop: the register. */}
+        <table className="hidden w-full table-fixed text-sm md:table">
+          <colgroup>
+            <col className="w-[14%]" />
+            <col />
+            <col className="w-[10%]" />
+            <col className="w-[16%]" />
+            <col className="w-[22%]" />
+          </colgroup>
+          <thead>
+            <tr className="border-b border-border/60 bg-muted/40 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+              <th className={TH}>Branch</th>
+              <th className={TH}>City</th>
+              <th className={cn(TH, "text-right")}>Stock</th>
+              <th className={TH}>Availability</th>
+              <th className={TH}>Offer</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const city = branchCity(labels, row.branchCode);
+              const offer = offers.get(row.branchCode);
+              const out = row.quantity <= 0;
+              return (
+                <tr
+                  key={row.branchCode}
+                  className="border-b border-border/40 transition-colors last:border-0 hover:bg-muted/30"
+                >
+                  <td className={cn(TD, "py-2 font-mono text-[13px] font-semibold")}>
+                    {row.branchCode}
+                  </td>
+                  <td className={cn(TD, "truncate py-2")} dir="auto" title={city ?? undefined}>
+                    {city ?? <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td
+                    className={cn(
+                      "px-3 py-2 text-right text-[15px] font-semibold tabular-nums",
+                      out ? "text-muted-foreground/60" : "text-foreground",
+                    )}
+                  >
+                    {out ? "0" : row.quantity}
+                  </td>
+                  <td className={cn(TD, "py-2")}>
+                    <StockStatus quantity={row.quantity} />
+                  </td>
+                  <td className={cn(TD, "py-2")}>
+                    {/* Blank rather than an em-dash: most branches have no
+                        promotion, and a column of dashes reads as data. */}
+                    {offer ? <OfferPrice offer={offer} /> : null}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
 
-        return (
-          <li key={row.branchCode}>
-            <Card
-              className={cn(
-                "h-full overflow-hidden transition-colors",
-                // A stocked branch is the useful one, so it keeps the ordinary
-                // card surface and an out-of-stock branch recedes. Muting the
-                // negative case reads faster than colouring the positive one,
-                // which would leave a wall of green.
-                out && "border-border/50 bg-muted/30",
-              )}
-            >
-              <CardContent className="flex h-full flex-col gap-3 p-3.5">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="font-mono text-base font-semibold leading-none">
-                      {row.branchCode}
-                    </p>
-                    <p
-                      className="mt-1.5 truncate text-sm text-muted-foreground"
-                      dir="auto"
-                      title={city ?? undefined}
-                    >
+        {/* Mobile: the same rows, two lines each. No sideways scrolling. */}
+        <ul className="divide-y divide-border/40 md:hidden">
+          {rows.map((row) => {
+            const city = branchCity(labels, row.branchCode);
+            const offer = offers.get(row.branchCode);
+            const out = row.quantity <= 0;
+            return (
+              <li key={row.branchCode} className="px-4 py-2.5">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="min-w-0 flex items-baseline gap-2">
+                    <span className="font-mono text-[13px] font-semibold">{row.branchCode}</span>
+                    <span className="truncate text-sm text-muted-foreground" dir="auto">
                       {city ?? "—"}
-                    </p>
-                  </div>
-                  <StockStatus quantity={row.quantity} />
-                </div>
-
-                <div className="mt-auto flex items-baseline justify-between gap-3">
-                  {/* Not "In stock" — the badge above already says that, and a
-                      card repeating it twice gives the eye two identical things
-                      to read. This names the *number* beside it instead. */}
-                  <span className="text-xs uppercase tracking-wide text-muted-foreground">
-                    {out ? "None on hand" : "On hand"}
+                    </span>
                   </span>
                   <span
                     className={cn(
-                      "text-2xl font-semibold leading-none tabular-nums",
-                      out ? "text-muted-foreground/70" : "text-foreground",
+                      "shrink-0 text-[15px] font-semibold tabular-nums",
+                      out ? "text-muted-foreground/60" : "text-foreground",
                     )}
                   >
                     {out ? "0" : row.quantity}
                   </span>
                 </div>
-
-                {/* Only when this branch actually has a promotion — an empty
-                    offer slot on every card would be the column of dashes the
-                    table already avoided. */}
-                {offer && (
-                  <div className="-mx-3.5 -mb-3.5 mt-1 border-t border-border/60 bg-primary/[0.04] px-3.5 py-2">
-                    <OfferPrice offer={offer} />
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </li>
-        );
-      })}
-    </ul>
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <StockStatus quantity={row.quantity} />
+                  {offer && <OfferPrice offer={offer} />}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </CardContent>
+    </Card>
   );
 });
+
 /**
  * Whether a branch has the item.
  *
- * Zero is the answer agents are scanning for, so it is destructive-toned and
- * spelled out. A stocked branch gets a quiet success mark rather than a second
- * loud badge — the quantity beside it is the number that matters, and two
- * competing emphases in one row is one too many. No banding between them,
+ * A dot and a word, not a filled pill. Down 140 rows a pill on every line
+ * becomes a column of coloured blocks that pulls the eye away from the numbers
+ * beside it; a small dot carries the same two-state signal at a fraction of the
+ * visual weight and still reads at a glance. The word stays because a dot alone
+ * is a legend nobody has.
+ *
+ * `Out of stock` is the one an agent is scanning for, so it keeps the
+ * destructive tone and a slightly heavier weight. No banding between the two,
  * because the application defines no "low stock" threshold to band on.
  */
 function StockStatus({ quantity }: { quantity: number }) {
-  if (quantity <= 0) {
-    return (
-      <span className="inline-flex whitespace-nowrap rounded-full bg-destructive/10 px-2.5 py-1 text-xs font-semibold text-destructive">
-        Out of Stock
-      </span>
-    );
-  }
+  const out = quantity <= 0;
   return (
-    <span className="inline-flex whitespace-nowrap rounded-full bg-success/10 px-2.5 py-1 text-xs font-medium text-success">
-      In stock
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 whitespace-nowrap text-xs",
+        out ? "font-medium text-destructive" : "text-muted-foreground",
+      )}
+    >
+      <span
+        className={cn("h-1.5 w-1.5 shrink-0 rounded-full", out ? "bg-destructive" : "bg-success")}
+        aria-hidden="true"
+      />
+      {out ? "Out of stock" : "In stock"}
     </span>
   );
 }
