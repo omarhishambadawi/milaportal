@@ -1,10 +1,21 @@
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
-import { Bike, ExternalLink, Loader2, RefreshCw, Send, XCircle } from "lucide-react";
+import { Bike, ExternalLink, History, Loader2, RefreshCw, Send, XCircle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { fmtSAR } from "@/lib/branches";
 import { isAdministrator, useAuth } from "@/lib/auth";
 import { HISTORICAL_ALSHROUQ_NOTICE } from "@/lib/alshrouq/dispatch";
@@ -49,9 +60,12 @@ export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
   const cancelOrder = useServerFn(alshrouqCancelOrder);
   const setHistorical = useServerFn(alshrouqSetHistorical);
   const { role } = useAuth();
-  // Owner and admin only. The server checks the same thing against `has_role`;
-  // this only decides whether to offer it.
+  // Owner and admin only. The server checks the same thing against `has_role`,
+  // and that check is the one that decides; this only decides whether to offer
+  // it. A supervisor holding `edit_all_orders` sees nothing here.
   const mayMarkHistorical = isAdministrator(role);
+  /** Which confirmation is open, or null. Both directions are confirmed. */
+  const [confirming, setConfirming] = useState<"mark" | "unmark" | null>(null);
 
   const state = useQuery({
     queryKey: ["alshrouq", "state", orderId],
@@ -61,6 +75,18 @@ export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
   const dispatched = state.data?.dispatch ?? null;
   const live = Boolean(dispatched && !dispatched.cancelledAt);
   const blockers = state.data?.blockers ?? [];
+
+  /**
+   * Whether this order is out of the integration, by either route.
+   *
+   * `historical` is the server's determination about an *AlShrouq* order — the
+   * automatic test plus the flag. `historicalManual` is the flag on its own, and
+   * it is read separately because an order being converted has not been saved
+   * with `AlShrouq` as its method yet: the flag is already set, the automatic
+   * test still says no, and the panel must show the state it is actually in
+   * rather than offering to mark it a second time.
+   */
+  const markedHistorical = Boolean(state.data?.historical || state.data?.historicalManual);
 
   // Only to put a name on the stored numeric payment id. Not needed while there
   // is nothing dispatched to label.
@@ -284,20 +310,45 @@ export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
         )}
 
         {/* ---------------------------------------------------------------- */}
-        {/* Raised before the integration existed                            */}
+        {/* Out of the integration — raised before it, or declared so         */}
         {/* ---------------------------------------------------------------- */}
-        {/* A note and nothing else. No blockers — the fields it "lacks" were
-            never going to exist — and deliberately no button: this delivery was
-            arranged by a person months ago, and the only thing a control here
-            could achieve is a second driver at the customer's door. */}
-        {state.data?.historical && (
-          <p className="text-[11px] text-muted-foreground">{HISTORICAL_ALSHROUQ_NOTICE}</p>
+        {/* The state, stated plainly, and no dispatch control of any kind. No
+            blockers either — the fields it "lacks" were never going to exist —
+            and no Send button: this delivery was arranged by a person, and the
+            only thing a control here could achieve is a second driver at the
+            customer's door. */}
+        {markedHistorical && (
+          <div className="space-y-2 rounded-md border border-border/60 bg-muted/20 p-3">
+            <Badge variant="outline" className="font-medium">
+              <History className="mr-1 h-3 w-3" aria-hidden /> Historical
+            </Badge>
+            <p className="text-[11px] text-muted-foreground">{HISTORICAL_ALSHROUQ_NOTICE}</p>
+            {/* Only what a person set can be taken back. An order that is
+                historical because it predates the integration has no marking to
+                remove — the flag is not what makes it historical — so offering
+                the button would promise something it could not do. */}
+            {mayMarkHistorical && state.data?.historicalManual && !live && (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-[11px]"
+                onClick={() => setConfirming("unmark")}
+                disabled={markHistorical.isPending}
+              >
+                {markHistorical.isPending && (
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" aria-hidden />
+                )}
+                Remove the historical marking
+              </Button>
+            )}
+          </div>
         )}
 
         {/* ---------------------------------------------------------------- */}
         {/* Not sent yet — why, and the way to try again                     */}
         {/* ---------------------------------------------------------------- */}
-        {state.data?.configured && !state.data.historical && !state.data.held && !dispatched && (
+        {state.data?.configured && !markedHistorical && !state.data.held && !dispatched && (
           <div className="space-y-2">
             <p className="text-[11px] text-muted-foreground">
               This order has not reached AlShrouq. Saving an AlShrouq order sends it automatically;
@@ -330,23 +381,88 @@ export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
         {/* Owner / admin: declare this one historical                        */}
         {/* ---------------------------------------------------------------- */}
         {/* Offered only to owner and admin, and refused server-side for anyone
-            else. Hidden while a delivery is live: the courier already has that
-            order, and calling it historical afterwards would only hide it. */}
-        {mayMarkHistorical && state.data?.configured && !live && (
-          <label className="flex items-start gap-2 border-t border-border/60 pt-3 text-[11px] text-muted-foreground">
-            <input
-              type="checkbox"
-              className="mt-0.5"
-              checked={state.data.historicalManual}
-              disabled={markHistorical.isPending}
-              onChange={(e) => markHistorical.mutate(e.target.checked)}
-            />
-            <span>
-              Historical AlShrouq order — automatic dispatch is not applicable. Stops this order
-              being sent to AlShrouq, on save and on any schedule.
-            </span>
-          </label>
+            else — `alshrouqSetHistorical` re-checks `has_role`, so a supervisor
+            who calls it directly is turned away whatever the browser rendered.
+            Deliberately *not* gated on the CRM being configured: this writes one
+            column and speaks to no courier, so a deployment without credentials
+            is exactly where an old order still needs converting. Hidden while a
+            delivery is live — the courier already has that order, and calling it
+            historical afterwards would only hide it from this panel. */}
+        {mayMarkHistorical && !markedHistorical && !live && (
+          <div className="space-y-1.5 border-t border-border/60 pt-3">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setConfirming("mark")}
+              disabled={markHistorical.isPending || state.isLoading}
+            >
+              {markHistorical.isPending ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" aria-hidden />
+              ) : (
+                <History className="mr-1 h-3.5 w-3.5" aria-hidden />
+              )}
+              Mark as Historical AlShrouq order
+            </Button>
+            <p className="text-[11px] text-muted-foreground">
+              For an order AlShrouq already delivered through the old manual workflow. Nothing is
+              sent to the courier — it stops this order being dispatched on save and on any
+              schedule.
+            </p>
+          </div>
         )}
+
+        {/* The portal confirms anything it cannot silently undo for the agent.
+            Marking is reversible by the same two roles, but it changes whether a
+            live courier integration will ever touch the order, so both
+            directions ask. */}
+        <AlertDialog
+          open={confirming != null}
+          onOpenChange={(open) => !open && setConfirming(null)}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {confirming === "unmark"
+                  ? "Remove the historical marking?"
+                  : "Mark this as a historical AlShrouq order?"}
+              </AlertDialogTitle>
+              <AlertDialogDescription asChild>
+                <div className="space-y-2 text-sm">
+                  {confirming === "unmark" ? (
+                    <p>
+                      The order rejoins the integration. Saving it with the AlShrouq method, or a
+                      schedule falling due, will submit it to the courier from then on.
+                    </p>
+                  ) : (
+                    <>
+                      <p>
+                        The order is recorded as one AlShrouq delivered through the old manual
+                        workflow. It will never be submitted to AlShrouq — not on save, and not by
+                        the scheduled sweep.
+                      </p>
+                      <p className="text-muted-foreground">
+                        Nothing is created, updated or cancelled at AlShrouq by this. An owner or
+                        admin can take the marking back.
+                      </p>
+                    </>
+                  )}
+                </div>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  markHistorical.mutate(confirming !== "unmark");
+                  setConfirming(null);
+                }}
+              >
+                {confirming === "unmark" ? "Remove the marking" : "Mark as historical"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </CardContent>
     </Card>
   );

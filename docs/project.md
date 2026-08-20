@@ -2035,11 +2035,47 @@ historical.
 
 What follows from it: `historicalOrderFormSchema` drops the AlShrouq
 requirements so the row stays editable; the order form shows a one-line notice in
-place of the delivery fields; the panel shows the same notice and no control at
-all; and `attemptDispatch` refuses **before** the CRM is contacted and before
-anything reaches the timeline, so a save leaves no trace of an attempt. The
-server check is the one that matters — the browser is not what is trusted with
-this. `src/features/orders/__tests__/historical-alshrouq.test.ts` pins it.
+place of the delivery fields; the panel shows the same notice and no dispatch
+control at all; and `attemptDispatch` refuses **before** the CRM is contacted and
+before anything reaches the timeline, so a save leaves no trace of an attempt.
+The server check is the one that matters — the browser is not what is trusted
+with this. `src/features/orders/__tests__/historical-alshrouq.test.ts` pins it.
+
+##### Declaring one by hand
+
+The automatic test catches an order that *looks* historical. It cannot catch one
+back-filled with a location years ago, or one recorded under another method that
+AlShrouq in fact delivered — so **Mark as Historical AlShrouq order** sits at the
+foot of `AlShrouqDispatchPanel`, behind a confirmation, for owner and admin only.
+It calls `alshrouqSetHistorical`, which writes `orders.alshrouq_historical` and
+nothing else: no courier request is made, on this path or any other.
+
+Three things about where it is drawn:
+
+- **It is not gated on the CRM being configured.** The action writes one column
+  and speaks to no courier, so a deployment without credentials is precisely
+  where an old order still needs converting. It *is* hidden while a delivery is
+  live, because the courier already has that order — and the server refuses that
+  case too, so the panel is not what is preventing it.
+- **The panel is rendered from the form's method, not the row's**, and also
+  whenever the row is already flagged. An owner converting an Azman order picks
+  AlShrouq, the panel appears, and the order is declared historical *before* the
+  save that would otherwise dispatch it. Once flagged, the panel stays reachable
+  whatever the method reads — it is the only place the declaration can be taken
+  back.
+- **Marked is a state, not a checkbox.** Once flagged, the panel shows the notice
+  under a *Historical* badge and withdraws Send entirely; only a marking a person
+  set offers **Remove the historical marking**, since an order historical by the
+  automatic test has no marking to remove.
+
+`isHistoricalAlShrouq` in `useOrderForm` honours the flag the same way
+`isHistoricalAlShrouqOrder` does, and deliberately without regard to the stored
+method: between flagging an order and saving it as AlShrouq the automatic test
+still says no, and without this the save would call `alshrouqAutoSubmit` for an
+order the server would only refuse — a round trip and a warning about a courier
+submission nobody asked for. RBAC is enforced in `alshrouqSetHistorical` against
+`has_role`, not by the hidden button: a supervisor holding `edit_all_orders` may
+edit the order and still not set this.
 
 #### Timeline
 

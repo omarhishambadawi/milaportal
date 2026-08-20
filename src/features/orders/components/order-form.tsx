@@ -748,8 +748,16 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
 
           {/* Only for a saved order whose delivery method is actually AlShrouq:
               a courier cannot be sent an order that does not exist yet, and a
-              dispatch button on a store pickup is an invitation to a mistake. */}
-          {mode === "edit" && id && form.delivery_type === ALSHROUQ && (
+              dispatch button on a store pickup is an invitation to a mistake.
+              The method is read from the form rather than the row, so an
+              owner or admin converting an old order sees the panel — and its
+              Historical control — the moment they pick AlShrouq, before the
+              save that would otherwise dispatch it.
+
+              An order already declared historical keeps the panel whatever its
+              method reads, because that declaration is a fact about the order
+              worth showing, and it is the only place it can be taken back. */}
+          {mode === "edit" && id && (form.delivery_type === ALSHROUQ || isHistoricalAlShrouq) && (
             <AlShrouqDispatchPanel orderId={id} />
           )}
 

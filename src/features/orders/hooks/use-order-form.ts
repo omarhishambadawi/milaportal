@@ -165,14 +165,24 @@ export function useOrderForm(mode: "create" | "edit") {
    *
    * While the order is still loading this is false, so the full rules apply —
    * the safe direction, since it refuses a save rather than allowing a wrong one.
+   *
+   * `alshrouq_historical` is the owner/admin declaration, and it outranks the
+   * automatic test exactly as it does in `isHistoricalAlShrouqOrder` on the
+   * server. It is read without regard to the stored method because that is the
+   * whole point of converting one: the flag is set first, the method is changed
+   * to AlShrouq in the same sitting, and between those two moments the automatic
+   * test still says no. Without this, saving that order would call
+   * `alshrouqAutoSubmit` for an order the server would only refuse — a round
+   * trip and a warning about a courier submission nobody asked for.
    */
   const isHistoricalAlShrouq =
     mode === "edit" &&
     !!existing &&
-    existing.delivery_type === ALSHROUQ &&
-    (existing as any).alshrouq_lat == null &&
-    (existing as any).alshrouq_lng == null &&
-    (existing as any).alshrouq_payment_type == null;
+    ((existing as any).alshrouq_historical === true ||
+      (existing.delivery_type === ALSHROUQ &&
+        (existing as any).alshrouq_lat == null &&
+        (existing as any).alshrouq_lng == null &&
+        (existing as any).alshrouq_payment_type == null));
 
   /**
    * Fill the form from the order — once per order, not once per fetch.
