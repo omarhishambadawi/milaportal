@@ -1980,7 +1980,7 @@ was tried and was wrong for 87 of 136 branches — 27 of them pointing at anothe
 pharmacy's id, which is a real delivery to the wrong shop. It assumed the branch
 codes ran contiguously from `P0001`; they jump `P0040 → P0101 → P0201 → P0301 →
 P0401 → P0501 → P0601 → P0701`, and the source workbook even orders `P0503`
-before `P0502`. `20260820200000_alshrouq_order_delivery.sql` drops that column.
+before `P0502`. `20260820185447_7fff9f9c-…` drops that column.
 The CRM's list has already drifted from the shipped workbook by one branch, so a
 second frozen copy would drift the same way.
 
