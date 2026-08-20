@@ -80,6 +80,16 @@ export interface BuildOrderPayloadArgs {
   canAssign: boolean;
   /** May this caller tick Call Center Invoice by hand? */
   canVerify: boolean;
+  /**
+   * Whether the held-until time is part of this save.
+   *
+   * False on the pre-integration path, where nothing schedules anything: the
+   * form does not offer the control, so the only value it could carry is the
+   * null it started with — and sending a column an order was never going to set
+   * is what a save has no business doing. Defaults to true, so the integration's
+   * own saves are exactly as they were.
+   */
+  includeScheduling?: boolean;
 }
 
 /**
@@ -117,6 +127,7 @@ export function buildOrderPayload({
   invoices,
   canAssign,
   canVerify,
+  includeScheduling = true,
 }: BuildOrderPayloadArgs): Record<string, unknown> {
   /** Form value, or the stored one when the form's is blank and one exists. */
   const required = (field: (typeof REQUIRED_FROM_ROW)[number]): string => {
@@ -165,10 +176,20 @@ export function buildOrderPayload({
      * A datetime-local input yields a wall-clock string with no zone; `new Date()`
      * reads it in the browser timezone, which is the one the agent typed it in.
      * Stored as UTC so the sweep compares instants rather than clock faces.
+     *
+     * `undefined` — the key left out of the write entirely, the same device
+     * `agent_id` and `call_center_verified` below use — when the save is not the
+     * integration's. Not `null`: a null is still a column named in the statement,
+     * and naming this one on the pre-integration path is what made an agent's
+     * Update fail outright. The column is untouched by that, and an order that
+     * holds a schedule keeps it, because the key not being written is not the
+     * same as it being cleared.
      */
-    alshrouq_scheduled_at: form.alshrouq_scheduled_at
-      ? new Date(form.alshrouq_scheduled_at).toISOString()
-      : null,
+    alshrouq_scheduled_at: !includeScheduling
+      ? undefined
+      : form.alshrouq_scheduled_at
+        ? new Date(form.alshrouq_scheduled_at).toISOString()
+        : null,
 
     /**
      * The verified total wins over anything typed.

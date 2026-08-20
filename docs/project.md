@@ -1961,6 +1961,19 @@ The order activity timeline is deliberately **not** gated. It predates the
 integration, carries every other kind of order event, and an agent looking at an
 order already dispatched by an admin should still see its history.
 
+One column follows the control. `buildOrderPayload` takes `includeScheduling`
+(false on this path, from the same `skipAlshrouqIntegration`) and leaves
+`alshrouq_scheduled_at` out of the write as `undefined` — the device `agent_id`
+and `call_center_verified` already use, since `JSON.stringify` inside supabase-js
+drops the key and the statement never names the column. Not `null`: a null is
+still a named column, and naming this one is what made an agent's **Update order**
+fail outright with `Could not find the 'alshrouq_scheduled_at' column of 'orders'`
+`in the schema cache` — over a schedule the form does not offer them and they
+could not have set. The column is untouched, an order holding a schedule keeps
+it, and the integration's own saves still write it, null included, because
+clearing a schedule is something it can do.
+
+
 
 The existing **Customer Name**, **Customer Phone** and **Branch** are reused
 as-is. There is deliberately no preparation time, driver note, timeslot or

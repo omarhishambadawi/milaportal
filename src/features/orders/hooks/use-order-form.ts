@@ -498,6 +498,9 @@ export function useOrderForm(mode: "create" | "edit") {
           invoices: shamsInvoices,
           canAssign,
           canVerify: canVerifyThis,
+          // The scheduling control belongs to the integration, so the column
+          // belongs to its saves. See `skipAlshrouqIntegration`.
+          includeScheduling: !skipAlshrouqIntegration,
         }),
       );
       if (mode === "create") {

@@ -24,6 +24,8 @@ import { fileURLToPath } from "node:url";
 import { isAdministrator } from "@/lib/auth";
 import { ALSHROUQ, DELIVERY_TYPES } from "@/lib/branches";
 import { historicalOrderFormSchema, orderFormSchema } from "../schema";
+import { buildOrderPayload, type OrderFormState, type PersistedOrder } from "../payload";
+import { summarizeInvoices } from "../invoice-verification";
 
 const hook = readFileSync(
   fileURLToPath(new URL("../hooks/use-order-form.ts", import.meta.url)),
@@ -110,5 +112,97 @@ describe("every other method", () => {
       expect(orderFormSchema.safeParse(order).success).toBe(true);
       expect(historicalOrderFormSchema.safeParse(order).success).toBe(true);
     }
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The reported failure                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `Could not find the 'alshrouq_scheduled_at' column of 'orders' in the schema
+ * cache` — an agent opening an AlShrouq order on the temporary workflow and
+ * pressing Update.
+ *
+ * The gate took the scheduling *control* away and left the *column* in the
+ * write. PostgREST rejects the whole statement over a column it cannot resolve,
+ * so the order did not save at all — over a null, for a schedule the agent was
+ * never offered and could not have set.
+ *
+ * What is asserted is the serialized body, not the object: `undefined` is how
+ * this payload has always meant "leave the column out" (`agent_id`,
+ * `call_center_verified`), and it is `JSON.stringify` inside supabase-js that
+ * turns that into a statement which does not name the column.
+ */
+describe("the column an agent's save must not name", () => {
+  /** What supabase-js actually puts on the wire. */
+  const wire = (payload: Record<string, unknown>, schema: typeof orderFormSchema) =>
+    JSON.parse(JSON.stringify(schema.parse(payload)));
+
+  /**
+   * An AlShrouq order as an agent has it open on the temporary workflow.
+   *
+   * The schedule is deliberately *set*: it was hydrated from a row an admin
+   * scheduled, so the fix cannot pass merely because the field happens to be
+   * blank. The location fields are blank, which is what the legacy workflow
+   * leaves them as.
+   */
+  const scheduled: OrderFormState = {
+    order_date: "2026-08-21",
+    team: "customer_care",
+    order_type: "Cash",
+    customer_name: "Sara",
+    customer_phone: "0500000000",
+    alshrouq_map_url: "",
+    alshrouq_lat: "",
+    alshrouq_lng: "",
+    alshrouq_payment_type: "",
+    alshrouq_scheduled_at: "2026-08-22T09:00",
+    branch_no: "P0001",
+    delivery_type: ALSHROUQ,
+    invoice_value: "240",
+    notes: "",
+    status: "Pending",
+    agent_id: "11111111-1111-4111-8111-111111111111",
+    call_center_verified: false,
+  };
+  const unscheduled: OrderFormState = { ...scheduled, alshrouq_scheduled_at: "" };
+
+  const build = (over: Partial<Parameters<typeof buildOrderPayload>[0]> = {}) =>
+    buildOrderPayload({
+      mode: "edit",
+      form: scheduled,
+      invoiceNo: "",
+      persisted: { delivery_type: ALSHROUQ, status: "Pending" } as PersistedOrder,
+      invoices: summarizeInvoices([]),
+      canAssign: false,
+      canVerify: false,
+      ...over,
+    });
+
+  it("is left out of the write on the legacy path", () => {
+    const body = wire(build({ includeScheduling: false }), historicalOrderFormSchema);
+    expect("alshrouq_scheduled_at" in body).toBe(false);
+    // And nothing else went with it — this is one column, not the location.
+    expect(body.delivery_type).toBe(ALSHROUQ);
+    expect(body.customer_name).toBe("Sara");
+    expect(body.status).toBe("Pending");
+  });
+
+  it("is still written by the integration's own saves", () => {
+    const body = wire(build(), historicalOrderFormSchema);
+    expect(body.alshrouq_scheduled_at).toBe(new Date("2026-08-22T09:00").toISOString());
+  });
+
+  it("is a null, not an omission, when the integration has nothing to hold", () => {
+    // Send-on-save. The integration still names the column, because clearing a
+    // schedule is a thing it can do and an omission would not do it.
+    const body = wire(build({ form: unscheduled }), historicalOrderFormSchema);
+    expect("alshrouq_scheduled_at" in body).toBe(true);
+    expect(body.alshrouq_scheduled_at).toBeNull();
+  });
+
+  it("is the hook that decides, from the same flag as everything else", () => {
+    expect(hook).toContain("includeScheduling: !skipAlshrouqIntegration,");
   });
 });
