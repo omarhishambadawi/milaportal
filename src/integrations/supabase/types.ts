@@ -1557,6 +1557,10 @@ export type Database = {
         }
         Returns: {
           agent_id: string
+          alshrouq_lat: number | null
+          alshrouq_lng: number | null
+          alshrouq_map_url: string | null
+          alshrouq_payment_type: number | null
           branch_no: string | null
           call_center_verified: boolean
           created_at: string
