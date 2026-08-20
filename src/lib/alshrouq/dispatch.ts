@@ -34,6 +34,12 @@ export interface AlShrouqDispatchRecord {
   trackingUrl: string | null;
   paymentType: number | null;
   alshrouqBranchId: string;
+  /** The Shams branch the courier collected from. Not the order's current one. */
+  branchNo: string | null;
+  customerName: string | null;
+  customerPhone: string | null;
+  /** The appointment this dispatch was held for, if it was scheduled. */
+  scheduledAt: string | null;
   mapUrl: string | null;
   value: number | null;
   preparationTime: number | null;
@@ -185,6 +191,10 @@ export function toDispatchRecord(
     trackingUrl: row.tracking_url ?? null,
     paymentType: numberOrNull(row.payment_type),
     alshrouqBranchId: row.alshrouq_branch_id,
+    branchNo: row.branch_no ?? null,
+    customerName: row.customer_name ?? null,
+    customerPhone: row.customer_phone ?? null,
+    scheduledAt: row.scheduled_at ?? null,
     mapUrl: row.customer_address ?? null,
     value: numberOrNull(row.value),
     preparationTime: row.preparation_time ?? null,

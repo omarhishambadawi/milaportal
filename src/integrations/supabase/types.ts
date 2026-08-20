@@ -49,6 +49,8 @@ export type Database = {
           client_order_id: string
           created_at: string
           customer_address: string | null
+          customer_name: string | null
+          customer_phone: string | null
           customer_lat: number | null
           customer_lng: number | null
           details: string | null
@@ -63,6 +65,7 @@ export type Database = {
           preparation_time: number | null
           refreshed_at: string | null
           status: string | null
+          scheduled_at: string | null
           status_detail: string | null
           tracking_url: string | null
           updated_at: string
@@ -75,6 +78,8 @@ export type Database = {
           client_order_id: string
           created_at?: string
           customer_address?: string | null
+          customer_name?: string | null
+          customer_phone?: string | null
           customer_lat?: number | null
           customer_lng?: number | null
           details?: string | null
@@ -89,6 +94,7 @@ export type Database = {
           preparation_time?: number | null
           refreshed_at?: string | null
           status?: string | null
+          scheduled_at?: string | null
           status_detail?: string | null
           tracking_url?: string | null
           updated_at?: string
@@ -101,6 +107,8 @@ export type Database = {
           client_order_id?: string
           created_at?: string
           customer_address?: string | null
+          customer_name?: string | null
+          customer_phone?: string | null
           customer_lat?: number | null
           customer_lng?: number | null
           details?: string | null
@@ -115,6 +123,7 @@ export type Database = {
           preparation_time?: number | null
           refreshed_at?: string | null
           status?: string | null
+          scheduled_at?: string | null
           status_detail?: string | null
           tracking_url?: string | null
           updated_at?: string

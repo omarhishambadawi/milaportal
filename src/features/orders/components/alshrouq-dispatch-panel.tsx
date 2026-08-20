@@ -162,6 +162,16 @@ export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
                   to the courier, so it is not shown as "the" reference. */}
               <dt>AlShrouq order no.</dt>
               <dd className="text-foreground tabular-nums">{dispatched.externalOrderId ?? "—"}</dd>
+              {/* The branch the courier collected from, read off the dispatch
+                  row rather than the order. Invoice review can move the order to
+                  the branch that had the stock, and that is a true statement
+                  about the order — but the van went here. */}
+              {dispatched.branchNo && (
+                <>
+                  <dt>Collected from</dt>
+                  <dd className="text-foreground">{dispatched.branchNo}</dd>
+                </>
+              )}
               <dt>Payment</dt>
               <dd className="text-foreground">{paymentLabel}</dd>
               <dt>Value</dt>

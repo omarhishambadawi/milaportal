@@ -72,8 +72,14 @@ export async function persistDispatch(
       status: state.status,
       status_detail: state.statusDetail,
       tracking_url: state.trackingUrl,
+      // The branch the courier collects from, frozen here. `orders.branch_no`
+      // may later become the branch that invoiced the order; this must not
+      // follow it, because the van has already been to this one.
       branch_no: order.branch_no,
       alshrouq_branch_id: payload.branch_id,
+      customer_name: payload.customer_name,
+      customer_phone: payload.customer_phone,
+      scheduled_at: order.alshrouq_scheduled_at,
       payment_type: payload.payment_type,
       customer_address: payload.customer_address,
       details: payload.details,

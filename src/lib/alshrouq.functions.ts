@@ -126,6 +126,39 @@ export const alshrouqOrderState = createServerFn({ method: "POST" })
       };
     }
 
+    /**
+     * A live delivery describes itself, from the row written when it was sent.
+     *
+     * Nothing here is re-derived from `order`, and that is the point. An order
+     * dispatched from P0025 and later invoiced from P0001 has legitimately moved
+     * branch — both facts are true — but the van went to P0025, and reading the
+     * delivery's branch off the order afterwards would name the wrong shop. It
+     * would also compute coverage and blockers for a branch that has nothing to
+     * do with this delivery, so an order collected from a covered branch could
+     * start reporting "AlShrouq does not cover…" once the invoice moved it.
+     *
+     * The CRM is not contacted either: `branchCoverage` is a round trip, and
+     * there is nothing left to decide about an order already sent.
+     */
+    if (row && !row.cancelled_at) {
+      return {
+        configured: true,
+        alshrouqBranchId: row.alshrouq_branch_id ?? null,
+        coverage: "covered",
+        dispatch: toDispatchRecord(row, storedTimeline(row)),
+        historical: false,
+        historicalManual: order.alshrouq_historical === true,
+        // The appointment this delivery was held for, not whatever the order
+        // says now — and it is no longer held, because it has gone.
+        scheduledAt: row.scheduled_at ?? null,
+        held: false,
+        blockers: [],
+      };
+    }
+
+    // No live delivery: this order may still be sent, so the *current* branch
+    // and the current fields are exactly what matters. A cancelled dispatch
+    // takes this path too, because a re-send goes out from the order as it is now.
     const coverage = await branchCoverage(order.branch_no);
 
     return {
@@ -134,7 +167,7 @@ export const alshrouqOrderState = createServerFn({ method: "POST" })
       coverage: coverage.kind,
       dispatch: row ? toDispatchRecord(row, storedTimeline(row)) : null,
       historical: false,
-      historicalManual: false,
+      historicalManual: order.alshrouq_historical === true,
       scheduledAt: order.alshrouq_scheduled_at,
       held: isHeldForLater(order),
       blockers: dispatchBlockers(order, coverage),
