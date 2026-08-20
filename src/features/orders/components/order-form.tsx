@@ -216,6 +216,15 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
   const valueIsVerified =
     shamsInvoices.verified.length > 0 && Number(form.invoice_value) === shamsInvoices.verifiedTotal;
 
+  /**
+   * Whether the customer's name and number are mandatory right now.
+   *
+   * Follows the method currently selected, not the one the order was saved with,
+   * so switching to AlShrouq marks them at once and switching away clears the
+   * marker — the same condition `orderFormSchema` applies at save.
+   */
+  const alshrouqNeedsCustomer = form.delivery_type === ALSHROUQ && !isHistoricalAlShrouq;
+
   /** The state of each typed number, so a row can say where its lookup got to. */
   const stateOf = (value: string) => {
     const trimmed = value.trim();
@@ -480,7 +489,18 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 </Popover>
               </Field>
 
-              <Field id="customer-name" label="Customer name" optional>
+              {/* Required only while AlShrouq is the method: a courier API
+                  cannot be handed a nameless, unreachable delivery. The rule
+                  itself lives in `orderFormSchema`; this shows the same
+                  condition, so the marker and the validation cannot disagree.
+                  Historical orders are excluded — they have neither, and the
+                  schema does not ask them for either. */}
+              <Field
+                id="customer-name"
+                label="Customer name"
+                required={alshrouqNeedsCustomer}
+                optional={!alshrouqNeedsCustomer}
+              >
                 <Input
                   id="customer-name"
                   value={form.customer_name}
@@ -489,7 +509,12 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 />
               </Field>
 
-              <Field id="customer-phone" label="Customer phone" optional>
+              <Field
+                id="customer-phone"
+                label="Customer phone"
+                required={alshrouqNeedsCustomer}
+                optional={!alshrouqNeedsCustomer}
+              >
                 <Input
                   id="customer-phone"
                   value={form.customer_phone}
