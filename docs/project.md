@@ -1931,6 +1931,37 @@ order creates the delivery. Nobody opens AlShrouq's own dashboard to retype it.
 Every other method's form is untouched, and `ALSHROUQ` (`lib/branches.ts`) is the
 single spelling that gates all of it.
 
+#### Temporarily, only owner and admin see any of this
+
+While the integration is being checked out it is held to owner and admin.
+Everyone else — agents included — gets AlShrouq as the plain delivery method it
+was beforehand: it is one of the four options, they pick it, they save, and a
+person arranges the delivery through the workflow that predates the integration.
+No delivery fields, no scheduling, no dispatch panel, and no request to the
+courier.
+
+`alshrouqIntegrationEnabled` in `useOrderForm` is the whole of it — `isAdministrator(role)`,
+deliberately not a new permission, so the gate is lifted by deleting a line
+rather than by unpicking a permission that has since spread. Four places read it:
+the two blocks beneath the method, the dispatch panel in the sidebar, and
+`alshrouqNeedsCustomer` — the courier is what cannot be handed a nameless
+order, so outside the gate **Customer Name** and **Customer Phone** go back to
+being optional.
+
+Nothing is rebuilt for this. The save takes the path that already existed for
+orders predating the integration: `skipAlshrouqIntegration` (historical **or**
+outside the gate) picks `historicalOrderFormSchema`, whose purpose is the
+AlShrouq rules not running, and is the argument `submitToAlShrouq` already
+takes to return before the CRM is touched. The integration itself — its server
+functions, its RBAC, its duplicate protection — is untouched, and an admin still
+reaches all of it. `__tests__/alshrouq-agent-gate.test.ts` pins who is put on
+which path; `historical-alshrouq.test.ts` still pins what each path does.
+
+The order activity timeline is deliberately **not** gated. It predates the
+integration, carries every other kind of order event, and an agent looking at an
+order already dispatched by an admin should still see its history.
+
+
 The existing **Customer Name**, **Customer Phone** and **Branch** are reused
 as-is. There is deliberately no preparation time, driver note, timeslot or
 service fee: the CRM accepts them, none is required to create a delivery, and

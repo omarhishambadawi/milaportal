@@ -156,7 +156,7 @@ export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
     <Card className="overflow-hidden shadow-sm">
       <CardHeader className="border-b border-border/60 bg-muted/25 px-4 py-3 dark:bg-muted/10">
         <CardTitle className="flex items-center gap-2 text-sm font-semibold">
-          <Bike className="h-4 w-4 text-muted-foreground" /> AlShrouq delivery
+          <Bike className="h-4 w-4 text-muted-foreground" /> Alshrouq Integration
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 p-4 text-[13px]">

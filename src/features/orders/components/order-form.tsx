@@ -182,6 +182,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
     shamsInvoices,
     readOnly,
     isHistoricalAlShrouq,
+    alshrouqIntegrationEnabled,
     submit,
     del,
   } = useOrderForm(mode);
@@ -222,8 +223,13 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
    * Follows the method currently selected, not the one the order was saved with,
    * so switching to AlShrouq marks them at once and switching away clears the
    * marker — the same condition `orderFormSchema` applies at save.
+   *
+   * And only where the integration is offered: it is the courier API that cannot
+   * be handed a nameless order, so outside the gate there is no courier call and
+   * the pre-integration form applies, where these were always optional.
    */
-  const alshrouqNeedsCustomer = form.delivery_type === ALSHROUQ && !isHistoricalAlShrouq;
+  const alshrouqNeedsCustomer =
+    form.delivery_type === ALSHROUQ && !isHistoricalAlShrouq && alshrouqIntegrationEnabled;
 
   /** The state of each typed number, so a row can say where its lookup got to. */
   const stateOf = (value: string) => {
@@ -392,42 +398,49 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                   it was created with. It is not asked for a location or a
                   payment method — it has neither, was delivered by a person on a
                   phone, and requiring them would make the row uneditable. */}
-              {form.delivery_type === ALSHROUQ && isHistoricalAlShrouq && (
-                <div className="sm:col-span-2 rounded-md border border-border/60 bg-muted/20 p-3 dark:bg-muted/10">
-                  <p className="text-[11.5px] text-muted-foreground">
-                    {HISTORICAL_ALSHROUQ_NOTICE}
-                  </p>
-                </div>
-              )}
+              {/* Temporarily owner/admin only, per `alshrouqIntegrationEnabled`.
+                  Everyone else picks AlShrouq and saves — the method behaves as
+                  it did before the integration, and nothing below is drawn. */}
+              {alshrouqIntegrationEnabled &&
+                form.delivery_type === ALSHROUQ &&
+                isHistoricalAlShrouq && (
+                  <div className="sm:col-span-2 rounded-md border border-border/60 bg-muted/20 p-3 dark:bg-muted/10">
+                    <p className="text-[11.5px] text-muted-foreground">
+                      {HISTORICAL_ALSHROUQ_NOTICE}
+                    </p>
+                  </div>
+                )}
 
-              {form.delivery_type === ALSHROUQ && !isHistoricalAlShrouq && (
-                <div className="sm:col-span-2 rounded-md border border-border/60 bg-muted/20 p-3 dark:bg-muted/10">
-                  <p className="mb-2.5 text-[11.5px] font-medium text-muted-foreground">
-                    AlShrouq delivery — sent to the courier when this order is saved.
-                  </p>
-                  <AlShrouqDeliveryFields
-                    disabled={readOnly}
-                    branchNo={form.branch_no}
-                    value={{
-                      map_url: form.alshrouq_map_url,
-                      lat: form.alshrouq_lat,
-                      lng: form.alshrouq_lng,
-                      payment_type: form.alshrouq_payment_type,
-                      scheduled_at: form.alshrouq_scheduled_at,
-                    }}
-                    onChange={(next) =>
-                      setForm((f) => ({
-                        ...f,
-                        alshrouq_map_url: next.map_url,
-                        alshrouq_lat: next.lat,
-                        alshrouq_lng: next.lng,
-                        alshrouq_payment_type: next.payment_type,
-                        alshrouq_scheduled_at: next.scheduled_at,
-                      }))
-                    }
-                  />
-                </div>
-              )}
+              {alshrouqIntegrationEnabled &&
+                form.delivery_type === ALSHROUQ &&
+                !isHistoricalAlShrouq && (
+                  <div className="sm:col-span-2 rounded-md border border-border/60 bg-muted/20 p-3 dark:bg-muted/10">
+                    <p className="mb-2.5 text-[11.5px] font-medium text-muted-foreground">
+                      Alshrouq Integration — sent to the courier when this order is saved.
+                    </p>
+                    <AlShrouqDeliveryFields
+                      disabled={readOnly}
+                      branchNo={form.branch_no}
+                      value={{
+                        map_url: form.alshrouq_map_url,
+                        lat: form.alshrouq_lat,
+                        lng: form.alshrouq_lng,
+                        payment_type: form.alshrouq_payment_type,
+                        scheduled_at: form.alshrouq_scheduled_at,
+                      }}
+                      onChange={(next) =>
+                        setForm((f) => ({
+                          ...f,
+                          alshrouq_map_url: next.map_url,
+                          alshrouq_lat: next.lat,
+                          alshrouq_lng: next.lng,
+                          alshrouq_payment_type: next.payment_type,
+                          alshrouq_scheduled_at: next.scheduled_at,
+                        }))
+                      }
+                    />
+                  </div>
+                )}
 
               {/* The branch. Everything the customer asks next — is it open,
                   does it deliver, what is the address — is answered by the
@@ -757,9 +770,12 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
               An order already declared historical keeps the panel whatever its
               method reads, because that declaration is a fact about the order
               worth showing, and it is the only place it can be taken back. */}
-          {mode === "edit" && id && (form.delivery_type === ALSHROUQ || isHistoricalAlShrouq) && (
-            <AlShrouqDispatchPanel orderId={id} />
-          )}
+          {alshrouqIntegrationEnabled &&
+            mode === "edit" &&
+            id &&
+            (form.delivery_type === ALSHROUQ || isHistoricalAlShrouq) && (
+              <AlShrouqDispatchPanel orderId={id} />
+            )}
 
           {mode === "edit" && id && <OrderActivityTimeline orderId={id} />}
         </aside>
