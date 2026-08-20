@@ -126,6 +126,22 @@ function detailLine(e: OrderActivityEvent): string | null {
     if (d.call_centre_invoice) parts.push(`Call Centre invoice ${String(d.call_centre_invoice)}`);
     return parts.join(" · ");
   }
+  if (e.action === "alshrouq_dispatched") {
+    // The reference is the whole point of this line: it is what somebody quotes
+    // on the phone when a delivery has to be chased.
+    const parts = [`Reference ${d.local_id ?? "pending"}`];
+    if (d.payment_type) parts.push(String(d.payment_type));
+    if (d.value !== undefined && d.value !== null) parts.push(fmtSAR(Number(d.value)));
+    if (d.status) parts.push(`Status: ${String(d.status)}`);
+    return parts.join(" · ");
+  }
+  if (e.action === "alshrouq_status_changed") {
+    // AlShrouq's own words on both sides, unmapped — see the dispatch panel.
+    return `${d.from ?? "—"} → ${d.to ?? "—"}${d.detail ? ` · ${String(d.detail)}` : ""}`;
+  }
+  if (e.action === "alshrouq_cancelled") {
+    return `Reference ${d.local_id ?? "—"}${d.status ? ` · ${String(d.status)}` : ""}`;
+  }
   if (e.action === "assigned" && d.to_team) return `Team: ${String(d.to_team).replace("_", " ")}`;
   return null;
 }
