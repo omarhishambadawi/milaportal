@@ -46,6 +46,12 @@ function describe(e: OrderActivityEvent, nameOf: (id: unknown) => string): strin
   // The withdrawal, which had no event until the flag could be cleared at all.
   if (e.action === "call_center_cleared") return "Call Center Invoice cleared automatically";
   if (e.action === "auto_completed") return "Order automatically completed by MilaPortal";
+  // The courier events. Named after AlShrouq rather than "delivery updated",
+  // because the Portal is reporting what another system did with the order and
+  // an agent chasing a late delivery needs to know which one to call.
+  if (e.action === "alshrouq_dispatched") return "Sent to AlShrouq for delivery";
+  if (e.action === "alshrouq_status_changed") return "AlShrouq delivery status changed";
+  if (e.action === "alshrouq_cancelled") return "AlShrouq delivery cancelled";
   if (e.action === "edited") {
     const keys = Object.keys(d);
     if (keys.length === 0) return "Edited the order";
