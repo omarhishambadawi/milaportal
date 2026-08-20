@@ -133,6 +133,9 @@ export async function loadEditableOrder(
 /* -------------------------------------------------------------------------- */
 
 export const numberOrNull = (v: unknown): number | null => {
+  // A blank string is absence, not zero. `Number("")` is 0, which would turn a
+  // NULL numeric column into a courier order worth nothing at all.
+  if (typeof v === "string" && v.trim() === "") return null;
   const n = typeof v === "string" ? Number(v) : v;
   return typeof n === "number" && Number.isFinite(n) ? n : null;
 };
