@@ -104,60 +104,17 @@ export type ShamsCrmErrorKind =
   | "malformed"
   | "auth_failed";
 
-/** A failure safe to surface. Never carries a credential or a token. */
+/** A failure safe to surface. Never carries a credential, token, or body. */
 export class ShamsCrmError extends Error {
   readonly kind: ShamsCrmErrorKind;
   readonly httpStatus: number | null;
-  /**
-   * What the CRM said was wrong, in its own words.
-   *
-   * The reason this exists: a rejected create used to arrive as nothing but
-   * "unexpected status", so the one thing that would have identified the bad
-   * field — the CRM's own validation message — was parsed and then dropped.
-   * Only a message-shaped string is kept, never the whole body, so a response
-   * that happened to echo the request cannot carry the payload into a log.
-   */
-  readonly detail: string | null;
 
-  constructor(
-    kind: ShamsCrmErrorKind,
-    message: string,
-    httpStatus: number | null = null,
-    detail: string | null = null,
-  ) {
+  constructor(kind: ShamsCrmErrorKind, message: string, httpStatus: number | null = null) {
     super(message);
     this.name = "ShamsCrmError";
     this.kind = kind;
     this.httpStatus = httpStatus;
-    this.detail = detail;
   }
-}
-
-/**
- * The CRM's own error text, out of whatever shape it answered with.
- *
- * Tolerant across the usual envelopes, and deliberately capped: this ends up on
- * an order's timeline, which is read by agents, not a place for a wall of JSON.
- */
-function errorDetail(body: unknown): string | null {
-  if (typeof body === "string") return body.trim().slice(0, 300) || null;
-  if (!body || typeof body !== "object") return null;
-  const row = body as Record<string, unknown>;
-  for (const key of ["message", "error", "detail", "title"]) {
-    const value = row[key];
-    if (typeof value === "string" && value.trim() !== "") return value.trim().slice(0, 300);
-  }
-  // Laravel-style `{errors: {field: ["msg"]}}` — the shape that names the field.
-  const errors = row["errors"];
-  if (errors && typeof errors === "object") {
-    const parts: string[] = [];
-    for (const [field, messages] of Object.entries(errors as Record<string, unknown>)) {
-      const first = Array.isArray(messages) ? messages[0] : messages;
-      if (typeof first === "string") parts.push(`${field}: ${first}`);
-    }
-    if (parts.length > 0) return parts.join("; ").slice(0, 300);
-  }
-  return null;
 }
 
 interface SessionState {
@@ -276,26 +233,14 @@ async function getSessionToken(forceRefresh = false): Promise<string> {
 }
 
 /**
- * An authenticated call against the CRM.
+ * An authenticated GET against the CRM.
  *
  * On 401 the session is discarded, one fresh login is performed, and the request
  * is retried **once**. A second 401 raises `auth_failed` rather than looping —
  * repeatedly re-authenticating a user credential against a server that keeps
  * refusing is how an account gets locked.
- *
- * ## Why a write may be retried at all
- *
- * The retry happens only on 401, which the CRM answers *before* doing anything:
- * a rejected session never reached the courier, so re-sending it cannot create a
- * second delivery. Every other failure — timeout included — is raised, because a
- * timed-out `POST` may well have been accepted and only the answer was lost. The
- * duplicate protection for that case is the caller's `client_order_id`, not a
- * decision taken here.
  */
-async function crmCall<T>(
-  path: string,
-  opts: { method?: "GET" | "POST"; body?: unknown; timeoutMs?: number } = {},
-): Promise<T> {
+export async function crmFetch<T>(path: string, opts: { timeoutMs?: number } = {}): Promise<T> {
   const env = readCrmEnv();
   if (!env) {
     throw new ShamsCrmError(
@@ -304,23 +249,13 @@ async function crmCall<T>(
     );
   }
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const method = opts.method ?? "GET";
   const url = `${env.baseUrl}${path}`;
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const token = await getSessionToken(attempt > 0);
-    const headers: Record<string, string> = {
-      accept: "application/json",
-      "X-Session-Token": token,
-    };
-    if (opts.body !== undefined) headers["content-type"] = "application/json";
     const { status, body } = await request<T>(
       url,
-      {
-        method,
-        headers,
-        ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
-      },
+      { method: "GET", headers: { accept: "application/json", "X-Session-Token": token } },
       timeoutMs,
     );
 
@@ -330,18 +265,7 @@ async function crmCall<T>(
       throw new ShamsCrmError("auth_failed", "Shams CRM rejected the portal's session.", status);
     }
     if (status < 200 || status >= 300) {
-      // The status and the CRM's own wording both travel with the error. Without
-      // them a rejected delivery is undiagnosable: the request is gone, the
-      // response is gone, and all anyone has is "unexpected status".
-      const detail = errorDetail(body);
-      throw new ShamsCrmError(
-        "http_error",
-        detail
-          ? `Shams CRM rejected the request (${status}): ${detail}`
-          : `Shams CRM returned an unexpected status (${status}).`,
-        status,
-        detail,
-      );
+      throw new ShamsCrmError("http_error", "Shams CRM returned an unexpected status.", status);
     }
     if (body === null) {
       throw new ShamsCrmError("malformed", "Shams CRM returned an unreadable response.", status);
@@ -351,24 +275,4 @@ async function crmCall<T>(
 
   // Unreachable: the loop either returns or throws.
   throw new ShamsCrmError("auth_failed", "Shams CRM rejected the portal's session.");
-}
-
-/** An authenticated GET against the CRM. */
-export async function crmFetch<T>(path: string, opts: { timeoutMs?: number } = {}): Promise<T> {
-  return crmCall<T>(path, { method: "GET", timeoutMs: opts.timeoutMs });
-}
-
-/**
- * An authenticated POST against the CRM.
- *
- * Exists for the AlShrouq integration, which is the first thing the Portal does
- * on this host that is not a read. `body` is optional because two of its three
- * write endpoints — cancel, and the refresh the Desktop issues as a GET — take
- * none.
- */
-export async function crmSend<T>(
-  path: string,
-  opts: { body?: unknown; timeoutMs?: number } = {},
-): Promise<T> {
-  return crmCall<T>(path, { method: "POST", body: opts.body ?? {}, timeoutMs: opts.timeoutMs });
 }

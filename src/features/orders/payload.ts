@@ -46,15 +46,6 @@ export interface OrderFormState {
   status: string;
   agent_id: string;
   call_center_verified: boolean;
-  /** Google Maps link to the customer, as pasted or as the map picker built it. */
-  alshrouq_map_url: string;
-  /** Held as text, like `invoice_value`, because that is what an input yields. */
-  alshrouq_lat: string;
-  alshrouq_lng: string;
-  /** The CRM's numeric payment id, as the select yields it. */
-  alshrouq_payment_type: string;
-  /** A datetime-local value, or "" for send-on-save. */
-  alshrouq_scheduled_at: string;
 }
 
 /** The persisted row, as far as this cares about it. */
@@ -80,16 +71,6 @@ export interface BuildOrderPayloadArgs {
   canAssign: boolean;
   /** May this caller tick Call Center Invoice by hand? */
   canVerify: boolean;
-  /**
-   * Whether the held-until time is part of this save.
-   *
-   * False on the pre-integration path, where nothing schedules anything: the
-   * form does not offer the control, so the only value it could carry is the
-   * null it started with — and sending a column an order was never going to set
-   * is what a save has no business doing. Defaults to true, so the integration's
-   * own saves are exactly as they were.
-   */
-  includeScheduling?: boolean;
 }
 
 /**
@@ -127,7 +108,6 @@ export function buildOrderPayload({
   invoices,
   canAssign,
   canVerify,
-  includeScheduling = true,
 }: BuildOrderPayloadArgs): Record<string, unknown> {
   /** Form value, or the stored one when the form's is blank and one exists. */
   const required = (field: (typeof REQUIRED_FROM_ROW)[number]): string => {
@@ -152,44 +132,6 @@ export function buildOrderPayload({
     customer_phone: form.customer_phone || null,
     notes: form.notes || null,
     invoice_no: invoiceNo || null,
-
-    /**
-     * The customer's location.
-     *
-     * Optional in the same sense as the fields above — blank means blank — even
-     * though the schema requires it for AlShrouq. The two are not in conflict:
-     * validation decides whether a blank may be *saved*, this decides what a
-     * blank *means*, and it means cleared.
-     *
-     * Kept rather than nulled when the method changes away from AlShrouq. A
-     * location is not wrong on a pickup order, only unused, and discarding it
-     * would lose the customer's address the moment an agent corrected a
-     * mis-picked method — then require re-entry to correct it back.
-     */
-    alshrouq_map_url: form.alshrouq_map_url || null,
-    alshrouq_lat: form.alshrouq_lat || null,
-    alshrouq_lng: form.alshrouq_lng || null,
-    alshrouq_payment_type: form.alshrouq_payment_type ? Number(form.alshrouq_payment_type) : null,
-    /**
-     * The held-until time, as an absolute instant.
-     *
-     * A datetime-local input yields a wall-clock string with no zone; `new Date()`
-     * reads it in the browser timezone, which is the one the agent typed it in.
-     * Stored as UTC so the sweep compares instants rather than clock faces.
-     *
-     * `undefined` — the key left out of the write entirely, the same device
-     * `agent_id` and `call_center_verified` below use — when the save is not the
-     * integration's. Not `null`: a null is still a column named in the statement,
-     * and naming this one on the pre-integration path is what made an agent's
-     * Update fail outright. The column is untouched by that, and an order that
-     * holds a schedule keeps it, because the key not being written is not the
-     * same as it being cleared.
-     */
-    alshrouq_scheduled_at: !includeScheduling
-      ? undefined
-      : form.alshrouq_scheduled_at
-        ? new Date(form.alshrouq_scheduled_at).toISOString()
-        : null,
 
     /**
      * The verified total wins over anything typed.

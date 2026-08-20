@@ -41,111 +41,6 @@ export type Database = {
         }
         Relationships: []
       }
-      alshrouq_dispatches: {
-        Row: {
-          alshrouq_branch_id: string
-          branch_no: string | null
-          cancelled_at: string | null
-          client_order_id: string
-          created_at: string
-          customer_address: string | null
-          customer_name: string | null
-          customer_phone: string | null
-          customer_lat: number | null
-          customer_lng: number | null
-          details: string | null
-          dispatched_at: string
-          dispatched_by: string | null
-          external_order_id: string | null
-          id: string
-          last_response: Json
-          local_id: string | null
-          order_id: string
-          payment_type: number | null
-          preparation_time: number | null
-          refreshed_at: string | null
-          status: string | null
-          scheduled_at: string | null
-          status_detail: string | null
-          tracking_url: string | null
-          updated_at: string
-          value: number | null
-        }
-        Insert: {
-          alshrouq_branch_id: string
-          branch_no?: string | null
-          cancelled_at?: string | null
-          client_order_id: string
-          created_at?: string
-          customer_address?: string | null
-          customer_name?: string | null
-          customer_phone?: string | null
-          customer_lat?: number | null
-          customer_lng?: number | null
-          details?: string | null
-          dispatched_at?: string
-          dispatched_by?: string | null
-          external_order_id?: string | null
-          id?: string
-          last_response?: Json
-          local_id?: string | null
-          order_id: string
-          payment_type?: number | null
-          preparation_time?: number | null
-          refreshed_at?: string | null
-          status?: string | null
-          scheduled_at?: string | null
-          status_detail?: string | null
-          tracking_url?: string | null
-          updated_at?: string
-          value?: number | null
-        }
-        Update: {
-          alshrouq_branch_id?: string
-          branch_no?: string | null
-          cancelled_at?: string | null
-          client_order_id?: string
-          created_at?: string
-          customer_address?: string | null
-          customer_name?: string | null
-          customer_phone?: string | null
-          customer_lat?: number | null
-          customer_lng?: number | null
-          details?: string | null
-          dispatched_at?: string
-          dispatched_by?: string | null
-          external_order_id?: string | null
-          id?: string
-          last_response?: Json
-          local_id?: string | null
-          order_id?: string
-          payment_type?: number | null
-          preparation_time?: number | null
-          refreshed_at?: string | null
-          status?: string | null
-          scheduled_at?: string | null
-          status_detail?: string | null
-          tracking_url?: string | null
-          updated_at?: string
-          value?: number | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "alshrouq_dispatches_branch_no_fkey"
-            columns: ["branch_no"]
-            isOneToOne: false
-            referencedRelation: "branches"
-            referencedColumns: ["branch_no"]
-          },
-          {
-            foreignKeyName: "alshrouq_dispatches_order_id_fkey"
-            columns: ["order_id"]
-            isOneToOne: false
-            referencedRelation: "orders"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       branch_imports: {
         Row: {
           actor_role: string | null
@@ -688,12 +583,6 @@ export type Database = {
       orders: {
         Row: {
           agent_id: string
-          alshrouq_historical: boolean
-          alshrouq_lat: number | null
-          alshrouq_lng: number | null
-          alshrouq_map_url: string | null
-          alshrouq_payment_type: number | null
-          alshrouq_scheduled_at: string | null
           branch_no: string | null
           call_center_verified: boolean
           created_at: string
@@ -715,12 +604,6 @@ export type Database = {
         }
         Insert: {
           agent_id: string
-          alshrouq_historical?: boolean
-          alshrouq_lat?: number | null
-          alshrouq_lng?: number | null
-          alshrouq_map_url?: string | null
-          alshrouq_payment_type?: number | null
-          alshrouq_scheduled_at?: string | null
           branch_no?: string | null
           call_center_verified?: boolean
           created_at?: string
@@ -742,12 +625,6 @@ export type Database = {
         }
         Update: {
           agent_id?: string
-          alshrouq_historical?: boolean
-          alshrouq_lat?: number | null
-          alshrouq_lng?: number | null
-          alshrouq_map_url?: string | null
-          alshrouq_payment_type?: number | null
-          alshrouq_scheduled_at?: string | null
           branch_no?: string | null
           call_center_verified?: boolean
           created_at?: string
@@ -1572,10 +1449,6 @@ export type Database = {
         }
         Returns: {
           agent_id: string
-          alshrouq_lat: number | null
-          alshrouq_lng: number | null
-          alshrouq_map_url: string | null
-          alshrouq_payment_type: number | null
           branch_no: string | null
           call_center_verified: boolean
           created_at: string

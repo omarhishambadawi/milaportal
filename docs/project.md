@@ -498,31 +498,7 @@ first.
 (→ `branches.branch_no`), `delivery_type`, `invoice_no`, `invoice_value`,
 `status`, `customer_name`, `customer_phone`, `notes`, `call_center_verified`,
 `created_by` (→ `auth.users`, `DEFAULT auth.uid()` — who *entered* the order, as
-opposed to `agent_id`, who owns it), `created_at`, `updated_at`, and the AlShrouq
-delivery: `alshrouq_map_url`, `alshrouq_lat`/`alshrouq_lng` (`numeric(10,7)`, to
-match `branches.latitude`; `orders_alshrouq_point_complete` makes it both or
-neither) and `alshrouq_payment_type` (the CRM’s numeric id). All nullable, with
-no CHECK tying them to `delivery_type` — every AlShrouq order predating them has
-no location and never will, and a CHECK would make those rows invalid and every
-UPDATE to one fail.
-
-### `alshrouq_dispatches`
-
-One row per order handed to the courier, separate from `orders` because it is a
-different system’s lifecycle — an order can be completed here while the courier
-record is still moving. `order_id`, `client_order_id` (what we called it),
-`local_id` (the CRM’s row id, which refresh and cancel take), `external_order_id`
-(AlShrouq’s own number, the one quoted on the phone), `status`/`status_detail`
-verbatim, `tracking_url`, `branch_no`, `alshrouq_branch_id`, `payment_type`
-(integer), `customer_address`, `customer_lat`/`customer_lng`, `value`,
-`preparation_time`, `last_response` (response bodies only — no headers, no
-token), `dispatched_by`/`dispatched_at`, `cancelled_at`, `refreshed_at`.
-
-Unique on `(order_id) WHERE cancelled_at IS NULL` and on `client_order_id` — the
-database half of the duplicate rule. RLS grants `authenticated` SELECT only,
-following the order’s own visibility; every write goes through the server
-function that actually spoke to the CRM, so a row can never claim a dispatch that
-did not happen.
+opposed to `agent_id`, who owns it), `created_at`, `updated_at`.
 
 Indexes include `orders_team_date_idx (team, order_date) INCLUDE (agent_id,
 status, order_type, invoice_value)` and `orders_agent_date_idx (agent_id,
@@ -1107,7 +1083,7 @@ Provider-agnostic and pure. `index.ts` is the only import surface.
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `lib/utils.ts`                               | `cn()` — `clsx` + `tailwind-merge`.                                                                                                                                                                                                                                                  |
 | `lib/timezone.ts`                            | `BUSINESS_TIMEZONE = "Asia/Riyadh"`, `BUSINESS_UTC_OFFSET_MINUTES = 180`. Fixed a real bug where timelines formatted in UTC+2 while call analytics bucketed in UTC+3.                                                                                                                |
-| `lib/branches.ts`                            | `ORDER_TYPES` (Cash, Wasfaty), `DELIVERY_TYPES` (AlShrouq, Store Pickup, Branch Scooter, Azman), `ALSHROUQ` (the one courier the portal submits to, named because it gates form fields, validation and dispatch), `STATUSES`, `COMPLAINT_STATUSES`, `TEAMS`, `STATUS_STYLES`, `CURRENCY = "SAR"`, `fmtSAR`, `formatOrderNo`, `stripOrderPrefix`.                                                      |
+| `lib/branches.ts`                            | `ORDER_TYPES` (Cash, Wasfaty), `DELIVERY_TYPES` (AlShrouq, Store Pickup, Branch Scooter, Azman), `STATUSES`, `COMPLAINT_STATUSES`, `TEAMS`, `STATUS_STYLES`, `CURRENCY = "SAR"`, `fmtSAR`, `formatOrderNo`, `stripOrderPrefix`.                                                      |
 | `lib/query-keys.ts`                          | Hierarchical key factory; every entity has a real `all()` invalidation boundary. Lookups live under their own root so an order write does not refetch the directory.                                                                                                                 |
 | `lib/query-client.ts`                        | `QUERY_DEFAULTS` / `MUTATION_DEFAULTS`, each option carrying its rationale.                                                                                                                                                                                                          |
 | `lib/supabase-paginate.ts`                   | `fetchAllPaginated` — PostgREST caps a response at 1000 rows; safety ceiling 200k.                                                                                                                                                                                                   |
@@ -1811,11 +1787,7 @@ unchanged.
 `orderFormSchema` (Zod): `order_date`, `team`, `order_type`, `customer_name`,
 `customer_phone`, `branch_no` (**required**), `delivery_type` (**required**),
 `invoice_no`, `invoice_value` (coerced, non-negative, nullable), `notes`,
-`status`, `agent_id` (optional), `call_center_verified` (optional), and — required
-only when `delivery_type` is AlShrouq — `alshrouq_map_url`, `alshrouq_lat`,
-`alshrouq_lng`, `alshrouq_payment_type`. The conditional rule is a `superRefine`,
-not a database CHECK: it is about what an agent must type today, not a fact about
-every row ever stored, and historical AlShrouq orders have none of them.
+`status`, `agent_id` (optional), `call_center_verified` (optional).
 
 The payload itself is built by **`buildOrderPayload`** (pure, in
 `features/orders/payload.ts`), not by spreading form state. Editing an order and
@@ -1922,220 +1894,6 @@ in `Asia/Riyadh` — `Today 12:31 PM` within the business day, the date before i
 Rows carrying `details.automated` are attributed to their `source` (MilaPortal)
 and dotted in `success`; everything else names its actor.
 
-### AlShrouq delivery — the one courier the portal submits to
-
-Selecting **AlShrouq** as the delivery method turns the order form into the
-courier's intake form. Four fields appear beneath the method — **Map URL**,
-**Lat**, **Lng** on one row and **Payment Method** on the next — and saving the
-order creates the delivery. Nobody opens AlShrouq's own dashboard to retype it.
-Every other method's form is untouched, and `ALSHROUQ` (`lib/branches.ts`) is the
-single spelling that gates all of it.
-
-#### Temporarily, only owner and admin see any of this
-
-While the integration is being checked out it is held to owner and admin.
-Everyone else — agents included — gets AlShrouq as the plain delivery method it
-was beforehand: it is one of the four options, they pick it, they save, and a
-person arranges the delivery through the workflow that predates the integration.
-No delivery fields, no scheduling, no dispatch panel, and no request to the
-courier.
-
-`alshrouqIntegrationEnabled` in `useOrderForm` is the whole of it — `isAdministrator(role)`,
-deliberately not a new permission, so the gate is lifted by deleting a line
-rather than by unpicking a permission that has since spread. Four places read it:
-the two blocks beneath the method, the dispatch panel in the sidebar, and
-`alshrouqNeedsCustomer` — the courier is what cannot be handed a nameless
-order, so outside the gate **Customer Name** and **Customer Phone** go back to
-being optional.
-
-Nothing is rebuilt for this. The save takes the path that already existed for
-orders predating the integration: `skipAlshrouqIntegration` (historical **or**
-outside the gate) picks `historicalOrderFormSchema`, whose purpose is the
-AlShrouq rules not running, and is the argument `submitToAlShrouq` already
-takes to return before the CRM is touched. The integration itself — its server
-functions, its RBAC, its duplicate protection — is untouched, and an admin still
-reaches all of it. `__tests__/alshrouq-agent-gate.test.ts` pins who is put on
-which path; `historical-alshrouq.test.ts` still pins what each path does.
-
-The order activity timeline is deliberately **not** gated. It predates the
-integration, carries every other kind of order event, and an agent looking at an
-order already dispatched by an admin should still see its history.
-
-One column follows the control. `buildOrderPayload` takes `includeScheduling`
-(false on this path, from the same `skipAlshrouqIntegration`) and leaves
-`alshrouq_scheduled_at` out of the write as `undefined` — the device `agent_id`
-and `call_center_verified` already use, since `JSON.stringify` inside supabase-js
-drops the key and the statement never names the column. Not `null`: a null is
-still a named column, and naming this one is what made an agent's **Update order**
-fail outright with `Could not find the 'alshrouq_scheduled_at' column of 'orders'`
-`in the schema cache` — over a schedule the form does not offer them and they
-could not have set. The column is untouched, an order holding a schedule keeps
-it, and the integration's own saves still write it, null included, because
-clearing a schedule is something it can do.
-
-
-
-The existing **Customer Name**, **Customer Phone** and **Branch** are reused
-as-is. There is deliberately no preparation time, driver note, timeslot or
-service fee: the CRM accepts them, none is required to create a delivery, and
-each is another box between an agent and a saved order.
-
-#### The contract, and where it came from
-
-The portal never calls `alshrouqdelivery.com`. It goes through the same
-`shams-crm.cloud` integration the PharmacyCRM Desktop uses, so one system owns
-the courier relationship. The contract was read off that Desktop package — its
-PyInstaller bundle and its local `http_cache`, which holds real config and order
-records — not guessed from a public API.
-
-| Call | Path |
-| --- | --- |
-| Config | `GET /integrations/alshrouq/config` |
-| History | `GET /integrations/alshrouq/orders` |
-| Create | `POST /integrations/alshrouq/orders` |
-| Refresh | `GET /integrations/alshrouq/orders/{localId}/refresh` |
-| Cancel | `POST /integrations/alshrouq/orders/{localId}/cancel` |
-
-Refresh is a **GET** — the verb the Desktop uses. Sending it as a POST returns
-`405 Method Not Allowed`: the path is right, the method is not.
-
-Three details in the payload are easy to get wrong and are pinned by tests in
-`shams-crm/__tests__/alshrouq-contract.test.ts`:
-
-- **`customer_address` is the Google Maps URL**, not a street address. Every CRM
-  record carries the link the customer sent — short `maps.app.goo.gl` links
-  included — *alongside* `customer_lat`/`customer_lng`. The link names the
-  building; the point is what routing consumes. Neither substitutes for the
-  other, so the order stores both and a typed point still generates a link.
-- **`client_order_id` is the bare order number** — `6529`, `06441` — which is
-  `stripOrderPrefix(display_no)`. It is **not** `formatOrderNo`: `CC-6529` is a
-  display rendering, and sending it would give one order two names across two
-  systems and break the duplicate lookup that depends on recognising it.
-- **`payment_type` is numeric** — `1` COD, `2` SPAN Machine, `3` Paid,
-  `4` AlshrouqPay — read from the config endpoint, never hardcoded.
-
-#### Branch mapping is read, not stored
-
-`GET /integrations/alshrouq/config` returns `branch_options`: the live
-Shams-code → AlShrouq-id mapping, 136 entries, 18 of them flagged
-`covered: false` for branches AlShrouq does not serve. `branchCoverage()` reads
-it on every dispatch, cached five minutes server-side, and refuses an uncovered
-or unmapped branch rather than sending a request that would simply sit.
-
-There is deliberately **no local copy**. A 137-row seed frozen into a migration
-was tried and was wrong for 87 of 136 branches — 27 of them pointing at another
-pharmacy's id, which is a real delivery to the wrong shop. It assumed the branch
-codes ran contiguously from `P0001`; they jump `P0040 → P0101 → P0201 → P0301 →
-P0401 → P0501 → P0601 → P0701`, and the source workbook even orders `P0503`
-before `P0502`. `20260820200000_alshrouq_order_delivery.sql` drops that column —
-alongside `20260820185447_7fff9f9c-…`, which the Lovable integration wrote as its
-own copy of the same change when it applied it. Both versions are in the remote
-migration ledger, so **both files have to stay**: deleting either one leaves a
-recorded version with no local file, and the Supabase Preview check fails with
-"Remote migration versions not found in local migrations directory". The DDL is
-idempotent throughout, so replaying both is harmless.
-The CRM's list has already drifted from the shipped workbook by one branch, so a
-second frozen copy would drift the same way.
-
-#### Duplicate protection
-
-A duplicate here is a second driver at a customer's door and a second bill, so
-there are three layers:
-
-1. A partial unique index on `(order_id) WHERE cancelled_at IS NULL`, plus a
-   unique index on `client_order_id`.
-2. A pre-flight read of the live dispatch, so a double-click or a re-save returns
-   the existing delivery rather than attempting another.
-3. For what neither can see — a POST that timed out *after* the courier may have
-   received it — `findAlShrouqOrderByClientId` searches the CRM's own history for
-   our `client_order_id` before anything is sent again. `outcomeIsUnknown()`
-   decides when that applies: timeouts, transport failures, 5xx and unparseable
-   bodies all mean "the order may exist on the other side". An unrecognised error
-   counts as unknown too, because guessing "it definitely failed" is the guess
-   that creates the second delivery. The lookup compares numerically, since the
-   CRM stores `06441` for the order the portal calls `6441`.
-
-#### Historical orders
-
-An AlShrouq order raised before this integration existed was already delivered,
-by a person, through the old manual workflow. It is held out of the integration
-entirely — `isHistoricalAlShrouqOrder` identifies it as one carrying no delivery
-data (`alshrouq_lat`, `alshrouq_lng`, `alshrouq_payment_type` all null) that the
-integration has never dispatched.
-
-Both halves are persisted facts, and that is the point. Every row that existed
-when the delivery columns were added has them null by construction, and
-`orderFormSchema` will not save a new AlShrouq order without them — so "no
-delivery data" *is* "created before the integration", derived from the schema
-rather than asserted by a flag or guessed from a date. `delivery_type` alone
-cannot do this job: it reads `AlShrouq` on both kinds of order, which is why
-old orders briefly started being asked for fields they were never going to have.
-
-The determination is made from the **stored** row, never from what is on screen,
-so an agent typing coordinates into an old order cannot convert it into a
-dispatchable one — and the form does not offer those fields on such an order, so
-nothing can populate them in the first place. A historical order stays
-historical.
-
-What follows from it: `historicalOrderFormSchema` drops the AlShrouq
-requirements so the row stays editable; the order form shows a one-line notice in
-place of the delivery fields; the panel shows the same notice and no dispatch
-control at all; and `attemptDispatch` refuses **before** the CRM is contacted and
-before anything reaches the timeline, so a save leaves no trace of an attempt.
-The server check is the one that matters — the browser is not what is trusted
-with this. `src/features/orders/__tests__/historical-alshrouq.test.ts` pins it.
-
-##### Declaring one by hand
-
-The automatic test catches an order that *looks* historical. It cannot catch one
-back-filled with a location years ago, or one recorded under another method that
-AlShrouq in fact delivered — so **Mark as Historical AlShrouq order** sits at the
-foot of `AlShrouqDispatchPanel`, behind a confirmation, for owner and admin only.
-It calls `alshrouqSetHistorical`, which writes `orders.alshrouq_historical` and
-nothing else: no courier request is made, on this path or any other.
-
-Three things about where it is drawn:
-
-- **It is not gated on the CRM being configured.** The action writes one column
-  and speaks to no courier, so a deployment without credentials is precisely
-  where an old order still needs converting. It *is* hidden while a delivery is
-  live, because the courier already has that order — and the server refuses that
-  case too, so the panel is not what is preventing it.
-- **The panel is rendered from the form's method, not the row's**, and also
-  whenever the row is already flagged. An owner converting an Azman order picks
-  AlShrouq, the panel appears, and the order is declared historical *before* the
-  save that would otherwise dispatch it. Once flagged, the panel stays reachable
-  whatever the method reads — it is the only place the declaration can be taken
-  back.
-- **Marked is a state, not a checkbox.** Once flagged, the panel shows the notice
-  under a *Historical* badge and withdraws Send entirely; only a marking a person
-  set offers **Remove the historical marking**, since an order historical by the
-  automatic test has no marking to remove.
-
-`isHistoricalAlShrouq` in `useOrderForm` honours the flag the same way
-`isHistoricalAlShrouqOrder` does, and deliberately without regard to the stored
-method: between flagging an order and saving it as AlShrouq the automatic test
-still says no, and without this the save would call `alshrouqAutoSubmit` for an
-order the server would only refuse — a round trip and a warning about a courier
-submission nobody asked for. RBAC is enforced in `alshrouqSetHistorical` against
-`has_role`, not by the hidden button: a supervisor holding `edit_all_orders` may
-edit the order and still not set this.
-
-#### Timeline
-
-Courier events land on the existing `order_activity` timeline rather than a
-second log — `alshrouq_submission_started` (written *before* the POST, so an
-interrupted attempt still leaves a trace), `alshrouq_dispatched`,
-`alshrouq_failed`, `alshrouq_recovered`, `alshrouq_status_changed`,
-`alshrouq_cancelled`. Details carry the AlShrouq order number, the status and the
-failure reason as the CRM worded it; never a payload, a header or a token.
-`recordDispatchEvent` never throws, because these run *after* the courier has
-been told something and failing there would invite a retry.
-
-Statuses are stored and displayed verbatim. The portal maps nothing to an order
-status: the vocabulary is the courier's, and a guessed mapping would report
-"delivered" for a word that meant something else. `AlShrouqDispatchPanel` shows
-the record and offers refresh, cancel and — when a submission failed — retry.
 ### The form lives in the feature module, not the route file
 
 `OrderForm` was exported from `routes/_app.orders.new.tsx` so `/orders/$id` could

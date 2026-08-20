@@ -109,26 +109,6 @@ export const geoReverseGeocode = createServerFn({ method: "POST" })
   });
 
 /**
- * Follow a shortened Google Maps link to the location behind it.
- *
- * Gated on authentication alone, deliberately, and it is the one function here
- * that is: it reads no portal data, so there is nothing for a permission to
- * protect. What makes it safe is the host allow-list in the resolver, not an
- * RBAC check — and tying it to `view_branches` would put it out of reach of a
- * telesales agent capturing a customer's location, which is what it is for.
- *
- * `redirect: "manual"` and the allow-list live in the resolver; see the header
- * comment there for why a user-supplied URL is not simply fetched.
- */
-export const geoResolveMapLink = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
-  .inputValidator((d: { url: string }) => z.object({ url: z.string().min(1).max(2000) }).parse(d))
-  .handler(async ({ data }) => {
-    const { resolveMapLink } = await import("@/lib/geo/short-link.server");
-    return resolveMapLink(data.url);
-  });
-
-/**
  * Shared gate.
  *
  * Routed through `has_permission` rather than a role comparison so this and the

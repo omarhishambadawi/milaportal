@@ -1,16 +1,5 @@
 export const ORDER_TYPES = ["Cash", "Wasfaty"] as const;
-
-/**
- * The one courier the portal submits to automatically.
- *
- * Named rather than spelled at each site because it is now load-bearing: it
- * decides which fields the order form requires, which orders carry a customer
- * location, and which get sent to Shams. A second spelling of the string is a
- * second place for the integration to silently stop applying.
- */
-export const ALSHROUQ = "AlShrouq";
-
-export const DELIVERY_TYPES = [ALSHROUQ, "Store Pickup", "Branch Scooter", "Azman"] as const;
+export const DELIVERY_TYPES = ["AlShrouq", "Store Pickup", "Branch Scooter", "Azman"] as const;
 export const STATUSES = ["Pending", "Completed", "Cancelled"] as const;
 export const COMPLAINT_STATUSES = ["In Progress", "Resolved"] as const;
 export const TEAMS = [

@@ -8,13 +8,11 @@ import { hasPerm } from "@/lib/permissions";
 import { queryKeys } from "@/lib/query-keys";
 import { useAgentDirectory } from "@/lib/directory";
 import { useDebounced } from "@/features/shams/hooks/use-shams-data";
-import { historicalOrderFormSchema, orderFormSchema } from "../schema";
+import { orderFormSchema } from "../schema";
 import { buildOrderPayload, type PersistedOrder } from "../payload";
 import { invoiceNoSignature } from "../invoice-verification";
 import { recordInvoiceVerification } from "../record-verification";
-import { submitToAlShrouq } from "../submit-to-alshrouq";
-import { ALSHROUQ } from "@/lib/branches";
-import { defaultTeam, parseInvoiceNumbers, toLocalInputValue } from "../utils";
+import { defaultTeam, parseInvoiceNumbers } from "../utils";
 import { isAssignableAgent } from "../components/order-assignment";
 import { useOrderInvoices } from "./use-order-invoices";
 import { armOrderReturn } from "./use-orders-scroll-restoration";
@@ -62,18 +60,6 @@ export function useOrderForm(mode: "create" | "edit") {
     order_type: "Cash",
     customer_name: "",
     customer_phone: "",
-    /**
-     * Where an AlShrouq delivery goes.
-     *
-     * Three fields rather than an address: the link the customer sent, and the
-     * point read out of it. Empty for every other method, and the form only
-     * asks once AlShrouq is picked.
-     */
-    alshrouq_map_url: "",
-    alshrouq_lat: "",
-    alshrouq_lng: "",
-    alshrouq_payment_type: "",
-    alshrouq_scheduled_at: "",
     branch_no: "" as string | null,
     delivery_type: "",
     invoice_value: "",
@@ -133,22 +119,6 @@ export function useOrderForm(mode: "create" | "edit") {
    */
   const canAssign = isAdministrator(role);
   /**
-   * Whether this user gets the AlShrouq integration, or the workflow that came
-   * before it.
-   *
-   * **Temporary.** While the integration is being checked out it is held to
-   * owner and admin — they keep the delivery fields, the scheduling, the
-   * dispatch panel and the submission on save. Everyone else gets AlShrouq as
-   * the plain delivery method it was beforehand: pick it, save, and a person
-   * arranges the delivery as they used to.
-   *
-   * Nothing is removed by this. The integration, its server functions and its
-   * RBAC are untouched; this only decides who the form offers it to. Deliberately
-   * `isAdministrator` rather than a new permission, so the gate can be lifted by
-   * deleting it rather than by unpicking a permission that has since spread.
-   */
-  const alshrouqIntegrationEnabled = isAdministrator(role);
-  /**
    * Whether the agent picker is live in the current mode.
    *
    * On **create** the gate is `edit_all_orders`, mirroring the INSERT policy
@@ -164,54 +134,6 @@ export function useOrderForm(mode: "create" | "edit") {
   const readOnly = mode === "edit" && !canEditThis;
   const canVerifyThis =
     mode === "create" ? canVerifyAll || canVerifyOwn : canVerifyAll || (isOwner && canVerifyOwn);
-
-  /**
-   * An AlShrouq order raised before the integration existed.
-   *
-   * Read from the **stored** row, never from `form`: an agent typing
-   * coordinates into an old order must not be able to turn it into one the
-   * integration will send. Since the form does not offer those fields on such an
-   * order, nothing can populate them anyway — the two together mean a historical
-   * order stays historical.
-   *
-   * The dispatch ledger is not consulted here, and does not need to be: an order
-   * with a dispatch record necessarily carries the delivery fields, because
-   * `orderFormSchema` would not have saved it otherwise. The server checks both
-   * before it will contact the courier; this is the form's half.
-   *
-   * While the order is still loading this is false, so the full rules apply —
-   * the safe direction, since it refuses a save rather than allowing a wrong one.
-   *
-   * `alshrouq_historical` is the owner/admin declaration, and it outranks the
-   * automatic test exactly as it does in `isHistoricalAlShrouqOrder` on the
-   * server. It is read without regard to the stored method because that is the
-   * whole point of converting one: the flag is set first, the method is changed
-   * to AlShrouq in the same sitting, and between those two moments the automatic
-   * test still says no. Without this, saving that order would call
-   * `alshrouqAutoSubmit` for an order the server would only refuse — a round
-   * trip and a warning about a courier submission nobody asked for.
-   */
-  const isHistoricalAlShrouq =
-    mode === "edit" &&
-    !!existing &&
-    ((existing as any).alshrouq_historical === true ||
-      (existing.delivery_type === ALSHROUQ &&
-        (existing as any).alshrouq_lat == null &&
-        (existing as any).alshrouq_lng == null &&
-        (existing as any).alshrouq_payment_type == null));
-
-  /**
-   * Whether this save takes the pre-integration path.
-   *
-   * True for an order that predates the integration, and true for anyone outside
-   * the temporary gate above — both mean the form asks for nothing extra
-   * (`historicalOrderFormSchema`, whose whole purpose is the AlShrouq rules not
-   * running) and nothing is sent to the courier.
-   *
-   * `isHistoricalAlShrouq` stays the narrower fact and is what the notice and the
-   * dispatch panel are about; this is only about what a save does.
-   */
-  const skipAlshrouqIntegration = isHistoricalAlShrouq || !alshrouqIntegrationEnabled;
 
   /**
    * Fill the form from the order — once per order, not once per fetch.
@@ -244,11 +166,6 @@ export function useOrderForm(mode: "create" | "edit") {
       order_type: existing.order_type,
       customer_name: (existing as any).customer_name ?? "",
       customer_phone: (existing as any).customer_phone ?? "",
-      alshrouq_map_url: (existing as any).alshrouq_map_url ?? "",
-      alshrouq_lat: (existing as any).alshrouq_lat?.toString() ?? "",
-      alshrouq_lng: (existing as any).alshrouq_lng?.toString() ?? "",
-      alshrouq_payment_type: (existing as any).alshrouq_payment_type?.toString() ?? "",
-      alshrouq_scheduled_at: toLocalInputValue((existing as any).alshrouq_scheduled_at),
       branch_no: existing.branch_no ?? "",
       delivery_type: existing.delivery_type ?? "",
       invoice_value: existing.invoice_value?.toString() ?? "",
@@ -489,7 +406,7 @@ export function useOrderForm(mode: "create" | "edit") {
       // Built by `buildOrderPayload`, which is pure and tested: every field the
       // order has is present, and a *required* field left blank by a hydration
       // failure falls back to the stored row rather than being sent empty.
-      const parsed = (skipAlshrouqIntegration ? historicalOrderFormSchema : orderFormSchema).parse(
+      const parsed = orderFormSchema.parse(
         buildOrderPayload({
           mode,
           form,
@@ -498,9 +415,6 @@ export function useOrderForm(mode: "create" | "edit") {
           invoices: shamsInvoices,
           canAssign,
           canVerify: canVerifyThis,
-          // The scheduling control belongs to the integration, so the column
-          // belongs to its saves. See `skipAlshrouqIntegration`.
-          includeScheduling: !skipAlshrouqIntegration,
         }),
       );
       if (mode === "create") {
@@ -548,14 +462,6 @@ export function useOrderForm(mode: "create" | "edit") {
                 : "Order saved. The invoice could not be recorded yet; it will be picked up when the order is next opened.",
             );
           }
-          // And hand it to the courier, if that is the method. Same position and
-          // the same non-fatal contract as the verification above.
-          // The historical half of `skipAlshrouqIntegration` is false on create by
-          // construction — a brand new order cannot predate the integration — but
-          // the gate half is live: an agent's AlShrouq order is arranged by a
-          // person, exactly as it was before the integration, and no request is
-          // made here at all.
-          await submitToAlShrouq(createdId, parsed.delivery_type, skipAlshrouqIntegration);
         }
       } else {
         const { error } = await supabase
@@ -603,7 +509,6 @@ export function useOrderForm(mode: "create" | "edit") {
               : "Order updated. The invoice could not be recorded yet; it will be picked up when the order is next opened.",
           );
         }
-        await submitToAlShrouq(id!, parsed.delivery_type, skipAlshrouqIntegration);
       }
       qc.invalidateQueries({ queryKey: queryKeys.orders.all() });
       qc.invalidateQueries({ queryKey: queryKeys.dashboard.all() });
@@ -667,8 +572,6 @@ export function useOrderForm(mode: "create" | "edit") {
     canEditThis,
     canVerifyThis,
     readOnly,
-    isHistoricalAlShrouq,
-    alshrouqIntegrationEnabled,
     submit,
     del,
     // assignment + Shams

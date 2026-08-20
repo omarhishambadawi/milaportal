@@ -44,14 +44,6 @@ function form(overrides: Partial<OrderFormState> = {}): OrderFormState {
     order_type: "Cash",
     customer_name: "Sara",
     customer_phone: "0500000000",
-    // The helper's method is AlShrouq, which since the delivery location was
-    // added is the one method that requires a customer location — so a "fully
-    // hydrated" AlShrouq form has one.
-    alshrouq_map_url: "https://maps.app.goo.gl/aBcDeF",
-    alshrouq_lat: "24.5372826",
-    alshrouq_lng: "46.6456098",
-    alshrouq_payment_type: "1",
-    alshrouq_scheduled_at: "",
     branch_no: "P0008",
     delivery_type: "AlShrouq",
     invoice_value: "1261.40",
