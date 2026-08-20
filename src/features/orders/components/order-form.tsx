@@ -670,6 +670,13 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
               asks next are answered without leaving a half-typed order. */}
           {form.branch_no && <BranchPreviewPanel branchNo={form.branch_no} />}
 
+          {/* Only for a saved order whose delivery method is actually AlShrouq:
+              a courier cannot be sent an order that does not exist yet, and a
+              dispatch button on a store pickup is an invitation to a mistake. */}
+          {mode === "edit" && id && form.delivery_type === "AlShrouq" && (
+            <AlShrouqDispatchPanel orderId={id} />
+          )}
+
           {mode === "edit" && id && <OrderActivityTimeline orderId={id} />}
         </aside>
       </div>
