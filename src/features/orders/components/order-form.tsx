@@ -54,6 +54,7 @@ import { cn } from "@/lib/utils";
 import { useOrderForm } from "@/features/orders/hooks/use-order-form";
 import { invoiceKey } from "@/features/orders/invoice-verification";
 import { OrderActivityTimeline } from "@/features/orders/components/order-activity-timeline";
+import { AlShrouqDispatchPanel } from "@/features/orders/components/alshrouq-dispatch-panel";
 import { OrderAssignment } from "@/features/orders/components/order-assignment";
 import { CallCenterInvoiceField } from "@/features/orders/components/call-center-invoice-field";
 import { OrderInvoicePanel, StateTag } from "@/features/orders/components/order-invoice-panel";
