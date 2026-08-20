@@ -80,7 +80,17 @@ export interface AlShrouqCreatePayload {
   details: string;
   customer_lat: number;
   customer_lng: number;
-  value: number;
+  /**
+   * The order's value, under the CRM's own name for it.
+   *
+   * `order_value`, not `value`. Read off the Desktop's `_collect_alshrouq_payload`
+   * constant table, where the create body's keys appear as one run:
+   * `customer_phone, customer_address, customer_lat, customer_lng, order_value,
+   * client_order_id`. The CRM's stored orders use the same name, which was the
+   * hint that went unread — sending `value` left the create body without a field
+   * the CRM requires, and it rejected the request.
+   */
+  order_value: number;
   /**
    * Minutes the branch needs before collection.
    *
@@ -194,7 +204,7 @@ export function buildAlShrouqCreatePayload(input: AlShrouqOrderInput): AlShrouqC
     details: input.details?.trim() ?? "",
     customer_lat: input.lat as number,
     customer_lng: input.lng as number,
-    value: input.value as number,
+    order_value: input.value as number,
   };
   if (typeof input.preparationTime === "number" && Number.isFinite(input.preparationTime)) {
     payload.preparation_time = Math.max(0, Math.round(input.preparationTime));

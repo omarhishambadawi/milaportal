@@ -192,7 +192,7 @@ async function persistDispatch(
       details: payload.details,
       customer_lat: payload.customer_lat,
       customer_lng: payload.customer_lng,
-      value: payload.value,
+      value: payload.order_value,
       preparation_time: payload.preparation_time ?? null,
       last_response: (raw ?? {}) as any,
       dispatched_by: userId,
@@ -298,8 +298,12 @@ async function attemptDispatch(
     await recordDispatchEvent(order.id, userId, "alshrouq_failed", {
       source: "AlShrouq",
       client_order_id: clientOrderId,
-      // The message only — never the payload, the headers or the session token.
+      // The message, the status and the CRM's own wording — never the payload,
+      // the headers or the session token. The status is what turns "it failed"
+      // into something diagnosable after the fact.
       reason: error?.message ?? "unknown error",
+      http_status: error?.httpStatus ?? null,
+      crm_detail: error?.detail ?? null,
     });
     throw new Error(error?.message ?? "AlShrouq did not accept the order.");
   }
@@ -319,7 +323,7 @@ async function attemptDispatch(
     external_order_id: result.state.externalOrderId,
     payment_type: payload.payment_type,
     status: result.state.status,
-    value: payload.value,
+    value: payload.order_value,
   });
   return record;
 }

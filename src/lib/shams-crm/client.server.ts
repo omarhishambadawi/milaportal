@@ -104,17 +104,60 @@ export type ShamsCrmErrorKind =
   | "malformed"
   | "auth_failed";
 
-/** A failure safe to surface. Never carries a credential, token, or body. */
+/** A failure safe to surface. Never carries a credential or a token. */
 export class ShamsCrmError extends Error {
   readonly kind: ShamsCrmErrorKind;
   readonly httpStatus: number | null;
+  /**
+   * What the CRM said was wrong, in its own words.
+   *
+   * The reason this exists: a rejected create used to arrive as nothing but
+   * "unexpected status", so the one thing that would have identified the bad
+   * field — the CRM's own validation message — was parsed and then dropped.
+   * Only a message-shaped string is kept, never the whole body, so a response
+   * that happened to echo the request cannot carry the payload into a log.
+   */
+  readonly detail: string | null;
 
-  constructor(kind: ShamsCrmErrorKind, message: string, httpStatus: number | null = null) {
+  constructor(
+    kind: ShamsCrmErrorKind,
+    message: string,
+    httpStatus: number | null = null,
+    detail: string | null = null,
+  ) {
     super(message);
     this.name = "ShamsCrmError";
     this.kind = kind;
     this.httpStatus = httpStatus;
+    this.detail = detail;
   }
+}
+
+/**
+ * The CRM's own error text, out of whatever shape it answered with.
+ *
+ * Tolerant across the usual envelopes, and deliberately capped: this ends up on
+ * an order's timeline, which is read by agents, not a place for a wall of JSON.
+ */
+function errorDetail(body: unknown): string | null {
+  if (typeof body === "string") return body.trim().slice(0, 300) || null;
+  if (!body || typeof body !== "object") return null;
+  const row = body as Record<string, unknown>;
+  for (const key of ["message", "error", "detail", "title"]) {
+    const value = row[key];
+    if (typeof value === "string" && value.trim() !== "") return value.trim().slice(0, 300);
+  }
+  // Laravel-style `{errors: {field: ["msg"]}}` — the shape that names the field.
+  const errors = row["errors"];
+  if (errors && typeof errors === "object") {
+    const parts: string[] = [];
+    for (const [field, messages] of Object.entries(errors as Record<string, unknown>)) {
+      const first = Array.isArray(messages) ? messages[0] : messages;
+      if (typeof first === "string") parts.push(`${field}: ${first}`);
+    }
+    if (parts.length > 0) return parts.join("; ").slice(0, 300);
+  }
+  return null;
 }
 
 interface SessionState {
@@ -287,7 +330,18 @@ async function crmCall<T>(
       throw new ShamsCrmError("auth_failed", "Shams CRM rejected the portal's session.", status);
     }
     if (status < 200 || status >= 300) {
-      throw new ShamsCrmError("http_error", "Shams CRM returned an unexpected status.", status);
+      // The status and the CRM's own wording both travel with the error. Without
+      // them a rejected delivery is undiagnosable: the request is gone, the
+      // response is gone, and all anyone has is "unexpected status".
+      const detail = errorDetail(body);
+      throw new ShamsCrmError(
+        "http_error",
+        detail
+          ? `Shams CRM rejected the request (${status}): ${detail}`
+          : `Shams CRM returned an unexpected status (${status}).`,
+        status,
+        detail,
+      );
     }
     if (body === null) {
       throw new ShamsCrmError("malformed", "Shams CRM returned an unreadable response.", status);
