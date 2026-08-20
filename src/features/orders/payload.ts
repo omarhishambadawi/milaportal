@@ -53,6 +53,8 @@ export interface OrderFormState {
   alshrouq_lng: string;
   /** The CRM's numeric payment id, as the select yields it. */
   alshrouq_payment_type: string;
+  /** A datetime-local value, or "" for send-on-save. */
+  alshrouq_scheduled_at: string;
 }
 
 /** The persisted row, as far as this cares about it. */
@@ -157,6 +159,16 @@ export function buildOrderPayload({
     alshrouq_lat: form.alshrouq_lat || null,
     alshrouq_lng: form.alshrouq_lng || null,
     alshrouq_payment_type: form.alshrouq_payment_type ? Number(form.alshrouq_payment_type) : null,
+    /**
+     * The held-until time, as an absolute instant.
+     *
+     * A datetime-local input yields a wall-clock string with no zone; `new Date()`
+     * reads it in the browser timezone, which is the one the agent typed it in.
+     * Stored as UTC so the sweep compares instants rather than clock faces.
+     */
+    alshrouq_scheduled_at: form.alshrouq_scheduled_at
+      ? new Date(form.alshrouq_scheduled_at).toISOString()
+      : null,
 
     /**
      * The verified total wins over anything typed.

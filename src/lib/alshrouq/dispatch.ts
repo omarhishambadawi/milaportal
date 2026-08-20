@@ -61,6 +61,12 @@ export interface AlShrouqPanelState {
    * that was delivered months ago by a person on a phone.
    */
   historical: boolean;
+  /** Set by an owner or admin, as opposed to detected from the row. */
+  historicalManual: boolean;
+  /** ISO time this order is held until, or null when it goes on save. */
+  scheduledAt: string | null;
+  /** Whether that time is still in the future. */
+  held: boolean;
   /** Why this order cannot be dispatched yet, worded for the agent. */
   blockers: string[];
 }
@@ -82,6 +88,10 @@ export interface OrderForDispatch {
   alshrouq_lat: number | string | null;
   alshrouq_lng: number | string | null;
   alshrouq_payment_type: number | string | null;
+  /** When the Portal will send it. Null = on save. */
+  alshrouq_scheduled_at: string | null;
+  /** Declared historical by an owner or admin, as opposed to detected. */
+  alshrouq_historical: boolean | null;
 }
 
 /** The narrow slice of a Supabase client this module uses. */
@@ -116,7 +126,7 @@ export async function canDispatch(supabase: DispatchClient, userId: string): Pro
 }
 
 const ORDER_COLUMNS =
-  "id, display_no, team, agent_id, branch_no, customer_name, customer_phone, invoice_value, notes, delivery_type, status, alshrouq_map_url, alshrouq_lat, alshrouq_lng, alshrouq_payment_type";
+  "id, display_no, team, agent_id, branch_no, customer_name, customer_phone, invoice_value, notes, delivery_type, status, alshrouq_map_url, alshrouq_lat, alshrouq_lng, alshrouq_payment_type, alshrouq_scheduled_at, alshrouq_historical";
 
 /**
  * The order, if this caller may act on it.
@@ -308,6 +318,15 @@ export function isHistoricalAlShrouqOrder(
 ): boolean {
   if (order.delivery_type !== ALSHROUQ) return false;
   if (hasEverDispatched) return false;
+  /**
+   * The manual declaration, which outranks the automatic test.
+   *
+   * An owner or admin can say "this one is historical" about an order the
+   * detection would not catch — one back-filled with a location, say. It is
+   * checked here rather than only in the UI so that every path that could reach
+   * the courier goes through it: the save, the panel, and the scheduled sweep.
+   */
+  if (order.alshrouq_historical === true) return true;
   return (
     numberOrNull(order.alshrouq_lat) === null &&
     numberOrNull(order.alshrouq_lng) === null &&
@@ -318,6 +337,35 @@ export function isHistoricalAlShrouqOrder(
 /** Worded for the agent looking at an order the integration will not touch. */
 export const HISTORICAL_ALSHROUQ_NOTICE =
   "Historical AlShrouq order — automatic dispatch is not applicable.";
+
+/**
+ * The moment this order is due, or null when it goes on save.
+ *
+ * A schedule already past is not "held" — it is due, and the sweep will take it.
+ */
+export function scheduledFor(order: OrderForDispatch): Date | null {
+  if (!order.alshrouq_scheduled_at) return null;
+  const at = new Date(order.alshrouq_scheduled_at);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
+/**
+ * Is this order being held for later?
+ *
+ * The single gate that stops an early POST, and it is asked on every path that
+ * could reach the courier — the save, the panel's retry, and the sweep itself.
+ * Strictly greater-than, so a request is never sent even a second early, and an
+ * order whose time has come reads as due rather than held.
+ */
+export function isHeldForLater(order: OrderForDispatch, now: Date = new Date()): boolean {
+  const at = scheduledFor(order);
+  return at != null && at.getTime() > now.getTime();
+}
+
+/** Worded for the agent looking at an order that has not been sent yet. */
+export function heldNotice(at: Date): string {
+  return `Scheduled for AlShrouq — held until ${at.toLocaleString()}.`;
+}
 
 /**
  * The order's own inputs, in the shape the CRM contract takes.
@@ -339,7 +387,11 @@ export function dispatchInputFor(
     details: order.notes,
     lat: numberOrNull(order.alshrouq_lat),
     lng: numberOrNull(order.alshrouq_lng),
-    value: numberOrNull(order.invoice_value) ?? 0,
+    // No `?? 0`. A blank Order Value is missing, not free: defaulting it sent
+    // the courier a 0.00 SAR delivery and, on a SPAN or COD job, told the
+    // driver to collect nothing. Null fails validation with "The order value is
+    // required." — an explicit 0 is still accepted, because that is a statement.
+    value: numberOrNull(order.invoice_value),
     preparationTime: null,
   };
 }
@@ -383,6 +435,8 @@ export function dispatchBlockers(order: OrderForDispatch, coverage: BranchCovera
  * `logAdminAction` makes, for the same reason.
  */
 export type AlShrouqEvent =
+  /** Held for a chosen time. No CRM request exists yet, and none will until then. */
+  | "alshrouq_scheduled"
   /** Written *before* the POST, so an interrupted attempt still leaves a trace. */
   | "alshrouq_submission_started"
   | "alshrouq_dispatched"
@@ -391,7 +445,10 @@ export type AlShrouqEvent =
   /** A create whose outcome was unknown turned out to have already landed. */
   | "alshrouq_recovered"
   | "alshrouq_status_changed"
-  | "alshrouq_cancelled";
+  | "alshrouq_cancelled"
+  /** The owner/admin declaration, recorded so the change has an author. */
+  | "alshrouq_marked_historical"
+  | "alshrouq_unmarked_historical";
 
 export async function recordDispatchEvent(
   orderId: string,

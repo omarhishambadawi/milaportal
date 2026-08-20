@@ -55,6 +55,8 @@ function order(over: Partial<OrderForDispatch> = {}): OrderForDispatch {
     alshrouq_lat: null,
     alshrouq_lng: null,
     alshrouq_payment_type: null,
+    alshrouq_scheduled_at: null,
+    alshrouq_historical: false,
     ...over,
   };
 }

@@ -79,6 +79,17 @@ const orderFormObject = z.object({
     (v) => (v === "" || v == null ? null : Number(v)),
     z.number().int().positive().nullable(),
   ),
+  /**
+   * When the Portal will send this order to AlShrouq.
+   *
+   * Null means "on save", which is the ordinary case. A future time holds the
+   * order: the CRM accepts a delivery time and AlShrouq ignores it, so the only
+   * thing that actually defers a delivery is withholding the request itself.
+   *
+   * Not required for AlShrouq — an unscheduled order is an immediate one — so it
+   * stays out of the conditional block below.
+   */
+  alshrouq_scheduled_at: z.string().datetime({ offset: true }).nullable().optional(),
 });
 
 /** Validation schema for the order create/edit form. */

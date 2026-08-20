@@ -49,6 +49,11 @@ function describe(e: OrderActivityEvent, nameOf: (id: unknown) => string): strin
   // The courier events. Named after AlShrouq rather than "delivery updated",
   // because the Portal is reporting what another system did with the order and
   // an agent chasing a late delivery needs to know which one to call.
+  // Held, not sent. Distinct from "submitting" on purpose: no request exists
+  // yet, and the timeline must not read as though the courier has been told.
+  if (e.action === "alshrouq_scheduled") return "Scheduled for AlShrouq";
+  if (e.action === "alshrouq_marked_historical") return "Marked as a historical AlShrouq order";
+  if (e.action === "alshrouq_unmarked_historical") return "Removed the historical AlShrouq marking";
   if (e.action === "alshrouq_submission_started") return "Submitting the order to AlShrouq";
   if (e.action === "alshrouq_dispatched") return "Sent to AlShrouq for delivery";
   if (e.action === "alshrouq_failed") return "AlShrouq did not accept the order";
@@ -150,6 +155,11 @@ function detailLine(e: OrderActivityEvent): string | null {
       parts.push(`verified total ${fmtSAR(Number(d.total))}`);
     if (d.call_centre_invoice) parts.push(`Call Centre invoice ${String(d.call_centre_invoice)}`);
     return parts.join(" · ");
+  }
+  if (e.action === "alshrouq_scheduled") {
+    return d.scheduled_at
+      ? `Held until ${new Date(String(d.scheduled_at)).toLocaleString()}`
+      : "Held for a scheduled time";
   }
   if (e.action === "alshrouq_submission_started") {
     return `Order no. ${d.client_order_id ?? "—"}`;

@@ -407,11 +407,13 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                   </p>
                   <AlShrouqDeliveryFields
                     disabled={readOnly}
+                    branchNo={form.branch_no}
                     value={{
                       map_url: form.alshrouq_map_url,
                       lat: form.alshrouq_lat,
                       lng: form.alshrouq_lng,
                       payment_type: form.alshrouq_payment_type,
+                      scheduled_at: form.alshrouq_scheduled_at,
                     }}
                     onChange={(next) =>
                       setForm((f) => ({
@@ -420,6 +422,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                         alshrouq_lat: next.lat,
                         alshrouq_lng: next.lng,
                         alshrouq_payment_type: next.payment_type,
+                        alshrouq_scheduled_at: next.scheduled_at,
                       }))
                     }
                   />

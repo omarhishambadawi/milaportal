@@ -27,6 +27,7 @@ import { Route as AppOrdersIndexRouteImport } from './routes/_app.orders.index'
 import { Route as AppComplaintsIndexRouteImport } from './routes/_app.complaints.index'
 import { Route as AppCallsIndexRouteImport } from './routes/_app.calls.index'
 import { Route as AppBranchesIndexRouteImport } from './routes/_app.branches.index'
+import { Route as ApiAlshrouqRunScheduledRouteImport } from './routes/api.alshrouq.run-scheduled'
 import { Route as AppOrdersNewRouteImport } from './routes/_app.orders.new'
 import { Route as AppOrdersIdRouteImport } from './routes/_app.orders.$id'
 import { Route as AppComplaintsNewRouteImport } from './routes/_app.complaints.new'
@@ -140,6 +141,11 @@ const AppBranchesIndexRoute = AppBranchesIndexRouteImport.update({
   id: '/branches/',
   path: '/branches/',
   getParentRoute: () => AppRoute,
+} as any)
+const ApiAlshrouqRunScheduledRoute = ApiAlshrouqRunScheduledRouteImport.update({
+  id: '/api/alshrouq/run-scheduled',
+  path: '/api/alshrouq/run-scheduled',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const AppOrdersNewRoute = AppOrdersNewRouteImport.update({
   id: '/orders/new',
@@ -289,6 +295,7 @@ export interface FileRoutesByFullPath {
   '/complaints/new': typeof AppComplaintsNewRoute
   '/orders/$id': typeof AppOrdersIdRoute
   '/orders/new': typeof AppOrdersNewRoute
+  '/api/alshrouq/run-scheduled': typeof ApiAlshrouqRunScheduledRoute
   '/branches/': typeof AppBranchesIndexRoute
   '/calls/': typeof AppCallsIndexRoute
   '/complaints/': typeof AppComplaintsIndexRoute
@@ -330,6 +337,7 @@ export interface FileRoutesByTo {
   '/complaints/new': typeof AppComplaintsNewRoute
   '/orders/$id': typeof AppOrdersIdRoute
   '/orders/new': typeof AppOrdersNewRoute
+  '/api/alshrouq/run-scheduled': typeof ApiAlshrouqRunScheduledRoute
   '/branches': typeof AppBranchesIndexRoute
   '/calls': typeof AppCallsIndexRoute
   '/complaints': typeof AppComplaintsIndexRoute
@@ -373,6 +381,7 @@ export interface FileRoutesById {
   '/_app/complaints/new': typeof AppComplaintsNewRoute
   '/_app/orders/$id': typeof AppOrdersIdRoute
   '/_app/orders/new': typeof AppOrdersNewRoute
+  '/api/alshrouq/run-scheduled': typeof ApiAlshrouqRunScheduledRoute
   '/_app/branches/': typeof AppBranchesIndexRoute
   '/_app/calls/': typeof AppCallsIndexRoute
   '/_app/complaints/': typeof AppComplaintsIndexRoute
@@ -416,6 +425,7 @@ export interface FileRouteTypes {
     | '/complaints/new'
     | '/orders/$id'
     | '/orders/new'
+    | '/api/alshrouq/run-scheduled'
     | '/branches/'
     | '/calls/'
     | '/complaints/'
@@ -457,6 +467,7 @@ export interface FileRouteTypes {
     | '/complaints/new'
     | '/orders/$id'
     | '/orders/new'
+    | '/api/alshrouq/run-scheduled'
     | '/branches'
     | '/calls'
     | '/complaints'
@@ -499,6 +510,7 @@ export interface FileRouteTypes {
     | '/_app/complaints/new'
     | '/_app/orders/$id'
     | '/_app/orders/new'
+    | '/api/alshrouq/run-scheduled'
     | '/_app/branches/'
     | '/_app/calls/'
     | '/_app/complaints/'
@@ -521,6 +533,7 @@ export interface RootRouteChildren {
   ApiCspReportRoute: typeof ApiCspReportRoute
   DotlovableOauthConsentRoute: typeof DotlovableOauthConsentRoute
   Char91DotmcpChar93InvokeToolToolRoute: typeof Char91DotmcpChar93InvokeToolToolRoute
+  ApiAlshrouqRunScheduledRoute: typeof ApiAlshrouqRunScheduledRoute
   ApiPublicCdrProgressJobIdRoute: typeof ApiPublicCdrProgressJobIdRoute
   LovableEmailAuthPreviewRoute: typeof LovableEmailAuthPreviewRoute
   LovableEmailAuthWebhookRoute: typeof LovableEmailAuthWebhookRoute
@@ -654,6 +667,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/branches/'
       preLoaderRoute: typeof AppBranchesIndexRouteImport
       parentRoute: typeof AppRoute
+    }
+    '/api/alshrouq/run-scheduled': {
+      id: '/api/alshrouq/run-scheduled'
+      path: '/api/alshrouq/run-scheduled'
+      fullPath: '/api/alshrouq/run-scheduled'
+      preLoaderRoute: typeof ApiAlshrouqRunScheduledRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_app/orders/new': {
       id: '/_app/orders/new'
@@ -883,6 +903,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiCspReportRoute: ApiCspReportRoute,
   DotlovableOauthConsentRoute: DotlovableOauthConsentRoute,
   Char91DotmcpChar93InvokeToolToolRoute: Char91DotmcpChar93InvokeToolToolRoute,
+  ApiAlshrouqRunScheduledRoute: ApiAlshrouqRunScheduledRoute,
   ApiPublicCdrProgressJobIdRoute: ApiPublicCdrProgressJobIdRoute,
   LovableEmailAuthPreviewRoute: LovableEmailAuthPreviewRoute,
   LovableEmailAuthWebhookRoute: LovableEmailAuthWebhookRoute,

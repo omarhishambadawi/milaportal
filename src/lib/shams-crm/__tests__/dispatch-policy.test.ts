@@ -26,6 +26,8 @@ const order = (over: Partial<OrderForDispatch> = {}): OrderForDispatch => ({
   alshrouq_lat: 24.71355,
   alshrouq_lng: 46.67529,
   alshrouq_payment_type: 1,
+  alshrouq_scheduled_at: null,
+  alshrouq_historical: false,
   ...over,
 });
 

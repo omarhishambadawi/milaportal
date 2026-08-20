@@ -43,7 +43,11 @@ export async function submitToAlShrouq(
   if (isHistorical) return;
   try {
     const result = await alshrouqAutoSubmit({ data: { orderId } });
-    if (result.ok) {
+    if (result.ok && "held" in result) {
+      // Nothing was sent, and that is the point: the server recorded the
+      // appointment and the scheduled sweep will keep it.
+      toast.success(`Scheduled for AlShrouq — ${new Date(result.scheduledAt).toLocaleString()}`);
+    } else if (result.ok) {
       const reference = result.dispatch.externalOrderId ?? result.dispatch.localId;
       toast.success(reference ? `Sent to AlShrouq — reference ${reference}` : "Sent to AlShrouq");
     } else {

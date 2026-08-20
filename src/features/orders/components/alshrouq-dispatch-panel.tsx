@@ -6,12 +6,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { fmtSAR } from "@/lib/branches";
+import { isAdministrator, useAuth } from "@/lib/auth";
 import { HISTORICAL_ALSHROUQ_NOTICE } from "@/lib/alshrouq/dispatch";
 import {
   alshrouqCancelOrder,
   alshrouqConfig,
   alshrouqDispatchOrder,
   alshrouqOrderState,
+  alshrouqSetHistorical,
 } from "@/lib/alshrouq.functions";
 
 /**
@@ -45,6 +47,11 @@ export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
   const readConfig = useServerFn(alshrouqConfig);
   const dispatchOrder = useServerFn(alshrouqDispatchOrder);
   const cancelOrder = useServerFn(alshrouqCancelOrder);
+  const setHistorical = useServerFn(alshrouqSetHistorical);
+  const { role } = useAuth();
+  // Owner and admin only. The server checks the same thing against `has_role`;
+  // this only decides whether to offer it.
+  const mayMarkHistorical = isAdministrator(role);
 
   const state = useQuery({
     queryKey: ["alshrouq", "state", orderId],
@@ -85,6 +92,17 @@ export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
       invalidate();
     },
     onError: (e: any) => toast.error(e?.message ?? "AlShrouq did not accept the order."),
+  });
+
+  const markHistorical = useMutation({
+    mutationFn: (historical: boolean) => setHistorical({ data: { orderId, historical } }),
+    onSuccess: (r) => {
+      toast.success(
+        r.historical ? "Marked as a historical AlShrouq order" : "Historical marking removed",
+      );
+      invalidate();
+    },
+    onError: (e: any) => toast.error(e?.message ?? "Unable to change that."),
   });
 
   const refresh = useMutation({
@@ -239,6 +257,23 @@ export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
         )}
 
         {/* ---------------------------------------------------------------- */}
+        {/* Held for a chosen time                                           */}
+        {/* ---------------------------------------------------------------- */}
+        {/* Nothing has been sent and no dispatch row exists — the courier has
+            not been told anything yet. The sweep sends it when the time comes. */}
+        {state.data?.held && state.data.scheduledAt && !dispatched && (
+          <div className="rounded-md border border-border/60 bg-muted/20 p-3">
+            <Badge variant="outline" className="font-medium">
+              Scheduled
+            </Badge>
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              Held until {new Date(state.data.scheduledAt).toLocaleString()}. Nothing has been sent
+              to AlShrouq yet — the portal submits it automatically at that time.
+            </p>
+          </div>
+        )}
+
+        {/* ---------------------------------------------------------------- */}
         {/* Raised before the integration existed                            */}
         {/* ---------------------------------------------------------------- */}
         {/* A note and nothing else. No blockers — the fields it "lacks" were
@@ -252,7 +287,7 @@ export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
         {/* ---------------------------------------------------------------- */}
         {/* Not sent yet — why, and the way to try again                     */}
         {/* ---------------------------------------------------------------- */}
-        {state.data?.configured && !state.data.historical && !dispatched && (
+        {state.data?.configured && !state.data.historical && !state.data.held && !dispatched && (
           <div className="space-y-2">
             <p className="text-[11px] text-muted-foreground">
               This order has not reached AlShrouq. Saving an AlShrouq order sends it automatically;
@@ -280,6 +315,27 @@ export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
               Send to AlShrouq
             </Button>
           </div>
+        )}
+        {/* ---------------------------------------------------------------- */}
+        {/* Owner / admin: declare this one historical                        */}
+        {/* ---------------------------------------------------------------- */}
+        {/* Offered only to owner and admin, and refused server-side for anyone
+            else. Hidden while a delivery is live: the courier already has that
+            order, and calling it historical afterwards would only hide it. */}
+        {mayMarkHistorical && state.data?.configured && !live && (
+          <label className="flex items-start gap-2 border-t border-border/60 pt-3 text-[11px] text-muted-foreground">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={state.data.historicalManual}
+              disabled={markHistorical.isPending}
+              onChange={(e) => markHistorical.mutate(e.target.checked)}
+            />
+            <span>
+              Historical AlShrouq order — automatic dispatch is not applicable. Stops this order
+              being sent to AlShrouq, on save and on any schedule.
+            </span>
+          </label>
         )}
       </CardContent>
     </Card>

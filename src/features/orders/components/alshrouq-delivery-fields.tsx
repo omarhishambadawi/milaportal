@@ -39,11 +39,15 @@ export interface AlShrouqDelivery {
   lat: string;
   lng: string;
   payment_type: string;
+  /** A datetime-local value. Empty means send as soon as the order is saved. */
+  scheduled_at: string;
 }
 
 interface Props {
   value: AlShrouqDelivery;
   onChange: (next: AlShrouqDelivery) => void;
+  /** The branch on the order, so its AlShrouq coverage can be shown here. */
+  branchNo: string | null;
   disabled?: boolean;
   /** Field-level messages from the form's own schema, keyed as the form keys. */
   errors?: Partial<Record<keyof AlShrouqDelivery, string>>;
@@ -56,7 +60,7 @@ type LinkStatus =
   | { kind: "out_of_range" }
   | { kind: "failed" };
 
-export function AlShrouqDeliveryFields({ value, onChange, disabled, errors }: Props) {
+export function AlShrouqDeliveryFields({ value, onChange, branchNo, disabled, errors }: Props) {
   const [status, setStatus] = useState<LinkStatus>({ kind: "idle" });
   const resolveFn = useServerFn(geoResolveMapLink);
 
@@ -75,6 +79,26 @@ export function AlShrouqDeliveryFields({ value, onChange, disabled, errors }: Pr
     retry: false,
   });
   const paymentOptions = config.data?.paymentTypes ?? [];
+
+  /**
+   * What the CRM says about this branch.
+   *
+   * The same `branch_options` list the server resolves against at dispatch, so the
+   * warning here and the refusal there cannot disagree. Undefined while the
+   * config is still loading, which shows nothing rather than a false alarm.
+   */
+  const branch = branchNo
+    ? config.data?.branches.find((entry) => entry.code === branchNo.trim())
+    : undefined;
+  const coverage: "loading" | "covered" | "not_covered" | "unmapped" = !config.data
+    ? "loading"
+    : !branchNo
+      ? "loading"
+      : !branch
+        ? "unmapped"
+        : branch.covered
+          ? "covered"
+          : "not_covered";
 
   /** Keep the newest request only: an agent editing a link fires several. */
   const requestId = useRef(0);
@@ -170,6 +194,23 @@ export function AlShrouqDeliveryFields({ value, onChange, disabled, errors }: Pr
 
   return (
     <div className="space-y-3">
+      {/* Coverage, stated before anything is typed. AlShrouq does not serve
+          every branch, and finding that out at dispatch — after the order is
+          filled in — wastes the agent's call. The server refuses these too;
+          this is so nobody gets that far. */}
+      {coverage === "not_covered" && (
+        <p className="rounded-md border border-destructive/40 bg-destructive/5 px-2.5 py-2 text-[11px] text-destructive">
+          AlShrouq does not cover {branch?.name ?? branchNo}
+          {branch?.note ? ` (${branch.note})` : ""}. This order can still be saved, but it cannot be
+          sent to AlShrouq — choose another branch or another delivery method.
+        </p>
+      )}
+      {coverage === "unmapped" && (
+        <p className="rounded-md border border-destructive/40 bg-destructive/5 px-2.5 py-2 text-[11px] text-destructive">
+          {branchNo} is not in AlShrouq's branch list, so this order cannot be sent to them.
+        </p>
+      )}
+
       {/* Row 1 — the link and the point it resolves to, together, because an
           agent checking one against the other should not have to scroll. */}
       <div className="grid gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)]">
@@ -249,7 +290,7 @@ export function AlShrouqDeliveryFields({ value, onChange, disabled, errors }: Pr
       {pairError && <p className="text-[11px] text-destructive">{pairError}</p>}
       {errors?.lat && <p className="text-[11px] text-destructive">{errors.lat}</p>}
 
-      {/* Row 2 — the payment method. */}
+      {/* Row 2 — how they pay, and when it goes. */}
       <div className="grid gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,2fr)]">
         <div className="space-y-1">
           <Label htmlFor="order-alshrouq-payment" className="text-xs">
@@ -288,6 +329,32 @@ export function AlShrouqDeliveryFields({ value, onChange, disabled, errors }: Pr
           {errors?.payment_type && (
             <p className="text-[11px] text-destructive">{errors.payment_type}</p>
           )}
+        </div>
+
+        {/* When to send it.
+            Empty means "on save", which is what most orders want. A future time
+            holds the order: AlShrouq ignores the delivery time the CRM accepts,
+            so the only way to make a delivery late is to send the request late.
+            The Portal keeps the appointment on the server, so the agent can
+            close the tab. */}
+        <div className="space-y-1">
+          <Label htmlFor="order-alshrouq-schedule" className="text-xs">
+            Send to AlShrouq
+          </Label>
+          <Input
+            id="order-alshrouq-schedule"
+            type="datetime-local"
+            disabled={disabled}
+            value={value.scheduled_at}
+            onChange={(event) => onChange({ ...value, scheduled_at: event.target.value })}
+          />
+          <p className="text-[11px] text-muted-foreground">
+            {value.scheduled_at
+              ? new Date(value.scheduled_at).getTime() > Date.now()
+                ? "Held until this time, then sent automatically."
+                : "This time has passed — it will be sent on save."
+              : "Leave empty to send as soon as the order is saved."}
+          </p>
         </div>
       </div>
     </div>

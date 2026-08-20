@@ -679,10 +679,12 @@ export type Database = {
       orders: {
         Row: {
           agent_id: string
+          alshrouq_historical: boolean
           alshrouq_lat: number | null
           alshrouq_lng: number | null
           alshrouq_map_url: string | null
           alshrouq_payment_type: number | null
+          alshrouq_scheduled_at: string | null
           branch_no: string | null
           call_center_verified: boolean
           created_at: string
@@ -704,10 +706,12 @@ export type Database = {
         }
         Insert: {
           agent_id: string
+          alshrouq_historical?: boolean
           alshrouq_lat?: number | null
           alshrouq_lng?: number | null
           alshrouq_map_url?: string | null
           alshrouq_payment_type?: number | null
+          alshrouq_scheduled_at?: string | null
           branch_no?: string | null
           call_center_verified?: boolean
           created_at?: string
@@ -729,10 +733,12 @@ export type Database = {
         }
         Update: {
           agent_id?: string
+          alshrouq_historical?: boolean
           alshrouq_lat?: number | null
           alshrouq_lng?: number | null
           alshrouq_map_url?: string | null
           alshrouq_payment_type?: number | null
+          alshrouq_scheduled_at?: string | null
           branch_no?: string | null
           call_center_verified?: boolean
           created_at?: string

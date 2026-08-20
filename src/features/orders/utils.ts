@@ -169,3 +169,18 @@ export function applyOrderFilters(qb: any, s: OrderFilterState) {
 export function defaultTeam(role: string | null): "customer_care" | "telesales" {
   return role === "telesales" ? "telesales" : "customer_care";
 }
+
+/**
+ * An ISO instant as a `datetime-local` input wants it.
+ *
+ * That input has no timezone: it shows and returns a wall clock. Converting
+ * through the local offset means an agent sees the time they chose rather than
+ * the UTC the column stores.
+ */
+export function toLocalInputValue(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "";
+  const local = new Date(at.getTime() - at.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}

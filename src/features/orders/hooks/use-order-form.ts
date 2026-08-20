@@ -14,7 +14,7 @@ import { invoiceNoSignature } from "../invoice-verification";
 import { recordInvoiceVerification } from "../record-verification";
 import { submitToAlShrouq } from "../submit-to-alshrouq";
 import { ALSHROUQ } from "@/lib/branches";
-import { defaultTeam, parseInvoiceNumbers } from "../utils";
+import { defaultTeam, parseInvoiceNumbers, toLocalInputValue } from "../utils";
 import { isAssignableAgent } from "../components/order-assignment";
 import { useOrderInvoices } from "./use-order-invoices";
 import { armOrderReturn } from "./use-orders-scroll-restoration";
@@ -73,6 +73,7 @@ export function useOrderForm(mode: "create" | "edit") {
     alshrouq_lat: "",
     alshrouq_lng: "",
     alshrouq_payment_type: "",
+    alshrouq_scheduled_at: "",
     branch_no: "" as string | null,
     delivery_type: "",
     invoice_value: "",
@@ -208,6 +209,7 @@ export function useOrderForm(mode: "create" | "edit") {
       alshrouq_lat: (existing as any).alshrouq_lat?.toString() ?? "",
       alshrouq_lng: (existing as any).alshrouq_lng?.toString() ?? "",
       alshrouq_payment_type: (existing as any).alshrouq_payment_type?.toString() ?? "",
+      alshrouq_scheduled_at: toLocalInputValue((existing as any).alshrouq_scheduled_at),
       branch_no: existing.branch_no ?? "",
       delivery_type: existing.delivery_type ?? "",
       invoice_value: existing.invoice_value?.toString() ?? "",

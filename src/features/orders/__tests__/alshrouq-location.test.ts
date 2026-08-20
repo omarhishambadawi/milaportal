@@ -35,6 +35,7 @@ function form(overrides: Partial<OrderFormState> = {}): OrderFormState {
     alshrouq_lat: POINT.lat,
     alshrouq_lng: POINT.lng,
     alshrouq_payment_type: "1",
+    alshrouq_scheduled_at: "",
     branch_no: "P0008",
     delivery_type: ALSHROUQ,
     invoice_value: "120",
