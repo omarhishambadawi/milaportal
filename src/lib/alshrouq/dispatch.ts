@@ -137,7 +137,10 @@ export const numberOrNull = (v: unknown): number | null => {
   return typeof n === "number" && Number.isFinite(n) ? n : null;
 };
 
-export function toDispatchRecord(row: any, timeline: AlShrouqTimelineEntry[]): AlShrouqDispatchRecord {
+export function toDispatchRecord(
+  row: any,
+  timeline: AlShrouqTimelineEntry[],
+): AlShrouqDispatchRecord {
   return {
     id: row.id,
     orderId: row.order_id,
@@ -169,7 +172,10 @@ export function storedTimeline(row: any): AlShrouqTimelineEntry[] {
 }
 
 /** The most recent dispatch row for an order, live or not. */
-export async function latestDispatch(supabase: DispatchClient, orderId: string): Promise<any | null> {
+export async function latestDispatch(
+  supabase: DispatchClient,
+  orderId: string,
+): Promise<any | null> {
   const { data } = await supabase
     .from("alshrouq_dispatches")
     .select("*")
