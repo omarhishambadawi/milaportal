@@ -8,11 +8,12 @@ import { hasPerm } from "@/lib/permissions";
 import { queryKeys } from "@/lib/query-keys";
 import { useAgentDirectory } from "@/lib/directory";
 import { useDebounced } from "@/features/shams/hooks/use-shams-data";
-import { orderFormSchema } from "../schema";
+import { historicalOrderFormSchema, orderFormSchema } from "../schema";
 import { buildOrderPayload, type PersistedOrder } from "../payload";
 import { invoiceNoSignature } from "../invoice-verification";
 import { recordInvoiceVerification } from "../record-verification";
 import { submitToAlShrouq } from "../submit-to-alshrouq";
+import { ALSHROUQ } from "@/lib/branches";
 import { defaultTeam, parseInvoiceNumbers } from "../utils";
 import { isAssignableAgent } from "../components/order-assignment";
 import { useOrderInvoices } from "./use-order-invoices";
@@ -146,6 +147,31 @@ export function useOrderForm(mode: "create" | "edit") {
   const readOnly = mode === "edit" && !canEditThis;
   const canVerifyThis =
     mode === "create" ? canVerifyAll || canVerifyOwn : canVerifyAll || (isOwner && canVerifyOwn);
+
+  /**
+   * An AlShrouq order raised before the integration existed.
+   *
+   * Read from the **stored** row, never from `form`: an agent typing
+   * coordinates into an old order must not be able to turn it into one the
+   * integration will send. Since the form does not offer those fields on such an
+   * order, nothing can populate them anyway — the two together mean a historical
+   * order stays historical.
+   *
+   * The dispatch ledger is not consulted here, and does not need to be: an order
+   * with a dispatch record necessarily carries the delivery fields, because
+   * `orderFormSchema` would not have saved it otherwise. The server checks both
+   * before it will contact the courier; this is the form's half.
+   *
+   * While the order is still loading this is false, so the full rules apply —
+   * the safe direction, since it refuses a save rather than allowing a wrong one.
+   */
+  const isHistoricalAlShrouq =
+    mode === "edit" &&
+    !!existing &&
+    existing.delivery_type === ALSHROUQ &&
+    (existing as any).alshrouq_lat == null &&
+    (existing as any).alshrouq_lng == null &&
+    (existing as any).alshrouq_payment_type == null;
 
   /**
    * Fill the form from the order — once per order, not once per fetch.
@@ -422,7 +448,7 @@ export function useOrderForm(mode: "create" | "edit") {
       // Built by `buildOrderPayload`, which is pure and tested: every field the
       // order has is present, and a *required* field left blank by a hydration
       // failure falls back to the stored row rather than being sent empty.
-      const parsed = orderFormSchema.parse(
+      const parsed = (isHistoricalAlShrouq ? historicalOrderFormSchema : orderFormSchema).parse(
         buildOrderPayload({
           mode,
           form,
@@ -480,7 +506,10 @@ export function useOrderForm(mode: "create" | "edit") {
           }
           // And hand it to the courier, if that is the method. Same position and
           // the same non-fatal contract as the verification above.
-          await submitToAlShrouq(createdId, parsed.delivery_type);
+          // `isHistoricalAlShrouq` is false on create by construction — a brand new
+          // order cannot predate the integration — but it is passed rather than
+          // hardcoded so both call sites read the same.
+          await submitToAlShrouq(createdId, parsed.delivery_type, isHistoricalAlShrouq);
         }
       } else {
         const { error } = await supabase
@@ -528,7 +557,7 @@ export function useOrderForm(mode: "create" | "edit") {
               : "Order updated. The invoice could not be recorded yet; it will be picked up when the order is next opened.",
           );
         }
-        await submitToAlShrouq(id!, parsed.delivery_type);
+        await submitToAlShrouq(id!, parsed.delivery_type, isHistoricalAlShrouq);
       }
       qc.invalidateQueries({ queryKey: queryKeys.orders.all() });
       qc.invalidateQueries({ queryKey: queryKeys.dashboard.all() });
@@ -592,6 +621,7 @@ export function useOrderForm(mode: "create" | "edit") {
     canEditThis,
     canVerifyThis,
     readOnly,
+    isHistoricalAlShrouq,
     submit,
     del,
     // assignment + Shams

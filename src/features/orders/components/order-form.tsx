@@ -56,6 +56,7 @@ import { invoiceKey } from "@/features/orders/invoice-verification";
 import { OrderActivityTimeline } from "@/features/orders/components/order-activity-timeline";
 import { AlShrouqDispatchPanel } from "@/features/orders/components/alshrouq-dispatch-panel";
 import { AlShrouqDeliveryFields } from "@/features/orders/components/alshrouq-delivery-fields";
+import { HISTORICAL_ALSHROUQ_NOTICE } from "@/lib/alshrouq/dispatch";
 import { OrderAssignment } from "@/features/orders/components/order-assignment";
 import { CallCenterInvoiceField } from "@/features/orders/components/call-center-invoice-field";
 import { OrderInvoicePanel, StateTag } from "@/features/orders/components/order-invoice-panel";
@@ -180,6 +181,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
     agents,
     shamsInvoices,
     readOnly,
+    isHistoricalAlShrouq,
     submit,
     del,
   } = useOrderForm(mode);
@@ -377,7 +379,19 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                   Four fields — the customer's map link, the point it resolves
                   to, and how they pay — sitting directly under the method that
                   asks for them. Every other method's form is untouched. */}
-              {form.delivery_type === ALSHROUQ && (
+              {/* An order raised before the integration existed keeps the form
+                  it was created with. It is not asked for a location or a
+                  payment method — it has neither, was delivered by a person on a
+                  phone, and requiring them would make the row uneditable. */}
+              {form.delivery_type === ALSHROUQ && isHistoricalAlShrouq && (
+                <div className="sm:col-span-2 rounded-md border border-border/60 bg-muted/20 p-3 dark:bg-muted/10">
+                  <p className="text-[11.5px] text-muted-foreground">
+                    {HISTORICAL_ALSHROUQ_NOTICE}
+                  </p>
+                </div>
+              )}
+
+              {form.delivery_type === ALSHROUQ && !isHistoricalAlShrouq && (
                 <div className="sm:col-span-2 rounded-md border border-border/60 bg-muted/20 p-3 dark:bg-muted/10">
                   <p className="mb-2.5 text-[11.5px] font-medium text-muted-foreground">
                     AlShrouq delivery — sent to the courier when this order is saved.

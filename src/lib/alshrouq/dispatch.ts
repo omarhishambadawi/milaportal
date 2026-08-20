@@ -10,7 +10,7 @@
  * bundle.
  */
 
-import { stripOrderPrefix } from "@/lib/branches";
+import { ALSHROUQ, stripOrderPrefix } from "@/lib/branches";
 import {
   readAlShrouqState,
   validateAlShrouqOrder,
@@ -53,6 +53,14 @@ export interface AlShrouqPanelState {
   /** Distinguishes "not covered" from "not in the mapping", for the message. */
   coverage: BranchCoverage["kind"];
   dispatch: AlShrouqDispatchRecord | null;
+  /**
+   * This order predates the integration and is not part of it.
+   *
+   * When true the panel shows a note and no action at all: the blockers list is
+   * empty, because "no delivery location" is not something to fix on an order
+   * that was delivered months ago by a person on a phone.
+   */
+  historical: boolean;
   /** Why this order cannot be dispatched yet, worded for the agent. */
   blockers: string[];
 }
@@ -261,6 +269,55 @@ export function coveredBranchId(coverage: BranchCoverage): string | null {
 export function clientOrderIdFor(order: OrderForDispatch): string {
   return stripOrderPrefix(String(order.display_no ?? "").trim());
 }
+
+/**
+ * An AlShrouq order that predates this integration and must stay out of it.
+ *
+ * ## The signal, and why it is this one
+ *
+ * Two persisted facts, both owned by the integration itself:
+ *
+ *   1. the order carries no delivery data — `alshrouq_lat`, `alshrouq_lng` and
+ *      `alshrouq_payment_type` are all null, and
+ *   2. the integration has never recorded a dispatch for it.
+ *
+ * Every row that existed when `…_alshrouq_order_delivery` added those columns
+ * has them null by construction, and every order created through the new form
+ * has all three — `orderFormSchema` will not save an AlShrouq order without
+ * them. So "no delivery data" *is* "created before the integration", derived
+ * from the schema rather than asserted by a flag or inferred from a date.
+ *
+ * `delivery_type` alone is deliberately not enough: it reads `AlShrouq` on both
+ * kinds of order, which is exactly why an old order started being asked for
+ * fields it will never have.
+ *
+ * ## Why it cannot drift
+ *
+ * The decision is made from the row **as stored**, never from what is on screen.
+ * An agent typing coordinates into an old order therefore cannot turn it into a
+ * dispatchable one — and because the form does not offer those fields on a
+ * historical order, nothing can populate them in the first place. A historical
+ * order stays historical.
+ *
+ * A cancelled dispatch still counts as (2): the order was in the integration,
+ * was withdrawn, and re-sending it is a normal thing to do.
+ */
+export function isHistoricalAlShrouqOrder(
+  order: OrderForDispatch,
+  hasEverDispatched: boolean,
+): boolean {
+  if (order.delivery_type !== ALSHROUQ) return false;
+  if (hasEverDispatched) return false;
+  return (
+    numberOrNull(order.alshrouq_lat) === null &&
+    numberOrNull(order.alshrouq_lng) === null &&
+    numberOrNull(order.alshrouq_payment_type) === null
+  );
+}
+
+/** Worded for the agent looking at an order the integration will not touch. */
+export const HISTORICAL_ALSHROUQ_NOTICE =
+  "Historical AlShrouq order — automatic dispatch is not applicable.";
 
 /**
  * The order's own inputs, in the shape the CRM contract takes.

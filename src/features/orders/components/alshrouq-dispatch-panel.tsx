@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { fmtSAR } from "@/lib/branches";
+import { HISTORICAL_ALSHROUQ_NOTICE } from "@/lib/alshrouq/dispatch";
 import {
   alshrouqCancelOrder,
   alshrouqConfig,
@@ -238,9 +239,20 @@ export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
         )}
 
         {/* ---------------------------------------------------------------- */}
+        {/* Raised before the integration existed                            */}
+        {/* ---------------------------------------------------------------- */}
+        {/* A note and nothing else. No blockers — the fields it "lacks" were
+            never going to exist — and deliberately no button: this delivery was
+            arranged by a person months ago, and the only thing a control here
+            could achieve is a second driver at the customer's door. */}
+        {state.data?.historical && (
+          <p className="text-[11px] text-muted-foreground">{HISTORICAL_ALSHROUQ_NOTICE}</p>
+        )}
+
+        {/* ---------------------------------------------------------------- */}
         {/* Not sent yet — why, and the way to try again                     */}
         {/* ---------------------------------------------------------------- */}
-        {state.data?.configured && !dispatched && (
+        {state.data?.configured && !state.data.historical && !dispatched && (
           <div className="space-y-2">
             <p className="text-[11px] text-muted-foreground">
               This order has not reached AlShrouq. Saving an AlShrouq order sends it automatically;

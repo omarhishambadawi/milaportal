@@ -54,7 +54,9 @@ import {
   coveredBranchId,
   dispatchBlockers,
   dispatchInputFor,
+  isHistoricalAlShrouqOrder,
   latestDispatch,
+  HISTORICAL_ALSHROUQ_NOTICE,
   liveDispatch,
   loadEditableOrder,
   recordDispatchEvent,
@@ -95,18 +97,35 @@ export const alshrouqOrderState = createServerFn({ method: "POST" })
         alshrouqBranchId: null,
         coverage: "unmapped",
         dispatch: row ? toDispatchRecord(row, storedTimeline(row)) : null,
+        historical: isHistoricalAlShrouqOrder(order, row != null),
+        blockers: [],
+      };
+    }
+
+    const row = await latestDispatch(supabase, data.orderId);
+
+    // An order that predates the integration is reported as such and nothing
+    // else. No branch lookup — that is a CRM round trip — and no blockers: the
+    // fields it is "missing" are ones it was never going to have.
+    if (isHistoricalAlShrouqOrder(order, row != null)) {
+      return {
+        configured: true,
+        alshrouqBranchId: null,
+        coverage: "unmapped",
+        dispatch: null,
+        historical: true,
         blockers: [],
       };
     }
 
     const coverage = await branchCoverage(order.branch_no);
-    const row = await latestDispatch(supabase, data.orderId);
 
     return {
       configured: true,
       alshrouqBranchId: coveredBranchId(coverage),
       coverage: coverage.kind,
       dispatch: row ? toDispatchRecord(row, storedTimeline(row)) : null,
+      historical: false,
       blockers: dispatchBlockers(order, coverage),
     };
   });
@@ -202,6 +221,26 @@ async function attemptDispatch(
   // second courier.
   const existing = await liveDispatch(supabase, orderId);
   if (existing) return toDispatchRecord(existing, storedTimeline(existing));
+
+  /**
+   * The historical gate, and it is deliberately the first thing after the
+   * duplicate check.
+   *
+   * An order raised before this integration existed was already delivered, by a
+   * person, through the old manual workflow. Re-sending it would put a second
+   * driver at a customer's door for a delivery that happened months ago. This
+   * refuses before the CRM is contacted and before anything is written to the
+   * timeline, so saving such an order cannot leave a trace of an attempt, let
+   * alone an order.
+   *
+   * Enforced here rather than only in the form because this is the boundary that
+   * actually reaches the courier: the form can be stale, bypassed, or replaced,
+   * and the browser is not what must be trusted with this.
+   */
+  const everDispatched = await latestDispatch(supabase, orderId);
+  if (isHistoricalAlShrouqOrder(order, everDispatched != null)) {
+    throw new Error(HISTORICAL_ALSHROUQ_NOTICE);
+  }
 
   const coverage = await branchCoverage(order.branch_no);
   const blockers = dispatchBlockers(order, coverage);

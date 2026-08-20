@@ -28,8 +28,19 @@ import { alshrouqAutoSubmit } from "@/lib/alshrouq.functions";
 export async function submitToAlShrouq(
   orderId: string,
   deliveryType: string | null | undefined,
+  isHistorical = false,
 ): Promise<void> {
   if (deliveryType !== ALSHROUQ) return;
+  /**
+   * An order that predates the integration is not sent, and is not *asked* to be
+   * sent — the call is not made at all.
+   *
+   * The server refuses it anyway, so this is not what makes it safe. What it
+   * prevents is the noise: without it, every save of an old AlShrouq order costs
+   * a CRM round trip and shows the agent a warning about a courier submission
+   * they never asked for, on an order delivered months ago.
+   */
+  if (isHistorical) return;
   try {
     const result = await alshrouqAutoSubmit({ data: { orderId } });
     if (result.ok) {

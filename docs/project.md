@@ -2002,9 +2002,35 @@ there are three layers:
    that creates the second delivery. The lookup compares numerically, since the
    CRM stores `06441` for the order the portal calls `6441`.
 
-Historical AlShrouq orders are never auto-submitted: they carry no location and
-no payment method, so they fail validation and are refused before anything is
-sent.
+#### Historical orders
+
+An AlShrouq order raised before this integration existed was already delivered,
+by a person, through the old manual workflow. It is held out of the integration
+entirely — `isHistoricalAlShrouqOrder` identifies it as one carrying no delivery
+data (`alshrouq_lat`, `alshrouq_lng`, `alshrouq_payment_type` all null) that the
+integration has never dispatched.
+
+Both halves are persisted facts, and that is the point. Every row that existed
+when the delivery columns were added has them null by construction, and
+`orderFormSchema` will not save a new AlShrouq order without them — so "no
+delivery data" *is* "created before the integration", derived from the schema
+rather than asserted by a flag or guessed from a date. `delivery_type` alone
+cannot do this job: it reads `AlShrouq` on both kinds of order, which is why
+old orders briefly started being asked for fields they were never going to have.
+
+The determination is made from the **stored** row, never from what is on screen,
+so an agent typing coordinates into an old order cannot convert it into a
+dispatchable one — and the form does not offer those fields on such an order, so
+nothing can populate them in the first place. A historical order stays
+historical.
+
+What follows from it: `historicalOrderFormSchema` drops the AlShrouq
+requirements so the row stays editable; the order form shows a one-line notice in
+place of the delivery fields; the panel shows the same notice and no control at
+all; and `attemptDispatch` refuses **before** the CRM is contacted and before
+anything reaches the timeline, so a save leaves no trace of an attempt. The
+server check is the one that matters — the browser is not what is trusted with
+this. `src/features/orders/__tests__/historical-alshrouq.test.ts` pins it.
 
 #### Timeline
 
