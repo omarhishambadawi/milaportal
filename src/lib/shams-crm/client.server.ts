@@ -233,14 +233,26 @@ async function getSessionToken(forceRefresh = false): Promise<string> {
 }
 
 /**
- * An authenticated GET against the CRM.
+ * An authenticated call against the CRM.
  *
  * On 401 the session is discarded, one fresh login is performed, and the request
  * is retried **once**. A second 401 raises `auth_failed` rather than looping —
  * repeatedly re-authenticating a user credential against a server that keeps
  * refusing is how an account gets locked.
+ *
+ * ## Why a write may be retried at all
+ *
+ * The retry happens only on 401, which the CRM answers *before* doing anything:
+ * a rejected session never reached the courier, so re-sending it cannot create a
+ * second delivery. Every other failure — timeout included — is raised, because a
+ * timed-out `POST` may well have been accepted and only the answer was lost. The
+ * duplicate protection for that case is the caller's `client_order_id`, not a
+ * decision taken here.
  */
-export async function crmFetch<T>(path: string, opts: { timeoutMs?: number } = {}): Promise<T> {
+async function crmCall<T>(
+  path: string,
+  opts: { method?: "GET" | "POST"; body?: unknown; timeoutMs?: number } = {},
+): Promise<T> {
   const env = readCrmEnv();
   if (!env) {
     throw new ShamsCrmError(
@@ -249,13 +261,23 @@ export async function crmFetch<T>(path: string, opts: { timeoutMs?: number } = {
     );
   }
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const method = opts.method ?? "GET";
   const url = `${env.baseUrl}${path}`;
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const token = await getSessionToken(attempt > 0);
+    const headers: Record<string, string> = {
+      accept: "application/json",
+      "X-Session-Token": token,
+    };
+    if (opts.body !== undefined) headers["content-type"] = "application/json";
     const { status, body } = await request<T>(
       url,
-      { method: "GET", headers: { accept: "application/json", "X-Session-Token": token } },
+      {
+        method,
+        headers,
+        ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
+      },
       timeoutMs,
     );
 
@@ -276,3 +298,24 @@ export async function crmFetch<T>(path: string, opts: { timeoutMs?: number } = {
   // Unreachable: the loop either returns or throws.
   throw new ShamsCrmError("auth_failed", "Shams CRM rejected the portal's session.");
 }
+
+/** An authenticated GET against the CRM. */
+export async function crmFetch<T>(path: string, opts: { timeoutMs?: number } = {}): Promise<T> {
+  return crmCall<T>(path, { method: "GET", timeoutMs: opts.timeoutMs });
+}
+
+/**
+ * An authenticated POST against the CRM.
+ *
+ * Exists for the AlShrouq integration, which is the first thing the Portal does
+ * on this host that is not a read. `body` is optional because two of its three
+ * write endpoints — cancel, and the refresh the Desktop issues as a GET — take
+ * none.
+ */
+export async function crmSend<T>(
+  path: string,
+  opts: { body?: unknown; timeoutMs?: number } = {},
+): Promise<T> {
+  return crmCall<T>(path, { method: "POST", body: opts.body ?? {}, timeoutMs: opts.timeoutMs });
+}
+
