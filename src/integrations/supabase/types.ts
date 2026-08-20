@@ -41,6 +41,93 @@ export type Database = {
         }
         Relationships: []
       }
+      alshrouq_dispatches: {
+        Row: {
+          alshrouq_branch_id: string
+          branch_no: string | null
+          cancelled_at: string | null
+          client_order_id: string
+          created_at: string
+          customer_lat: number | null
+          customer_lng: number | null
+          details: string | null
+          dispatched_at: string
+          dispatched_by: string | null
+          id: string
+          last_response: Json
+          local_id: string | null
+          order_id: string
+          payment_type: string
+          preparation_time: number | null
+          refreshed_at: string | null
+          status: string | null
+          status_detail: string | null
+          updated_at: string
+          value: number | null
+        }
+        Insert: {
+          alshrouq_branch_id: string
+          branch_no?: string | null
+          cancelled_at?: string | null
+          client_order_id: string
+          created_at?: string
+          customer_lat?: number | null
+          customer_lng?: number | null
+          details?: string | null
+          dispatched_at?: string
+          dispatched_by?: string | null
+          id?: string
+          last_response?: Json
+          local_id?: string | null
+          order_id: string
+          payment_type: string
+          preparation_time?: number | null
+          refreshed_at?: string | null
+          status?: string | null
+          status_detail?: string | null
+          updated_at?: string
+          value?: number | null
+        }
+        Update: {
+          alshrouq_branch_id?: string
+          branch_no?: string | null
+          cancelled_at?: string | null
+          client_order_id?: string
+          created_at?: string
+          customer_lat?: number | null
+          customer_lng?: number | null
+          details?: string | null
+          dispatched_at?: string
+          dispatched_by?: string | null
+          id?: string
+          last_response?: Json
+          local_id?: string | null
+          order_id?: string
+          payment_type?: string
+          preparation_time?: number | null
+          refreshed_at?: string | null
+          status?: string | null
+          status_detail?: string | null
+          updated_at?: string
+          value?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "alshrouq_dispatches_branch_no_fkey"
+            columns: ["branch_no"]
+            isOneToOne: false
+            referencedRelation: "branches"
+            referencedColumns: ["branch_no"]
+          },
+          {
+            foreignKeyName: "alshrouq_dispatches_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       branch_imports: {
         Row: {
           actor_role: string | null
@@ -122,6 +209,7 @@ export type Database = {
         Row: {
           active: boolean
           address: string | null
+          alshrouq_branch_id: string | null
           area_manager: string | null
           area_manager_phone: string | null
           branch_no: string
@@ -143,6 +231,7 @@ export type Database = {
         Insert: {
           active?: boolean
           address?: string | null
+          alshrouq_branch_id?: string | null
           area_manager?: string | null
           area_manager_phone?: string | null
           branch_no: string
@@ -164,6 +253,7 @@ export type Database = {
         Update: {
           active?: boolean
           address?: string | null
+          alshrouq_branch_id?: string | null
           area_manager?: string | null
           area_manager_phone?: string | null
           branch_no?: string

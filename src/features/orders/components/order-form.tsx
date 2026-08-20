@@ -54,6 +54,7 @@ import { cn } from "@/lib/utils";
 import { useOrderForm } from "@/features/orders/hooks/use-order-form";
 import { invoiceKey } from "@/features/orders/invoice-verification";
 import { OrderActivityTimeline } from "@/features/orders/components/order-activity-timeline";
+import { AlShrouqDispatchPanel } from "@/features/orders/components/alshrouq-dispatch-panel";
 import { OrderAssignment } from "@/features/orders/components/order-assignment";
 import { CallCenterInvoiceField } from "@/features/orders/components/call-center-invoice-field";
 import { OrderInvoicePanel, StateTag } from "@/features/orders/components/order-invoice-panel";
@@ -669,6 +670,13 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
           {/* Appears the moment a branch is chosen, so the questions a customer
               asks next are answered without leaving a half-typed order. */}
           {form.branch_no && <BranchPreviewPanel branchNo={form.branch_no} />}
+
+          {/* Only for a saved order whose delivery method is actually AlShrouq:
+              a courier cannot be sent an order that does not exist yet, and a
+              dispatch button on a store pickup is an invitation to a mistake. */}
+          {mode === "edit" && id && form.delivery_type === "AlShrouq" && (
+            <AlShrouqDispatchPanel orderId={id} />
+          )}
 
           {mode === "edit" && id && <OrderActivityTimeline orderId={id} />}
         </aside>

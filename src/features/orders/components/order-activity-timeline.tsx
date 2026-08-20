@@ -46,6 +46,12 @@ function describe(e: OrderActivityEvent, nameOf: (id: unknown) => string): strin
   // The withdrawal, which had no event until the flag could be cleared at all.
   if (e.action === "call_center_cleared") return "Call Center Invoice cleared automatically";
   if (e.action === "auto_completed") return "Order automatically completed by MilaPortal";
+  // The courier events. Named after AlShrouq rather than "delivery updated",
+  // because the Portal is reporting what another system did with the order and
+  // an agent chasing a late delivery needs to know which one to call.
+  if (e.action === "alshrouq_dispatched") return "Sent to AlShrouq for delivery";
+  if (e.action === "alshrouq_status_changed") return "AlShrouq delivery status changed";
+  if (e.action === "alshrouq_cancelled") return "AlShrouq delivery cancelled";
   if (e.action === "edited") {
     const keys = Object.keys(d);
     if (keys.length === 0) return "Edited the order";
@@ -119,6 +125,22 @@ function detailLine(e: OrderActivityEvent): string | null {
       parts.push(`verified total ${fmtSAR(Number(d.total))}`);
     if (d.call_centre_invoice) parts.push(`Call Centre invoice ${String(d.call_centre_invoice)}`);
     return parts.join(" · ");
+  }
+  if (e.action === "alshrouq_dispatched") {
+    // The reference is the whole point of this line: it is what somebody quotes
+    // on the phone when a delivery has to be chased.
+    const parts = [`Reference ${d.local_id ?? "pending"}`];
+    if (d.payment_type) parts.push(String(d.payment_type));
+    if (d.value !== undefined && d.value !== null) parts.push(fmtSAR(Number(d.value)));
+    if (d.status) parts.push(`Status: ${String(d.status)}`);
+    return parts.join(" · ");
+  }
+  if (e.action === "alshrouq_status_changed") {
+    // AlShrouq's own words on both sides, unmapped — see the dispatch panel.
+    return `${d.from ?? "—"} → ${d.to ?? "—"}${d.detail ? ` · ${String(d.detail)}` : ""}`;
+  }
+  if (e.action === "alshrouq_cancelled") {
+    return `Reference ${d.local_id ?? "—"}${d.status ? ` · ${String(d.status)}` : ""}`;
   }
   if (e.action === "assigned" && d.to_team) return `Team: ${String(d.to_team).replace("_", " ")}`;
   return null;
