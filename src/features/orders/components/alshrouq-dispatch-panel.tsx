@@ -293,7 +293,9 @@ export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
                   />
                   {coords.trim() !== "" && !parsed.point && (
                     <p className="text-[11px] text-destructive">
-                      {parsed.error ?? "Enter it as “latitude, longitude”."}
+                      {parsed.outOfRange
+                        ? "That point is outside Saudi Arabia — check the order of the two values."
+                        : "Enter it as “latitude, longitude”."}
                     </p>
                   )}
                 </div>
