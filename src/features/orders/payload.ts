@@ -46,6 +46,13 @@ export interface OrderFormState {
   status: string;
   agent_id: string;
   call_center_verified: boolean;
+  /** Google Maps link to the customer, as pasted or as the map picker built it. */
+  alshrouq_map_url: string;
+  /** Held as text, like `invoice_value`, because that is what an input yields. */
+  alshrouq_lat: string;
+  alshrouq_lng: string;
+  /** The CRM's numeric payment id, as the select yields it. */
+  alshrouq_payment_type: string;
 }
 
 /** The persisted row, as far as this cares about it. */
@@ -132,6 +139,24 @@ export function buildOrderPayload({
     customer_phone: form.customer_phone || null,
     notes: form.notes || null,
     invoice_no: invoiceNo || null,
+
+    /**
+     * The customer's location.
+     *
+     * Optional in the same sense as the fields above — blank means blank — even
+     * though the schema requires it for AlShrouq. The two are not in conflict:
+     * validation decides whether a blank may be *saved*, this decides what a
+     * blank *means*, and it means cleared.
+     *
+     * Kept rather than nulled when the method changes away from AlShrouq. A
+     * location is not wrong on a pickup order, only unused, and discarding it
+     * would lose the customer's address the moment an agent corrected a
+     * mis-picked method — then require re-entry to correct it back.
+     */
+    alshrouq_map_url: form.alshrouq_map_url || null,
+    alshrouq_lat: form.alshrouq_lat || null,
+    alshrouq_lng: form.alshrouq_lng || null,
+    alshrouq_payment_type: form.alshrouq_payment_type ? Number(form.alshrouq_payment_type) : null,
 
     /**
      * The verified total wins over anything typed.

@@ -10,10 +10,11 @@
  * bundle.
  */
 
-import { formatOrderNo } from "@/lib/branches";
+import { stripOrderPrefix } from "@/lib/branches";
 import {
   readAlShrouqState,
   validateAlShrouqOrder,
+  type AlShrouqOrderInput,
   type AlShrouqTimelineEntry,
 } from "@/lib/shams-crm/alshrouq";
 
@@ -26,10 +27,14 @@ export interface AlShrouqDispatchRecord {
   orderId: string;
   clientOrderId: string;
   localId: string | null;
+  /** AlShrouq's own order number — the one quoted when chasing a delivery. */
+  externalOrderId: string | null;
   status: string | null;
   statusDetail: string | null;
-  paymentType: string;
+  trackingUrl: string | null;
+  paymentType: number | null;
   alshrouqBranchId: string;
+  mapUrl: string | null;
   value: number | null;
   preparationTime: number | null;
   lat: number | null;
@@ -45,6 +50,8 @@ export interface AlShrouqPanelState {
   configured: boolean;
   /** The branch's AlShrouq id, or null when AlShrouq does not cover it. */
   alshrouqBranchId: string | null;
+  /** Distinguishes "not covered" from "not in the mapping", for the message. */
+  coverage: BranchCoverage["kind"];
   dispatch: AlShrouqDispatchRecord | null;
   /** Why this order cannot be dispatched yet, worded for the agent. */
   blockers: string[];
@@ -62,6 +69,11 @@ export interface OrderForDispatch {
   notes: string | null;
   delivery_type: string | null;
   status: string;
+  /** Where the delivery goes — captured on the order form, not in the panel. */
+  alshrouq_map_url: string | null;
+  alshrouq_lat: number | string | null;
+  alshrouq_lng: number | string | null;
+  alshrouq_payment_type: number | string | null;
 }
 
 /** The narrow slice of a Supabase client this module uses. */
@@ -96,7 +108,7 @@ export async function canDispatch(supabase: DispatchClient, userId: string): Pro
 }
 
 const ORDER_COLUMNS =
-  "id, display_no, team, agent_id, branch_no, customer_name, customer_phone, invoice_value, notes, delivery_type, status";
+  "id, display_no, team, agent_id, branch_no, customer_name, customer_phone, invoice_value, notes, delivery_type, status, alshrouq_map_url, alshrouq_lat, alshrouq_lng, alshrouq_payment_type";
 
 /**
  * The order, if this caller may act on it.
@@ -149,10 +161,13 @@ export function toDispatchRecord(
     orderId: row.order_id,
     clientOrderId: row.client_order_id,
     localId: row.local_id ?? null,
+    externalOrderId: row.external_order_id ?? null,
     status: row.status ?? null,
     statusDetail: row.status_detail ?? null,
-    paymentType: row.payment_type,
+    trackingUrl: row.tracking_url ?? null,
+    paymentType: numberOrNull(row.payment_type),
     alshrouqBranchId: row.alshrouq_branch_id,
+    mapUrl: row.customer_address ?? null,
     value: numberOrNull(row.value),
     preparationTime: row.preparation_time ?? null,
     lat: numberOrNull(row.customer_lat),
@@ -199,49 +214,103 @@ export async function liveDispatch(supabase: DispatchClient, orderId: string): P
   return (data as any[] | null)?.[0] ?? null;
 }
 
-/** The branch's AlShrouq id, or null when AlShrouq does not cover it. */
-export async function branchAlShrouqId(
-  supabase: DispatchClient,
-  branchNo: string | null,
-): Promise<string | null> {
-  if (!branchNo) return null;
-  const { data } = await supabase
-    .from("branches")
-    .select("alshrouq_branch_id")
-    .eq("branch_no", branchNo)
-    .maybeSingle();
-  return (data as { alshrouq_branch_id?: string | null } | null)?.alshrouq_branch_id ?? null;
+/** How a branch stands with AlShrouq, according to the CRM. */
+export type BranchCoverage =
+  | { kind: "covered"; alshrouqBranchId: string }
+  /** The CRM knows the branch and says AlShrouq does not serve it. */
+  | { kind: "not_covered"; name: string; note: string | null }
+  /** No branch chosen, or the CRM's mapping has no such code. */
+  | { kind: "unmapped" };
+
+/**
+ * Where AlShrouq collects this order from, resolved against the live CRM config.
+ *
+ * Deliberately **not** a database lookup. The mapping used to be a 137-row seed
+ * frozen into a migration, and it was wrong for 87 branches — 27 of them mapped
+ * to another pharmacy's id, which dispatches a real delivery to the wrong shop.
+ * The CRM publishes the mapping on `GET /integrations/alshrouq/config` and keeps
+ * it current, so that is what the Portal reads; there is no local copy to drift.
+ *
+ * A branch the CRM marks `covered: false` is refused rather than sent, because
+ * AlShrouq will not collect from it and a submitted order would simply sit.
+ */
+export async function branchCoverage(branchNo: string | null): Promise<BranchCoverage> {
+  if (!branchNo?.trim()) return { kind: "unmapped" };
+  const { fetchAlShrouqConfig } = await import("@/lib/shams-crm/alshrouq.server");
+  const config = await fetchAlShrouqConfig();
+  const match = config.branches.find((b) => b.code === branchNo.trim());
+  if (!match) return { kind: "unmapped" };
+  if (!match.covered) return { kind: "not_covered", name: match.name, note: match.note };
+  return { kind: "covered", alshrouqBranchId: match.id };
 }
 
-/** The identity handed to the CRM: the order's display number, never agent input. */
-export function clientOrderIdFor(order: OrderForDispatch): string {
-  return formatOrderNo(order.team, order.display_no);
+/** The id when the branch is dispatchable, and null for every other outcome. */
+export function coveredBranchId(coverage: BranchCoverage): string | null {
+  return coverage.kind === "covered" ? coverage.alshrouqBranchId : null;
 }
 
 /**
- * What must be fixed on the *order* before the panel can be used at all.
+ * The identity handed to the CRM: the order's operational number, bare.
  *
- * Payment method and coordinates are chosen inside the panel, so they are
- * stubbed here with values known to pass — this list is about the order's own
- * data: the branch mapping, the customer, the value.
+ * `display_no` is stored as `#6529`; `stripOrderPrefix` takes it to `6529`,
+ * which is exactly what the CRM's own dispatch history holds. It is emphatically
+ * **not** `formatOrderNo`, which renders `CC-6529` for a screen — sending that
+ * would give the same order two different names across the two systems and make
+ * the duplicate lookup unable to recognise its own work.
  */
-export function dispatchBlockers(
+export function clientOrderIdFor(order: OrderForDispatch): string {
+  return stripOrderPrefix(String(order.display_no ?? "").trim());
+}
+
+/**
+ * The order's own inputs, in the shape the CRM contract takes.
+ *
+ * One place builds this, so the check that runs before dispatch and the payload
+ * that is actually sent can never disagree about what the order says.
+ */
+export function dispatchInputFor(
   order: OrderForDispatch,
   alshrouqBranchId: string | null,
-): string[] {
-  return validateAlShrouqOrder({
+): AlShrouqOrderInput {
+  return {
     alshrouqBranchId,
     clientOrderId: clientOrderIdFor(order),
     customerName: order.customer_name,
     customerPhone: order.customer_phone,
-    customerAddress: null,
-    paymentType: "chosen-in-panel",
+    mapUrl: order.alshrouq_map_url,
+    paymentType: numberOrNull(order.alshrouq_payment_type),
     details: order.notes,
-    lat: 24,
-    lng: 46,
+    lat: numberOrNull(order.alshrouq_lat),
+    lng: numberOrNull(order.alshrouq_lng),
     value: numberOrNull(order.invoice_value) ?? 0,
     preparationTime: null,
-  }).map((e) => e.message);
+  };
+}
+
+/**
+ * What must be fixed on the *order* before it can be sent.
+ *
+ * Everything AlShrouq needs now lives on the order itself — the location and the
+ * payment method are captured on the order form rather than typed into a
+ * separate panel — so this validates the real values rather than stubbing the
+ * ones a panel used to collect.
+ */
+export function dispatchBlockers(order: OrderForDispatch, coverage: BranchCoverage): string[] {
+  const blockers = validateAlShrouqOrder(dispatchInputFor(order, coveredBranchId(coverage))).map(
+    (e) => e.message,
+  );
+
+  // Said in the CRM's own terms, replacing the generic "no AlShrouq id": a
+  // branch the courier does not serve is a different problem from one the
+  // mapping has never heard of, and only the first has a note worth reading.
+  if (coverage.kind === "not_covered") {
+    return blockers.map((m) =>
+      m.startsWith("This branch has no AlShrouq id")
+        ? `AlShrouq does not cover ${coverage.name}${coverage.note ? ` (${coverage.note})` : ""}.`
+        : m,
+    );
+  }
+  return blockers;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -256,10 +325,21 @@ export function dispatchBlockers(
  * second delivery. Loud in the logs, silent to the agent: the same trade-off
  * `logAdminAction` makes, for the same reason.
  */
+export type AlShrouqEvent =
+  /** Written *before* the POST, so an interrupted attempt still leaves a trace. */
+  | "alshrouq_submission_started"
+  | "alshrouq_dispatched"
+  /** The create failed and the CRM does not have the order. Safe to retry. */
+  | "alshrouq_failed"
+  /** A create whose outcome was unknown turned out to have already landed. */
+  | "alshrouq_recovered"
+  | "alshrouq_status_changed"
+  | "alshrouq_cancelled";
+
 export async function recordDispatchEvent(
   orderId: string,
   actorId: string | null,
-  action: "alshrouq_dispatched" | "alshrouq_status_changed" | "alshrouq_cancelled",
+  action: AlShrouqEvent,
   details: Record<string, unknown>,
 ): Promise<void> {
   try {

@@ -48,20 +48,23 @@ export type Database = {
           cancelled_at: string | null
           client_order_id: string
           created_at: string
+          customer_address: string | null
           customer_lat: number | null
           customer_lng: number | null
           details: string | null
           dispatched_at: string
           dispatched_by: string | null
+          external_order_id: string | null
           id: string
           last_response: Json
           local_id: string | null
           order_id: string
-          payment_type: string
+          payment_type: number | null
           preparation_time: number | null
           refreshed_at: string | null
           status: string | null
           status_detail: string | null
+          tracking_url: string | null
           updated_at: string
           value: number | null
         }
@@ -71,20 +74,23 @@ export type Database = {
           cancelled_at?: string | null
           client_order_id: string
           created_at?: string
+          customer_address?: string | null
           customer_lat?: number | null
           customer_lng?: number | null
           details?: string | null
           dispatched_at?: string
           dispatched_by?: string | null
+          external_order_id?: string | null
           id?: string
           last_response?: Json
           local_id?: string | null
           order_id: string
-          payment_type: string
+          payment_type?: number | null
           preparation_time?: number | null
           refreshed_at?: string | null
           status?: string | null
           status_detail?: string | null
+          tracking_url?: string | null
           updated_at?: string
           value?: number | null
         }
@@ -94,20 +100,23 @@ export type Database = {
           cancelled_at?: string | null
           client_order_id?: string
           created_at?: string
+          customer_address?: string | null
           customer_lat?: number | null
           customer_lng?: number | null
           details?: string | null
           dispatched_at?: string
           dispatched_by?: string | null
+          external_order_id?: string | null
           id?: string
           last_response?: Json
           local_id?: string | null
           order_id?: string
-          payment_type?: string
+          payment_type?: number | null
           preparation_time?: number | null
           refreshed_at?: string | null
           status?: string | null
           status_detail?: string | null
+          tracking_url?: string | null
           updated_at?: string
           value?: number | null
         }
@@ -209,7 +218,6 @@ export type Database = {
         Row: {
           active: boolean
           address: string | null
-          alshrouq_branch_id: string | null
           area_manager: string | null
           area_manager_phone: string | null
           branch_no: string
@@ -231,7 +239,6 @@ export type Database = {
         Insert: {
           active?: boolean
           address?: string | null
-          alshrouq_branch_id?: string | null
           area_manager?: string | null
           area_manager_phone?: string | null
           branch_no: string
@@ -253,7 +260,6 @@ export type Database = {
         Update: {
           active?: boolean
           address?: string | null
-          alshrouq_branch_id?: string | null
           area_manager?: string | null
           area_manager_phone?: string | null
           branch_no?: string
@@ -673,6 +679,10 @@ export type Database = {
       orders: {
         Row: {
           agent_id: string
+          alshrouq_lat: number | null
+          alshrouq_lng: number | null
+          alshrouq_map_url: string | null
+          alshrouq_payment_type: number | null
           branch_no: string | null
           call_center_verified: boolean
           created_at: string
@@ -694,6 +704,10 @@ export type Database = {
         }
         Insert: {
           agent_id: string
+          alshrouq_lat?: number | null
+          alshrouq_lng?: number | null
+          alshrouq_map_url?: string | null
+          alshrouq_payment_type?: number | null
           branch_no?: string | null
           call_center_verified?: boolean
           created_at?: string
@@ -715,6 +729,10 @@ export type Database = {
         }
         Update: {
           agent_id?: string
+          alshrouq_lat?: number | null
+          alshrouq_lng?: number | null
+          alshrouq_map_url?: string | null
+          alshrouq_payment_type?: number | null
           branch_no?: string | null
           call_center_verified?: boolean
           created_at?: string

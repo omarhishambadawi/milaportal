@@ -49,12 +49,13 @@ import {
   UserCog,
   X,
 } from "lucide-react";
-import { ORDER_TYPES, DELIVERY_TYPES, CURRENCY, formatOrderNo } from "@/lib/branches";
+import { ORDER_TYPES, DELIVERY_TYPES, CURRENCY, ALSHROUQ, formatOrderNo } from "@/lib/branches";
 import { cn } from "@/lib/utils";
 import { useOrderForm } from "@/features/orders/hooks/use-order-form";
 import { invoiceKey } from "@/features/orders/invoice-verification";
 import { OrderActivityTimeline } from "@/features/orders/components/order-activity-timeline";
 import { AlShrouqDispatchPanel } from "@/features/orders/components/alshrouq-dispatch-panel";
+import { AlShrouqDeliveryFields } from "@/features/orders/components/alshrouq-delivery-fields";
 import { OrderAssignment } from "@/features/orders/components/order-assignment";
 import { CallCenterInvoiceField } from "@/features/orders/components/call-center-invoice-field";
 import { OrderInvoicePanel, StateTag } from "@/features/orders/components/order-invoice-panel";
@@ -370,6 +371,38 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 </Select>
               </Field>
 
+              {/* AlShrouq, and only AlShrouq.
+                  The one courier the Portal submits to over an API, so the one
+                  method that needs more than a person on a phone call knows.
+                  Four fields — the customer's map link, the point it resolves
+                  to, and how they pay — sitting directly under the method that
+                  asks for them. Every other method's form is untouched. */}
+              {form.delivery_type === ALSHROUQ && (
+                <div className="sm:col-span-2 rounded-md border border-border/60 bg-muted/20 p-3 dark:bg-muted/10">
+                  <p className="mb-2.5 text-[11.5px] font-medium text-muted-foreground">
+                    AlShrouq delivery — sent to the courier when this order is saved.
+                  </p>
+                  <AlShrouqDeliveryFields
+                    disabled={readOnly}
+                    value={{
+                      map_url: form.alshrouq_map_url,
+                      lat: form.alshrouq_lat,
+                      lng: form.alshrouq_lng,
+                      payment_type: form.alshrouq_payment_type,
+                    }}
+                    onChange={(next) =>
+                      setForm((f) => ({
+                        ...f,
+                        alshrouq_map_url: next.map_url,
+                        alshrouq_lat: next.lat,
+                        alshrouq_lng: next.lng,
+                        alshrouq_payment_type: next.payment_type,
+                      }))
+                    }
+                  />
+                </div>
+              )}
+
               {/* The branch. Everything the customer asks next — is it open,
                   does it deliver, what is the address — is answered by the
                   panel in the verification column, without leaving the form. */}
@@ -674,7 +707,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
           {/* Only for a saved order whose delivery method is actually AlShrouq:
               a courier cannot be sent an order that does not exist yet, and a
               dispatch button on a store pickup is an invitation to a mistake. */}
-          {mode === "edit" && id && form.delivery_type === "AlShrouq" && (
+          {mode === "edit" && id && form.delivery_type === ALSHROUQ && (
             <AlShrouqDispatchPanel orderId={id} />
           )}
 

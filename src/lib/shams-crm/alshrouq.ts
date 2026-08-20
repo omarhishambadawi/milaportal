@@ -25,6 +25,8 @@
  * failed delivery whose name we guessed wrong.
  */
 
+import { mapSearchUrl } from "@/lib/geo/maps-url";
+
 /* -------------------------------------------------------------------------- */
 /* Endpoints                                                                   */
 /* -------------------------------------------------------------------------- */
@@ -36,7 +38,8 @@ export const ALSHROUQ_PATHS = {
   history: "/integrations/alshrouq/orders",
   refresh: (localId: string) =>
     `/integrations/alshrouq/orders/${encodeURIComponent(localId)}/refresh`,
-  cancel: (localId: string) => `/integrations/alshrouq/orders/${encodeURIComponent(localId)}/cancel`,
+  cancel: (localId: string) =>
+    `/integrations/alshrouq/orders/${encodeURIComponent(localId)}/cancel`,
 } as const;
 
 /**
@@ -56,8 +59,24 @@ export interface AlShrouqCreatePayload {
   client_order_id: string;
   customer_name: string;
   customer_phone: string;
+  /**
+   * The customer's Google Maps link — **not** a street address.
+   *
+   * Verified against the CRM's own dispatch history, where every record carries
+   * the link the customer sent (`https://www.google.com/maps?q=…`, and short
+   * `maps.app.goo.gl/…` links too) alongside the coordinates. The link names the
+   * place; the coordinates are what the courier routes to. Sending coordinates
+   * here instead would discard the half a human reads.
+   */
   customer_address: string;
-  payment_type: string;
+  /**
+   * The CRM's own payment id, as a number.
+   *
+   * `1` COD, `2` SPAN Machine, `3` Paid, `4` AlshrouqPay — read from
+   * `GET /integrations/alshrouq/config`, never hardcoded here. Numeric because
+   * that is what the CRM's stored orders hold (`"payment_type": 1`).
+   */
+  payment_type: number;
   details: string;
   customer_lat: number;
   customer_lng: number;
@@ -75,12 +94,19 @@ export interface AlShrouqCreatePayload {
 
 export interface AlShrouqOrderInput {
   alshrouqBranchId: string | null | undefined;
-  /** The order's display number, prefixed by team. Never agent-editable. */
+  /**
+   * The order's operational number, bare. Never agent-editable.
+   *
+   * The CRM's own history holds `"6529"`, `"6527"`, `"06441"` — the number and
+   * nothing else. A team-prefixed `CC-6529` is a *display* rendering and would
+   * make the Portal's orders unmatchable against the ones the Desktop created.
+   */
   clientOrderId: string;
   customerName: string | null | undefined;
   customerPhone: string | null | undefined;
-  customerAddress: string | null | undefined;
-  paymentType: string | null | undefined;
+  /** The customer's Google Maps link. See `customer_address` on the payload. */
+  mapUrl: string | null | undefined;
+  paymentType: number | null | undefined;
   details: string | null | undefined;
   lat: number | null | undefined;
   lng: number | null | undefined;
@@ -122,7 +148,7 @@ export function validateAlShrouqOrder(input: AlShrouqOrderInput): AlShrouqValida
   if (phone.replace(/\D/g, "").length < 9) {
     errors.push({ field: "customerPhone", message: "A valid customer phone is required." });
   }
-  if (!input.paymentType?.trim()) {
+  if (typeof input.paymentType !== "number" || !Number.isInteger(input.paymentType)) {
     errors.push({ field: "paymentType", message: "Choose an AlShrouq payment method." });
   }
   if (typeof input.lat !== "number" || !Number.isFinite(input.lat)) {
@@ -157,12 +183,14 @@ export function buildAlShrouqCreatePayload(input: AlShrouqOrderInput): AlShrouqC
     client_order_id: input.clientOrderId,
     customer_name: input.customerName!.trim(),
     customer_phone: input.customerPhone!.trim(),
-    // The CRM's UI has an address field; the Portal has no separate address of
-    // its own and does not add a duplicate one, so this carries whatever the
-    // order already says about where it is going — usually nothing, in which
-    // case the coordinates are the address.
-    customer_address: input.customerAddress?.trim() ?? "",
-    payment_type: input.paymentType!.trim(),
+    // Always a link, never blank. The agent's pasted link when there is one —
+    // it names the customer's building, which is what a driver actually reads —
+    // and a generated pin link when the point was typed as coordinates. The CRM
+    // has no record without one, so an empty string here would be the Portal
+    // inventing a shape the courier system has never been sent.
+    customer_address:
+      input.mapUrl?.trim() || mapSearchUrl({ lat: input.lat as number, lng: input.lng as number }),
+    payment_type: input.paymentType as number,
     details: input.details?.trim() ?? "",
     customer_lat: input.lat as number,
     customer_lng: input.lng as number,
@@ -179,14 +207,39 @@ export function buildAlShrouqCreatePayload(input: AlShrouqOrderInput): AlShrouqC
 /* -------------------------------------------------------------------------- */
 
 export interface AlShrouqPaymentOption {
-  value: string;
+  /** The CRM's numeric id — what `payment_type` carries. */
+  value: number;
   label: string;
+}
+
+/**
+ * One branch as AlShrouq knows it.
+ *
+ * `code` is the Shams branch number (`P0111`); `id` is AlShrouq's own
+ * identifier. `covered` is the part that matters operationally: the CRM marks
+ * branches AlShrouq does not serve, and 18 of them are so marked today.
+ */
+export interface AlShrouqBranchOption {
+  id: string;
+  code: string;
+  name: string;
+  covered: boolean;
+  note: string | null;
 }
 
 export interface AlShrouqConfig {
   /** What the CRM says AlShrouq accepts. Never a hardcoded list. */
   paymentTypes: AlShrouqPaymentOption[];
-  defaultPaymentType: string | null;
+  defaultPaymentType: number | null;
+  /**
+   * The branch mapping, live from the CRM.
+   *
+   * The single source of truth for Shams code → AlShrouq id. It is deliberately
+   * *not* mirrored into a table: the CRM's list already drifts from the shipped
+   * workbook by one branch, and a frozen copy is how the previous
+   * implementation ended up dispatching 27 branches to the wrong pharmacy.
+   */
+  branches: AlShrouqBranchOption[];
   /** A default only if the CRM states one; otherwise the agent supplies it. */
   defaultPreparationTime: number | null;
 }
@@ -213,61 +266,70 @@ function firstNumber(source: Record<string, unknown>, keys: string[]): number | 
 }
 
 /**
- * Read the payment methods out of whatever shape the config endpoint returns.
+ * Read the config the CRM actually returns.
  *
- * Tolerant on purpose: the response was not captured, only the fact that the
- * Desktop reads its payment options from it. So several plausible key names and
- * both plausible element shapes — a bare string, or an object with a code and a
- * label — are accepted, and anything unrecognised yields *no* options rather
- * than a fabricated "Cash". An empty list disables dispatch, which is the
- * correct failure: we do not know what AlShrouq accepts, so we do not guess.
+ * The shape is verified against a live `GET /integrations/alshrouq/config`
+ * captured from the PharmacyCRM Desktop's own cache, so this reads the real key
+ * names rather than guessing at plausible ones: `payment_options` and
+ * `branch_options`. The previous implementation looked for `payment_types`,
+ * which the CRM has never sent — so it found no payment methods and dispatch
+ * could never be enabled at all.
+ *
+ * Anything unreadable yields an empty list rather than a fabricated default. An
+ * empty payment list disables dispatch, and an empty branch list makes every
+ * branch unmapped; both are refusals, which is the correct failure for an
+ * integration that does not know what the courier accepts.
  */
 export function normalizeAlShrouqConfig(raw: unknown): AlShrouqConfig {
   const root = asRecord(raw);
   const source = Object.keys(asRecord(root["data"])).length > 0 ? asRecord(root["data"]) : root;
-  const entries = firstArray(source, [
-    "payment_types",
-    "payment_methods",
-    "payments",
-    "paymentTypes",
-  ]);
 
-  const seen = new Set<string>();
   const paymentTypes: AlShrouqPaymentOption[] = [];
-  for (const entry of entries) {
-    let value: string | null = null;
-    let label: string | null = null;
-    if (typeof entry === "string") {
-      value = entry;
-    } else {
-      const row = asRecord(entry);
-      const candidate = row["value"] ?? row["code"] ?? row["id"] ?? row["key"] ?? row["name"];
-      if (typeof candidate === "string" || typeof candidate === "number") {
-        value = String(candidate);
-      }
-      const text = row["label"] ?? row["name"] ?? row["title"] ?? row["description"];
-      if (typeof text === "string") label = text;
-    }
-    const key = value?.trim();
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    paymentTypes.push({ value: key, label: label?.trim() || key });
+  const seenPayment = new Set<number>();
+  for (const entry of firstArray(source, ["payment_options"])) {
+    const row = asRecord(entry);
+    const id = typeof row["id"] === "string" ? Number(row["id"]) : row["id"];
+    if (typeof id !== "number" || !Number.isInteger(id) || seenPayment.has(id)) continue;
+    const label = typeof row["label"] === "string" ? row["label"].trim() : "";
+    seenPayment.add(id);
+    paymentTypes.push({ value: id, label: label || String(id) });
   }
 
-  const rawDefault = source["default_payment_type"] ?? source["payment_type"];
+  const branches: AlShrouqBranchOption[] = [];
+  const seenBranch = new Set<string>();
+  for (const entry of firstArray(source, ["branch_options"])) {
+    const row = asRecord(entry);
+    const id = row["id"];
+    const code = row["internal_code"];
+    if (typeof code !== "string" || code.trim() === "") continue;
+    if (typeof id !== "string" && typeof id !== "number") continue;
+    const key = code.trim();
+    if (seenBranch.has(key)) continue;
+    seenBranch.add(key);
+    branches.push({
+      id: String(id).trim(),
+      code: key,
+      name: typeof row["branch_name"] === "string" ? row["branch_name"] : key,
+      // Absent `covered` is treated as covered: the CRM states it on every row
+      // today, and defaulting to "not covered" would silently stop dispatching
+      // everywhere if the key were ever renamed.
+      covered: row["covered"] !== false,
+      note: typeof row["note"] === "string" ? row["note"] : null,
+    });
+  }
+
+  const rawDefault = source["default_payment_type"];
+  const defaultCandidate = typeof rawDefault === "string" ? Number(rawDefault) : rawDefault;
   const defaultPaymentType =
-    typeof rawDefault === "string" && paymentTypes.some((p) => p.value === rawDefault)
-      ? rawDefault
+    typeof defaultCandidate === "number" && paymentTypes.some((p) => p.value === defaultCandidate)
+      ? defaultCandidate
       : null;
 
   return {
     paymentTypes,
     defaultPaymentType,
-    defaultPreparationTime: firstNumber(source, [
-      "default_preparation_time",
-      "preparation_time",
-      "preparationTime",
-    ]),
+    branches,
+    defaultPreparationTime: firstNumber(source, ["default_preparation_time", "preparation_time"]),
   };
 }
 
@@ -284,9 +346,23 @@ export interface AlShrouqTimelineEntry {
 export interface AlShrouqOrderState {
   /** The CRM's own reference for this delivery — what refresh and cancel take. */
   localId: string | null;
+  /**
+   * AlShrouq's own order number, as opposed to the CRM's.
+   *
+   * `external_order_id` in the verified record (`5648616`). This is the number a
+   * supervisor quotes to AlShrouq on the phone; `localId` only means anything to
+   * the CRM. Both are kept because neither substitutes for the other.
+   */
+  externalOrderId: string | null;
+  /** Echoed back by the CRM — used to confirm a create actually landed. */
+  clientOrderId: string | null;
   /** Verbatim. Not translated, not title-cased, not mapped to an order status. */
   status: string | null;
   statusDetail: string | null;
+  /** The customer-facing tracking page, when the CRM returns one. */
+  trackingUrl: string | null;
+  /** The CRM's own `is_cancelled`, when it states one. */
+  cancelled: boolean | null;
   timeline: AlShrouqTimelineEntry[];
 }
 
@@ -310,9 +386,8 @@ function firstString(source: Record<string, unknown>, keys: string[]): string | 
 export function readAlShrouqState(raw: unknown): AlShrouqOrderState {
   const root = asRecord(raw);
   const source = Object.keys(asRecord(root["data"])).length > 0 ? asRecord(root["data"]) : root;
-  const order = Object.keys(asRecord(source["order"])).length > 0
-    ? asRecord(source["order"])
-    : source;
+  const order =
+    Object.keys(asRecord(source["order"])).length > 0 ? asRecord(source["order"]) : source;
 
   const timelineRows = firstArray(order, ["timeline", "events", "history", "statuses"]).concat(
     firstArray(source, ["timeline", "events", "history", "statuses"]),
@@ -329,10 +404,56 @@ export function readAlShrouqState(raw: unknown): AlShrouqOrderState {
     });
   }
 
+  const cancelled = order["is_cancelled"];
+
   return {
-    localId: firstString(order, ["local_id", "id", "order_id", "localId"]),
-    status: firstString(order, ["status", "order_status", "state", "delivery_status"]),
-    statusDetail: firstString(order, ["status_detail", "status_text", "message", "note"]),
+    // `id` first: in the verified record it is the CRM's own row id, which is
+    // what the refresh and cancel paths take.
+    localId: firstString(order, ["id", "local_id", "order_id", "localId"]),
+    externalOrderId: firstString(order, ["external_order_id", "externalOrderId"]),
+    clientOrderId: firstString(order, ["client_order_id", "clientOrderId"]),
+    // `status_label` first: `status_id` is a bare code ("23") and reads as
+    // nothing to an agent, while the label is the courier's own wording.
+    status: firstString(order, ["status_label", "status", "order_status", "delivery_status"]),
+    statusDetail: firstString(order, [
+      "last_tracking_status",
+      "status_detail",
+      "status_text",
+      "message",
+    ]),
+    trackingUrl: firstString(order, ["tracking_url", "trackingUrl"]),
+    cancelled: typeof cancelled === "boolean" ? cancelled : null,
     timeline,
   };
+}
+
+/**
+ * Find our order in the CRM's dispatch history.
+ *
+ * The recovery path after an ambiguous create: the POST may have reached the
+ * courier before the connection died, so before sending a second one we ask the
+ * CRM whether it already knows this `client_order_id`. Returns the matching
+ * record's state, or null when the CRM has never heard of it — which is the only
+ * safe basis for trying again.
+ */
+export function findByClientOrderId(
+  raw: unknown,
+  clientOrderId: string,
+): AlShrouqOrderState | null {
+  const root = asRecord(raw);
+  const rows = Array.isArray(raw) ? raw : firstArray(root, ["data", "orders", "results", "items"]);
+  const wanted = clientOrderId.trim();
+  for (const row of rows) {
+    const entry = asRecord(row);
+    const candidate = firstString(entry, ["client_order_id", "clientOrderId"]);
+    // Compared as numbers when both look numeric: the CRM's history holds
+    // "06441" for an order the Portal calls "6441", and a string compare would
+    // miss it and dispatch a duplicate.
+    if (candidate == null) continue;
+    const same =
+      candidate === wanted ||
+      (/^\d+$/.test(candidate) && /^\d+$/.test(wanted) && Number(candidate) === Number(wanted));
+    if (same) return readAlShrouqState(entry);
+  }
+  return null;
 }

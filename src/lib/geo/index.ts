@@ -57,6 +57,8 @@ export {
   mapUrlLabel,
   multiStopUrl,
   navigationUrl,
+  parseMapsUrl,
   resolveMapUrl,
   resolveNavUrl,
+  type MapsUrlParse,
 } from "./maps-url";

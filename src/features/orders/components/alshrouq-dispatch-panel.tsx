@@ -1,24 +1,11 @@
-import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
-import { Bike, ExternalLink, Loader2, RefreshCw, XCircle } from "lucide-react";
+import { Bike, ExternalLink, Loader2, RefreshCw, Send, XCircle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { fmtSAR } from "@/lib/branches";
-import { parseCoordinatePair } from "@/lib/geo";
-import { mapSearchUrl } from "@/lib/geo/maps-url";
 import {
   alshrouqCancelOrder,
   alshrouqConfig,
@@ -27,20 +14,29 @@ import {
 } from "@/lib/alshrouq.functions";
 
 /**
- * Hand an order to AlShrouq, and show what AlShrouq said back.
+ * What AlShrouq said about this order.
  *
  * Only rendered for an order whose delivery method *is* AlShrouq — see
  * `OrderForm` — because the panel is meaningless for a scooter run or a counter
- * pickup, and an always-present "send to courier" button on a pickup order is an
- * invitation to a mistake.
+ * pickup.
  *
- * ## The status this shows is AlShrouq's own wording
+ * ## This is not where an order is composed
+ *
+ * It used to be: the panel carried its own payment, coordinates, preparation
+ * time and driver-note boxes, and an agent filled them in *after* saving. That
+ * asked for the delivery twice and let the courier order say something the order
+ * did not. The delivery now lives on the order form beside the branch and the
+ * customer, and saving the order sends it. What remains here is the record and
+ * the three things that can still be done to a live delivery: refresh it, cancel
+ * it, or — when the submission failed — try it again.
+ *
+ * ## The status shown is AlShrouq's own wording
  *
  * Whatever the CRM returns is displayed verbatim. The Portal has no mapping from
- * courier status to order status, because the courier's vocabulary is not
- * documented anywhere we have verified — and a guessed mapping would report
- * "delivered" for a word that meant something else. So there is a Refresh button
- * rather than a live feed, and its result is persisted and timelined.
+ * courier status to order status, because the courier's vocabulary is the
+ * courier's — and a guessed mapping would report "delivered" for a word that
+ * meant something else. So there is a Refresh button rather than a live feed,
+ * and its result is persisted and timelined.
  */
 export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
   const qc = useQueryClient();
@@ -55,27 +51,21 @@ export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
   });
 
   const dispatched = state.data?.dispatch ?? null;
-  const live = dispatched && !dispatched.cancelledAt;
+  const live = Boolean(dispatched && !dispatched.cancelledAt);
+  const blockers = state.data?.blockers ?? [];
 
-  // The payment methods are only worth a network call while there is something
-  // to send: a delivered order does not need a courier's price list.
+  // Only to put a name on the stored numeric payment id. Not needed while there
+  // is nothing dispatched to label.
   const config = useQuery({
     queryKey: ["alshrouq", "config"],
     queryFn: () => readConfig({}),
-    enabled: state.data?.configured === true && !live,
+    enabled: state.data?.configured === true && dispatched != null,
     staleTime: 10 * 60_000,
     retry: false,
   });
-
-  const [paymentType, setPaymentType] = useState("");
-  const [coords, setCoords] = useState("");
-  const [details, setDetails] = useState("");
-  const [prep, setPrep] = useState("");
-
-  const parsed = useMemo(() => {
-    const [latRaw, lngRaw] = coords.split(/[,\s]+/);
-    return parseCoordinatePair(latRaw, lngRaw);
-  }, [coords]);
+  const paymentLabel =
+    config.data?.paymentTypes.find((p) => p.value === dispatched?.paymentType)?.label ??
+    (dispatched?.paymentType != null ? String(dispatched.paymentType) : "—");
 
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ["alshrouq", "state", orderId] });
@@ -83,25 +73,14 @@ export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
     void qc.invalidateQueries({ queryKey: ["orders"] });
   };
 
-  const send = useMutation({
-    mutationFn: async () => {
-      const point = parsed.point;
-      if (!point) throw new Error("Enter the delivery location as “latitude, longitude”.");
-      return dispatchOrder({
-        data: {
-          orderId,
-          paymentType,
-          lat: point.lat,
-          lng: point.lng,
-          details: details.trim() || null,
-          // `preparation_time` is sent only when someone states one. The CRM's
-          // own default, when it publishes one, seeds the box.
-          preparationTime: prep.trim() === "" ? null : Number(prep),
-        },
-      });
-    },
-    onSuccess: () => {
-      toast.success("Sent to AlShrouq");
+  const retry = useMutation({
+    mutationFn: () => dispatchOrder({ data: { orderId } }),
+    onSuccess: (row) => {
+      toast.success(
+        row.externalOrderId
+          ? `Sent to AlShrouq — reference ${row.externalOrderId}`
+          : "Sent to AlShrouq",
+      );
       invalidate();
     },
     onError: (e: any) => toast.error(e?.message ?? "AlShrouq did not accept the order."),
@@ -127,9 +106,6 @@ export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
     },
     onError: (e: any) => toast.error(e?.message ?? "Unable to cancel the AlShrouq delivery."),
   });
-
-  const options = config.data?.paymentTypes ?? [];
-  const defaultPrep = config.data?.defaultPreparationTime ?? null;
 
   return (
     <Card className="overflow-hidden shadow-sm">
@@ -160,25 +136,52 @@ export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
               {dispatched.cancelledAt && <Badge variant="outline">Cancelled</Badge>}
             </div>
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-              <dt>Our reference</dt>
+              <dt>Our order no.</dt>
               <dd className="text-foreground tabular-nums">{dispatched.clientOrderId}</dd>
-              <dt>AlShrouq reference</dt>
-              <dd className="text-foreground tabular-nums">{dispatched.localId ?? "—"}</dd>
+              {/* AlShrouq's own number, which is what a supervisor quotes on the
+                  phone. `localId` is the CRM's internal handle and means nothing
+                  to the courier, so it is not shown as "the" reference. */}
+              <dt>AlShrouq order no.</dt>
+              <dd className="text-foreground tabular-nums">{dispatched.externalOrderId ?? "—"}</dd>
               <dt>Payment</dt>
-              <dd className="text-foreground">{dispatched.paymentType}</dd>
+              <dd className="text-foreground">{paymentLabel}</dd>
               <dt>Value</dt>
               <dd className="text-foreground">{fmtSAR(dispatched.value)}</dd>
-              {dispatched.lat != null && dispatched.lng != null && (
+              {dispatched.mapUrl && (
                 <>
-                  <dt>Location</dt>
+                  <dt>Map URL</dt>
                   <dd>
                     <a
                       className="inline-flex items-center gap-1 text-primary hover:underline"
-                      href={mapSearchUrl({ lat: dispatched.lat, lng: dispatched.lng })}
+                      href={dispatched.mapUrl}
                       target="_blank"
                       rel="noreferrer"
                     >
-                      {dispatched.lat.toFixed(5)}, {dispatched.lng.toFixed(5)}
+                      Open the customer's location
+                      <ExternalLink className="h-3 w-3" aria-hidden />
+                    </a>
+                  </dd>
+                </>
+              )}
+              {dispatched.lat != null && dispatched.lng != null && (
+                <>
+                  <dt>Lat / Lng</dt>
+                  <dd className="text-foreground tabular-nums">
+                    {dispatched.lat.toFixed(5)}, {dispatched.lng.toFixed(5)}
+                  </dd>
+                </>
+              )}
+              {dispatched.trackingUrl && (
+                <>
+                  <dt>Tracking</dt>
+                  <dd>
+                    <a
+                      className="inline-flex items-center gap-1 text-primary hover:underline"
+                      href={dispatched.trackingUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Follow the driver
                       <ExternalLink className="h-3 w-3" aria-hidden />
                     </a>
                   </dd>
@@ -235,115 +238,35 @@ export function AlShrouqDispatchPanel({ orderId }: { orderId: string }) {
         )}
 
         {/* ---------------------------------------------------------------- */}
-        {/* The send form                                                    */}
+        {/* Not sent yet — why, and the way to try again                     */}
         {/* ---------------------------------------------------------------- */}
-        {state.data?.configured && !live && (
-          <div className="space-y-3">
-            {state.data.blockers.length > 0 ? (
-              <ul className="list-inside list-disc space-y-1 text-xs text-destructive">
-                {state.data.blockers.map((blocker) => (
-                  <li key={blocker}>{blocker}</li>
+        {state.data?.configured && !dispatched && (
+          <div className="space-y-2">
+            <p className="text-[11px] text-muted-foreground">
+              This order has not reached AlShrouq. Saving an AlShrouq order sends it automatically;
+              if that did not happen, the order's timeline says why.
+            </p>
+            {blockers.length > 0 && (
+              <ul className="space-y-1 text-[11px] text-destructive">
+                {blockers.map((b) => (
+                  <li key={b}>{b}</li>
                 ))}
               </ul>
-            ) : (
-              <>
-                <div className="space-y-1">
-                  <Label htmlFor="alshrouq-payment" className="text-xs">
-                    Payment method
-                  </Label>
-                  <Select value={paymentType} onValueChange={setPaymentType}>
-                    <SelectTrigger id="alshrouq-payment" className="h-9">
-                      <SelectValue
-                        placeholder={
-                          config.isLoading
-                            ? "Loading AlShrouq methods…"
-                            : options.length === 0
-                              ? "AlShrouq published no methods"
-                              : "Choose a method"
-                        }
-                      />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {options.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {config.isError && (
-                    <p className="text-[11px] text-destructive">
-                      The CRM did not return its payment methods, so nothing can be sent — the
-                      portal will not invent one.
-                    </p>
-                  )}
-                </div>
-
-                <div className="space-y-1">
-                  <Label htmlFor="alshrouq-coords" className="text-xs">
-                    Delivery location
-                  </Label>
-                  <Input
-                    id="alshrouq-coords"
-                    className="h-9 tabular-nums"
-                    inputMode="decimal"
-                    placeholder="24.71355, 46.67529"
-                    value={coords}
-                    onChange={(e) => setCoords(e.target.value)}
-                  />
-                  {coords.trim() !== "" && !parsed.point && (
-                    <p className="text-[11px] text-destructive">
-                      {parsed.outOfRange
-                        ? "That point is outside Saudi Arabia — check the order of the two values."
-                        : "Enter it as “latitude, longitude”."}
-                    </p>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="space-y-1">
-                    <Label htmlFor="alshrouq-prep" className="text-xs">
-                      Preparation (min)
-                    </Label>
-                    <Input
-                      id="alshrouq-prep"
-                      className="h-9 tabular-nums"
-                      inputMode="numeric"
-                      placeholder={defaultPrep != null ? String(defaultPrep) : "Optional"}
-                      value={prep}
-                      onChange={(e) => setPrep(e.target.value.replace(/\D/g, ""))}
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <Label htmlFor="alshrouq-details" className="text-xs">
-                    Details for the driver
-                  </Label>
-                  <Textarea
-                    id="alshrouq-details"
-                    rows={2}
-                    className="resize-y"
-                    placeholder="Defaults to this order's notes"
-                    value={details}
-                    onChange={(e) => setDetails(e.target.value)}
-                  />
-                </div>
-
-                <Button
-                  type="button"
-                  size="sm"
-                  className="w-full"
-                  onClick={() => send.mutate()}
-                  disabled={send.isPending || !paymentType || !parsed.point}
-                >
-                  {send.isPending && (
-                    <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" aria-hidden />
-                  )}
-                  {dispatched ? "Send to AlShrouq again" : "Send to AlShrouq"}
-                </Button>
-              </>
             )}
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => retry.mutate()}
+              disabled={retry.isPending || blockers.length > 0}
+            >
+              {retry.isPending ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" aria-hidden />
+              ) : (
+                <Send className="mr-1 h-3.5 w-3.5" aria-hidden />
+              )}
+              Send to AlShrouq
+            </Button>
           </div>
         )}
       </CardContent>

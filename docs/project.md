@@ -498,7 +498,31 @@ first.
 (→ `branches.branch_no`), `delivery_type`, `invoice_no`, `invoice_value`,
 `status`, `customer_name`, `customer_phone`, `notes`, `call_center_verified`,
 `created_by` (→ `auth.users`, `DEFAULT auth.uid()` — who *entered* the order, as
-opposed to `agent_id`, who owns it), `created_at`, `updated_at`.
+opposed to `agent_id`, who owns it), `created_at`, `updated_at`, and the AlShrouq
+delivery: `alshrouq_map_url`, `alshrouq_lat`/`alshrouq_lng` (`numeric(10,7)`, to
+match `branches.latitude`; `orders_alshrouq_point_complete` makes it both or
+neither) and `alshrouq_payment_type` (the CRM’s numeric id). All nullable, with
+no CHECK tying them to `delivery_type` — every AlShrouq order predating them has
+no location and never will, and a CHECK would make those rows invalid and every
+UPDATE to one fail.
+
+### `alshrouq_dispatches`
+
+One row per order handed to the courier, separate from `orders` because it is a
+different system’s lifecycle — an order can be completed here while the courier
+record is still moving. `order_id`, `client_order_id` (what we called it),
+`local_id` (the CRM’s row id, which refresh and cancel take), `external_order_id`
+(AlShrouq’s own number, the one quoted on the phone), `status`/`status_detail`
+verbatim, `tracking_url`, `branch_no`, `alshrouq_branch_id`, `payment_type`
+(integer), `customer_address`, `customer_lat`/`customer_lng`, `value`,
+`preparation_time`, `last_response` (response bodies only — no headers, no
+token), `dispatched_by`/`dispatched_at`, `cancelled_at`, `refreshed_at`.
+
+Unique on `(order_id) WHERE cancelled_at IS NULL` and on `client_order_id` — the
+database half of the duplicate rule. RLS grants `authenticated` SELECT only,
+following the order’s own visibility; every write goes through the server
+function that actually spoke to the CRM, so a row can never claim a dispatch that
+did not happen.
 
 Indexes include `orders_team_date_idx (team, order_date) INCLUDE (agent_id,
 status, order_type, invoice_value)` and `orders_agent_date_idx (agent_id,
@@ -1083,7 +1107,7 @@ Provider-agnostic and pure. `index.ts` is the only import surface.
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `lib/utils.ts`                               | `cn()` — `clsx` + `tailwind-merge`.                                                                                                                                                                                                                                                  |
 | `lib/timezone.ts`                            | `BUSINESS_TIMEZONE = "Asia/Riyadh"`, `BUSINESS_UTC_OFFSET_MINUTES = 180`. Fixed a real bug where timelines formatted in UTC+2 while call analytics bucketed in UTC+3.                                                                                                                |
-| `lib/branches.ts`                            | `ORDER_TYPES` (Cash, Wasfaty), `DELIVERY_TYPES` (AlShrouq, Store Pickup, Branch Scooter, Azman), `STATUSES`, `COMPLAINT_STATUSES`, `TEAMS`, `STATUS_STYLES`, `CURRENCY = "SAR"`, `fmtSAR`, `formatOrderNo`, `stripOrderPrefix`.                                                      |
+| `lib/branches.ts`                            | `ORDER_TYPES` (Cash, Wasfaty), `DELIVERY_TYPES` (AlShrouq, Store Pickup, Branch Scooter, Azman), `ALSHROUQ` (the one courier the portal submits to, named because it gates form fields, validation and dispatch), `STATUSES`, `COMPLAINT_STATUSES`, `TEAMS`, `STATUS_STYLES`, `CURRENCY = "SAR"`, `fmtSAR`, `formatOrderNo`, `stripOrderPrefix`.                                                      |
 | `lib/query-keys.ts`                          | Hierarchical key factory; every entity has a real `all()` invalidation boundary. Lookups live under their own root so an order write does not refetch the directory.                                                                                                                 |
 | `lib/query-client.ts`                        | `QUERY_DEFAULTS` / `MUTATION_DEFAULTS`, each option carrying its rationale.                                                                                                                                                                                                          |
 | `lib/supabase-paginate.ts`                   | `fetchAllPaginated` — PostgREST caps a response at 1000 rows; safety ceiling 200k.                                                                                                                                                                                                   |
@@ -1787,7 +1811,11 @@ unchanged.
 `orderFormSchema` (Zod): `order_date`, `team`, `order_type`, `customer_name`,
 `customer_phone`, `branch_no` (**required**), `delivery_type` (**required**),
 `invoice_no`, `invoice_value` (coerced, non-negative, nullable), `notes`,
-`status`, `agent_id` (optional), `call_center_verified` (optional).
+`status`, `agent_id` (optional), `call_center_verified` (optional), and — required
+only when `delivery_type` is AlShrouq — `alshrouq_map_url`, `alshrouq_lat`,
+`alshrouq_lng`, `alshrouq_payment_type`. The conditional rule is a `superRefine`,
+not a database CHECK: it is about what an agent must type today, not a fact about
+every row ever stored, and historical AlShrouq orders have none of them.
 
 The payload itself is built by **`buildOrderPayload`** (pure, in
 `features/orders/payload.ts`), not by spreading form state. Editing an order and
@@ -1894,6 +1922,105 @@ in `Asia/Riyadh` — `Today 12:31 PM` within the business day, the date before i
 Rows carrying `details.automated` are attributed to their `source` (MilaPortal)
 and dotted in `success`; everything else names its actor.
 
+### AlShrouq delivery — the one courier the portal submits to
+
+Selecting **AlShrouq** as the delivery method turns the order form into the
+courier's intake form. Four fields appear beneath the method — **Map URL**,
+**Lat**, **Lng** on one row and **Payment Method** on the next — and saving the
+order creates the delivery. Nobody opens AlShrouq's own dashboard to retype it.
+Every other method's form is untouched, and `ALSHROUQ` (`lib/branches.ts`) is the
+single spelling that gates all of it.
+
+The existing **Customer Name**, **Customer Phone** and **Branch** are reused
+as-is. There is deliberately no preparation time, driver note, timeslot or
+service fee: the CRM accepts them, none is required to create a delivery, and
+each is another box between an agent and a saved order.
+
+#### The contract, and where it came from
+
+The portal never calls `alshrouqdelivery.com`. It goes through the same
+`shams-crm.cloud` integration the PharmacyCRM Desktop uses, so one system owns
+the courier relationship. The contract was read off that Desktop package — its
+PyInstaller bundle and its local `http_cache`, which holds real config and order
+records — not guessed from a public API.
+
+| Call | Path |
+| --- | --- |
+| Config | `GET /integrations/alshrouq/config` |
+| History | `GET /integrations/alshrouq/orders` |
+| Create | `POST /integrations/alshrouq/orders` |
+| Refresh | `POST /integrations/alshrouq/orders/{localId}/refresh` |
+| Cancel | `POST /integrations/alshrouq/orders/{localId}/cancel` |
+
+Three details in the payload are easy to get wrong and are pinned by tests in
+`shams-crm/__tests__/alshrouq-contract.test.ts`:
+
+- **`customer_address` is the Google Maps URL**, not a street address. Every CRM
+  record carries the link the customer sent — short `maps.app.goo.gl` links
+  included — *alongside* `customer_lat`/`customer_lng`. The link names the
+  building; the point is what routing consumes. Neither substitutes for the
+  other, so the order stores both and a typed point still generates a link.
+- **`client_order_id` is the bare order number** — `6529`, `06441` — which is
+  `stripOrderPrefix(display_no)`. It is **not** `formatOrderNo`: `CC-6529` is a
+  display rendering, and sending it would give one order two names across two
+  systems and break the duplicate lookup that depends on recognising it.
+- **`payment_type` is numeric** — `1` COD, `2` SPAN Machine, `3` Paid,
+  `4` AlshrouqPay — read from the config endpoint, never hardcoded.
+
+#### Branch mapping is read, not stored
+
+`GET /integrations/alshrouq/config` returns `branch_options`: the live
+Shams-code → AlShrouq-id mapping, 136 entries, 18 of them flagged
+`covered: false` for branches AlShrouq does not serve. `branchCoverage()` reads
+it on every dispatch, cached five minutes server-side, and refuses an uncovered
+or unmapped branch rather than sending a request that would simply sit.
+
+There is deliberately **no local copy**. A 137-row seed frozen into a migration
+was tried and was wrong for 87 of 136 branches — 27 of them pointing at another
+pharmacy's id, which is a real delivery to the wrong shop. It assumed the branch
+codes ran contiguously from `P0001`; they jump `P0040 → P0101 → P0201 → P0301 →
+P0401 → P0501 → P0601 → P0701`, and the source workbook even orders `P0503`
+before `P0502`. `20260820200000_alshrouq_order_delivery.sql` drops that column.
+The CRM's list has already drifted from the shipped workbook by one branch, so a
+second frozen copy would drift the same way.
+
+#### Duplicate protection
+
+A duplicate here is a second driver at a customer's door and a second bill, so
+there are three layers:
+
+1. A partial unique index on `(order_id) WHERE cancelled_at IS NULL`, plus a
+   unique index on `client_order_id`.
+2. A pre-flight read of the live dispatch, so a double-click or a re-save returns
+   the existing delivery rather than attempting another.
+3. For what neither can see — a POST that timed out *after* the courier may have
+   received it — `findAlShrouqOrderByClientId` searches the CRM's own history for
+   our `client_order_id` before anything is sent again. `outcomeIsUnknown()`
+   decides when that applies: timeouts, transport failures, 5xx and unparseable
+   bodies all mean "the order may exist on the other side". An unrecognised error
+   counts as unknown too, because guessing "it definitely failed" is the guess
+   that creates the second delivery. The lookup compares numerically, since the
+   CRM stores `06441` for the order the portal calls `6441`.
+
+Historical AlShrouq orders are never auto-submitted: they carry no location and
+no payment method, so they fail validation and are refused before anything is
+sent.
+
+#### Timeline
+
+Courier events land on the existing `order_activity` timeline rather than a
+second log — `alshrouq_submission_started` (written *before* the POST, so an
+interrupted attempt still leaves a trace), `alshrouq_dispatched`,
+`alshrouq_failed`, `alshrouq_recovered`, `alshrouq_status_changed`,
+`alshrouq_cancelled`. Details carry the AlShrouq order number, the status and the
+failure reason as the CRM worded it; never a payload, a header or a token.
+`recordDispatchEvent` never throws, because these run *after* the courier has
+been told something and failing there would invite a retry.
+
+Statuses are stored and displayed verbatim. The portal maps nothing to an order
+status: the vocabulary is the courier's, and a guessed mapping would report
+"delivered" for a word that meant something else. `AlShrouqDispatchPanel` shows
+the record and offers refresh, cancel and — when a submission failed — retry.
 ### The form lives in the feature module, not the route file
 
 `OrderForm` was exported from `routes/_app.orders.new.tsx` so `/orders/$id` could

@@ -12,6 +12,7 @@ import { orderFormSchema } from "../schema";
 import { buildOrderPayload, type PersistedOrder } from "../payload";
 import { invoiceNoSignature } from "../invoice-verification";
 import { recordInvoiceVerification } from "../record-verification";
+import { submitToAlShrouq } from "../submit-to-alshrouq";
 import { defaultTeam, parseInvoiceNumbers } from "../utils";
 import { isAssignableAgent } from "../components/order-assignment";
 import { useOrderInvoices } from "./use-order-invoices";
@@ -60,6 +61,17 @@ export function useOrderForm(mode: "create" | "edit") {
     order_type: "Cash",
     customer_name: "",
     customer_phone: "",
+    /**
+     * Where an AlShrouq delivery goes.
+     *
+     * Three fields rather than an address: the link the customer sent, and the
+     * point read out of it. Empty for every other method, and the form only
+     * asks once AlShrouq is picked.
+     */
+    alshrouq_map_url: "",
+    alshrouq_lat: "",
+    alshrouq_lng: "",
+    alshrouq_payment_type: "",
     branch_no: "" as string | null,
     delivery_type: "",
     invoice_value: "",
@@ -166,6 +178,10 @@ export function useOrderForm(mode: "create" | "edit") {
       order_type: existing.order_type,
       customer_name: (existing as any).customer_name ?? "",
       customer_phone: (existing as any).customer_phone ?? "",
+      alshrouq_map_url: (existing as any).alshrouq_map_url ?? "",
+      alshrouq_lat: (existing as any).alshrouq_lat?.toString() ?? "",
+      alshrouq_lng: (existing as any).alshrouq_lng?.toString() ?? "",
+      alshrouq_payment_type: (existing as any).alshrouq_payment_type?.toString() ?? "",
       branch_no: existing.branch_no ?? "",
       delivery_type: existing.delivery_type ?? "",
       invoice_value: existing.invoice_value?.toString() ?? "",
@@ -462,6 +478,9 @@ export function useOrderForm(mode: "create" | "edit") {
                 : "Order saved. The invoice could not be recorded yet; it will be picked up when the order is next opened.",
             );
           }
+          // And hand it to the courier, if that is the method. Same position and
+          // the same non-fatal contract as the verification above.
+          await submitToAlShrouq(createdId, parsed.delivery_type);
         }
       } else {
         const { error } = await supabase
@@ -509,6 +528,7 @@ export function useOrderForm(mode: "create" | "edit") {
               : "Order updated. The invoice could not be recorded yet; it will be picked up when the order is next opened.",
           );
         }
+        await submitToAlShrouq(id!, parsed.delivery_type);
       }
       qc.invalidateQueries({ queryKey: queryKeys.orders.all() });
       qc.invalidateQueries({ queryKey: queryKeys.dashboard.all() });

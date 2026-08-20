@@ -49,7 +49,12 @@ function describe(e: OrderActivityEvent, nameOf: (id: unknown) => string): strin
   // The courier events. Named after AlShrouq rather than "delivery updated",
   // because the Portal is reporting what another system did with the order and
   // an agent chasing a late delivery needs to know which one to call.
+  if (e.action === "alshrouq_submission_started") return "Submitting the order to AlShrouq";
   if (e.action === "alshrouq_dispatched") return "Sent to AlShrouq for delivery";
+  if (e.action === "alshrouq_failed") return "AlShrouq did not accept the order";
+  // Not a second delivery: a submission whose result was unknown turned out to
+  // have already reached the courier, and the portal adopted it.
+  if (e.action === "alshrouq_recovered") return "Recovered an AlShrouq delivery already created";
   if (e.action === "alshrouq_status_changed") return "AlShrouq delivery status changed";
   if (e.action === "alshrouq_cancelled") return "AlShrouq delivery cancelled";
   if (e.action === "edited") {
@@ -126,21 +131,28 @@ function detailLine(e: OrderActivityEvent): string | null {
     if (d.call_centre_invoice) parts.push(`Call Centre invoice ${String(d.call_centre_invoice)}`);
     return parts.join(" · ");
   }
-  if (e.action === "alshrouq_dispatched") {
+  if (e.action === "alshrouq_submission_started") {
+    return `Order no. ${d.client_order_id ?? "—"}`;
+  }
+  if (e.action === "alshrouq_dispatched" || e.action === "alshrouq_recovered") {
     // The reference is the whole point of this line: it is what somebody quotes
-    // on the phone when a delivery has to be chased.
-    const parts = [`Reference ${d.local_id ?? "pending"}`];
-    if (d.payment_type) parts.push(String(d.payment_type));
+    // on the phone when a delivery has to be chased. AlShrouq's own number
+    // first, because the CRM's internal id means nothing to the courier.
+    const parts = [`AlShrouq no. ${d.external_order_id ?? d.local_id ?? "pending"}`];
     if (d.value !== undefined && d.value !== null) parts.push(fmtSAR(Number(d.value)));
     if (d.status) parts.push(`Status: ${String(d.status)}`);
     return parts.join(" · ");
+  }
+  if (e.action === "alshrouq_failed") {
+    // The reason as the CRM worded it. Never a payload, never a header.
+    return d.reason ? String(d.reason) : "No reason reported";
   }
   if (e.action === "alshrouq_status_changed") {
     // AlShrouq's own words on both sides, unmapped — see the dispatch panel.
     return `${d.from ?? "—"} → ${d.to ?? "—"}${d.detail ? ` · ${String(d.detail)}` : ""}`;
   }
   if (e.action === "alshrouq_cancelled") {
-    return `Reference ${d.local_id ?? "—"}${d.status ? ` · ${String(d.status)}` : ""}`;
+    return `AlShrouq no. ${d.external_order_id ?? d.local_id ?? "—"}${d.status ? ` · ${String(d.status)}` : ""}`;
   }
   if (e.action === "assigned" && d.to_team) return `Team: ${String(d.to_team).replace("_", " ")}`;
   return null;
