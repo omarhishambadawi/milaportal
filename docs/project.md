@@ -1949,8 +1949,11 @@ records — not guessed from a public API.
 | Config | `GET /integrations/alshrouq/config` |
 | History | `GET /integrations/alshrouq/orders` |
 | Create | `POST /integrations/alshrouq/orders` |
-| Refresh | `POST /integrations/alshrouq/orders/{localId}/refresh` |
+| Refresh | `GET /integrations/alshrouq/orders/{localId}/refresh` |
 | Cancel | `POST /integrations/alshrouq/orders/{localId}/cancel` |
+
+Refresh is a **GET** — the verb the Desktop uses. Sending it as a POST returns
+`405 Method Not Allowed`: the path is right, the method is not.
 
 Three details in the payload are easy to get wrong and are pinned by tests in
 `shams-crm/__tests__/alshrouq-contract.test.ts`:

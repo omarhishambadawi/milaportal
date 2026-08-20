@@ -267,6 +267,9 @@ async function attemptDispatch(
       client_order_id: clientOrderId,
       local_id: found.state.localId,
       external_order_id: found.state.externalOrderId,
+      // The courier tracking page, so the timeline can link to it. Nothing else
+      // from the response goes on the event.
+      tracking_url: found.state.trackingUrl,
       status: found.state.status,
     });
     return record;
@@ -321,6 +324,7 @@ async function attemptDispatch(
     client_order_id: clientOrderId,
     local_id: result.state.localId,
     external_order_id: result.state.externalOrderId,
+    tracking_url: result.state.trackingUrl,
     payment_type: payload.payment_type,
     status: result.state.status,
     value: payload.order_value,

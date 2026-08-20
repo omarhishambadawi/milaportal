@@ -1,5 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Bot, Clock } from "lucide-react";
+import { Bot, Clock, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fmtSAR } from "@/lib/branches";
 import { BUSINESS_TIMEZONE } from "@/lib/timezone";
@@ -63,6 +63,26 @@ function describe(e: OrderActivityEvent, nameOf: (id: unknown) => string): strin
     return `Updated ${keys.join(", ")}`;
   }
   return e.action;
+}
+
+/**
+ * The courier's tracking page for a dispatch event, if there is one.
+ *
+ * Read straight off the stored event — the URL the CRM returned, never
+ * reconstructed from an order id, because a guessed tracking link is worse than
+ * none. The scheme is checked before it becomes an `href`: this renders a value
+ * that arrived from another system, and only http(s) has any business here.
+ */
+function trackingUrl(e: OrderActivityEvent): string | null {
+  if (e.action !== "alshrouq_dispatched" && e.action !== "alshrouq_recovered") return null;
+  const raw = (e.details as Record<string, unknown> | null)?.tracking_url;
+  if (typeof raw !== "string" || raw.trim() === "") return null;
+  try {
+    const url = new URL(raw.trim());
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -234,6 +254,23 @@ export function OrderActivityTimeline({ orderId }: { orderId: string }) {
                   </div>
                   {detail && (
                     <div className="text-[11px] leading-snug text-muted-foreground">{detail}</div>
+                  )}
+                  {/* The courier's own tracking page, on the event that created
+                      the delivery. Only ever the link the CRM returned and we
+                      stored — never rebuilt from an id — so an order with no
+                      tracking page simply shows nothing here. */}
+                  {trackingUrl(e) && (
+                    <div className="text-[11px] leading-snug">
+                      <a
+                        className="inline-flex items-center gap-1 text-primary hover:underline"
+                        href={trackingUrl(e)!}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        Track this delivery
+                        <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                      </a>
+                    </div>
                   )}
                   {subtitle && (
                     <div

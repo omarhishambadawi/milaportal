@@ -87,11 +87,18 @@ export async function createAlShrouqOrder(
   return { state: readAlShrouqState(raw), raw };
 }
 
-/** `POST /integrations/alshrouq/orders/{local_id}/refresh` — ask again. */
+/**
+ * `GET /integrations/alshrouq/orders/{local_id}/refresh` — ask again.
+ *
+ * A GET, which is what the Desktop issues and what `crmSend`'s own header note
+ * records. It was briefly sent as a POST and the CRM answered `405 Method Not
+ * Allowed` — the path exists, the verb did not. Reading a status is a read, so
+ * the method matches the meaning; create and cancel remain POSTs.
+ */
 export async function refreshAlShrouqOrder(
   localId: string,
 ): Promise<{ state: AlShrouqOrderState; raw: unknown }> {
-  const raw = await crmSend<unknown>(ALSHROUQ_PATHS.refresh(localId));
+  const raw = await crmFetch<unknown>(ALSHROUQ_PATHS.refresh(localId));
   return { state: readAlShrouqState(raw), raw };
 }
 
