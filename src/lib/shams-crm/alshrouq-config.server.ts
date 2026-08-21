@@ -28,6 +28,7 @@
  */
 
 import { crmFetch, isCrmConfigured, ShamsCrmError } from "./client.server";
+import type { AlShrouqBranchOption } from "./alshrouq-branches";
 
 /** The one path this module is allowed to call. */
 const CONFIG_PATH = "/integrations/alshrouq/config";
@@ -179,4 +180,102 @@ export async function runAlShrouqConfigProbe(): Promise<AlShrouqConfigProbe> {
     shapeValid,
     errorKind: null,
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/* The dispatch options, for the order page                                    */
+/* -------------------------------------------------------------------------- */
+
+/** One payment method, as the CRM publishes it. No enum is kept here. */
+export interface AlShrouqPaymentOption {
+  id: number;
+  label: string;
+}
+
+export interface AlShrouqDispatchOptions {
+  branchOptions: AlShrouqBranchOption[];
+  paymentOptions: AlShrouqPaymentOption[];
+}
+
+/**
+ * Five minutes.
+ *
+ * The branch list and the payment list change on the CRM's schedule, not ours,
+ * and a dispatch dialog opened twice in a minute should not cost two round
+ * trips. Short enough that a newly covered branch appears the same shift it was
+ * added; long enough that it is not a per-keystroke concern.
+ */
+const OPTIONS_TTL_MS = 5 * 60_000;
+
+let cached: { at: number; value: AlShrouqDispatchOptions } | null = null;
+let inFlight: Promise<AlShrouqDispatchOptions> | null = null;
+
+/** Test seam. Also lets a diagnostics surface force a cold read. */
+export function _resetAlShrouqOptionsCache(): void {
+  cached = null;
+  inFlight = null;
+}
+
+function toBranchOptions(raw: unknown): AlShrouqBranchOption[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((r) => {
+    if (!r || typeof r !== "object") return [];
+    const o = r as Record<string, unknown>;
+    return [
+      {
+        id: typeof o.id === "string" ? o.id : null,
+        internal_code: typeof o.internal_code === "string" ? o.internal_code : null,
+        branch_name: typeof o.branch_name === "string" ? o.branch_name : null,
+        label: typeof o.label === "string" ? o.label : null,
+        covered: o.covered === true,
+        note: typeof o.note === "string" ? o.note : null,
+      },
+    ];
+  });
+}
+
+function toPaymentOptions(raw: unknown): AlShrouqPaymentOption[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((r) => {
+    if (!r || typeof r !== "object") return [];
+    const o = r as Record<string, unknown>;
+    if (typeof o.id !== "number" || !Number.isFinite(o.id)) return [];
+    return [{ id: o.id, label: typeof o.label === "string" ? o.label : String(o.id) }];
+  });
+}
+
+/**
+ * The branch and payment lists the dispatch dialog needs.
+ *
+ * Reads the same `GET /integrations/alshrouq/config` the probe does — one source
+ * of truth, one endpoint, no second copy of the mapping anywhere.
+ *
+ * **Returns two lists and nothing else.** The config body also carries
+ * `webhook_auth_value`, which is a secret; it is not read here and cannot reach
+ * a caller. Single-flight, so a page that mounts two dialogs pays for one fetch.
+ */
+export async function fetchAlShrouqDispatchOptions(): Promise<AlShrouqDispatchOptions> {
+  if (!isCrmConfigured()) {
+    throw new ShamsCrmError(
+      "not_configured",
+      "The Shams CRM connection is not configured on this deployment.",
+    );
+  }
+  if (cached && Date.now() - cached.at < OPTIONS_TTL_MS) return cached.value;
+  if (inFlight) return inFlight;
+
+  inFlight = crmFetch<RawConfig>(CONFIG_PATH)
+    .then((raw) => {
+      const value: AlShrouqDispatchOptions = {
+        branchOptions: toBranchOptions(raw.branch_options),
+        paymentOptions: toPaymentOptions(raw.payment_options),
+      };
+      cached = { at: Date.now(), value };
+      return value;
+    })
+    .finally(() => {
+      inFlight = null;
+    });
+
+  return inFlight;
 }

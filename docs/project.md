@@ -2872,6 +2872,44 @@ and each is pinned by a test:
 - **`customer_address` is a Maps link passed through verbatim** — 104 of 126 are
   unresolved `maps.app.goo.gl` short links, so nothing resolves them.
 
+### AlShrouq branch resolution and the dispatch dialog
+
+`alshrouq-branches.ts` is pure and holds **no branch ids**. It takes the CRM's
+live `branch_options` and answers one question — is this `orders.branch_no`
+dispatchable — returning `resolved` / `not_covered` / `unknown` (with a reason:
+`no_branch_on_order`, `not_in_crm`, `no_id_published`). The three are kept apart
+because they are three different conversations: a data-entry fix, an order that
+must go another way, and something for whoever maintains the CRM.
+
+The reverted integration froze 137 rows into a migration instead. A frozen copy
+cannot express `covered` — the flag marking the 18 branches AlShrouq does not
+serve. (Its ids were in fact 136/136 correct against the live config; the
+migration comment claiming otherwise is wrong. Freezing was still the wrong
+call.) `fetchAlShrouqDispatchOptions()` reads the same `/config` endpoint the
+probe uses, cached 5 minutes and single-flight, and returns **only** the branch
+and payment lists — `webhook_auth_value` is never read.
+
+**Why the dialog exists.** A courier needs to know who to call, where to go, and
+how the customer pays. The Portal is an order *log* and collects none of it: of
+2,823 AlShrouq orders in the last 30 days, **7** carry both a customer name and a
+phone, and payment type has no UI at all. Requiring those on the order form would
+change the daily workflow for all 2,823 to serve the few that are dispatched —
+and conditional-required rules in `orderFormSchema` are exactly what broke order
+saving last time. So the extra data is asked for **at dispatch time**, and
+`orderFormSchema` is untouched.
+
+`AlShrouqDispatchCard` renders as a **sibling** of `OrderForm` from
+`_app.orders.$id.tsx`, shares no state with it, and returns `null` unless
+`delivery_type` is `AlShrouq`. `alshrouqDispatchContext` gates on the same rule
+the form uses to allow editing — `edit_all_orders`, or `edit_orders` on an order
+the agent owns — so no new permission, no migration, no parity change. Payment
+type is never guessed from `order_type`: sending a driver to collect cash from
+someone who has already paid is the failure that blank prevents.
+
+**It does not dispatch.** Submitting validates through the Phase 6 builder and
+stops. Nothing reaches `createAlshrouqOrder`, no courier is contacted, and
+nothing is written. A live dispatch is a separately reviewed step.
+
 ### AlShrouq create transport
 
 `alshrouq-create.server.ts` owns the create POST and the read that reconciles

@@ -36,7 +36,11 @@ import type { InvoiceBranchMatch } from "@/lib/shams/types";
 import type { ItemAvailability } from "@/lib/shams/availability";
 import type { CatalogDiagnostics } from "@/lib/shams/diagnostics.server";
 import type { CrmSearchDiagnostics, CrmSmokeResult } from "@/lib/shams-crm/diagnostics.server";
-import type { AlShrouqConfigProbe } from "@/lib/shams-crm/alshrouq-config.server";
+import type {
+  AlShrouqConfigProbe,
+  AlShrouqPaymentOption,
+} from "@/lib/shams-crm/alshrouq-config.server";
+import type { AlShrouqBranchResolution } from "@/lib/shams-crm/alshrouq-branches";
 import type { ShamsCrmOffer, ShamsOfferScope } from "@/lib/shams-crm/types";
 import type { ShamsCrmHistory } from "@/lib/shams/types";
 
@@ -655,6 +659,146 @@ export const shamsAlshrouqConfigProbe = createServerFn({ method: "POST" })
 
     const { runAlShrouqConfigProbe } = await import("@/lib/shams-crm/alshrouq-config.server");
     return runAlShrouqConfigProbe();
+  });
+
+/** A live courier record for an order, if one exists. Read-only here. */
+export interface AlShrouqExistingDispatch {
+  externalOrderId: string | null;
+  status: string | null;
+  statusDetail: string | null;
+  trackingUrl: string | null;
+  dispatchedAt: string | null;
+}
+
+/**
+ * What the dispatch dialog is told about an order.
+ *
+ * `prefill` is what the order already knows; the dialog asks only for what is
+ * missing. Nothing here is a courier instruction — this is a read.
+ */
+export interface AlShrouqDispatchContext {
+  orderId: string;
+  /** `display_no` minus its stored `#`. What the payload's `client_order_id` takes. */
+  clientOrderId: string;
+  displayNo: string | null;
+  team: string | null;
+  branchNo: string | null;
+  deliveryType: string | null;
+  status: string | null;
+  branch: AlShrouqBranchResolution;
+  paymentOptions: AlShrouqPaymentOption[];
+  /** Set when the CRM could not be reached, so the dialog can say so. */
+  optionsError: string | null;
+  prefill: {
+    customerName: string;
+    customerPhone: string;
+    orderValue: string;
+    notes: string;
+  };
+  existingDispatch: AlShrouqExistingDispatch | null;
+}
+
+/**
+ * Everything the dispatch dialog needs about one order, and nothing it doesn't.
+ *
+ * Gated on the same rule the order form uses to decide whether the agent may
+ * edit this order — `edit_all_orders`, or `edit_orders` on an order they own.
+ * No new permission: a new key is a migration plus a `has_permission()` change
+ * plus a parity update, and dispatching an order the agent may already edit does
+ * not need a wider ceiling than editing it.
+ *
+ * Read-only. It resolves the branch against the CRM's live `branch_options` and
+ * reports what the order is missing; it creates nothing and dispatches nothing.
+ */
+export const alshrouqDispatchContext = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => z.object({ orderId: z.string().uuid() }).parse(d))
+  .handler(async ({ context, data }): Promise<AlShrouqDispatchContext> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+
+    // RLS already limits this to orders the caller may see; the permission check
+    // below is what decides whether they may act on it.
+    const { data: order, error } = await supabase
+      .from("orders")
+      .select(
+        "id,display_no,team,branch_no,delivery_type,status,customer_name,customer_phone,invoice_value,notes,agent_id",
+      )
+      .eq("id", data.orderId)
+      .maybeSingle();
+    if (error || !order) throw new Error("Order not found");
+
+    const { data: canAll } = await supabase.rpc("has_permission", {
+      _user_id: userId,
+      _permission: "edit_all_orders",
+    });
+    const { data: canOwn } = await supabase.rpc("has_permission", {
+      _user_id: userId,
+      _permission: "edit_orders",
+    });
+    const owns = order.agent_id === userId;
+    if (!canAll && !(owns && canOwn)) throw new Error("Forbidden: insufficient permissions");
+
+    /**
+     * Is there already a live courier record for this order?
+     *
+     * `alshrouq_dispatches` is absent from the generated `types.ts`, so it is
+     * reached through the cast this codebase already uses for such tables. A
+     * *live* dispatch is one that has not been cancelled — the same rule as the
+     * unique index `alshrouq_dispatches_live_order_key`, so what the dialog shows
+     * and what the database enforces cannot drift apart.
+     */
+    const { data: dispatchRow } = await (supabase as any)
+      .from("alshrouq_dispatches")
+      .select("external_order_id,status,status_detail,tracking_url,dispatched_at")
+      .eq("order_id", data.orderId)
+      .is("cancelled_at", null)
+      .maybeSingle();
+
+    const { stripOrderPrefix } = await import("@/lib/branches");
+    const { resolveAlShrouqBranch } = await import("@/lib/shams-crm/alshrouq-branches");
+    const { fetchAlShrouqDispatchOptions } = await import("@/lib/shams-crm/alshrouq-config.server");
+
+    let branch: AlShrouqBranchResolution = { kind: "unknown", reason: "not_in_crm" };
+    let paymentOptions: AlShrouqPaymentOption[] = [];
+    let optionsError: string | null = null;
+    try {
+      const options = await fetchAlShrouqDispatchOptions();
+      paymentOptions = options.paymentOptions;
+      branch = resolveAlShrouqBranch(options.branchOptions, order.branch_no);
+    } catch (err) {
+      // The CRM being unreachable is not the order's fault, and the dialog says
+      // so rather than reporting the branch as uncovered.
+      const { ShamsCrmError } = await import("@/lib/shams-crm/client.server");
+      optionsError = err instanceof ShamsCrmError ? err.kind : "unknown";
+    }
+
+    return {
+      orderId: order.id,
+      clientOrderId: stripOrderPrefix(String(order.display_no ?? "")),
+      displayNo: order.display_no ?? null,
+      team: order.team ?? null,
+      branchNo: order.branch_no ?? null,
+      deliveryType: order.delivery_type ?? null,
+      status: order.status ?? null,
+      branch,
+      paymentOptions,
+      optionsError,
+      prefill: {
+        customerName: order.customer_name ?? "",
+        customerPhone: order.customer_phone ?? "",
+        orderValue: order.invoice_value == null ? "" : String(order.invoice_value),
+        notes: order.notes ?? "",
+      },
+      existingDispatch: dispatchRow
+        ? {
+            externalOrderId: dispatchRow.external_order_id ?? null,
+            status: dispatchRow.status ?? null,
+            statusDetail: dispatchRow.status_detail ?? null,
+            trackingUrl: dispatchRow.tracking_url ?? null,
+            dispatchedAt: dispatchRow.dispatched_at ?? null,
+          }
+        : null,
+    };
   });
 
 export interface ShamsProductOffersResult {
