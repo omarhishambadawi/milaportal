@@ -2,6 +2,7 @@ import { createFileRoute, Outlet, useNavigate, useRouterState } from "@tanstack/
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useAuth, isAdministrator, isOwnerRole } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 import {
   LayoutDashboard,
   FileText,
@@ -304,6 +305,7 @@ function AppLayout() {
           <Outlet />
         </div>
       </main>
+      <SpeedInsights />
     </div>
   );
 }
