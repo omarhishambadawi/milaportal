@@ -2846,6 +2846,39 @@ the session token, a header, the webhook auth value or the raw response.
 The branch mapping is **not** stored. `branch_options` is the CRM's to publish,
 and it is the only source that also carries `covered`.
 
+### AlShrouq payload builder
+
+`alshrouq-payload.ts` turns an order into the create-order payload and does
+nothing else — pure, deterministic, no HTTP, no Supabase, no React. Its only
+import is `stripOrderPrefix`. Nothing sends the result yet; wiring it to the CRM
+is a later phase, and `src/features/orders` neither imports nor calls it.
+
+`buildAlshrouqOrderPayload(order, context)` returns a discriminated result:
+`{ok: true, payload}`, `{ok: false, reason: "branch_unresolved"}`, or
+`{ok: false, reason: "invalid", errors}`. The unresolved branch is its own
+outcome because "AlShrouq does not cover this branch" is not something an agent
+can fix by typing.
+
+Three rules come from the CRM's own 127 stored deliveries rather than intuition,
+and each is pinned by a test:
+
+- **`order_value: 0` is valid** — 107 of 127 real records carry it, COD and SPAN
+  included. There is no `> 0` rule. Absent is still an error, because every real
+  record has a number and defaulting a blank to 0 would invent a "collect
+  nothing" instruction.
+- **`client_order_id` is a string** — one real value is `"9396####"`. It is
+  `display_no` with its stored leading `#` removed and no team prefix added; the
+  `CC-`/`TS-` form is a display rendering only.
+- **`customer_address` is a Maps link passed through verbatim** — 104 of 126 are
+  unresolved `maps.app.goo.gl` short links, so nothing resolves them.
+
+Not defaulted: `preparation_time` is `10` on 122 of 127 records, but whether the
+client sends it or the CRM fills it in is unestablished, so the key is omitted
+unless a caller supplies one. Coordinates are optional and never manufactured —
+both or neither, mirroring the `orders` CHECK. Payment ids arrive in
+`context.paymentOptionIds` from the live config; there is no enum here, and an
+id the CRM does not offer is refused by name rather than rewritten.
+
 **Credentials are `SHAMS_CRM_USERNAME` / `SHAMS_CRM_PASSWORD`, server-only.**
 Temporary and deliberately flagged as such: they are a *person's* Desktop login,
 used with the account holder's authorization until Shams issues a machine
