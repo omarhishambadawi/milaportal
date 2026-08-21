@@ -2872,6 +2872,45 @@ and each is pinned by a test:
 - **`customer_address` is a Maps link passed through verbatim** — 104 of 126 are
   unresolved `maps.app.goo.gl` short links, so nothing resolves them.
 
+### AlShrouq create transport
+
+`alshrouq-create.server.ts` owns the create POST and the read that reconciles
+it. **Nothing calls it yet** — it is built, tested against a mocked transport,
+and left disconnected from Orders.
+
+It deliberately does **not** use `crmFetch`. `crmFetch` answers a 401 by
+re-logging-in and re-sending; correct for a read, and for a create it is a second
+driver at a customer's door, because a 401 on the response leg is
+indistinguishable from one raised before the CRM processed anything. `crmFetch`
+is untouched and still owns every read, including the reconciliation. The two
+additive exports it gained — `getCrmSessionToken()` and `crmBaseUrl()` — exist so
+the create reuses the session this module already owns instead of racing a second
+login. `readCrmEnv` stays private; it is the only thing that holds the password.
+
+The invariant: **if `createAlshrouqOrder` throws, nothing was transmitted; if it
+returns, exactly one POST was attempted.** Everything that can fail before
+transmission throws. There is no path through the file that sends a second POST.
+
+Three outcomes, and the third is the point:
+
+- `accepted` — 2xx. The delivery exists.
+- `rejected` — an explicit non-2xx refusal. Nothing was created.
+- `indeterminate` — timeout, network failure, unreadable 2xx, **or 401**. The
+  request left the machine and the result is unknown. Answered by
+  `findAlshrouqOrderByClientOrderId`, which is a GET — never by another POST.
+
+`indeterminate` exists because server-side deduplication is **unknown**. The
+Desktop sends `X-Client-Operation-Id` on this endpoint (confirmed: the path is
+the sixth member of its `tracked_prefixes` tuple), so a uuid4 is sent here too —
+but nothing depends on the server honouring it until that is observed.
+
+The create response has never been captured, so no `AlshrouqCreateResponse`
+interface exists. The body is passed through `sanitizeResponseBody`, which keeps
+shape while redacting credential- and identity-shaped keys and capping depth,
+array length and string length. The reconciliation record *is* evidence-backed
+and is typed — minus customer and driver identity, which reconciliation does not
+need.
+
 Not defaulted: `preparation_time` is `10` on 122 of 127 records, but whether the
 client sends it or the CRM fills it in is unestablished, so the key is omitted
 unless a caller supplies one. Coordinates are optional and never manufactured —

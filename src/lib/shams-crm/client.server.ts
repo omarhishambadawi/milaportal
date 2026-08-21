@@ -276,3 +276,27 @@ export async function crmFetch<T>(path: string, opts: { timeoutMs?: number } = {
   // Unreachable: the loop either returns or throws.
   throw new ShamsCrmError("auth_failed", "Shams CRM rejected the portal's session.");
 }
+
+/* -------------------------------------------------------------------------- */
+/* Reuse points for transports that must not inherit `crmFetch`'s retry         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The session token, for a caller that must send something `crmFetch` cannot.
+ *
+ * `crmFetch` is GET-only and answers a 401 by re-sending. That is right for a
+ * read and unsafe for a create, so `alshrouq-create.server.ts` builds its own
+ * single-attempt POST — and needs the session this module already owns rather
+ * than a second login flow racing this one.
+ *
+ * Exposes the token and nothing else. `readCrmEnv` stays private: it is the only
+ * thing that ever holds the password, and that has not changed.
+ */
+export function getCrmSessionToken(): Promise<string> {
+  return getSessionToken();
+}
+
+/** The CRM origin, for the same callers. Not configurable, never a credential. */
+export function crmBaseUrl(): string {
+  return BASE_URL;
+}
