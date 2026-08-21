@@ -201,8 +201,53 @@ describe("createAlshrouqOrder — outcomes", () => {
     expect(createPosts()).toBe(1);
   });
 
-  it("5xx is rejected", async () => {
-    mockCrm(async () => jsonResponse({ detail: "upstream error" }, 503));
+  /**
+   * The Phase 9 correction. A 4xx means the CRM understood and declined; a 5xx
+   * means nothing of the kind — the CRM brokers onward to AlShrouq, so a server
+   * error is equally consistent with the delivery having been created and the
+   * acknowledgement lost. Treating it as a refusal would invite a resend.
+   */
+  it.each([500, 502, 503, 504])("%i is indeterminate, never a refusal", async (status) => {
+    mockCrm(async () => jsonResponse({ detail: "upstream error" }, status));
+    const operationId = newAlshrouqOperationId();
+    const r = await createAlshrouqOrder(samplePayload(), operationId);
+
+    expect(r.kind).toBe("indeterminate");
+    if (r.kind !== "indeterminate") throw new Error("unreachable");
+    expect(r.errorKind).toBe("server_error");
+    expect(r.operationId).toBe(operationId);
+    expect(r.message).toContain(String(status));
+    // The property that matters: no second driver.
+    expect(createPosts()).toBe(1);
+  });
+
+  it("no 5xx sends a second POST", async () => {
+    for (const status of [500, 502, 503, 504, 599]) {
+      _resetCrmSession();
+      fetchMock.mockReset();
+      mockCrm(async () => jsonResponse({ detail: "boom" }, status));
+      const r = await createAlshrouqOrder(samplePayload(), newAlshrouqOperationId());
+      expect(r.kind).toBe("indeterminate");
+      expect(createPosts()).toBe(1);
+    }
+  });
+
+  it("leaks no credential on the 5xx indeterminate path", async () => {
+    mockCrm(async () =>
+      jsonResponse({ session_token: "leaked-token", detail: "internal error" }, 500),
+    );
+    const r = await createAlshrouqOrder(samplePayload(), newAlshrouqOperationId());
+
+    const serialized = JSON.stringify(r);
+    expect(serialized).not.toContain("leaked-token");
+    expect(serialized).not.toContain("stub-session");
+    expect(serialized).not.toContain("stub-user");
+    expect(serialized).not.toContain("stub-pass");
+  });
+
+  it("still treats a 4xx as a genuine refusal", async () => {
+    // The distinction Phase 9 rests on: 400 declined, 500 unknown.
+    mockCrm(async () => jsonResponse({ detail: "bad branch" }, 400));
     const r = await createAlshrouqOrder(samplePayload(), newAlshrouqOperationId());
 
     expect(r.kind).toBe("rejected");

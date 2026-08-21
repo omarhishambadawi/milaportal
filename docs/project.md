@@ -2894,10 +2894,19 @@ transmission throws. There is no path through the file that sends a second POST.
 Three outcomes, and the third is the point:
 
 - `accepted` — 2xx. The delivery exists.
-- `rejected` — an explicit non-2xx refusal. Nothing was created.
-- `indeterminate` — timeout, network failure, unreadable 2xx, **or 401**. The
-  request left the machine and the result is unknown. Answered by
+- `rejected` — a **4xx**, and only a 4xx: the CRM understood the request and
+  declined it. Nothing was created.
+- `indeterminate` — timeout, network failure, unreadable 2xx, 401, **or any
+  5xx**. The request left the machine and the result is unknown. Answered by
   `findAlshrouqOrderByClientOrderId`, which is a GET — never by another POST.
+
+**5xx is not a refusal.** A 4xx is the CRM saying "I understood this and will
+not do it". A 5xx says nothing of the kind: the CRM brokers this call onward to
+AlShrouq, so a 500, a proxy's 502, or a 504 on the response leg is equally
+consistent with the delivery having been created and the acknowledgement lost on
+the way back. There is no evidence that a 5xx means no courier was dispatched,
+and classifying it `rejected` would invite a caller to treat it as safe to send
+again — the one mistake that puts a second driver at a customer's door.
 
 `indeterminate` exists because server-side deduplication is **unknown**. The
 Desktop sends `X-Client-Operation-Id` on this endpoint (confirmed: the path is

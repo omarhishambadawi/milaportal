@@ -29,6 +29,11 @@
  *
  * ## Why `indeterminate` exists
  *
+ * Only a **4xx** counts as a refusal, because only a 4xx tells us the CRM
+ * understood the request and declined it. Everything else that is not a clean
+ * 2xx — 5xx, 401, timeout, network failure, an unreadable body — is ambiguous
+ * about whether a courier was dispatched, and is reported as such.
+ *
  * Server-side deduplication is **unknown**. The Desktop client sends
  * `X-Client-Operation-Id` on this endpoint (confirmed: the path is the sixth
  * member of its `tracked_prefixes` tuple, and `_begin_tracked_operation`
@@ -67,10 +72,14 @@ export type JsonValue = string | number | boolean | null | JsonValue[] | { [k: s
 export type AlShrouqCreateResult =
   /** The CRM returned 2xx. The delivery exists. Never send this payload again. */
   | { kind: "accepted"; operationId: string; status: number; body: JsonValue | null }
-  /** The CRM explicitly refused it. Nothing was created. */
+  /**
+   * A **4xx**: the CRM understood the request and declined it. Nothing was
+   * created. 5xx is deliberately not here — see `indeterminate`.
+   */
   | { kind: "rejected"; operationId: string; status: number; body: JsonValue | null }
   /**
    * The request left the machine and the outcome is unknown. **Not a failure.**
+   * Covers timeout, network failure, an unreadable 2xx, 401, and **any 5xx**.
    * The only safe next step is `findAlshrouqOrderByClientOrderId`.
    */
   | { kind: "indeterminate"; operationId: string; errorKind: string; message: string };
@@ -237,8 +246,35 @@ export async function createAlshrouqOrder(
     return { kind: "accepted", operationId, status, body };
   }
 
-  // An explicit refusal. The status is the signal, so an unreadable body is
-  // reported as a rejection with no body rather than as ambiguity.
+  /**
+   * 5xx is *not* treated as a refusal either.
+   *
+   * A 4xx is the CRM saying "I understood this and I will not do it" — a
+   * validation failure, an uncovered branch — and nothing was created. A 5xx
+   * says nothing of the kind. The CRM brokers this call onward to AlShrouq, so
+   * a 500, a 502 from a proxy, or a 504 on the response leg is equally
+   * consistent with the delivery having been created and the acknowledgement
+   * having been lost on the way back.
+   *
+   * We have no evidence that a 5xx means the courier was not dispatched, and
+   * "no evidence either way" is exactly what `indeterminate` is for. Calling it
+   * `rejected` would invite a caller to treat it as safe to send again, which
+   * is the one mistake that puts a second driver at a customer's door.
+   */
+  if (status >= 500) {
+    return {
+      kind: "indeterminate",
+      operationId,
+      errorKind: "server_error",
+      message:
+        `The CRM returned ${status}. Whether the delivery was created is unknown — ` +
+        "a server error can arrive after the order was accepted.",
+    };
+  }
+
+  // An explicit refusal: a 4xx, where the CRM understood the request and
+  // declined it. The status is the signal, so an unreadable body is reported as
+  // a rejection with no body rather than as ambiguity.
   return { kind: "rejected", operationId, status, body };
 }
 
