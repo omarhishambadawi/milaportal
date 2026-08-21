@@ -2966,6 +2966,48 @@ Duplicate protection is checked before anything is built, using the same
 `alshrouq_dispatches_live_order_key`, so the check and the constraint cannot
 disagree. A `23505` on insert is reported as "already sent", not as an error.
 
+### AlShrouq customer location
+
+**The customer's own Google Maps link is the authoritative location.** A customer
+sends a link over WhatsApp and the agent pastes it; that link *is* the delivery
+address, not a retyped street address and not a geocoder's guess at what one
+meant. It is preserved verbatim and goes on the wire as `customer_address` —
+which is what the CRM's own records do, 104 of 126 real deliveries carrying an
+unresolved `maps.app.goo.gl` link.
+
+**Resolution is server-side, and the coordinates are persisted.** A courier
+routes to `customer_lat`/`customer_lng`, and a short link carries neither, only
+a redirect. `resolveMapLink` follows it once and the numbers are stored; storing
+only the URL would make a delivery depend on a shortener still being up months
+later, on a request nobody is watching. The browser could not do this anyway —
+the shortener sends no CORS headers — and the authoritative answer must not come
+from a client that could be asked to report anything.
+
+`parseMapsUrl` and `short-link.server.ts` were **restored from the reverted
+integration** (`3917274`), where they worked; they went out with the wholesale
+revert, not for a defect. Two protections were added on the way back: a length
+cap before `new URL`, and redirect-loop detection.
+
+**SSRF.** The pasted URL is untrusted input that the server then fetches, so:
+an **allow-list** of Google hosts (not a deny-list of private ranges — DNS can
+point a permitted name anywhere, and a deny-list is a list of the ranges somebody
+thought of), HTTPS only, both **re-checked on every hop** so a redirect cannot
+walk off the list; the response **body is never read**, only `Location`; and
+caps on length, hops and time.
+
+**No Google credentials.** Nothing here needs `GOOGLE_MAPS_API_KEY` or a browser
+key. It reads coordinates already present in a URL, or follows a redirect to one.
+
+**An unresolved link cannot be approved.** Failure produces blank coordinates,
+which fail `validateAlShrouqOrderFields` exactly as a location nobody entered
+would. No coordinate is ever fabricated, and latitude and longitude are never
+typed — they exist only as the product of a successful resolution.
+
+`AlShrouqLocation` — `originalUrl`, `resolvedUrl`, `latitude`, `longitude`,
+`address` — is shaped to drop straight into the future
+`payload_snapshot.location` without reshaping, so what is frozen at approval is
+what a courier is eventually told.
+
 ### AlShrouq order data and scheduling contract
 
 Three pure modules under `src/features/alshrouq`, each testable without a

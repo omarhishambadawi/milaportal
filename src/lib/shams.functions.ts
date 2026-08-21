@@ -42,6 +42,7 @@ import type {
 } from "@/lib/shams-crm/alshrouq-config.server";
 import type { AlShrouqBranchResolution } from "@/lib/shams-crm/alshrouq-branches";
 import type { AlShrouqDispatchResult } from "@/lib/shams-crm/alshrouq-dispatch.server";
+import type { AlShrouqLocationResult } from "@/features/alshrouq/location";
 import type { ShamsCrmOffer, ShamsOfferScope } from "@/lib/shams-crm/types";
 import type { ShamsCrmHistory } from "@/lib/shams/types";
 
@@ -739,6 +740,77 @@ export const alshrouqDispatchOrder = createServerFn({ method: "POST" })
       },
       supabase,
     );
+  });
+
+/**
+ * Resolve a customer's Google Maps link to a delivery point.
+ *
+ * Server-side because it has to be: the shortener sends no CORS headers, so a
+ * browser cannot follow `maps.app.goo.gl` at all — and because the authoritative
+ * answer must not come from a client that could be asked to report anything.
+ *
+ * The URL is untrusted input. `resolveMapLink` holds it to an allow-list of
+ * Google hosts over HTTPS, re-checked on **every** hop, reads only the
+ * `Location` header and never the body, and caps both length and hops. Nothing
+ * here can be pointed at an internal address.
+ *
+ * Gated on `create_orders`: pasting a link is part of taking an order, and this
+ * spends an outbound request. It resolves a link and nothing else — it touches
+ * no order, writes nothing, and dispatches nothing.
+ */
+export const alshrouqResolveLocation = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => z.object({ url: z.string().min(1).max(2048) }).parse(d))
+  .handler(async ({ context, data }): Promise<AlShrouqLocationResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertPermission(supabase, userId, "create_orders");
+
+    const { parseMapsUrl, mapUrlLabel } = await import("@/lib/geo/maps-url");
+    const { locationFrom } = await import("@/features/alshrouq/location");
+
+    // A link that already carries a point costs no request at all.
+    const direct = parseMapsUrl(data.url);
+    if (direct.point) {
+      return {
+        kind: "resolved",
+        location: locationFrom(data.url, data.url, direct.point, mapUrlLabel(data.url)),
+      };
+    }
+    if (direct.outOfRange) return { kind: "out_of_range", resolvedUrl: data.url };
+
+    // Not a Maps link, and not a shortener worth following.
+    if (!direct.needsResolution) {
+      let looksLikeMaps = false;
+      try {
+        looksLikeMaps = /(^|\.)(google\.[a-z.]+|goo\.gl)$/i.test(new URL(data.url).hostname);
+      } catch {
+        looksLikeMaps = false;
+      }
+      if (!looksLikeMaps) return { kind: "unsupported" };
+      return { kind: "no_coordinates", resolvedUrl: data.url };
+    }
+
+    const { resolveMapLink, ShortLinkError } = await import("@/lib/geo/short-link.server");
+    try {
+      const resolved = await resolveMapLink(data.url);
+      if (resolved.point) {
+        return {
+          kind: "resolved",
+          location: locationFrom(data.url, resolved.url, resolved.point, mapUrlLabel(resolved.url)),
+        };
+      }
+      if (resolved.outOfRange) return { kind: "out_of_range", resolvedUrl: resolved.url };
+      // Followed successfully, landed somewhere real, carries no pin. Never
+      // reported as resolved: a location without coordinates is not dispatchable.
+      return { kind: "no_coordinates", resolvedUrl: resolved.url };
+    } catch (err) {
+      if (err instanceof ShortLinkError) {
+        return err.kind === "not_allowed"
+          ? { kind: "unsupported" }
+          : { kind: "failed", errorKind: err.kind };
+      }
+      return { kind: "failed", errorKind: "unavailable" };
+    }
   });
 
 /** A live courier record for an order, if one exists. Read-only here. */

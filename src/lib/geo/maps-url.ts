@@ -1,4 +1,4 @@
-import { latLngParam } from "./coordinates";
+import { latLngParam, parseCoordinatePair } from "./coordinates";
 import type { LatLng, TravelMode } from "./types";
 
 /**
@@ -134,4 +134,112 @@ export function resolveNavUrl(record: {
 }): string | null {
   if (record.latitude == null || record.longitude == null) return null;
   return navigationUrl({ lat: record.latitude, lng: record.longitude });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Reading a location back out of a link                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Everything above builds Maps URLs. Everything below reads one.
+ *
+ * Restored from the reverted integration (`3917274`), which had this working:
+ * it went out with the wholesale AlShrouq revert rather than for any defect of
+ * its own. What it lacked was a reason to exist — Phase 4 established that the
+ * CRM stores the customer's link verbatim, so nothing needed *resolving* to send
+ * an address. Coordinates changed that: `customer_lat`/`customer_lng` are what a
+ * courier routes to, and a `maps.app.goo.gl` link carries neither.
+ */
+
+/** Google's map hosts, including the country domains a shared link can land on. */
+const MAPS_HOSTS = /(^|\.)(google\.[a-z.]+|goo\.gl)$/i;
+
+/** The shorteners, which hold a redirect and nothing else. */
+const SHORTENER_HOSTS = /(^|\.)goo\.gl$/i;
+
+/** The dropped pin inside a `/data=` blob — the place the person actually chose. */
+const PLACE_PIN = /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/;
+
+/** The map camera. Where the view was, which is close but not the pin. */
+const CAMERA = /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/;
+
+const PAIR = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/;
+
+/** Query parameters Maps uses to carry a point. */
+const COORDINATE_PARAMS = ["query", "q", "ll", "center", "destination", "daddr"] as const;
+
+export interface MapsUrlParse {
+  /** The location, when the link carries one and it falls inside the country. */
+  point: LatLng | null;
+  /** Both numbers parsed but landed outside KSA — very likely a swapped pair. */
+  outOfRange: boolean;
+  /**
+   * A Google shortener, which holds nothing but a redirect.
+   *
+   * Distinct from "no coordinates" because it is *recoverable*: following the
+   * redirect server-side yields the real link. The browser cannot follow it —
+   * the shortener sends no CORS headers — so the caller must ask the server.
+   */
+  needsResolution: boolean;
+}
+
+const NOTHING: MapsUrlParse = { point: null, outOfRange: false, needsResolution: false };
+
+function fromPair(latRaw: string, lngRaw: string): MapsUrlParse {
+  const { point, outOfRange } = parseCoordinatePair(latRaw, lngRaw);
+  return { point, outOfRange, needsResolution: false };
+}
+
+/**
+ * Pull the location out of a Google Maps link.
+ *
+ * Pure and keyless: no SDK, no geocoding call, no credential. An agent pasting a
+ * link the customer sent over WhatsApp is the common case, and it should not
+ * cost a Places lookup to read coordinates already sitting in the URL.
+ *
+ * Forms are tried in order of how well each means "the place the person
+ * intended" — the `/data=` pin first, then a coordinate-bearing query parameter,
+ * then the camera. Anything else, including a link naming a place by name only,
+ * yields no point rather than a guess.
+ *
+ * Range checking is delegated to `parseCoordinatePair`, so a pasted link is held
+ * to exactly the same bounds as a typed coordinate or an imported spreadsheet
+ * cell.
+ */
+export function parseMapsUrl(raw: string | null | undefined): MapsUrlParse {
+  const text = raw?.trim();
+  if (!text) return NOTHING;
+
+  // `geo:` is what a phone's "share location" produces outside Google Maps.
+  const geo = /^geo:(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/i.exec(text);
+  if (geo) return fromPair(geo[1]!, geo[2]!);
+
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    // Not a URL. A bare "24.71, 46.67" is still a location an agent may paste.
+    const pair = PAIR.exec(text);
+    return pair ? fromPair(pair[1]!, pair[2]!) : NOTHING;
+  }
+
+  const host = url.hostname.replace(/^www\./, "");
+  if (!MAPS_HOSTS.test(host)) return NOTHING;
+
+  const pin = PLACE_PIN.exec(url.href);
+  if (pin) return fromPair(pin[1]!, pin[2]!);
+
+  for (const key of COORDINATE_PARAMS) {
+    const value = url.searchParams.get(key);
+    const pair = value ? PAIR.exec(value) : null;
+    if (pair) return fromPair(pair[1]!, pair[2]!);
+  }
+
+  const camera = CAMERA.exec(url.href);
+  if (camera) return fromPair(camera[1]!, camera[2]!);
+
+  // A shortener that got this far genuinely holds nothing but the redirect.
+  if (SHORTENER_HOSTS.test(host)) return { ...NOTHING, needsResolution: true };
+
+  return NOTHING;
 }

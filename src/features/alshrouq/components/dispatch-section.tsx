@@ -38,7 +38,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Info, Loader2, PackageCheck, Send, Truck } from "lucide-react";
+import { Info, Loader2, MapPin, PackageCheck, Send, Truck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -64,8 +64,14 @@ import { fmtSAR } from "@/lib/branches";
 import {
   alshrouqDispatchContext,
   alshrouqDispatchOrder,
+  alshrouqResolveLocation,
   type AlShrouqDispatchContext,
 } from "@/lib/shams.functions";
+import {
+  describeLocationResult,
+  formatCoordinates,
+  type AlShrouqLocation,
+} from "@/features/alshrouq/location";
 import type { AlShrouqFieldError } from "@/lib/shams-crm/alshrouq-payload";
 import type { AlShrouqDispatchResult } from "@/lib/shams-crm/alshrouq-dispatch.server";
 
@@ -265,6 +271,61 @@ export function AlShrouqDispatchSection({
     },
   });
 
+  /**
+   * The customer's location, resolved server-side.
+   *
+   * The browser cannot follow `maps.app.goo.gl` — the shortener sends no CORS
+   * headers — and even if it could, the authoritative coordinates must not come
+   * from a client that could be asked to report anything. So the link goes to
+   * the server, which follows it under an allow-list and reads the point out of
+   * where it lands.
+   *
+   * Coordinates are never typed. They exist only as the product of a successful
+   * resolution, which is why an unresolved link leaves them blank and fails
+   * validation rather than becoming a location with plausible numbers attached.
+   */
+  const [located, setLocated] = useState<AlShrouqLocation | null>(null);
+  const [locationError, setLocationError] = useState<string | null>(null);
+  const resolveFn = useServerFn(alshrouqResolveLocation);
+
+  const resolve = useMutation({
+    mutationFn: (url: string) => resolveFn({ data: { url } }),
+    onSuccess: (r) => {
+      if (r.kind === "resolved") {
+        setLocated(r.location);
+        setLocationError(null);
+        // The form carries the derived values; the agent never edits them.
+        setForm((f) =>
+          f
+            ? {
+                ...f,
+                mapUrl: r.location.originalUrl,
+                lat: String(r.location.latitude),
+                lng: String(r.location.longitude),
+              }
+            : f,
+        );
+        return;
+      }
+      // Nothing is fabricated on failure: the link is kept so it can be
+      // corrected, and the coordinates stay empty so validation keeps failing.
+      setLocated(null);
+      setLocationError(describeLocationResult(r));
+      setForm((f) => (f ? { ...f, lat: "", lng: "" } : f));
+    },
+    onError: () => {
+      setLocated(null);
+      setLocationError("That link could not be checked. Try again.");
+    },
+  });
+
+  const resolveLocation = () => {
+    const url = form?.mapUrl?.trim();
+    if (!url || resolve.isPending) return;
+    setLocationError(null);
+    resolve.mutate(url);
+  };
+
   const errors: AlShrouqFieldError[] = result?.kind === "invalid" ? result.errors : [];
   const branch = useMemo(() => (ctx ? branchLine(ctx) : null), [ctx]);
 
@@ -305,7 +366,10 @@ export function AlShrouqDispatchSection({
       details: ctx.prefill.notes || notes,
     });
     setResult(null);
+    setLocated(null);
+    setLocationError(null);
     dispatch.reset();
+    resolve.reset();
     setOpen(true);
   };
 
@@ -477,42 +541,60 @@ export function AlShrouqDispatchSection({
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="al-map">Delivery location (Google Maps link)</Label>
-                <Input
-                  id="al-map"
-                  placeholder="https://maps.app.goo.gl/…"
-                  value={form.mapUrl}
-                  onChange={(e) => set({ mapUrl: e.target.value })}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Paste the link the customer sent. Short links are fine — the courier reads them as
-                  they are.
-                </p>
-              </div>
+                <Label htmlFor="al-map">Customer delivery location</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="al-map"
+                    placeholder="Paste the Google Maps link the customer sent"
+                    value={form.mapUrl}
+                    onChange={(e) => set({ mapUrl: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        resolveLocation();
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={resolveLocation}
+                    disabled={!form.mapUrl.trim() || resolve.isPending}
+                  >
+                    {resolve.isPending && (
+                      <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                    )}
+                    {resolve.isPending ? "Checking…" : "Resolve"}
+                  </Button>
+                </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="al-lat">Latitude (optional)</Label>
-                  <Input
-                    id="al-lat"
-                    inputMode="decimal"
-                    value={form.lat}
-                    onChange={(e) => set({ lat: e.target.value })}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="al-lng">Longitude (optional)</Label>
-                  <Input
-                    id="al-lng"
-                    inputMode="decimal"
-                    value={form.lng}
-                    onChange={(e) => set({ lng: e.target.value })}
-                  />
-                </div>
+                {located ? (
+                  <div className="rounded-md border border-border/60 bg-muted/20 p-3 dark:bg-muted/10">
+                    <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                      <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
+                      Location verified
+                    </p>
+                    {located.address && (
+                      <p className="mt-1 truncate text-sm" title={located.address}>
+                        {located.address}
+                      </p>
+                    )}
+                    <p className="mt-1 font-mono text-xs text-muted-foreground">
+                      {formatCoordinates(located)}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Short links are fine — they are followed on the server to read the coordinates a
+                    courier routes to. Latitude and longitude come from the link and are not typed.
+                  </p>
+                )}
+
+                {locationError && <p className="text-xs text-destructive">{locationError}</p>}
+                {errorFor("customer_lat") && !locationError && (
+                  <p className="text-xs text-destructive">{errorFor("customer_lat")}</p>
+                )}
               </div>
-              {errorFor("customer_lat") && (
-                <p className="text-xs text-destructive">{errorFor("customer_lat")}</p>
-              )}
 
               <div className="space-y-1.5">
                 <Label htmlFor="al-details">Note for the driver (optional)</Label>
