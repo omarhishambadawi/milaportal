@@ -42,6 +42,7 @@ import type {
 } from "@/lib/shams-crm/alshrouq-config.server";
 import type { AlShrouqBranchResolution } from "@/lib/shams-crm/alshrouq-branches";
 import type { AlShrouqDispatchResult } from "@/lib/shams-crm/alshrouq-dispatch.server";
+import type { ScheduleResult } from "@/lib/shams-crm/alshrouq-scheduler.server";
 import type { AlShrouqLocationResult } from "@/features/alshrouq/location";
 import type { ShamsCrmOffer, ShamsOfferScope } from "@/lib/shams-crm/types";
 import type { ShamsCrmHistory } from "@/lib/shams/types";
@@ -694,10 +695,19 @@ export const alshrouqDispatchOrder = createServerFn({ method: "POST" })
         lng: z.string().max(32),
         orderValue: z.string().max(32),
         details: z.string().max(500),
+        /**
+         * When the courier should be called, as a canonical UTC instant.
+         *
+         * Absent means now. Present and in the future means the dispatch is
+         * parked with a frozen snapshot and **nothing is contacted** — the
+         * server decides which, from the time itself. There is still no way for
+         * a caller to ask for a live send.
+         */
+        scheduledFor: z.string().datetime().optional(),
       })
       .parse(d),
   )
-  .handler(async ({ context, data }): Promise<AlShrouqDispatchResult> => {
+  .handler(async ({ context, data }): Promise<ScheduleResult> => {
     const { supabase, userId } = context as { supabase: any; userId: string };
 
     const { data: order, error } = await supabase
@@ -719,27 +729,68 @@ export const alshrouqDispatchOrder = createServerFn({ method: "POST" })
       throw new Error("Forbidden: insufficient permissions");
     }
 
-    const { dispatchOrderToAlShrouq } = await import("@/lib/shams-crm/alshrouq-dispatch.server");
-    return dispatchOrderToAlShrouq(
-      {
-        orderId: order.id,
-        displayNo: order.display_no ?? null,
-        branchNo: order.branch_no ?? null,
-        // The authenticated caller. Never defaulted to anyone.
-        userId,
-        form: {
-          customerName: data.customerName,
-          customerPhone: data.customerPhone,
-          paymentType: data.paymentType,
-          mapUrl: data.mapUrl,
-          lat: data.lat,
-          lng: data.lng,
-          orderValue: data.orderValue,
-          details: data.details,
-        },
+    const request = {
+      orderId: order.id,
+      displayNo: order.display_no ?? null,
+      branchNo: order.branch_no ?? null,
+      // The authenticated caller. Never defaulted to anyone.
+      userId,
+      form: {
+        customerName: data.customerName,
+        customerPhone: data.customerPhone,
+        paymentType: data.paymentType,
+        mapUrl: data.mapUrl,
+        lat: data.lat,
+        lng: data.lng,
+        orderValue: data.orderValue,
+        details: data.details,
       },
-      supabase,
-    );
+    };
+
+    /*
+     * Which path, decided here from the time rather than by the caller.
+     *
+     * A time still ahead parks the dispatch: the snapshot is frozen, the row is
+     * written `scheduled`, and no courier is contacted. Anything else goes
+     * through the immediate path, which still stops at the safety gate. The
+     * comparison is against the server's clock, so a browser with a wrong clock
+     * cannot turn a scheduled delivery into an immediate one.
+     */
+    const scheduledFor = data.scheduledFor ? new Date(data.scheduledFor) : null;
+    if (scheduledFor && scheduledFor.getTime() > Date.now()) {
+      const { scheduleAlShrouqDispatch } =
+        await import("@/lib/shams-crm/alshrouq-scheduler.server");
+      return scheduleAlShrouqDispatch(request, scheduledFor, supabase);
+    }
+
+    const { dispatchOrderToAlShrouq } = await import("@/lib/shams-crm/alshrouq-dispatch.server");
+    return dispatchOrderToAlShrouq(request, supabase);
+  });
+
+/**
+ * The CRM's AlShrouq payment methods.
+ *
+ * The approval dialog needs them before an order exists, so they cannot come
+ * through the order-scoped dispatch context. Same source, same cache — the list
+ * belongs to the CRM and there is no enum in this repository.
+ *
+ * Gated on `create_orders`: choosing a payment method is part of taking an
+ * order. Reads only; dispatches nothing.
+ */
+export const alshrouqPaymentOptions = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }): Promise<AlShrouqPaymentOption[]> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertPermission(supabase, userId, "create_orders");
+
+    const { fetchAlShrouqDispatchOptions } = await import("@/lib/shams-crm/alshrouq-config.server");
+    try {
+      return (await fetchAlShrouqDispatchOptions()).paymentOptions;
+    } catch {
+      // An unreachable CRM leaves the dialog with no methods to choose, which
+      // blocks dispatch — the correct outcome, and better than a guessed list.
+      return [];
+    }
   });
 
 /**

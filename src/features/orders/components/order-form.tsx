@@ -59,6 +59,8 @@ import { CallCenterInvoiceField } from "@/features/orders/components/call-center
 import { OrderInvoicePanel, StateTag } from "@/features/orders/components/order-invoice-panel";
 import { BranchPreviewPanel } from "@/features/branches/components/branch-preview-panel";
 import { AlShrouqDispatchSection } from "@/features/alshrouq/components/dispatch-section";
+import { useAlShrouqCreateApproval } from "@/features/alshrouq/use-create-approval";
+import { AlShrouqCreateApproval } from "@/features/alshrouq/components/create-approval-dialog";
 import { ALSHROUQ } from "@/features/alshrouq/constants";
 
 /** The id the header's submit button reaches the form by, across the layout. */
@@ -157,6 +159,7 @@ function Field({
 }
 
 export function OrderForm({ mode }: { mode: "create" | "edit" }) {
+  const approval = useAlShrouqCreateApproval();
   const {
     navigate,
     id,
@@ -182,7 +185,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
     readOnly,
     submit,
     del,
-  } = useOrderForm(mode);
+  } = useOrderForm(mode, { afterCreate: approval.afterCreate });
 
   if (mode === "create" && !canCreate) {
     return (
@@ -213,6 +216,14 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
    */
   const valueIsVerified =
     shamsInvoices.verified.length > 0 && Number(form.invoice_value) === shamsInvoices.verifiedTotal;
+
+  /**
+   * A new AlShrouq order asks before it saves.
+   *
+   * Only on create, and only for AlShrouq: an edit has nothing to approve, and
+   * every other delivery method submits exactly as it always has.
+   */
+  const interceptsCreate = mode === "create" && form.delivery_type === ALSHROUQ;
 
   /** The state of each typed number, so a row can say where its lookup got to. */
   const stateOf = (value: string) => {
@@ -289,7 +300,23 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
             // Outside the `form` element, so it reaches it by id. Keeping the
             // primary action in the header is what lets the form itself end
             // with a field rather than with a band of buttons.
-            <Button type="submit" form={FORM_ID} size="sm" disabled={busy} className="min-w-32">
+            <Button
+              /*
+               * One primary action, two behaviours.
+               *
+               * A new AlShrouq order opens the approval dialog instead of
+               * submitting, because "create" and "hand this to a courier" are
+               * two different decisions and the agent has not made the second
+               * one yet. Everything else submits exactly as it always has —
+               * same button, same form, same handler.
+               */
+              type={interceptsCreate ? "button" : "submit"}
+              form={interceptsCreate ? undefined : FORM_ID}
+              onClick={interceptsCreate ? approval.open : undefined}
+              size="sm"
+              disabled={busy}
+              className="min-w-32"
+            >
               {busy ? "Saving…" : mode === "create" ? "Create order" : "Update order"}
             </Button>
           )}
@@ -690,6 +717,23 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
           {mode === "edit" && id && <OrderActivityTimeline orderId={id} />}
         </aside>
       </div>
+
+      {interceptsCreate && (
+        <AlShrouqCreateApproval
+          open={approval.isOpen}
+          onOpenChange={approval.setOpen}
+          customerName={form.customer_name}
+          customerPhone={form.customer_phone}
+          branchNo={form.branch_no}
+          invoiceValue={form.invoice_value}
+          busy={busy}
+          onApprove={(plan) =>
+            approval.approve(plan, () =>
+              (document.getElementById(FORM_ID) as HTMLFormElement | null)?.requestSubmit(),
+            )
+          }
+        />
+      )}
     </div>
   );
 }

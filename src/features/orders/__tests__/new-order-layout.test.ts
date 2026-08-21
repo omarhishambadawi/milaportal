@@ -89,7 +89,26 @@ describe("primary actions", () => {
   it("are in the page header, reaching the form by id", () => {
     expect(source).toContain('const FORM_ID = "order-form";');
     expect(source).toContain("<form id={FORM_ID}");
-    expect(source).toContain('type="submit" form={FORM_ID}');
+
+    /*
+     * The invariant is that the header's action reaches the form *by id* rather
+     * than living inside it — that is what lets it sit in the page header at
+     * all. It used to be a single literal; a new AlShrouq order now opens an
+     * approval dialog first, so the attribute is conditional. Both paths still
+     * go through FORM_ID, and both are asserted rather than the old literal.
+     */
+    expect(source).toMatch(/form=\{[^}]*FORM_ID[^}]*\}/);
+    expect(source).toContain('type={interceptsCreate ? "button" : "submit"}');
+    // The AlShrouq path submits the same form, by the same id.
+    expect(source).toContain("getElementById(FORM_ID)");
+  });
+
+  it("keeps the approval dialog out of the form element", () => {
+    // Nested inside <form>, its buttons would submit on click. It is a sibling.
+    const formStart = source.indexOf("<form id={FORM_ID}");
+    const formEnd = source.indexOf("</form>");
+    const inside = source.slice(formStart, formEnd);
+    expect(inside).not.toContain("AlShrouqCreateApproval");
   });
 
   it("offer Cancel beside them", () => {

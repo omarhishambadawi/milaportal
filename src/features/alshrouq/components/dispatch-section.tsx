@@ -67,13 +67,14 @@ import {
   alshrouqResolveLocation,
   type AlShrouqDispatchContext,
 } from "@/lib/shams.functions";
+import { formatScheduledFor } from "@/features/alshrouq/scheduling";
 import {
   describeLocationResult,
   formatCoordinates,
   type AlShrouqLocation,
 } from "@/features/alshrouq/location";
 import type { AlShrouqFieldError } from "@/lib/shams-crm/alshrouq-payload";
-import type { AlShrouqDispatchResult } from "@/lib/shams-crm/alshrouq-dispatch.server";
+import type { ScheduleResult } from "@/lib/shams-crm/alshrouq-scheduler.server";
 
 /** The live form values this section reflects. Read-only — never written back. */
 export interface AlShrouqDispatchSectionProps {
@@ -133,10 +134,20 @@ function Row({ label, value, muted }: { label: string; value: string; muted?: bo
  * pipeline runs to completion and stops before the POST, and an agent must not
  * read that as a delivery being on its way.
  */
-function ResultNotice({ result }: { result: AlShrouqDispatchResult }) {
+function ResultNotice({ result }: { result: ScheduleResult }) {
   const box = "rounded-md border p-3 text-sm";
 
   switch (result.kind) {
+    case "scheduled":
+      return (
+        <div className={`${box} text-muted-foreground`}>
+          <p className="font-medium text-foreground">Scheduled — no courier contacted yet.</p>
+          <p className="mt-1">
+            AlShrouq will be contacted at {formatScheduledFor(result.scheduledFor)}. The details
+            approved now are the details that will be sent.
+          </p>
+        </div>
+      );
     case "prepared":
       return (
         <div className={`${box} border-dashed text-muted-foreground`}>
@@ -246,7 +257,7 @@ export function AlShrouqDispatchSection({
   const send = useServerFn(alshrouqDispatchOrder);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<DispatchForm | null>(null);
-  const [result, setResult] = useState<AlShrouqDispatchResult | null>(null);
+  const [result, setResult] = useState<ScheduleResult | null>(null);
 
   const dispatch = useMutation({
     mutationFn: (f: DispatchForm) =>

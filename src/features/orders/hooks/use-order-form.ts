@@ -25,7 +25,22 @@ import { armOrderReturn } from "./use-orders-scroll-restoration";
  * (validation, insert/update/delete, cache invalidation, navigation, toasts).
  * The route keeps only the JSX that consumes this.
  */
-export function useOrderForm(mode: "create" | "edit") {
+/** Optional hooks a caller can attach without changing how an order is saved. */
+export interface OrderFormOptions {
+  /**
+   * Runs once, after a new order has been successfully inserted.
+   *
+   * The same shape and the same guarantees as the invoice recording below it:
+   * the order is already saved and valid, the hook is best-effort, and anything
+   * it throws is the caller's to report rather than a reason the save failed.
+   * That boundary is what keeps "create the order" and "approve a courier" two
+   * separate outcomes — a dispatch that cannot be established leaves an ordinary
+   * saved order behind, which is a state the Portal already understands.
+   */
+  afterCreate?: (orderId: string) => Promise<void>;
+}
+
+export function useOrderForm(mode: "create" | "edit", options: OrderFormOptions = {}) {
   const navigate = useNavigate();
   const { user, role, profile } = useAuth();
   const qc = useQueryClient();
@@ -402,6 +417,7 @@ export function useOrderForm(mode: "create" | "edit") {
       return;
     }
     setBusy(true);
+    let createdOrderId: string | null = null;
     try {
       // Built by `buildOrderPayload`, which is pure and tested: every field the
       // order has is present, and a *required* field left blank by a hydration
@@ -452,6 +468,7 @@ export function useOrderForm(mode: "create" | "edit") {
          * ordinary case, not the fallback.
          */
         const createdId = (created as { id: string }[] | null)?.[0]?.id;
+        createdOrderId = createdId ?? null;
         if (createdId) {
           try {
             await recordInvoiceVerification(createdId, shamsInvoices.invoices);
@@ -510,6 +527,23 @@ export function useOrderForm(mode: "create" | "edit") {
           );
         }
       }
+      /**
+       * Whatever the caller wanted done with the order that now exists.
+       *
+       * Deliberately after the insert and before the navigation: it needs the
+       * id, and an agent must not be moved off the page while a courier is
+       * being approved. Its failures are its own to surface — the order is
+       * saved either way, and reporting a save as failed because a follow-up
+       * did would be the more damaging lie.
+       */
+      if (createdOrderId && options.afterCreate) {
+        try {
+          await options.afterCreate(createdOrderId);
+        } catch {
+          // Reported by the caller, which knows what it was attempting.
+        }
+      }
+
       qc.invalidateQueries({ queryKey: queryKeys.orders.all() });
       qc.invalidateQueries({ queryKey: queryKeys.dashboard.all() });
       // `resetScroll: false`, or the agent lands at the top of the list every

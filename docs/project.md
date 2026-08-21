@@ -2966,6 +2966,52 @@ Duplicate protection is checked before anything is built, using the same
 `alshrouq_dispatches_live_order_key`, so the check and the constraint cannot
 disagree. A `23505` on insert is reported as "already sent", not as an error.
 
+### Creating an AlShrouq order — the approval flow
+
+One primary action. For a new AlShrouq order the header's **Create order** button
+opens an approval dialog instead of submitting; every other delivery method and
+every edit submits exactly as it always has. There is no second dispatch button
+anywhere.
+
+The dialog offers **Create order only** and **Create order and send** — the
+second changing verb to *schedule delivery* when the chosen time is in the
+future, because "send" reads as *sent* to someone in a hurry and nothing is sent
+at all on that path.
+
+**Sequencing, and why the partial states are safe.** There is no transaction
+across the two systems: the order is inserted through Supabase, the dispatch is
+approved through a server function. So the design makes each partial state a
+state the Portal already understands, via an `afterCreate` hook on
+`useOrderForm` that mirrors the `recordInvoiceVerification` follow-up already
+there:
+
+| | |
+|---|---|
+| order insert fails | nothing else runs — no dispatch, no navigation |
+| created, approval fails | an ordinary saved order, **no dispatch row**, no courier. Identical to "Create order only"; approvable later from the order page |
+| created + scheduled | order + a `scheduled` row holding a frozen snapshot. Still no courier |
+| created + immediate | order + whatever the server's one POST achieved |
+
+The dangerous inverse — a dispatch with no order — cannot occur: approving one
+requires an order id only a successful insert produces.
+
+**The client never decides whether to send.** The approval carries a *time*, not
+a permission. `alshrouqDispatchOrder` compares it to the **server's** clock to
+route between scheduling and immediate dispatch, and the safety gate sits behind
+both. Its input schema is an order id, eight form strings and an optional
+`scheduledFor` — there is no `live` field, and a browser with a wrong clock
+changes nothing.
+
+**Nothing claims success without evidence.** With the gate shut the agent is told
+*"AlShrouq dispatch is switched off, so no courier was contacted."* An
+indeterminate result says so and says it has **not** been retried. Only a
+reconciled `dispatched` reports a reference.
+
+Where the AlShrouq requirements are enforced is deliberately split, and tested as
+such: the Phase 6 builder holds coordinates **optional-but-paired**, per the
+contract evidence, while `validateAlShrouqOrderFields` and the approval dialog
+make a resolved location **mandatory** before "send" is enabled.
+
 ### AlShrouq customer location
 
 **The customer's own Google Maps link is the authoritative location.** A customer
