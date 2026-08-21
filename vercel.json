@@ -1,22 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-
-  "//": [
-    "This repo's default Nitro preset is `cloudflare-module` (see .output/nitro.json),",
-    "because production runs on Cloudflare Workers via Lovable. A Vercel build must",
-    "override it or it emits a Worker bundle instead of Vercel's Build Output API,",
-    "and the deployment fails. NITRO_PRESET=vercel makes `vite build` write",
-    ".vercel/output/{config.json,functions,static}, which Vercel picks up natively.",
-    "",
-    "Install command and output directory are deliberately NOT set: the repo commits",
-    "bun.lock (package-lock.json is untracked), so Vercel's auto-detection installs",
-    "with bun correctly, and the Build Output API needs no outputDirectory.",
-    "",
-    "This file is inert outside Vercel -- the Cloudflare build path is unchanged."
-  ],
-
   "buildCommand": "NITRO_PRESET=vercel npm run build",
-
   "github": {
     "enabled": true,
     "silent": true
