@@ -3443,35 +3443,53 @@ RLS is exactly what should decide them. No RLS policy was added or weakened.
 
 ### Verified against the live database — 2026-08-22
 
-Phase 10H checked the deployed Supabase project rather than the repository, by
-read-only query. Every statement below is an observation, not an inference, and
-**nothing was written to production**.
+Phases 10H and 10I checked the deployed Supabase project rather than the
+repository. Every statement below is an observation, not an inference.
 
-**The schema is behind the repository.** The last applied migration is
-`20260820185447`. The scheduled-dispatch migration `20260821210000` has **not
-been applied**, so the deployed `alshrouq_dispatches` has none of:
+**The schema is now in sync (Phase 10I).** `20260821210000` and `20260822120000`
+were applied to production and recorded in
+`supabase_migrations.schema_migrations`, so a later `db push` sees them as done.
+`alshrouq_dispatches` now carries all ten lifecycle columns —
 
 ```
 dispatch_status   scheduled_for   payload_snapshot   scheduled_by
 scheduled_at      last_error      attempt_count      last_attempt_at
+cancelled_at      cancelled_by
 ```
 
-`public.alshrouq_dispatch_due()` does not exist, and `cron.job` holds zero rows.
-The vault secrets `alshrouq_scheduler_url` / `alshrouq_scheduler_secret` are
-absent — only `email_queue_service_role_key` is present.
+— both CHECK constraints (`alshrouq_dispatches_status_valid`,
+`alshrouq_dispatches_scheduled_has_time`), the partial due index
+`alshrouq_dispatches_due_idx`, and `alshrouq_dispatches_cancelled_by_idx`. The
+one-courier-per-order guarantee `alshrouq_dispatches_live_order_key` — `UNIQUE
+(order_id) WHERE cancelled_at IS NULL` — survived unchanged.
 
-**What that means.** Everything built in 10D–10G against those columns cannot
-function until the migration is applied: scheduling, cancellation, the timeline's
-dispatch events, the countdown, and — since 10G made `persist()` write
-`dispatch_status`, `last_error`, `attempt_count` and `last_attempt_at` — the
-immediate path too. The client query fails soft (PostgREST rejects the unknown
-columns, the hook returns no rows, the card reads "Not scheduled"), so the Orders
-page degrades rather than breaking, and the safety gate means no courier code is
-reachable regardless. The code is correct for the intended schema; the database
-is what is behind.
+The four pre-existing rows are all `dispatch_status = 'accepted'` with no
+snapshot and no schedule, which is what they are: completed deliveries that
+predate scheduling. `orders` was not touched — 5,240 rows and 23 columns before
+and after — and the only trigger on the dispatch table still just stamps
+`updated_at`, so nothing at the database level can mutate `payload_snapshot`.
+
+**The scheduler exists and is dormant, and that was observed rather than
+assumed.** `public.alshrouq_dispatch_due()` is deployed byte-identical to the
+migration, `SECURITY DEFINER`, with `EXECUTE` granted only to `postgres` and
+`service_role`. One cron job — `alshrouq-dispatch-due`, `* * * * *`, active,
+running `SELECT public.alshrouq_dispatch_due();` — and no duplicates. Its runs
+succeed in ~3 ms and return `0`: there is no due work, so the function returns
+before it ever reads vault. `net.http_request_queue` is empty and the only row in
+`net._http_response` predates the migration, so **no outbound request has been
+made**. The scheduler is wired, firing, and reaching nobody.
 
 `pg_cron` 1.6.4, `pg_net` 0.20.3, `pgmq` 1.5.1 and `supabase_vault` 0.3.1 are all
-installed, so the chain has everything it needs once the migration lands.
+installed.
+
+**What is still missing, deliberately.** The vault secrets
+`alshrouq_scheduler_url` / `alshrouq_scheduler_secret` are absent — only
+`email_queue_service_role_key` exists — and the runtime
+`ALSHROUQ_SCHEDULER_SECRET` is unset. Nothing was invented to fill them. Until
+they are configured the waker returns `0` even when work *is* due, so a scheduled
+dispatch would sit in `scheduled` rather than being attempted. That is the
+intended fail-closed behaviour, and it is the next deployment step rather than a
+defect.
 
 **The write path is protected by the policy, not the grant.** `alshrouq_dispatches`
 has RLS enabled with exactly **one** policy — `SELECT`, `TO authenticated`,
