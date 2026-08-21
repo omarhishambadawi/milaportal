@@ -11,6 +11,11 @@ import {
   type AlShrouqTimelineKind,
 } from "@/features/alshrouq/dispatch-timeline";
 import { useOrderAlShrouqDispatch } from "@/features/alshrouq/use-order-dispatch";
+import {
+  RESOLUTION_ACTIVITY_ACTION,
+  describeResolutionOutcome,
+  isResolutionOutcome,
+} from "@/lib/shams-crm/alshrouq-resolution";
 import { useScheduledDispatchCountdown } from "@/features/alshrouq/use-scheduled-countdown";
 
 /**
@@ -54,6 +59,15 @@ function describe(e: OrderActivityEvent, nameOf: (id: unknown) => string): strin
   // The withdrawal, which had no event until the flag could be cleared at all.
   if (e.action === "call_center_cleared") return "Call Center Invoice cleared automatically";
   if (e.action === "auto_completed") return "Order automatically completed by MilaPortal";
+  /*
+   * An operator's conclusion about a stuck dispatch — never AlShrouq's.
+   *
+   * The wording says "operator" out loud because this is the one entry on the
+   * timeline that looks like a courier status and is not one. AlShrouq's own
+   * events read "Accepted by AlShrouq"; this reads as a person's decision,
+   * because that is what it is.
+   */
+  if (e.action === RESOLUTION_ACTIVITY_ACTION) return "AlShrouq dispatch resolved by operator";
   if (e.action === "edited") {
     const keys = Object.keys(d);
     if (keys.length === 0) return "Edited the order";
@@ -127,6 +141,16 @@ function detailLine(e: OrderActivityEvent): string | null {
       parts.push(`verified total ${fmtSAR(Number(d.total))}`);
     if (d.call_centre_invoice) parts.push(`Call Centre invoice ${String(d.call_centre_invoice)}`);
     return parts.join(" · ");
+  }
+  if (e.action === RESOLUTION_ACTIVITY_ACTION) {
+    // The outcome in the operator's vocabulary, then their own account of how
+    // they established it. No payload, no courier body, no customer identity —
+    // the resolution record holds none of those.
+    const outcome = isResolutionOutcome(d.outcome)
+      ? describeResolutionOutcome(d.outcome)
+      : "Outcome recorded";
+    const note = typeof d.note === "string" && d.note.trim() !== "" ? d.note.trim() : null;
+    return note ? `${outcome} · ${note}` : outcome;
   }
   if (e.action === "assigned" && d.to_team) return `Team: ${String(d.to_team).replace("_", " ")}`;
   return null;

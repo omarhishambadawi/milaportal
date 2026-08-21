@@ -46,6 +46,7 @@ import type {
   CancelScheduledResult,
   ScheduleResult,
 } from "@/lib/shams-crm/alshrouq-scheduler.server";
+import type { ResolveDispatchResult } from "@/lib/shams-crm/alshrouq-resolve.server";
 import type { AlShrouqLocationResult } from "@/features/alshrouq/location";
 import type { ShamsCrmOffer, ShamsOfferScope } from "@/lib/shams-crm/types";
 import type { ShamsCrmHistory } from "@/lib/shams/types";
@@ -856,6 +857,77 @@ export const alshrouqCancelScheduledDispatch = createServerFn({ method: "POST" }
     // The actor is the verified session's subject, never anything the caller
     // sent — the validator above accepts an order id and nothing else.
     return cancelScheduledAlShrouqDispatch(data.orderId, userId, supabaseAdmin);
+  });
+
+/**
+ * Record what an operator established about a stuck dispatch.
+ *
+ * **It contacts nobody.** `alshrouq-resolve.server.ts` has no transport, and no
+ * outcome — including "confirmed not delivered" — has a branch that sends
+ * anything. This is reconciliation after a human rang the courier, never a
+ * resend. An `indeterminate` dispatch may already have a driver on the road,
+ * which is the whole reason the machine refuses to guess and the whole reason
+ * the answer is recorded rather than acted on.
+ *
+ * **Gated on `admin_access`**, the narrowest existing permission that fits.
+ * Resolving a dispatch is a supervisory act, not order editing: it overrides an
+ * uncertain courier outcome with a person's judgement, and an agent who may edit
+ * their own orders should not be able to declare a delivery settled. `owner`,
+ * `admin` and `supervisor` hold it by default; `customer_care`, `telesales` and
+ * `auditor` do not. No new permission key, so no migration and no parity change.
+ *
+ * **The client controls none of the identity.** The input is a dispatch id, an
+ * outcome from a fixed set, and a note. `resolved_by` and `resolved_at` are
+ * derived here — there is no field through which a browser could attribute a
+ * resolution to somebody else, backdate one, or ask for a lifecycle transition.
+ */
+export const alshrouqResolveDispatch = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) =>
+    z
+      .object({
+        dispatchId: z.string().uuid(),
+        // A closed set, validated here as well as by the database's CHECK.
+        outcome: z.enum(["delivered", "not_delivered", "undetermined"]),
+        // The evidence. Required: a resolution with no account of how it was
+        // reached is an unsourced claim in an audit trail.
+        note: z.string().min(3).max(280),
+      })
+      .parse(d),
+  )
+  .handler(async ({ context, data }): Promise<ResolveDispatchResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+
+    await assertPermission(supabase, userId, "admin_access");
+
+    /*
+     * The visibility read runs on the *caller's* client, so the dispatch's own
+     * RLS policy — which follows the order's visibility — decides whether this
+     * operator may see the row at all. A dispatch they cannot see is reported as
+     * absent rather than as forbidden.
+     */
+    const { data: visible } = await (supabase as any)
+      .from("alshrouq_dispatches")
+      .select("id")
+      .eq("id", data.dispatchId)
+      .maybeSingle();
+    if (!visible) return { kind: "not_found" };
+
+    // And the write runs as the service role, after the check above — the same
+    // pattern as every other write to this table. See `alshrouqDispatchOrder`.
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { resolveAlShrouqDispatch } = await import("@/lib/shams-crm/alshrouq-resolve.server");
+
+    return resolveAlShrouqDispatch(
+      {
+        dispatchId: data.dispatchId,
+        outcome: data.outcome,
+        note: data.note,
+        // The verified session's subject, never anything the caller sent.
+        resolvedBy: userId,
+      },
+      supabaseAdmin,
+    );
   });
 
 /**

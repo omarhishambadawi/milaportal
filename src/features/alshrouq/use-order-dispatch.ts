@@ -58,6 +58,8 @@ import type { AlShrouqDispatchRow } from "./dispatch-timeline";
  * reason.
  */
 export interface AlShrouqOrderDispatch extends AlShrouqDispatchRow {
+  /** The row's own id — what the resolve action targets. */
+  id: string;
   payment_type: string | null;
   value: number | null;
   customer_address: string | null;
@@ -68,9 +70,13 @@ export interface AlShrouqOrderDispatch extends AlShrouqDispatchRow {
 }
 
 const COLUMNS =
-  "dispatch_status,scheduled_for,scheduled_at,last_attempt_at,dispatched_at,cancelled_at," +
+  "id,dispatch_status,scheduled_for,scheduled_at,last_attempt_at,dispatched_at,cancelled_at," +
   "external_order_id,tracking_url,refreshed_at,last_error,status,payment_type,value," +
-  "customer_address,customer_lat,customer_lng,branch_no,created_at";
+  "customer_address,customer_lat,customer_lng,branch_no,created_at," +
+  // The operator's answer, when a stuck dispatch has been settled. `resolved_by`
+  // is an id and is deliberately not fetched — the card shows *that* it was
+  // resolved, and the order timeline carries the attribution with a name.
+  "resolution_outcome,resolved_at,resolution_note";
 
 export interface AlShrouqOrderDispatchState {
   /** Every dispatch this order has had, oldest first. History. */

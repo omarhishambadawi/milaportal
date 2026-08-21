@@ -46,6 +46,9 @@ function row(over: Partial<AlShrouqDispatchRow> = {}): AlShrouqDispatchRow {
     refreshed_at: null,
     last_error: null,
     status: null,
+    resolution_outcome: null,
+    resolved_at: null,
+    resolution_note: null,
     ...over,
   };
 }

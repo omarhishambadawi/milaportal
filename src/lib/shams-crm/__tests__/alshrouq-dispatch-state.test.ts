@@ -44,6 +44,9 @@ const emptyRow: AlShrouqDispatchRow = {
   refreshed_at: null,
   last_error: null,
   status: null,
+  resolution_outcome: null,
+  resolved_at: null,
+  resolution_note: null,
 };
 
 /* ------------------------------------------------------------------------- */
@@ -684,6 +687,9 @@ describe("a cancelled dispatch in the timeline", () => {
       refreshed_at: null,
       last_error: null,
       status: null,
+      resolution_outcome: null,
+      resolved_at: null,
+      resolution_note: null,
     });
 
     expect(events.map((e) => e.title)).toEqual([

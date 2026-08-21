@@ -54,6 +54,7 @@ import { useServerFn } from "@tanstack/react-start";
 import {
   AlertTriangle,
   CalendarX,
+  ClipboardCheck,
   ExternalLink,
   Info,
   Loader2,
@@ -76,14 +77,28 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Textarea } from "@/components/ui/textarea";
 import { fmtSAR } from "@/lib/branches";
 import { queryKeys } from "@/lib/query-keys";
 import {
   alshrouqCancelScheduledDispatch,
   alshrouqDispatchContext,
   alshrouqDispatchOrder,
+  alshrouqResolveDispatch,
   type AlShrouqDispatchContext,
 } from "@/lib/shams.functions";
+import {
+  ALSHROUQ_RESOLUTION_OUTCOMES,
+  RESOLUTION_NOTE_MAX,
+  describeResolutionOutcome,
+  explainResolutionOutcome,
+  isResolutionOutcome,
+  isValidResolutionNote,
+  resolutionWarningFor,
+  type AlShrouqResolutionOutcome,
+} from "@/lib/shams-crm/alshrouq-resolution";
 import type { AlShrouqFieldError } from "@/lib/shams-crm/alshrouq-payload";
 import type { ScheduleResult } from "@/lib/shams-crm/alshrouq-scheduler.server";
 import {
@@ -237,6 +252,43 @@ export function AlShrouqDispatchSection({
       toast.error("The delivery could not be cancelled. Nothing was changed.");
     },
     onSettled: () => setConfirmingCancel(false),
+  });
+
+  /**
+   * Recording what an operator established about a stuck dispatch.
+   *
+   * Contacts nobody: the server function has no transport in its import graph,
+   * and no outcome — including "confirmed not delivered" — sends anything. The
+   * row keeps its dispatch slot either way, so this never makes the order
+   * sendable again.
+   */
+  const [resolving, setResolving] = useState(false);
+  const [outcome, setOutcome] = useState<AlShrouqResolutionOutcome | null>(null);
+  const [note, setNote] = useState("");
+  const resolveFn = useServerFn(alshrouqResolveDispatch);
+  const resolve = useMutation({
+    mutationFn: (input: { outcome: AlShrouqResolutionOutcome; note: string }) =>
+      resolveFn({ data: { dispatchId: current!.id, outcome: input.outcome, note: input.note } }),
+    onSuccess: (r) => {
+      if (r.kind === "resolved") {
+        toast.success("Dispatch resolved. The record was updated; nothing was sent to AlShrouq.");
+        setResolving(false);
+      } else if (r.kind === "already_resolved") {
+        toast.info("This dispatch was already resolved by someone else.");
+        setResolving(false);
+      } else if (r.kind === "not_found") {
+        toast.error("That dispatch could not be found.");
+      } else {
+        // The server's own sentence, naming the state it refused from.
+        toast.error(r.message);
+      }
+      // Whatever happened, the honest state is whatever the database now holds.
+      qc.invalidateQueries({ queryKey: queryKeys.orders.dispatch(orderId) });
+      qc.invalidateQueries({ queryKey: queryKeys.orders.activity(orderId!) });
+    },
+    onError: () => {
+      toast.error("The dispatch could not be resolved. Nothing was changed.");
+    },
   });
 
   const errors: AlShrouqFieldError[] = result?.kind === "invalid" ? result.errors : [];
@@ -442,6 +494,27 @@ export function AlShrouqDispatchSection({
           </div>
         )}
 
+        {/* The operator's answer, once somebody has established one.
+
+            Shown beside the machine's own state rather than instead of it: the
+            dispatch is still `indeterminate` or `failed`, because that is what
+            actually happened, and this line is a person's conclusion about it.
+            Attributed as such so it can never read as a courier status. */}
+        {summary.resolutionOutcome && (
+          <div className="flex items-start gap-2 border-t border-border/60 bg-muted/20 px-4 py-3 text-[11.5px] leading-snug text-muted-foreground dark:bg-muted/10">
+            <ClipboardCheck className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <p>
+              <span className="font-medium text-foreground">
+                Resolved by operator:{" "}
+                {isResolutionOutcome(summary.resolutionOutcome)
+                  ? describeResolutionOutcome(summary.resolutionOutcome)
+                  : "outcome recorded"}
+              </span>
+              . This is a reviewed decision, not a courier update. The order was not sent again.
+            </p>
+          </div>
+        )}
+
         {(!branch?.ok || !saved) && !summary.handedOver && (
           <div className="flex items-start gap-2 border-t border-border/60 bg-muted/20 px-4 py-3 text-[11.5px] leading-snug text-muted-foreground dark:bg-muted/10">
             <Info className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -478,6 +551,27 @@ export function AlShrouqDispatchSection({
                     <ExternalLink className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                     Open tracking
                   </a>
+                </Button>
+              )}
+              {/* Only for a dispatch the machine gave up on and nobody has
+                  settled yet — `indeterminate` or `failed`, with no answer
+                  recorded. Never for scheduled, processing, accepted, cancelled
+                  or an already-resolved row, and the server refuses those
+                  independently of whether this renders. */}
+              {summary.awaitingResolution && current && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setOutcome(null);
+                    setNote("");
+                    resolve.reset();
+                    setResolving(true);
+                  }}
+                  disabled={resolve.isPending}
+                >
+                  <ClipboardCheck className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                  Resolve dispatch
                 </Button>
               )}
               {/* Only while the dispatch is still parked. A claimed, sent or
@@ -522,6 +616,84 @@ export function AlShrouqDispatchSection({
           )}
         </div>
       </Card>
+
+      <AlertDialog
+        open={resolving}
+        onOpenChange={(open) => !resolve.isPending && setResolving(open)}
+      >
+        <AlertDialogContent className="max-h-[85vh] overflow-y-auto">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Resolve this dispatch</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm">
+                <p>{resolutionWarningFor(summary.status)}</p>
+                <p className="text-muted-foreground">
+                  Record what you established after checking with AlShrouq. This is kept as an
+                  operator decision and is never shown as a courier update.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <div className="space-y-4">
+            <RadioGroup
+              value={outcome ?? ""}
+              onValueChange={(v) => isResolutionOutcome(v) && setOutcome(v)}
+              className="gap-2"
+            >
+              {ALSHROUQ_RESOLUTION_OUTCOMES.map((option) => (
+                <label
+                  key={option}
+                  htmlFor={`resolve-${option}`}
+                  className="flex cursor-pointer items-start gap-2.5 rounded-md border border-border/60 p-3"
+                >
+                  <RadioGroupItem value={option} id={`resolve-${option}`} className="mt-0.5" />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-foreground">
+                      {describeResolutionOutcome(option)}
+                    </span>
+                    <span className="block text-[11.5px] leading-snug text-muted-foreground">
+                      {explainResolutionOutcome(option)}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </RadioGroup>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="resolve-note">How was this established?</Label>
+              <Textarea
+                id="resolve-note"
+                rows={2}
+                maxLength={RESOLUTION_NOTE_MAX}
+                placeholder="e.g. Confirmed by phone with AlShrouq operations."
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+              />
+              {/* The note is the evidence, and it is shown on the order
+                  timeline — so it is a place for how you know, not for the
+                  customer's details. */}
+              <p className="text-[11px] text-muted-foreground">
+                Required. Shown on the order timeline, so do not include customer contact details.
+              </p>
+            </div>
+          </div>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={resolve.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                // The mutation closes the dialog on its result, not on the click.
+                event.preventDefault();
+                if (outcome && isValidResolutionNote(note)) resolve.mutate({ outcome, note });
+              }}
+              disabled={resolve.isPending || !outcome || !isValidResolutionNote(note)}
+            >
+              {resolve.isPending ? "Recording…" : "Record resolution"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={confirmingCancel} onOpenChange={setConfirmingCancel}>
         <AlertDialogContent>

@@ -38,6 +38,7 @@
 
 import { formatScheduledFor } from "./scheduling";
 import { blocksNewDispatch } from "@/lib/shams-crm/alshrouq-dispatch-state";
+import { canResolveDispatch } from "@/lib/shams-crm/alshrouq-resolution";
 
 /**
  * The persisted columns this module reads. Exactly the shape the client query
@@ -65,6 +66,17 @@ export interface AlShrouqDispatchRow {
    */
   refreshed_at: string | null;
   last_error: string | null;
+  /**
+   * What an operator established about a stuck dispatch — `delivered`,
+   * `not_delivered` or `undetermined`, or null while it is still unsettled.
+   *
+   * Never a lifecycle value. `dispatch_status` keeps recording what the machine
+   * observed and `status` keeps the courier's own word; this is the third,
+   * separate thing, and the card must never present it as either of the others.
+   */
+  resolution_outcome: string | null;
+  resolved_at: string | null;
+  resolution_note: string | null;
   /** The courier's own status word, stored verbatim and never translated. */
   status: string | null;
 }
@@ -333,6 +345,10 @@ export interface AlShrouqDispatchSummary {
   scheduledFor: string | null;
   /** The persisted failure text, sanitised. Null unless the dispatch failed. */
   failureReason: string | null;
+  /** The operator's answer, when one has been recorded. */
+  resolutionOutcome: string | null;
+  /** True while the dispatch is stuck and nobody has settled it yet. */
+  awaitingResolution: boolean;
   /**
    * AlShrouq's own word for where the delivery is, verbatim. Context beside the
    * label, never the label itself — see the `accepted` case.
@@ -361,6 +377,8 @@ export function summariseAlShrouqDispatch(
     scheduledFor: null,
     failureReason: null,
     courierStatus: null,
+    resolutionOutcome: null,
+    awaitingResolution: false,
   };
   if (!row) return empty;
 
@@ -374,6 +392,10 @@ export function summariseAlShrouqDispatch(
     // one shape rather than branching on which fields exist.
     failureReason: status === "failed" ? safeFailureReason(row.last_error) : null,
     courierStatus: row.status?.trim() || null,
+    resolutionOutcome: row.resolution_outcome?.trim() || null,
+    // The operator's worklist condition, asked through the state contract so the
+    // card and the server cannot disagree about what is resolvable.
+    awaitingResolution: canResolveDispatch(status, row.resolution_outcome),
   };
 
   if (row.cancelled_at) {

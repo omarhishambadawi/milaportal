@@ -3491,6 +3491,14 @@ dispatch would sit in `scheduled` rather than being attempted. That is the
 intended fail-closed behaviour, and it is the next deployment step rather than a
 defect.
 
+**What is left before live dispatch.** The operator recovery gap is closed — see
+"Resolve dispatch" below — so what remains is configuration rather than
+architecture: the two vault secrets, the matching runtime
+`ALSHROUQ_SCHEDULER_SECRET`, and then `ALSHROUQ_LIVE_DISPATCH_ENABLED` itself.
+Each of those is a deliberate human decision, and none of them should be taken on
+the strength of the tests alone: no dispatch has ever been created against the
+live schema, and no courier has ever been contacted from this codebase.
+
 **The write path is protected by the policy, not the grant.** `alshrouq_dispatches`
 has RLS enabled with exactly **one** policy — `SELECT`, `TO authenticated`,
 qualified by the order's own visibility — and none for `INSERT`, `UPDATE` or
@@ -3515,52 +3523,109 @@ exercised end to end, and the scheduler chain was never fired: doing any of thos
 needs either a write to production or the courier gate, and both were declined.
 Those links are covered by source and unit assertions only.
 
-### Operational recovery for a stuck dispatch — designed, not built
+### Resolve dispatch — settling what the machine gave up on
 
-`indeterminate` and `failed` are terminal, and neither has an operator exit. That
-is deliberate for `indeterminate` — the courier may already be moving — but it
-leaves a row owning its order's dispatch slot with no way to release it short of
-direct database access. The workflow below is specified here and **not
-implemented**; it needs a column, a permission key and a server function, and
-adding a third unapplied migration on top of the drift above would make the gap
-worse rather than better.
+Two lifecycle states are terminal with no automatic way out: `indeterminate`
+(transmitted, outcome unknown) and `failed` (AlShrouq refused it). Both are
+deliberate — an uncertain dispatch must never be retried by machinery, because
+the courier may already be moving — and both leave a row a person has to settle.
+**Resolve dispatch** is where that answer goes.
 
-**"Resolve dispatch", never "Retry dispatch".** The action records a human's
-conclusion; it never sends anything. There is no code path from it to
-`createAlshrouqOrder`, and it must be impossible to build one by mistake — so the
-resolution handler should not import the transport at all.
+**It is reconciliation, never resending.** `alshrouq-resolve.server.ts` has no
+transport in its import graph and no outcome has a branch that sends anything.
+Tests replace `globalThis.fetch` and assert zero requests for *all three*
+outcomes, including "confirmed not delivered". The action is called *resolve* and
+never *retry*, and a test asserts no outcome label contains "retry", "resend" or
+"send again".
 
-**What an operator needs first**, and what the timeline should already show
-before the button is offered: the external reference if reconciliation found one,
-the safe failure reason, when the attempt was made, and the client order id to
-quote to AlShrouq. Resolution is a decision taken *after* checking with the
-courier, so the UI's job is to make that check possible, not to shortcut it.
+**Allowed source states:** `indeterminate`, `failed` — and only while no answer
+has been recorded. Everything else is refused with a sentence naming why
+(`describeResolveRefusal`).
 
-**Two outcomes, and they differ in one important way:**
+**The three answers**, from `alshrouq-resolution.ts`:
 
-| Operator says | Effect |
+| Outcome | Means |
 | --- | --- |
-| "AlShrouq does have this delivery" | row moves to `accepted`; the slot stays taken; the reference may be entered if the GET never returned one |
-| "AlShrouq does not have this delivery" | row moves to `cancelled`, releasing the slot so the order can be approved again — deliberately reusing the existing cancellation semantics rather than inventing a "resolved" state |
+| `delivered` — "Confirmed delivered" | AlShrouq confirmed the delivery exists and was completed |
+| `not_delivered` — "Confirmed not delivered" | AlShrouq confirmed no delivery was created |
+| `undetermined` — "Unable to determine" | the outcome could not be established even after checking |
 
-The second is why resolution frees the slot: a released slot means the order
-becomes sendable, and that is only safe when a person has confirmed no courier
-exists. That confirmation is the whole content of the action.
+**Three vocabularies that must not merge.** `status` is AlShrouq's own word,
+verbatim — courier truth. `dispatch_status` is this system's lifecycle — machine
+truth. `resolution_outcome` is what a person established afterwards — operator
+truth. A resolution **never** overwrites `dispatch_status`: a resolved row stays
+`indeterminate` or `failed`, because that is what the machine actually observed,
+and an operator's conclusion does not get to rewrite the record of what the
+courier said. The database enforces the separation — `resolution_outcome` has its
+own CHECK listing only operator values.
 
-**Constraints it must satisfy**, all of which the current architecture already
-supports:
+**The dispatch slot is deliberately not freed.** Resolution writes no
+`cancelled_at`, so the row keeps its slot in
+`alshrouq_dispatches_live_order_key` and `blocksNewDispatch` still refuses a
+second send — for every outcome, "confirmed not delivered" included. That reads
+backwards at first: an operator saying no courier exists sounds like it should
+release the order. But releasing it *is* authorising a second courier, and
+recording what happened and re-authorising a delivery are different decisions
+that deserve to be made separately by someone who can see the consequences of
+each. A resend workflow, if one is ever wanted, is its own explicit thing.
 
-* `payload_snapshot` is untouched — resolution records a conclusion about a
-  dispatch, not a new authorisation of one.
-* A new permission key (`resolve_alshrouq_dispatch`), because this is a
-  supervisory act rather than order editing; it needs a migration, a
-  `has_permission()` change and a `check:permissions` update.
-* The actor and the operator's stated reason are persisted, following
-  `cancelled_by` / `scheduled_by` / `dispatched_by`.
-* An explicit acknowledgement in the dialog that no automatic retry occurred and
-  that the operator has verified the outcome with AlShrouq directly.
-* A timeline event from the persisted row, through the existing derivation — no
-  new event table, and the worker keeps touching only `alshrouq_dispatches`.
+**Authorization: `admin_access`**, the narrowest *existing* permission that fits.
+Resolving a dispatch is supervisory rather than order editing — it overrides an
+uncertain courier outcome with a person's judgement, and an agent who may edit
+their own orders should not be able to declare a delivery settled. `owner`,
+`admin` and `supervisor` hold it by default; `customer_care`, `telesales` and
+`auditor` do not. No new permission key, so no migration, no `has_permission()`
+change and no parity update.
+
+**The client controls none of the identity.** The validator accepts exactly three
+fields — a dispatch id, an outcome from a closed enum, and a note.
+`resolved_by` comes from the verified session's claims and `resolved_at` from the
+server clock; there is no field through which a browser could attribute a
+resolution to someone else, backdate one, or request a lifecycle transition. The
+visibility check runs on the *caller's* RLS-bound client, so a dispatch they may
+not see is reported absent rather than forbidden; the write then runs as the
+service role, the same pattern as every other write to this table.
+
+**Concurrency.** The update is a compare-and-swap guarded on both halves of
+"resolvable" — `.in(dispatch_status, ['indeterminate','failed'])` and
+`.is(resolution_outcome, null)`. Two operators resolving at once produce exactly
+one resolution, one audit event and one honest `already_resolved`; the second is
+never allowed to overwrite the first operator's account. The guard is *disjoint*
+from the worker's claim and from cancellation, both of which key on `scheduled`,
+so a row is either still in play or given up on and the two workflows cannot
+collide at all.
+
+**Audit.** A successful resolution writes one `order_activity` row
+(`alshrouq_dispatch_resolved`) carrying the outcome, the operator's note and the
+lifecycle state it was resolved from — and nothing else. No payload snapshot, no
+courier response body, no customer identity; the service reads none of them. This
+is a *person's* action, so it belongs on the order's own history beside every
+other human act, which does not weaken the worker's invariant — the worker is not
+what runs this code and still touches only `alshrouq_dispatches`.
+
+The timeline renders it as **"AlShrouq dispatch resolved by operator"**, worded
+that way because it is the one entry that could be mistaken for a courier status
+and is not one. AlShrouq's own events read "Accepted by AlShrouq"; this reads as
+a decision, because that is what it is. The card shows the same distinction:
+*"Resolved by operator: … This is a reviewed decision, not a courier update."*
+
+**The note is required**, 3–280 characters, because the note *is* the evidence —
+"Confirmed by phone with AlShrouq operations" is the whole content of the
+decision, and a resolution with no account of how it was reached is an unsourced
+claim in an audit trail. It is stored as written and rendered on the timeline, so
+the dialog says plainly that it is not a place for customer contact details.
+
+**Schema** (`20260823120000`, applied 2026-08-22): four nullable columns, two
+CHECK constraints — one restricting the outcome vocabulary, one refusing a
+half-written audit record where an outcome has no author or a timestamp has no
+outcome — and a partial index over the operator's worklist
+(`dispatch_status IN ('indeterminate','failed') AND resolution_outcome IS NULL`).
+Additive and idempotent; nothing outside `alshrouq_dispatches` is touched, and a
+test asserts the executable SQL names no other table, no cron, and no vault.
+
+**What this does not do.** It does not free the slot, contact AlShrouq, retry
+anything, create a dispatch, change an order, or alter the state machine.
+`blocksNewDispatch` is unchanged and a test re-asserts it for every status.
 
 ### Tracking URL provenance
 
