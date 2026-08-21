@@ -8,6 +8,7 @@ import {
   Scripts,
 } from "@tanstack/react-router";
 import { useEffect, useRef, type ReactNode } from "react";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 
 import appCss from "../styles.css?url";
 import { AuthProvider } from "@/lib/auth";
@@ -241,6 +242,7 @@ function RootComponent() {
         <AuthProvider>
           <Outlet />
           <ThemedToaster />
+          <SpeedInsights />
         </AuthProvider>
       </ThemeProvider>
     </QueryClientProvider>
