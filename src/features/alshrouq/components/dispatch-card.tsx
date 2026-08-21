@@ -18,11 +18,22 @@
  *
  * ## What it does not do yet
  *
- * **It does not dispatch.** Submitting validates the order through the Phase 6
- * builder and stops. No AlShrouq create endpoint is called, no courier is sent,
- * nothing is written to the database. Enabling the live send is a separate,
- * separately-reviewed step; until then this proves the data path end to end
- * without putting a driver on the road.
+ * **It does not dispatch.** Submitting calls `alshrouqDispatchOrder`, which runs
+ * the whole pipeline server-side and stops at the safety gate. No AlShrouq create
+ * endpoint is reached, no courier is sent, nothing is written. Enabling the live
+ * send is a separate, separately-reviewed step.
+ *
+ * ## Why visibility does not depend on the CRM
+ *
+ * This card originally decided whether to render from the dispatch context —
+ * which logs into the CRM first. While that round trip was in flight it rendered
+ * nothing, and if it failed it rendered nothing *permanently and silently*: no
+ * card, no error, no way to tell a non-AlShrouq order from a broken one.
+ *
+ * Visibility now comes from the order's own `delivery_type`, read from the cache
+ * `useOrderForm` has already filled. The CRM-dependent parts — branch coverage,
+ * payment methods — degrade the card instead of hiding it, and are only fetched
+ * for an order that is actually going to AlShrouq.
  */
 
 import { useMemo, useState } from "react";
@@ -50,6 +61,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { supabase } from "@/integrations/supabase/client";
+import { queryKeys } from "@/lib/query-keys";
 import {
   alshrouqDispatchContext,
   alshrouqDispatchOrder,
@@ -207,10 +220,49 @@ export function AlShrouqDispatchCard() {
   const params = useParams({ strict: false }) as { id?: string };
   const orderId = params?.id;
 
-  const load = useServerFn(alshrouqDispatchContext);
-  const { data: ctx, isPending } = useQuery({
-    queryKey: ["alshrouq", "dispatch-context", orderId],
+  /**
+   * Whether to show at all, decided from the order itself.
+   *
+   * Deliberately **not** from the dispatch context. That context reaches the CRM
+   * — a login plus a config read — and keying visibility on it meant the card
+   * rendered nothing until a third-party round trip finished, and nothing at all
+   * if it failed. An order's delivery method has no such dependency.
+   *
+   * Same query key and same shape as the one `useOrderForm` already runs, so
+   * React Query serves it from cache and this costs no extra request.
+   */
+  const { data: order } = useQuery({
+    queryKey: queryKeys.orders.detail(orderId),
     enabled: !!orderId,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("orders")
+        .select("*")
+        .eq("id", orderId!)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+  });
+
+  const isAlShrouqOrder =
+    (order as { delivery_type?: string | null } | null | undefined)?.delivery_type === ALSHROUQ;
+
+  /**
+   * The branch, payment methods and any existing dispatch.
+   *
+   * Only asked for once the order is known to be an AlShrouq one, so opening an
+   * ordinary order no longer causes a CRM login at all. Its absence degrades the
+   * card rather than hiding it.
+   */
+  const load = useServerFn(alshrouqDispatchContext);
+  const {
+    data: ctx,
+    isPending: ctxPending,
+    isError: ctxError,
+  } = useQuery({
+    queryKey: ["alshrouq", "dispatch-context", orderId],
+    enabled: !!orderId && isAlShrouqOrder,
     // A forbidden order is a legitimate answer here (an agent viewing someone
     // else's order), not a fault worth hammering the server over.
     retry: false,
@@ -257,13 +309,24 @@ export function AlShrouqDispatchCard() {
   const errors: AlShrouqFieldError[] = result?.kind === "invalid" ? result.errors : [];
   const branch = useMemo(() => (ctx ? branchLine(ctx) : null), [ctx]);
 
-  // Nothing to offer: not an AlShrouq order, or the caller may not act on it.
-  if (!orderId || isPending || !ctx) return null;
-  if (ctx.deliveryType !== ALSHROUQ) return null;
+  // The only reason to render nothing: this is not an AlShrouq order.
+  if (!orderId || !isAlShrouqOrder) return null;
 
-  const already = ctx.existingDispatch;
+  const already = ctx?.existingDispatch ?? null;
+  /** Dispatchable only once the CRM has answered and the branch is covered. */
+  const ready = !!ctx && !ctx.optionsError && !!branch?.ok;
+
+  /** What the card says under its title while the CRM is being consulted. */
+  const statusLine = ctxPending
+    ? "Checking branch coverage…"
+    : ctxError
+      ? "Dispatch details could not be loaded. You may not have permission to send this order."
+      : ctx?.optionsError
+        ? "The CRM could not be reached, so the branch could not be checked."
+        : (branch?.text ?? "");
 
   const start = () => {
+    if (!ctx) return;
     setForm(toForm(ctx));
     setResult(null);
     dispatch.reset();
@@ -298,10 +361,10 @@ export function AlShrouqDispatchCard() {
                 {already.status ? ` · ${already.status}` : ""}
               </p>
             ) : (
-              <p className={`text-sm ${branch?.ok ? "text-muted-foreground" : "text-destructive"}`}>
-                {ctx.optionsError
-                  ? "The CRM could not be reached, so the branch could not be checked."
-                  : branch?.text}
+              <p
+                className={`text-sm ${ctxPending || ready ? "text-muted-foreground" : "text-destructive"}`}
+              >
+                {statusLine}
               </p>
             )}
           </div>
@@ -315,9 +378,10 @@ export function AlShrouqDispatchCard() {
             <Button
               variant="secondary"
               onClick={start}
-              disabled={!branch?.ok || !!ctx.optionsError}
-              title={branch?.ok ? undefined : branch?.text}
+              disabled={!ready}
+              title={ready ? undefined : statusLine}
             >
+              {ctxPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
               Send to AlShrouq
             </Button>
           )}
@@ -329,7 +393,7 @@ export function AlShrouqDispatchCard() {
           <DialogHeader>
             <DialogTitle>Send order to AlShrouq</DialogTitle>
             <DialogDescription>
-              Order {ctx.displayNo} · branch {branch?.text}. AlShrouq needs a little more than the
+              Order {ctx?.displayNo} · branch {branch?.text}. AlShrouq needs a little more than the
               order records — this is asked once, here, and does not change the order.
             </DialogDescription>
           </DialogHeader>
@@ -368,7 +432,7 @@ export function AlShrouqDispatchCard() {
                       <SelectValue placeholder="Choose" />
                     </SelectTrigger>
                     <SelectContent>
-                      {ctx.paymentOptions.map((p) => (
+                      {(ctx?.paymentOptions ?? []).map((p) => (
                         <SelectItem key={p.id} value={String(p.id)}>
                           {p.label}
                         </SelectItem>
