@@ -2899,19 +2899,19 @@ saving last time. So the extra data is asked for **at dispatch time**, and
 `orderFormSchema` is untouched.
 
 `AlShrouqDispatchSection` renders **inside** the order form's contextual right
-column, beside `OrderInvoicePanel` and `BranchPreviewPanel` and by the same rule
-those follow — the form renders it from live state, exactly as it renders
-`BranchPreviewPanel` on `form.branch_no`. It appears whenever
-`form.delivery_type === "AlShrouq"`, on a draft as well as a saved order, and
-reflects the customer, phone, branch and order value as they are typed. It reads
-that state through props, takes no part in validation or submit, and
-`orderFormSchema` is untouched.
+column, **above** `BranchPreviewPanel` and by the same rule those panels follow —
+the form renders it from live state, exactly as it renders `BranchPreviewPanel`
+on `form.branch_no`. It appears whenever `form.delivery_type === "AlShrouq"`, on
+a draft as well as a saved order, and reflects the customer, phone, branch and
+order value as they are typed. It reads that state through props, takes no part
+in validation or submit, and `orderFormSchema` is untouched.
 
 A draft has no id, so it cannot dispatch and does not pretend to: the status
 reads **Pending order creation** and the action is disabled. Statuses are limited
 to what the backend supports — `Pending order creation`, `Checking…`,
-`Ready to send`, `Verification required`, `Not available`, or the stored status
-of an existing dispatch. There is no fake "Sent" or "Delivered".
+`Ready to send`, `Verification required`, `Not available`, or the persisted
+`dispatch_status` of an existing dispatch (see "The dispatch state model"
+below). There is no fake "Sent" or "Delivered".
 
 **No delivery fee is displayed, deliberately.** `GET /integrations/alshrouq/config`
 publishes `branch_options`, `payment_options`, webhook settings and
@@ -2929,6 +2929,10 @@ The dialog sends what the agent typed to `alshrouqDispatchOrder` and nothing
 else — no payload, no endpoint, no branch id. A component that assembled
 requests is how the previous integration turned a re-render into a second
 courier.
+
+The card no longer holds a dialog of its own. It opens the **shared**
+`AlShrouqApprovalDialog` that the create journey opens, and builds its request
+with the same `dispatchInputFor` — see "One approval dialog, one request" below.
 
 ### The dispatch service and the production safety gate
 
@@ -3139,6 +3143,160 @@ status; rows stay `scheduled` and are picked up whenever it opens.
 `alshrouq_dispatch_due()` is also a no-op while the vault secrets
 `alshrouq_scheduler_url` / `alshrouq_scheduler_secret` are absent, so applying
 the migration to an unconfigured environment does nothing.
+
+### The dispatch state model, and the order timeline
+
+One dispatch row per order is the whole state model. `dispatch_status` is the
+lifecycle — `scheduled → processing → accepted | failed | indeterminate |
+cancelled` — and the timestamps beside it are the history:
+
+| Column            | Written by                          | Means                          |
+| ----------------- | ----------------------------------- | ------------------------------ |
+| `scheduled_at`    | `scheduleAlShrouqDispatch`'s insert | the agent approved a slot      |
+| `scheduled_for`   | the same insert                     | when the courier is due        |
+| `last_attempt_at` | the worker's compare-and-swap       | a worker claimed the row       |
+| `dispatched_at`   | the insert / the accepted update    | the send completed             |
+| `cancelled_at`    | a cancellation                      | the delivery was called off    |
+| `last_error`      | the failed / indeterminate update   | a fixed, safe sentence         |
+
+**The timeline is derived from those columns, not from a second event log.**
+`features/alshrouq/dispatch-timeline.ts` is pure — no React, no network, no
+clock — and maps a row to events:
+
+```
+scheduled_at         → "AlShrouq delivery scheduled"      (+ due time, + countdown)
+last_attempt_at      → "AlShrouq dispatch started"
+status=accepted      → "Order sent to AlShrouq"           (+ reference, + tracking)
+status=failed        → "AlShrouq dispatch failed"         (+ safe reason)
+status=indeterminate → "AlShrouq dispatch requires review"(+ "not sent again")
+cancelled_at         → "AlShrouq delivery cancelled"
+```
+
+An event with no persisted timestamp is **not emitted**. A row that says
+`scheduled` but carries no `scheduled_at` produces nothing rather than a guessed
+instant, and an order with no dispatch row contributes no events at all — so a
+Store Pickup order's timeline is byte-for-byte what it always was.
+
+**Writing `order_activity` rows instead was the alternative, and it was
+rejected.** The worker's guarantee is that the only table it touches is
+`alshrouq_dispatches` — asserted by a test, and the reason a Portal edit cannot
+reach a courier. Giving it a second table to write would trade that guarantee
+for events it can already be asked for.
+
+**There is still one timeline.** `OrderActivityTimeline` normalises
+`order_activity` rows and dispatch events to one entry shape and sorts the
+combined list by time. It is not a second component and not a second card.
+
+`useOrderAlShrouqDispatch` is the single client read of the row, keyed
+`["orders","dispatch",id]` so it is swept by the same `orders.all()` boundary as
+everything else about an order. The card and the timeline share it, so the two
+cannot disagree. **No polling**: there is no `refetchInterval`, because the
+dispatch happens server-side whether or not a browser is open. The row is
+re-read on invalidation after an approval, and that is all.
+`alshrouqDispatchContext` no longer returns the dispatch row — it used to, which
+made two reads of one row that could show different things.
+
+### The one-time immutable handoff
+
+Once an order has a dispatch row in any state but `cancelled`, the Portal offers
+no way to send it again. `summariseAlShrouqDispatch(row).handedOver` is the flag,
+and it is **true for `indeterminate` as well as `accepted`** — an unconfirmed
+send is exactly where a second attempt does the most damage, because the courier
+may already be moving.
+
+The send control is **absent, not disabled**: a disabled button beside a delivery
+already on its way still invites a click. Three layers enforce this and they
+cannot disagree, because they use the same predicate:
+
+1. the UI does not render the action,
+2. `prepareAlShrouqDispatch` returns `already_dispatched` before anything is
+   built or sent,
+3. the unique index `alshrouq_dispatches_live_order_key` (`UNIQUE (order_id)
+   WHERE cancelled_at IS NULL`).
+
+**Editing a dispatched order changes nothing about the delivery.** The order save
+path and the dispatch path share no code and no table: `payload.ts`,
+`use-order-form.ts` and `use-orders-mutations.ts` mention neither
+`alshrouq_dispatches` nor `payload_snapshot` nor any dispatch function, and a
+test asserts each of those absences. The only edge from the form to the dispatch
+layer is `afterCreate`, which runs after an **insert**; there is no
+`afterUpdate`. So changing a name, a phone, an address, a payment type, a value,
+a note or a branch cannot send a request, rebuild a snapshot, create a second
+dispatch, or change the reference or the tracking URL.
+
+`payload_snapshot` is written in exactly **one** statement in the repository —
+the insert in `scheduleAlShrouqDispatch` — and appears in no `UPDATE` anywhere.
+Tests assert both halves: that the single writer is that insert, and that the
+column appears in no update's argument, including the worker's four.
+
+### Tracking URL provenance
+
+`tracking_url` comes from `findAlshrouqOrderByClientOrderId` — the reconciliation
+GET whose shape *is* evidence-backed — and from nowhere else. Nothing constructs
+one, no format is assumed, and no URL is derived from the external reference.
+
+When the column is null the link is simply absent: no disabled button, no
+placeholder. **The external reference stays visible either way**, because
+"AlShrouq has this order and it is called 6099196" is true whether or not a
+tracking page exists.
+
+Before it reaches an anchor the value passes `safeTrackingUrl`, which accepts
+`http`/`https` absolute URLs only. The column is upstream text, so the scheme is
+checked rather than trusted, and anything else is treated as no URL rather than
+rewritten. Links open with `rel="noopener noreferrer"`, the pattern the branch
+panels already use.
+
+### The scheduled countdown
+
+Display only, from `use-scheduled-countdown.ts`, rendered in both the AlShrouq
+card and beside the timeline's scheduled event. It reads the persisted
+`scheduled_for` on every render, so a refresh, another browser or another device
+reconstruct the same figure — there is no local state to disagree with the row.
+
+Reaching zero changes a label to **"Dispatch pending"** and nothing else. The
+hook has no network call, no mutation and no server function; its only effect is
+a `setInterval` that re-renders. The dispatch is performed by `pg_cron` → the
+worker → the safety gate, which is why a closed laptop, a logged-out agent or a
+sleeping tab makes no difference to whether the delivery happens. A countdown
+that fired the request would mean two open tabs sending two couriers and a
+closed one sending none.
+
+Once the row leaves `scheduled` the countdown reports `inactive` and the card
+shows the persisted status instead.
+
+### One approval dialog, one request
+
+There were two dispatch UIs: the create journey's approval dialog, and a second
+complete implementation inside the AlShrouq card with its own field set, its own
+validation and its own request. Two implementations of one handoff is how the
+details silently diverge, so they are now one.
+
+`AlShrouqApprovalDialog` takes `mode: "create" | "existing"`. The copy and the
+buttons differ — a new order can be recorded without being sent, an existing one
+is already recorded — and everything underneath is identical: the same fields,
+the same `AlShrouqApprovalPlan`, the same `alshrouqDispatchOrder`.
+
+`approval.ts` is the contract. `dispatchInputFor(orderId, plan)` is the **only**
+place either journey assembles a dispatch request, and `describeApprovalResult`
+is the only place either journey chooses what the agent is told — so the same
+server result cannot be reported two different ways depending on which screen it
+came from. Neither builds the object inline any more, and a test asserts it.
+
+The approval still carries a *time*, not a permission: the server compares it to
+its own clock to route between scheduling and immediate dispatch, and the safety
+gate sits behind both. There is no `live` field anywhere in the plan, the input
+or the request.
+
+**The AlShrouq card sits above the branch card** in the order form's right-hand
+column. Both are contextual, but only one is acted on, and the column stacks in
+document order on a narrow screen — so the delivery integration should not be
+below reference material. A test pins the order.
+
+**What the card shows** is the persisted row: status, customer, phone, branch,
+payment type as approved, the approved order value, the customer's location and
+coordinates, the scheduled slot with its countdown, the external reference, and
+the tracking link when one exists. It builds no payload, knows no endpoint, and
+reaches the transport through nothing.
 
 ### AlShrouq create transport
 

@@ -1,9 +1,16 @@
+import { useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Bot, Clock } from "lucide-react";
+import { Bot, Clock, ExternalLink, Truck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fmtSAR } from "@/lib/branches";
 import { BUSINESS_TIMEZONE } from "@/lib/timezone";
 import { actorName, useOrderActivity, type OrderActivityEvent } from "../hooks/use-order-activity";
+import {
+  buildAlShrouqTimeline,
+  type AlShrouqTimelineEvent,
+} from "@/features/alshrouq/dispatch-timeline";
+import { useOrderAlShrouqDispatch } from "@/features/alshrouq/use-order-dispatch";
+import { useScheduledDispatchCountdown } from "@/features/alshrouq/use-scheduled-countdown";
 
 /**
  * Describe one logged change.
@@ -159,8 +166,125 @@ const fmtBusinessTime = (iso: string) => {
   }
 };
 
+/**
+ * One row of the timeline, whichever log it came from.
+ *
+ * The order's own history lives in `order_activity`; the AlShrouq handoff lives
+ * in `alshrouq_dispatches`. Both are backend facts, and an agent reading "what
+ * happened to this order" wants them in one column in time order — so they are
+ * normalised to this shape and merged, rather than a second timeline being built
+ * beside the first.
+ */
+interface TimelineEntry {
+  id: string;
+  at: string;
+  title: string;
+  detail: string | null;
+  subtitle: string | null;
+  /** Which mark the rail draws, and in what colour. */
+  tone: "default" | "automated" | "success" | "warning" | "danger";
+  /** Who or what did it. `null` renders no attribution at all. */
+  actor: { kind: "person" | "system" | "delivery"; name: string } | null;
+  /** Only ever a persisted, absolute tracking URL. Never assembled. */
+  trackingUrl?: string | null;
+}
+
+const DOT: Record<TimelineEntry["tone"], string> = {
+  default: "bg-primary",
+  automated: "bg-success",
+  success: "bg-success",
+  warning: "bg-warning",
+  danger: "bg-destructive",
+};
+
+/** The scheduled entry's title, matched to attach the countdown to it. */
+const SCHEDULED_TITLE = "AlShrouq delivery scheduled";
+
+/** An `order_activity` row, as the timeline renders it. */
+function fromActivity(e: OrderActivityEvent): TimelineEntry {
+  const automated = e.details?.automated === true || e.action === "invoice_verified";
+  return {
+    id: e.id,
+    at: e.created_at,
+    title: describe(e, (id) => actorName(e.names, id)),
+    detail: detailLine(e),
+    subtitle: invoiceSubtitle(e),
+    tone: automated ? "automated" : "default",
+    actor: automated
+      ? // Named rather than attributed to whoever happened to have the order
+        // open: the portal did this, and history should not read as though an
+        // agent typed it.
+        { kind: "system", name: String(e.details?.source ?? "MilaPortal") }
+      : { kind: "person", name: e.actor_name },
+  };
+}
+
+/** A dispatch event, derived from the persisted row. */
+function fromDispatch(e: AlShrouqTimelineEvent, index: number): TimelineEntry {
+  return {
+    id: `alshrouq-${e.kind}-${e.at}-${index}`,
+    at: e.at,
+    title: e.title,
+    detail: e.detail,
+    subtitle: null,
+    tone:
+      e.tone === "success"
+        ? "success"
+        : e.tone === "danger"
+          ? "danger"
+          : e.tone === "warning"
+            ? "warning"
+            : "default",
+    // The integration, not a person. Who approved it is on the order's own
+    // history; repeating a name here would attribute the courier's own
+    // acknowledgement to whoever last touched the order.
+    actor: { kind: "delivery", name: "AlShrouq" },
+    trackingUrl: e.trackingUrl,
+  };
+}
+
 export function OrderActivityTimeline({ orderId }: { orderId: string }) {
   const { data, isLoading } = useOrderActivity(orderId);
+
+  /**
+   * The dispatch history, from the shared hook the AlShrouq card also reads.
+   * An order that was never dispatched has no rows and contributes no events —
+   * the timeline of a Store Pickup order is exactly what it always was.
+   */
+  const { data: dispatchState } = useOrderAlShrouqDispatch(orderId);
+  const current = dispatchState?.current ?? null;
+
+  /**
+   * The countdown, owned here because this is where the clock is rendered.
+   * Display only: it has no network call and no mutation, and reaching zero
+   * changes a label. The dispatch is performed server-side by pg_cron and the
+   * worker whether or not this page is open.
+   */
+  const countdown = useScheduledDispatchCountdown(current?.scheduled_for, current?.dispatch_status);
+
+  const entries = useMemo<TimelineEntry[]>(() => {
+    const activity = (data ?? []).map(fromActivity);
+    const dispatch = (dispatchState?.rows ?? []).flatMap((row, i) =>
+      buildAlShrouqTimeline(row).map((event, j) => fromDispatch(event, i * 100 + j)),
+    );
+    // Newest first, matching the order the activity query already returns.
+    return [...activity, ...dispatch].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  }, [data, dispatchState]);
+
+  /**
+   * How long is left, appended to the scheduled entry alone.
+   *
+   * Kept out of `buildAlShrouqTimeline` on purpose: that module is pure and has
+   * no clock, so the countdown belongs to the renderer that ticks. Once the row
+   * leaves `scheduled` the hook reports `inactive` and nothing is appended — a
+   * number ticking down beside an order a worker has already claimed is a lie.
+   */
+  const countdownLine =
+    countdown.state === "waiting"
+      ? `Dispatching in ${countdown.remainingLabel}`
+      : countdown.state === "due"
+        ? "Dispatch pending"
+        : null;
 
   return (
     <Card className="overflow-hidden shadow-sm">
@@ -171,15 +295,14 @@ export function OrderActivityTimeline({ orderId }: { orderId: string }) {
       </CardHeader>
       <CardContent className="p-4">
         {isLoading && <div className="text-xs text-muted-foreground">Loading…</div>}
-        {!isLoading && (data?.length ?? 0) === 0 && (
+        {!isLoading && entries.length === 0 && (
           <div className="text-xs text-muted-foreground">No activity yet.</div>
         )}
         <ol className="space-y-0">
-          {(data ?? []).map((e, i, all) => {
-            const automated = e.details?.automated === true || e.action === "invoice_verified";
-            const subtitle = invoiceSubtitle(e);
-            const detail = detailLine(e);
+          {entries.map((e, i, all) => {
             const last = i === all.length - 1;
+            const countdownHere =
+              countdownLine && e.title === SCHEDULED_TITLE ? countdownLine : null;
             return (
               <li key={e.id} className="flex gap-2.5">
                 {/* The rail: a dot per event and a hairline joining them, so the
@@ -189,39 +312,56 @@ export function OrderActivityTimeline({ orderId }: { orderId: string }) {
                     aria-hidden
                     className={cn(
                       "mt-1.5 h-2 w-2 shrink-0 rounded-full ring-2 ring-background",
-                      automated ? "bg-success" : "bg-primary",
+                      DOT[e.tone],
                     )}
                   />
                   {!last && <span aria-hidden className="w-px flex-1 bg-border" />}
                 </div>
                 <div className={cn("min-w-0 flex-1", last ? "pb-0" : "pb-3")}>
-                  <div className="text-[13px] font-medium leading-snug">
-                    {describe(e, (id) => actorName(e.names, id))}
-                  </div>
-                  {detail && (
-                    <div className="text-[11px] leading-snug text-muted-foreground">{detail}</div>
+                  <div className="text-[13px] font-medium leading-snug">{e.title}</div>
+                  {e.detail && (
+                    <div className="text-[11px] leading-snug text-muted-foreground">{e.detail}</div>
                   )}
-                  {subtitle && (
+                  {countdownHere && (
+                    <div className="text-[11px] font-medium leading-snug text-foreground">
+                      {countdownHere}
+                    </div>
+                  )}
+                  {e.subtitle && (
                     <div
                       className="truncate text-[11px] leading-snug text-muted-foreground"
                       dir="auto"
                     >
-                      {subtitle}
+                      {e.subtitle}
                     </div>
                   )}
+                  {/* Shown only when the reconciliation persisted a destination.
+                      No URL is constructed from a reference, and a missing one
+                      renders nothing rather than a dead button. */}
+                  {e.trackingUrl && (
+                    <a
+                      href={e.trackingUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+                    >
+                      <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                      Open tracking
+                    </a>
+                  )}
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">
-                    {automated ? (
-                      // Named rather than attributed to whoever happened to have
-                      // the order open: the portal did this, and history should
-                      // not read as though an agent typed it.
+                    {e.actor && (
                       <span className="inline-flex items-center gap-1 font-medium text-foreground">
-                        <Bot className="h-3 w-3" aria-hidden="true" />
-                        {e.details?.source ?? "MilaPortal"}
+                        {e.actor.kind === "system" && (
+                          <Bot className="h-3 w-3" aria-hidden="true" />
+                        )}
+                        {e.actor.kind === "delivery" && (
+                          <Truck className="h-3 w-3" aria-hidden="true" />
+                        )}
+                        {e.actor.name}
                       </span>
-                    ) : (
-                      <span className="font-medium text-foreground">{e.actor_name}</span>
                     )}
-                    <span>· {fmtBusinessTime(e.created_at)}</span>
+                    <span>· {fmtBusinessTime(e.at)}</span>
                   </div>
                 </div>
               </li>

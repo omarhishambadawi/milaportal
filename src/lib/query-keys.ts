@@ -94,6 +94,15 @@ export const queryKeys = {
     detail: (id: string | undefined) => ["orders", "detail", id] as const,
     activity: (orderId: string) => ["orders", "activity", orderId] as const,
     /**
+     * One order's AlShrouq dispatch row.
+     *
+     * Nested under `orders` so the dispatch state is swept by the same
+     * `orders.all()` boundary as the rest of the order, and so the card and the
+     * timeline — which both need it — read one cache entry rather than racing
+     * two queries on the same row.
+     */
+    dispatch: (orderId: string | undefined) => ["orders", "dispatch", orderId] as const,
+    /**
      * The signed-in agent's starred order ids.
      *
      * Keyed by user id so a sign-out/sign-in on a shared machine cannot serve

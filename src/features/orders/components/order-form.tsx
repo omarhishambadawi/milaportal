@@ -60,7 +60,7 @@ import { OrderInvoicePanel, StateTag } from "@/features/orders/components/order-
 import { BranchPreviewPanel } from "@/features/branches/components/branch-preview-panel";
 import { AlShrouqDispatchSection } from "@/features/alshrouq/components/dispatch-section";
 import { useAlShrouqCreateApproval } from "@/features/alshrouq/use-create-approval";
-import { AlShrouqCreateApproval } from "@/features/alshrouq/components/create-approval-dialog";
+import { AlShrouqApprovalDialog } from "@/features/alshrouq/components/approval-dialog";
 import { ALSHROUQ } from "@/features/alshrouq/constants";
 
 /** The id the header's submit button reaches the form by, across the layout. */
@@ -695,11 +695,16 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
         <aside className="min-w-0 space-y-4">
           {canViewShams && <OrderInvoicePanel invoices={shamsInvoices} />}
 
-          {/* Appears the moment a branch is chosen, so the questions a customer
-              asks next are answered without leaving a half-typed order. */}
-          {form.branch_no && <BranchPreviewPanel branchNo={form.branch_no} />}
+          {/* AlShrouq before the branch panel, deliberately.
 
-          {/* Appears the moment the delivery method is AlShrouq, on a draft as
+              Both are contextual, but only one is acted on: the dispatch card
+              carries the delivery's status, its scheduled slot and its tracking
+              link, while the branch panel is reference an agent glances at. On a
+              narrow screen the column stacks in document order, so whichever is
+              first is the one visible without scrolling — and the higher-priority
+              delivery integration should not be below a phone number.
+
+              Appears the moment the delivery method is AlShrouq, on a draft as
               well as a saved order. Read-only: it reflects the state above and
               takes no part in validation or submit. */}
           {form.delivery_type === ALSHROUQ && (
@@ -714,12 +719,17 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
             />
           )}
 
+          {/* Appears the moment a branch is chosen, so the questions a customer
+              asks next are answered without leaving a half-typed order. */}
+          {form.branch_no && <BranchPreviewPanel branchNo={form.branch_no} />}
+
           {mode === "edit" && id && <OrderActivityTimeline orderId={id} />}
         </aside>
       </div>
 
       {interceptsCreate && (
-        <AlShrouqCreateApproval
+        <AlShrouqApprovalDialog
+          mode="create"
           open={approval.isOpen}
           onOpenChange={approval.setOpen}
           customerName={form.customer_name}

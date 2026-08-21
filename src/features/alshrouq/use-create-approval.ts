@@ -30,11 +30,17 @@
 
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { alshrouqDispatchOrder } from "@/lib/shams.functions";
+import { queryKeys } from "@/lib/query-keys";
 import type { ScheduleResult } from "@/lib/shams-crm/alshrouq-scheduler.server";
-import type { AlShrouqApprovalPlan } from "./components/create-approval-dialog";
-import { formatScheduledFor } from "./scheduling";
+import {
+  approvalChangedDispatchState,
+  describeApprovalResult,
+  dispatchInputFor,
+  type AlShrouqApprovalPlan,
+} from "./approval";
 
 export interface AlShrouqCreateApprovalState {
   isOpen: boolean;
@@ -48,49 +54,20 @@ export interface AlShrouqCreateApprovalState {
   afterCreate: (orderId: string) => Promise<void>;
 }
 
-/** What the agent is told, per outcome. Never "sent" without evidence. */
+/**
+ * What the agent is told, per outcome.
+ *
+ * The wording lives in `describeApprovalResult`, shared with the order page, so
+ * the same server result cannot be reported two different ways depending on
+ * which screen the agent happened to approve from. Only the "Order created."
+ * opening clause belongs to this journey.
+ */
 function announce(result: ScheduleResult): void {
-  switch (result.kind) {
-    case "scheduled":
-      toast.success(
-        `Order created. AlShrouq will be contacted at ${formatScheduledFor(result.scheduledFor)}.`,
-      );
-      return;
-    case "dispatched":
-      toast.success(
-        result.dispatch.externalOrderId
-          ? `Order created and sent to AlShrouq — reference ${result.dispatch.externalOrderId}.`
-          : "Order created and sent to AlShrouq.",
-      );
-      return;
-    case "already_dispatched":
-      toast.info(
-        "Order created. This order already had an AlShrouq delivery, so it was not sent again.",
-      );
-      return;
-    case "prepared":
-      // The gate is shut. Saying "sent" here would be the single most damaging
-      // thing this hook could do.
-      toast.info("Order created. AlShrouq dispatch is switched off, so no courier was contacted.");
-      return;
-    case "rejected":
-      toast.error("Order created, but AlShrouq refused the delivery. No courier was sent.");
-      return;
-    case "indeterminate":
-      toast.warning(
-        "Order created. The AlShrouq result is unknown and it has NOT been retried — check with AlShrouq before anyone sends it again.",
-      );
-      return;
-    case "invalid":
-      toast.error("Order created, but the AlShrouq details were incomplete. Nothing was sent.");
-      return;
-    case "branch_unresolved":
-      toast.error("Order created, but this branch cannot be dispatched to. Nothing was sent.");
-      return;
-    case "options_unavailable":
-      toast.error("Order created, but AlShrouq could not be reached. Nothing was sent.");
-      return;
-  }
+  const { tone, message } = describeApprovalResult(result, true);
+  if (tone === "error") toast.error(message);
+  else if (tone === "warning") toast.warning(message);
+  else if (tone === "success") toast.success(message);
+  else toast.info(message);
 }
 
 export function useAlShrouqCreateApproval(): AlShrouqCreateApprovalState {
@@ -99,6 +76,7 @@ export function useAlShrouqCreateApproval(): AlShrouqCreateApprovalState {
   /** Held in a ref: the form submits immediately and must see the final value. */
   const plan = useRef<AlShrouqApprovalPlan | null>(null);
   const send = useServerFn(alshrouqDispatchOrder);
+  const qc = useQueryClient();
 
   const approve = useCallback((next: AlShrouqApprovalPlan, submitForm: () => void) => {
     plan.current = next;
@@ -115,29 +93,23 @@ export function useAlShrouqCreateApproval(): AlShrouqCreateApprovalState {
       if (!current || current.intent !== "dispatch") return;
 
       try {
-        const outcome = await send({
-          data: {
-            orderId,
-            customerName: current.customerName,
-            customerPhone: current.customerPhone,
-            paymentType: current.paymentType,
-            mapUrl: current.mapUrl,
-            lat: current.lat,
-            lng: current.lng,
-            orderValue: current.orderValue,
-            details: "",
-            scheduledFor: current.scheduledFor,
-          },
-        });
+        // Built by the same function the order page uses, so both journeys send
+        // the identical request shape to the identical server function.
+        const outcome = await send({ data: dispatchInputFor(orderId, current) });
         setResult(outcome);
         announce(outcome);
+        if (approvalChangedDispatchState(outcome)) {
+          // The new order's page reads its dispatch row from the shared query;
+          // seed nothing, just make sure it is not served a cached absence.
+          qc.invalidateQueries({ queryKey: queryKeys.orders.dispatch(orderId) });
+        }
       } catch {
         // The order is saved and correct; only the courier step failed, and it
         // failed before contacting anyone.
         toast.error("Order created, but the AlShrouq approval failed. Nothing was sent.");
       }
     },
-    [send],
+    [send, qc],
   );
 
   const open = useCallback(() => setOpen(true), []);

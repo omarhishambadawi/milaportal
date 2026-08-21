@@ -864,15 +864,6 @@ export const alshrouqResolveLocation = createServerFn({ method: "POST" })
     }
   });
 
-/** A live courier record for an order, if one exists. Read-only here. */
-export interface AlShrouqExistingDispatch {
-  externalOrderId: string | null;
-  status: string | null;
-  statusDetail: string | null;
-  trackingUrl: string | null;
-  dispatchedAt: string | null;
-}
-
 /**
  * What the dispatch dialog is told about an order.
  *
@@ -898,7 +889,6 @@ export interface AlShrouqDispatchContext {
     orderValue: string;
     notes: string;
   };
-  existingDispatch: AlShrouqExistingDispatch | null;
 }
 
 /**
@@ -941,21 +931,20 @@ export const alshrouqDispatchContext = createServerFn({ method: "POST" })
     const owns = order.agent_id === userId;
     if (!canAll && !(owns && canOwn)) throw new Error("Forbidden: insufficient permissions");
 
-    /**
-     * Is there already a live courier record for this order?
+    /*
+     * The dispatch row is deliberately *not* read here.
      *
-     * `alshrouq_dispatches` is absent from the generated `types.ts`, so it is
-     * reached through the cast this codebase already uses for such tables. A
-     * *live* dispatch is one that has not been cancelled — the same rule as the
-     * unique index `alshrouq_dispatches_live_order_key`, so what the dialog shows
-     * and what the database enforces cannot drift apart.
+     * It used to be, and the card rendered its status from this context while
+     * the timeline read the same row through its own query — two reads of one
+     * row that could show different things while one of them was stale. The
+     * client now reads it once, through `useOrderAlShrouqDispatch`, under the
+     * RLS policy that already follows the order's own visibility.
+     *
+     * Nothing is lost in the way that matters: whether an order may be sent
+     * again is not decided by what this context reports. It is decided by
+     * `prepareAlShrouqDispatch`'s duplicate check and, behind that, by the
+     * unique index `alshrouq_dispatches_live_order_key`.
      */
-    const { data: dispatchRow } = await (supabase as any)
-      .from("alshrouq_dispatches")
-      .select("external_order_id,status,status_detail,tracking_url,dispatched_at")
-      .eq("order_id", data.orderId)
-      .is("cancelled_at", null)
-      .maybeSingle();
 
     const { stripOrderPrefix } = await import("@/lib/branches");
     const { resolveAlShrouqBranch } = await import("@/lib/shams-crm/alshrouq-branches");
@@ -992,15 +981,6 @@ export const alshrouqDispatchContext = createServerFn({ method: "POST" })
         orderValue: order.invoice_value == null ? "" : String(order.invoice_value),
         notes: order.notes ?? "",
       },
-      existingDispatch: dispatchRow
-        ? {
-            externalOrderId: dispatchRow.external_order_id ?? null,
-            status: dispatchRow.status ?? null,
-            statusDetail: dispatchRow.status_detail ?? null,
-            trackingUrl: dispatchRow.tracking_url ?? null,
-            dispatchedAt: dispatchRow.dispatched_at ?? null,
-          }
-        : null,
     };
   });
 

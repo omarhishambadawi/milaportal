@@ -1,29 +1,37 @@
 /**
- * Approving what happens when an AlShrouq order is created.
+ * Approving an AlShrouq delivery — the one dialog, for both journeys.
  *
- * The one place an agent decides between "just record this order" and "record it
- * and send a courier". It opens from the page's single Create order action, so
- * there is no second button competing with it.
+ * An agent can approve a handoff in two situations: while creating a new order,
+ * and on an order that already exists. Those are different sentences, different
+ * buttons and different consequences if the agent walks away — so `mode` changes
+ * the copy. Everything underneath is deliberately identical: the same fields,
+ * the same `AlShrouqApprovalPlan`, the same `alshrouqDispatchOrder`.
+ *
+ * There used to be two dialogs. The create flow had this one; the order page had
+ * its own inside the AlShrouq card, with its own field set, its own validation
+ * and its own idea of what to send. Two implementations of the same handoff is
+ * how the details silently diverge — one gains a field the other never sends —
+ * and it is what this phase collapsed.
  *
  * ## What it is not
  *
- * It is not a dispatcher. Choosing "send" closes the dialog and hands a plan
- * back to the form; the form saves the order and only then calls the server
- * function, which decides — from the time, on the server's clock — whether to
- * contact a courier now or park a frozen snapshot for later. Nothing here talks
- * to AlShrouq, and there is no field a caller could set to make it.
+ * It is not a dispatcher. It hands a *plan* back to its caller; the caller calls
+ * the server function, and the server decides — from the time, on its own clock
+ * — whether to contact a courier now or park a frozen snapshot for later.
+ * Nothing here talks to AlShrouq, and there is no field a caller could set to
+ * make it.
  *
  * ## Why the scheduled wording is so explicit
  *
- * "Create order and send" reads, to a person in a hurry, as *sent*. When the
- * chosen time is in the future nothing is sent at all — the courier is contacted
- * hours later by a job nobody is watching. So the button changes verb, the
- * summary names the exact instant, and the confirmation says how long away it is
- * in words. An agent should never close this dialog believing a driver is on the
- * way when one is not.
+ * "Send" reads, to a person in a hurry, as *sent*. When the chosen time is in
+ * the future nothing is sent at all — the courier is contacted hours later by a
+ * job nobody is watching. So the button changes verb, the summary names the
+ * exact instant, and the confirmation says how long away it is in words. An
+ * agent should never close this dialog believing a driver is on the way when one
+ * is not.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { CalendarClock, Loader2, MapPin, Send } from "lucide-react";
@@ -45,28 +53,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { fmtSAR } from "@/lib/branches";
 import { alshrouqPaymentOptions, alshrouqResolveLocation } from "@/lib/shams.functions";
 import type { AlShrouqPaymentOption } from "@/lib/shams-crm/alshrouq-config.server";
+import type { AlShrouqFieldError } from "@/lib/shams-crm/alshrouq-payload";
+import type { ScheduleResult } from "@/lib/shams-crm/alshrouq-scheduler.server";
+import { describeApprovalResult, type AlShrouqApprovalPlan } from "../approval";
 import { describeLocationResult, formatCoordinates, type AlShrouqLocation } from "../location";
 import { describeRemaining, formatScheduledFor, parseScheduleInput } from "../scheduling";
 
-/** What the form is asked to do once the agent decides. */
-export interface AlShrouqApprovalPlan {
-  intent: "order_only" | "dispatch";
-  /** Present only for `dispatch`. Absent means immediate. */
-  scheduledFor?: string;
-  paymentType: string;
-  mapUrl: string;
-  lat: string;
-  lng: string;
-  /** Copied from the order at the moment of approval, not re-read later. */
-  customerName: string;
-  customerPhone: string;
-  orderValue: string;
-}
+export type { AlShrouqApprovalPlan };
 
-export interface AlShrouqCreateApprovalProps {
+export interface AlShrouqApprovalDialogProps {
+  /**
+   * `create` — the order does not exist yet, and "order only" is a real choice.
+   * `existing` — the order is saved, so the only decision is whether to hand it
+   * over and when.
+   */
+  mode: "create" | "existing";
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Live order values, for the summary. Never written back. */
@@ -74,6 +79,24 @@ export interface AlShrouqCreateApprovalProps {
   customerPhone: string;
   branchNo: string | null;
   invoiceValue: string;
+  /** Existing orders only: what to call the order, and its branch coverage. */
+  displayNo?: string | null;
+  branchLabel?: string | null;
+  /** The note for the driver, prefilled from the order where there is one. */
+  defaultDetails?: string;
+  /**
+   * The CRM's payment methods, when the caller already has them.
+   *
+   * The order page fetches them with the rest of the dispatch context, under the
+   * permission that decides whether this agent may act on this order. Left
+   * absent — on the create journey, where no order exists to scope a context to
+   * — the dialog fetches them itself.
+   */
+  paymentOptions?: AlShrouqPaymentOption[];
+  /** Server-side field errors from a refused approval, shown against the field. */
+  errors?: AlShrouqFieldError[];
+  /** The last outcome, shown inline. The create journey reports it as a toast. */
+  result?: ScheduleResult | null;
   busy: boolean;
   onApprove: (plan: AlShrouqApprovalPlan) => void;
 }
@@ -94,38 +117,76 @@ function Row({ label, value, muted }: { label: string; value: string; muted?: bo
   );
 }
 
-export function AlShrouqCreateApproval({
+/** What came back, said plainly. The wording lives in `describeApprovalResult`. */
+function ResultNotice({ result }: { result: ScheduleResult }) {
+  const { tone, message } = describeApprovalResult(result);
+  const bad = tone === "error" || tone === "warning";
+  return (
+    <div
+      className={`rounded-md border p-3 text-sm ${
+        bad ? "border-destructive/40 text-destructive" : "text-muted-foreground"
+      }`}
+    >
+      {message}
+    </div>
+  );
+}
+
+export function AlShrouqApprovalDialog({
+  mode,
   open,
   onOpenChange,
   customerName,
   customerPhone,
   branchNo,
   invoiceValue,
+  displayNo,
+  branchLabel,
+  defaultDetails = "",
+  paymentOptions: provided,
+  errors = [],
+  result = null,
   busy,
   onApprove,
-}: AlShrouqCreateApprovalProps) {
+}: AlShrouqApprovalDialogProps) {
   const [paymentType, setPaymentType] = useState("");
   const [linkInput, setLinkInput] = useState("");
   const [located, setLocated] = useState<AlShrouqLocation | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
+  const [details, setDetails] = useState(defaultDetails);
+
+  // Reopening is a fresh approval. A payment method or a location left over from
+  // the last time this dialog was open is exactly the kind of state that sends a
+  // driver to the previous customer's address.
+  useEffect(() => {
+    if (!open) return;
+    setPaymentType("");
+    setLinkInput("");
+    setLocated(null);
+    setLocationError(null);
+    setDate("");
+    setTime("");
+    setDetails(defaultDetails);
+  }, [open, defaultDetails]);
 
   /**
    * The CRM's payment methods.
    *
-   * Fetched here rather than passed in: a new order has no id to hang a dispatch
-   * context off, and the list belongs to the CRM in any case. Only while the
-   * dialog is open, so opening an order costs nothing.
+   * Only fetched when the caller has none to give — and only while the dialog is
+   * open, so opening an order costs nothing. There is no enum in this
+   * repository: the list belongs to the CRM.
    */
   const optionsFn = useServerFn(alshrouqPaymentOptions);
-  const { data: paymentOptions = [] } = useQuery<AlShrouqPaymentOption[]>({
+  const { data: fetched = [] } = useQuery<AlShrouqPaymentOption[]>({
     queryKey: ["alshrouq", "payment-options"],
-    enabled: open,
+    enabled: open && !provided,
     staleTime: 5 * 60_000,
     retry: false,
     queryFn: () => optionsFn({ data: undefined }),
   });
+  const paymentOptions = provided ?? fetched;
 
   const resolveFn = useServerFn(alshrouqResolveLocation);
   const resolve = useMutation({
@@ -145,6 +206,13 @@ export function AlShrouqCreateApproval({
       setLocationError("That link could not be checked. Try again.");
     },
   });
+
+  const resolveLocation = () => {
+    const url = linkInput.trim();
+    if (!url || resolve.isPending) return;
+    setLocationError(null);
+    resolve.mutate(url);
+  };
 
   /**
    * When the courier would be called.
@@ -181,28 +249,35 @@ export function AlShrouqCreateApproval({
         : "Add both a date and a time, or leave both blank to send now."
     : null;
 
+  const errorFor = (field: string) => errors.find((e) => e.field === field)?.message;
+
   const approve = (intent: AlShrouqApprovalPlan["intent"]) => {
     onApprove({
       intent,
       scheduledFor: intent === "dispatch" && scheduledIso ? scheduledIso : undefined,
       paymentType,
+      // The customer's own link is what goes on the wire, not the resolved one.
       mapUrl: located?.originalUrl ?? "",
       lat: located ? String(located.latitude) : "",
       lng: located ? String(located.longitude) : "",
       customerName,
       customerPhone,
       orderValue: invoiceValue,
+      details,
     });
   };
+
+  const creating = mode === "create";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Create this order</DialogTitle>
+          <DialogTitle>{creating ? "Create this order" : "Send order to AlShrouq"}</DialogTitle>
           <DialogDescription>
-            This order is going out by AlShrouq. Choose whether to record it only, or to record it
-            and hand it to AlShrouq.
+            {creating
+              ? "This order is going out by AlShrouq. Choose whether to record it only, or to record it and hand it to AlShrouq."
+              : `Order ${displayNo ?? "—"}${branchLabel ? ` · ${branchLabel}` : ""}. AlShrouq needs a little more than the order records — this is asked once, here, and does not change the order.`}
           </DialogDescription>
         </DialogHeader>
 
@@ -210,7 +285,17 @@ export function AlShrouqCreateApproval({
           <div className="grid grid-cols-1 gap-x-4 gap-y-3 rounded-md border border-border/60 p-3 sm:grid-cols-2">
             <Row label="Customer" value={customerName.trim() || "—"} muted={!customerName.trim()} />
             <Row label="Phone" value={customerPhone.trim() || "—"} muted={!customerPhone.trim()} />
-            <Row label="Branch" value={branchNo ?? "Select a branch"} muted={!branchNo} />
+            <Row
+              label="Branch"
+              value={
+                branchNo
+                  ? branchLabel
+                    ? `${branchNo} · ${branchLabel}`
+                    : branchNo
+                  : "Select a branch"
+              }
+              muted={!branchNo}
+            />
             <Row
               label="Order value"
               value={invoiceValue.trim() ? fmtSAR(Number(invoiceValue)) : "—"}
@@ -232,6 +317,9 @@ export function AlShrouqCreateApproval({
                 ))}
               </SelectContent>
             </Select>
+            {errorFor("payment_type") && (
+              <p className="text-xs text-destructive">{errorFor("payment_type")}</p>
+            )}
           </div>
 
           <div className="space-y-1.5">
@@ -242,11 +330,17 @@ export function AlShrouqCreateApproval({
                 placeholder="Paste the Google Maps link the customer sent"
                 value={linkInput}
                 onChange={(e) => setLinkInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    resolveLocation();
+                  }
+                }}
               />
               <Button
                 type="button"
                 variant="secondary"
-                onClick={() => linkInput.trim() && resolve.mutate(linkInput.trim())}
+                onClick={resolveLocation}
                 disabled={!linkInput.trim() || resolve.isPending}
               >
                 {resolve.isPending && (
@@ -261,21 +355,39 @@ export function AlShrouqCreateApproval({
                   <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
                   Location verified
                 </p>
-                {located.address && <p className="mt-1 truncate text-sm">{located.address}</p>}
+                {located.address && (
+                  <p className="mt-1 truncate text-sm" title={located.address}>
+                    {located.address}
+                  </p>
+                )}
                 <p className="mt-1 font-mono text-xs text-muted-foreground">
                   {formatCoordinates(located)}
                 </p>
               </div>
             ) : (
               <p className="text-xs text-muted-foreground">
-                Coordinates are read from the link on the server. They are not typed.
+                Short links are fine — they are followed on the server to read the coordinates a
+                courier routes to. Latitude and longitude come from the link and are not typed.
               </p>
             )}
             {locationError && <p className="text-xs text-destructive">{locationError}</p>}
+            {errorFor("customer_lat") && !locationError && (
+              <p className="text-xs text-destructive">{errorFor("customer_lat")}</p>
+            )}
           </div>
 
           <div className="space-y-1.5">
-            <Label>Reschedule delivery date &amp; time</Label>
+            <Label htmlFor="ap-details">Note for the driver (optional)</Label>
+            <Textarea
+              id="ap-details"
+              rows={2}
+              value={details}
+              onChange={(e) => setDetails(e.target.value)}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Delivery date &amp; time</Label>
             <div className="grid grid-cols-2 gap-2">
               <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
               <Input
@@ -285,7 +397,8 @@ export function AlShrouqCreateApproval({
               />
             </div>
             <p className="text-xs text-muted-foreground">
-              Leave both blank to hand the order over as soon as it is created.
+              Leave both blank to hand the order over
+              {creating ? " as soon as it is created" : " now"}.
             </p>
             {scheduleError && <p className="text-xs text-destructive">{scheduleError}</p>}
           </div>
@@ -309,15 +422,19 @@ export function AlShrouqCreateApproval({
               Sending to AlShrouq also needs: {missing.join(", ")}.
             </p>
           )}
+
+          {result && <ResultNotice result={result} />}
         </div>
 
         <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
-            Cancel
+            {creating ? "Cancel" : "Close"}
           </Button>
-          <Button variant="secondary" onClick={() => approve("order_only")} disabled={busy}>
-            Create order only
-          </Button>
+          {creating && (
+            <Button variant="secondary" onClick={() => approve("order_only")} disabled={busy}>
+              Create order only
+            </Button>
+          )}
           <Button onClick={() => approve("dispatch")} disabled={busy || !canDispatch}>
             {busy ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
@@ -326,7 +443,13 @@ export function AlShrouqCreateApproval({
             ) : (
               <Send className="mr-2 h-4 w-4" aria-hidden="true" />
             )}
-            {scheduledIso ? "Create order and schedule delivery" : "Create order and send"}
+            {creating
+              ? scheduledIso
+                ? "Create order and schedule delivery"
+                : "Create order and send"
+              : scheduledIso
+                ? "Schedule delivery"
+                : "Send to AlShrouq"}
           </Button>
         </DialogFooter>
       </DialogContent>
