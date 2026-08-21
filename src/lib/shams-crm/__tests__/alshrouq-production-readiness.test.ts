@@ -344,6 +344,41 @@ describe("the scheduler endpoint", () => {
     const get = route.slice(route.indexOf("GET:"), route.indexOf("POST:"));
     expect(get).not.toContain("runDueAlShrouqDispatches");
   });
+
+  /**
+   * The dry-run instrument.
+   *
+   * `GET` is how the whole chain is checked without any chance of a courier
+   * request: it reports whether the worker is configured, how much work is
+   * waiting, and — the field that matters most before go-live — whether the
+   * safety gate is open. Phase 10K leans on all three, so the shape is pinned
+   * here rather than left to be discovered when it is next needed.
+   */
+  it("reports configuration, due count and the gate — and only those", () => {
+    const get = route.slice(route.indexOf("GET:"), route.indexOf("POST:"));
+    expect(get).toContain("configured:");
+    expect(get).toContain("due:");
+    expect(get).toContain("liveDispatchEnabled: isAlShrouqLiveDispatchEnabled()");
+    // An unconfigured deployment answers rather than erroring, so a health check
+    // can distinguish "not set up" from "unreachable".
+    expect(get).toContain("{ configured: false, due: null }");
+    // Nothing sensitive in the response body itself — the header name is read
+    // from the request a few lines above, which is not a leak.
+    const body = get.slice(get.indexOf("return json({\n          configured: true"));
+    for (const leak of ["customer", "payload_snapshot", "secret", "client_order_id"]) {
+      expect(body).not.toContain(leak);
+    }
+  });
+
+  /**
+   * Both methods are behind the same secret, so a health check cannot be used to
+   * enumerate scheduled work either.
+   */
+  it("authenticates the health check as strictly as the run", () => {
+    const get = route.slice(route.indexOf("GET:"), route.indexOf("POST:"));
+    expect(get).toContain("x-alshrouq-scheduler-secret");
+    expect(get).toContain('json({ error: "unauthorized" }, 401)');
+  });
 });
 
 /* ------------------------------------------------------------------------- */

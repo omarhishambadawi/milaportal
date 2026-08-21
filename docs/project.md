@@ -3493,11 +3493,56 @@ defect.
 
 **What is left before live dispatch.** The operator recovery gap is closed — see
 "Resolve dispatch" below — so what remains is configuration rather than
-architecture: the two vault secrets, the matching runtime
-`ALSHROUQ_SCHEDULER_SECRET`, and then `ALSHROUQ_LIVE_DISPATCH_ENABLED` itself.
-Each of those is a deliberate human decision, and none of them should be taken on
-the strength of the tests alone: no dispatch has ever been created against the
-live schema, and no courier has ever been contacted from this codebase.
+architecture. Phase 10K walked the chain and found two things that would have
+made a configured scheduler fail silently.
+
+### Scheduler preflight — 2026-08-21
+
+Checked link by link, without contacting the courier.
+
+**pg_cron → the waker: healthy.** 25 runs, every minute, all `succeeded`, none
+longer than a few milliseconds. `alshrouq_dispatch_due()` returns `0` because
+nothing is due, so it exits before it ever reads vault. `net.http_request_queue`
+is empty: no request has been made.
+
+**The waker → the endpoint: blocked, twice over.**
+
+1. **The route is not in the deployed build.** `POST /api/alshrouq-run-scheduled`
+   on production answers **404**, while `POST /api/cdr-sync` and
+   `POST /lovable/email/queue/process` both answer **401** — so API routes are
+   served, and this one simply is not there. It is correctly registered in
+   `routeTree.gen.ts` and present in the local build output, so this is
+   deployment lag rather than a defect: production is running a build older than
+   the route. **Deploying current `main` is a prerequisite**, and configuring the
+   vault secrets before that would arm a scheduler that posts into a 404.
+
+2. **The URL must be the canonical origin.** The app answers on its own domain
+   (`milaportal.live`), and the `*.lovable.app` host issues a `307` to it.
+   `pg_net` does **not** follow redirects, so a vault `alshrouq_scheduler_url`
+   pointing at the `lovable.app` host would post into a redirect and do nothing at
+   all — with no error anywhere, because the waker fires and forgets. The value to
+   store is `https://milaportal.live/api/alshrouq-run-scheduled`, and it should be
+   re-checked if the domain ever moves.
+
+**The dry-run instrument.** `GET` on the same route is how the chain is checked
+without any possibility of a courier request: it reports `configured`, `due` and
+`liveDispatchEnabled`, and a test asserts it never calls
+`runDueAlShrouqDispatches`. It is behind the same shared secret as the run, so it
+cannot be used to enumerate scheduled work either. Once the deploy lands, an
+authenticated `GET` is the first thing to try — it exercises DNS, TLS, routing,
+the handler and the secret comparison, and dispatches nothing.
+
+**Then, in order:** deploy `main`; create the two vault secrets
+(`alshrouq_scheduler_url` pointing at the canonical origin's
+`/api/alshrouq-run-scheduled`, and `alshrouq_scheduler_secret`) together with the
+matching runtime `ALSHROUQ_SCHEDULER_SECRET`; confirm with an authenticated
+`GET`; schedule one order and watch it reach `scheduled` and then be claimed with
+the gate still shut (the run reports `skippedDisabled` and touches nothing); and
+only then consider `ALSHROUQ_LIVE_DISPATCH_ENABLED`.
+
+Each of those is a deliberate human decision, and none should be taken on the
+strength of the tests alone: no dispatch has ever been created against the live
+schema, and no courier has ever been contacted from this codebase.
 
 **The write path is protected by the policy, not the grant.** `alshrouq_dispatches`
 has RLS enabled with exactly **one** policy — `SELECT`, `TO authenticated`,
