@@ -61,6 +61,7 @@ export const Route = createFileRoute("/api/alshrouq-run-scheduled")({
             process.env.ALSHROUQ_SCHEDULER_SECRET,
           )
         ) {
+          console.warn("[alshrouq] scheduler health check rejected: bad or missing secret");
           return json({ error: "unauthorized" }, 401);
         }
 
@@ -90,19 +91,52 @@ export const Route = createFileRoute("/api/alshrouq-run-scheduled")({
             process.env.ALSHROUQ_SCHEDULER_SECRET,
           )
         ) {
+          /*
+           * A rejected caller is the one event that must never be silent.
+           *
+           * If the vault secret and `ALSHROUQ_SCHEDULER_SECRET` drift apart, the
+           * cron job keeps firing and this endpoint keeps refusing it — and
+           * scheduled deliveries simply stop happening, with nothing anywhere
+           * saying why. That is the same failure mode as the email job that ran
+           * 54 times and then stopped unnoticed.
+           *
+           * Nothing about the credential is logged, including its length.
+           */
+          console.warn("[alshrouq] scheduler request rejected: bad or missing secret");
           return json({ error: "unauthorized" }, 401);
         }
 
         const supabase = serviceClient();
-        if (!supabase) return json({ error: "not_configured" }, 503);
+        if (!supabase) {
+          // Configured to exist but not to work. Distinct from "nothing due".
+          console.error(
+            "[alshrouq] scheduler not configured: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing",
+          );
+          return json({ error: "not_configured" }, 503);
+        }
 
         const { runDueAlShrouqDispatches } =
           await import("@/lib/shams-crm/alshrouq-scheduler.server");
 
         try {
+          const { isAlShrouqLiveDispatchEnabled } =
+            await import("@/lib/shams-crm/alshrouq-dispatch.server");
           const summary = await runDueAlShrouqDispatches(supabase as any);
-          // Counts only. Never a customer, never a credential, never a payload.
-          console.info("[alshrouq] scheduled run", summary);
+
+          /*
+           * Counts only. Never a customer, never a credential, never a payload —
+           * `RunDueSummary` is six integers and a test asserts nothing else
+           * reaches it.
+           *
+           * The gate is stated rather than inferred: `skippedDisabled` already
+           * carries it, but "0 accepted" reads identically whether the gate was
+           * shut or there was simply nothing to do, and those are opposite
+           * operational facts.
+           */
+          console.info("[alshrouq] scheduled run", {
+            ...summary,
+            liveDispatchEnabled: isAlShrouqLiveDispatchEnabled(),
+          });
           return json({ ok: true, ...summary });
         } catch (err) {
           console.error("[alshrouq] scheduled run failed:", (err as Error)?.name ?? "unknown");

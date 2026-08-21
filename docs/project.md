@@ -3115,13 +3115,19 @@ pg_cron (every minute) → alshrouq_dispatch_due() → net.http_post
     → one POST → reconcile → persist
 ```
 
-**The cron job is registered by migration** (`20260821210000`), and that is the
-point. This database already lost a pg_cron job: `email_queue_dispatch` ran 54
-times, all succeeded, then stopped at 2026-08-20 23:15:19Z — 56 seconds after
-the Lovable revert — and never returned, because the email migration only
-*describes* it in `--` comments and never calls `cron.schedule`. Outbound email
-has been dead since. A courier dispatch that stops silently is worse, so this one
-is reproducible from the repository.
+**The cron job is registered by migration** (`20260821210000`), so that it is
+reproducible: a job that exists only because somebody once ran `cron.schedule` in
+a console is one nobody can rebuild, review, or notice the absence of.
+
+> **Correction (Phase 10H).** An earlier version of this paragraph said the
+> database had *lost* its `process-email-queue` job in the Lovable revert — 54
+> runs ending 2026-08-20 23:15:19Z — and that outbound email had been dead since.
+> That was verified wrong against the live database on 2026-08-22.
+> `email_queue_dispatch()` **unschedules itself** when both pgmq queues are
+> empty, and `email_queue_wake()` — an `AFTER INSERT` trigger on both queues,
+> both present and enabled — re-arms it on the next enqueue. An empty `cron.job`
+> beside empty queues is that design's idle state, not a regression. Email needs
+> no restoration, and no migration registers it.
 
 **The snapshot is the authority.** `payload_snapshot` is written when the agent
 approves and read at dispatch time; the worker never reads `orders` — a test
@@ -3394,10 +3400,19 @@ The cancelled row produces **"AlShrouq delivery cancelled"** through the existin
 Phase 10F timeline derivation, which already reads `cancelled_at`. No second
 event table, and the worker still touches only `alshrouq_dispatches`.
 
-Who cancelled is not recorded: there is no `cancelled_by` column, and adding one
-would need a migration this phase does not otherwise require. Authorization is
-enforced at the server function — `edit_all_orders`, or `edit_orders` on an order
-the agent owns, the same rule as dispatching and editing.
+**Who cancelled is recorded** (`20260822120000`). `cancelled_by` is a nullable
+uuid referencing `auth.users`, written server-side from `requireSupabaseAuth`'s
+verified claims — the server function's validator accepts an order id and nothing
+else, so a browser cannot attribute a cancellation to somebody else by asking to.
+It reuses the pattern `dispatched_by` and `scheduled_by` already set rather than
+introducing a second audit mechanism, and `admin_activity` is deliberately not
+involved: that table records administration of the portal, and this is one more
+fact about a dispatch row. Cancellations made before the column existed keep a
+NULL actor, which is the honest record.
+
+Authorization is enforced at the server function — `edit_all_orders`, or
+`edit_orders` on an order the agent owns, the same rule as dispatching and
+editing. No new permission key.
 
 ### Every insert states its status
 
@@ -3425,6 +3440,109 @@ The dispatch and cancellation writes therefore use `supabaseAdmin`, the pattern
 runs on — and, as there, only *after* the handler's permission check has passed.
 The order read and the `has_permission` RPCs stay on the caller's client, where
 RLS is exactly what should decide them. No RLS policy was added or weakened.
+
+### Verified against the live database — 2026-08-22
+
+Phase 10H checked the deployed Supabase project rather than the repository, by
+read-only query. Every statement below is an observation, not an inference, and
+**nothing was written to production**.
+
+**The schema is behind the repository.** The last applied migration is
+`20260820185447`. The scheduled-dispatch migration `20260821210000` has **not
+been applied**, so the deployed `alshrouq_dispatches` has none of:
+
+```
+dispatch_status   scheduled_for   payload_snapshot   scheduled_by
+scheduled_at      last_error      attempt_count      last_attempt_at
+```
+
+`public.alshrouq_dispatch_due()` does not exist, and `cron.job` holds zero rows.
+The vault secrets `alshrouq_scheduler_url` / `alshrouq_scheduler_secret` are
+absent — only `email_queue_service_role_key` is present.
+
+**What that means.** Everything built in 10D–10G against those columns cannot
+function until the migration is applied: scheduling, cancellation, the timeline's
+dispatch events, the countdown, and — since 10G made `persist()` write
+`dispatch_status`, `last_error`, `attempt_count` and `last_attempt_at` — the
+immediate path too. The client query fails soft (PostgREST rejects the unknown
+columns, the hook returns no rows, the card reads "Not scheduled"), so the Orders
+page degrades rather than breaking, and the safety gate means no courier code is
+reachable regardless. The code is correct for the intended schema; the database
+is what is behind.
+
+`pg_cron` 1.6.4, `pg_net` 0.20.3, `pgmq` 1.5.1 and `supabase_vault` 0.3.1 are all
+installed, so the chain has everything it needs once the migration lands.
+
+**The write path is protected by the policy, not the grant.** `alshrouq_dispatches`
+has RLS enabled with exactly **one** policy — `SELECT`, `TO authenticated`,
+qualified by the order's own visibility — and none for `INSERT`, `UPDATE` or
+`DELETE`. Under RLS a command with no permissive policy is denied, which is what
+refuses a write from the caller's own client.
+
+It is *not* the table grant. `authenticated` and `anon` both hold
+INSERT/UPDATE/DELETE grants here, because Supabase issues them by default on new
+public-schema tables and the migration's `GRANT SELECT` is additive rather than
+restrictive. The `20260820180000` comment claiming there is "no grant" describes
+the intent, not the outcome. The protection is real either way, and the Phase 10G
+fix — routing dispatch and cancellation writes through `supabaseAdmin` after the
+handler's permission check — is required for exactly the reason given, via the
+policy rather than the grant.
+
+**Data.** 4,085 orders carry `delivery_type = 'AlShrouq'`; `alshrouq_dispatches`
+holds 4 rows, all predating scheduling. `cron.job_run_details` holds 54 rows, the
+last at 2026-08-20 23:15:19Z — the email job draining its queue and disarming.
+
+**What remains unverified.** No dispatch was created, no permission boundary was
+exercised end to end, and the scheduler chain was never fired: doing any of those
+needs either a write to production or the courier gate, and both were declined.
+Those links are covered by source and unit assertions only.
+
+### Operational recovery for a stuck dispatch — designed, not built
+
+`indeterminate` and `failed` are terminal, and neither has an operator exit. That
+is deliberate for `indeterminate` — the courier may already be moving — but it
+leaves a row owning its order's dispatch slot with no way to release it short of
+direct database access. The workflow below is specified here and **not
+implemented**; it needs a column, a permission key and a server function, and
+adding a third unapplied migration on top of the drift above would make the gap
+worse rather than better.
+
+**"Resolve dispatch", never "Retry dispatch".** The action records a human's
+conclusion; it never sends anything. There is no code path from it to
+`createAlshrouqOrder`, and it must be impossible to build one by mistake — so the
+resolution handler should not import the transport at all.
+
+**What an operator needs first**, and what the timeline should already show
+before the button is offered: the external reference if reconciliation found one,
+the safe failure reason, when the attempt was made, and the client order id to
+quote to AlShrouq. Resolution is a decision taken *after* checking with the
+courier, so the UI's job is to make that check possible, not to shortcut it.
+
+**Two outcomes, and they differ in one important way:**
+
+| Operator says | Effect |
+| --- | --- |
+| "AlShrouq does have this delivery" | row moves to `accepted`; the slot stays taken; the reference may be entered if the GET never returned one |
+| "AlShrouq does not have this delivery" | row moves to `cancelled`, releasing the slot so the order can be approved again — deliberately reusing the existing cancellation semantics rather than inventing a "resolved" state |
+
+The second is why resolution frees the slot: a released slot means the order
+becomes sendable, and that is only safe when a person has confirmed no courier
+exists. That confirmation is the whole content of the action.
+
+**Constraints it must satisfy**, all of which the current architecture already
+supports:
+
+* `payload_snapshot` is untouched — resolution records a conclusion about a
+  dispatch, not a new authorisation of one.
+* A new permission key (`resolve_alshrouq_dispatch`), because this is a
+  supervisory act rather than order editing; it needs a migration, a
+  `has_permission()` change and a `check:permissions` update.
+* The actor and the operator's stated reason are persisted, following
+  `cancelled_by` / `scheduled_by` / `dispatched_by`.
+* An explicit acknowledgement in the dialog that no automatic retry occurred and
+  that the operator has verified the outcome with AlShrouq directly.
+* A timeline event from the persisted row, through the existing derivation — no
+  new event table, and the worker keeps touching only `alshrouq_dispatches`.
 
 ### Tracking URL provenance
 

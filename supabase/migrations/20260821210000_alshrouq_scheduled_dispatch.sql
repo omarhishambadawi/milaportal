@@ -4,20 +4,34 @@
 -- ===========================================================================
 -- Why the cron job is registered *here* and not by hand
 -- ===========================================================================
--- This database already had a pg_cron job -- `SELECT public.email_queue_dispatch()`
--- -- which ran 54 times, all succeeded, from 2026-08-06 until 2026-08-20
--- 23:15:19Z, and then stopped. `cron.job` now holds zero rows. The function
--- still exists and its vault secret still exists; only the *registration* was
--- lost, 56 seconds after the Lovable revert completed.
+-- So that it is reproducible: a courier dispatch that silently stops running is
+-- among the worst failures this integration can have, and a job that exists only
+-- because somebody once ran `cron.schedule` in a console is a job nobody can
+-- rebuild, review or notice the absence of. Registering it here means the same
+-- `supabase db push` that builds every other object also arms the scheduler.
 --
--- It never came back because it was never written down. The email migration
--- describes that job in `--` comments ("Creates job 'process-email-queue'") but
--- never executes `cron.schedule`, so nothing in this repository could recreate
--- it and nothing noticed it was gone. Outbound email has been dead since.
+-- ---------------------------------------------------------------------------
+-- A correction, recorded deliberately
+-- ---------------------------------------------------------------------------
+-- An earlier version of this comment justified the decision with the claim that
+-- this database had *lost* its `process-email-queue` job in the Lovable revert,
+-- citing 54 successful runs that stopped at 2026-08-20 23:15:19Z and concluding
+-- that outbound email had been dead since.
 --
--- A courier dispatch that silently stops is worse than an email that silently
--- stops, so this job is registered by a migration: reproducible, reviewable, and
--- restored by the same `supabase db push` that builds everything else.
+-- That was wrong, and it was verified wrong against the live database on
+-- 2026-08-22. `public.email_queue_dispatch()` **unschedules itself**: when both
+-- pgmq queues are empty it calls `cron.unschedule('process-email-queue')` and
+-- returns. `public.email_queue_wake()` -- an AFTER INSERT trigger on both
+-- `pgmq.q_auth_emails` and `pgmq.q_transactional_emails`, both present and
+-- enabled -- re-arms it on the next enqueue.
+--
+-- So an empty `cron.job` alongside empty queues is that design's correct idle
+-- state, not a regression. The run that ended at 23:15:19Z was the job draining
+-- the queue and disarming; it merely happened to fall near the revert. Email is
+-- not broken and needs no restoration.
+--
+-- The reasoning above stands on its own: AlShrouq's poll is a fixed every-minute
+-- job with a cheap guard, not a self-arming one, so it does need registering.
 --
 -- ===========================================================================
 -- 1. Scheduled-dispatch state

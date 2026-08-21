@@ -762,12 +762,20 @@ export const alshrouqDispatchOrder = createServerFn({ method: "POST" })
     /*
      * The dispatch write goes through the service-role client, not the caller's.
      *
-     * `alshrouq_dispatches` grants `SELECT` to `authenticated` and **no write of
-     * any kind** — deliberately, so a row can never claim a dispatch that did not
-     * happen; every write must come from the code that actually called the CRM.
-     * The middleware's client is the caller's own, RLS-bound, so the insert this
-     * function needs would be refused by Postgres and no dispatch record would
+     * `alshrouq_dispatches` carries exactly one RLS policy — `SELECT`, for
+     * `authenticated` — and none for `INSERT`, `UPDATE` or `DELETE`. Under RLS a
+     * command with no permissive policy is denied, so the insert this function
+     * needs is refused for the caller's own client and no dispatch record would
      * ever be written.
+     *
+     * **RLS is what blocks it, not the table grant.** Verified against the live
+     * database in Phase 10H: `authenticated` and `anon` do in fact hold
+     * INSERT/UPDATE/DELETE *grants* on this table, because Supabase grants them
+     * by default on new public-schema tables and the migration's `GRANT SELECT`
+     * is additive rather than restrictive. The 20260820180000 migration comment
+     * claiming there is "no grant" describes the intent, not the outcome. The
+     * protection is real either way — and it is the policy, so anyone reasoning
+     * about this table should look there.
      *
      * That silence was the danger, not the failure: an uncertain dispatch whose
      * row never lands is an order that still looks sendable. So the writes use
@@ -845,7 +853,9 @@ export const alshrouqCancelScheduledDispatch = createServerFn({ method: "POST" }
     const { cancelScheduledAlShrouqDispatch } =
       await import("@/lib/shams-crm/alshrouq-scheduler.server");
 
-    return cancelScheduledAlShrouqDispatch(data.orderId, supabaseAdmin);
+    // The actor is the verified session's subject, never anything the caller
+    // sent — the validator above accepts an order id and nothing else.
+    return cancelScheduledAlShrouqDispatch(data.orderId, userId, supabaseAdmin);
   });
 
 /**

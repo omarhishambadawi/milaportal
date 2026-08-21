@@ -371,13 +371,15 @@ export type CancelScheduledResult =
   | { kind: "conflict"; status: DispatchStatus | null; message: string };
 
 /**
- * Who cancelled is deliberately not recorded here. There is no `cancelled_by`
- * column, and adding one would mean a migration this phase does not otherwise
- * need — so the caller's authorization is enforced (and logged) at the server
- * function, and the row records only that it was called off and when.
+ * `userId` is the **verified** caller, from `requireSupabaseAuth`'s claims — the
+ * server function takes an order id and nothing else, so a browser cannot
+ * attribute a cancellation to somebody else by asking to. It joins
+ * `dispatched_by` and `scheduled_by` in recording who did the consequential
+ * thing, which cancellation was previously the only one to omit.
  */
 export async function cancelScheduledAlShrouqDispatch(
   orderId: string,
+  userId: string,
   supabase: SupabaseLike,
 ): Promise<CancelScheduledResult> {
   const cancelledAt = new Date().toISOString();
@@ -396,6 +398,7 @@ export async function cancelScheduledAlShrouqDispatch(
     .update({
       dispatch_status: "cancelled",
       cancelled_at: cancelledAt,
+      cancelled_by: userId,
     })
     .eq("order_id", orderId)
     .eq("dispatch_status", "scheduled")

@@ -28,11 +28,15 @@
  *
  * ## Read-only, and RLS-bounded
  *
- * `alshrouq_dispatches` grants `SELECT` to `authenticated` under a policy that
- * follows the order's own visibility, and grants no write of any kind: every
- * write goes through the server function that actually called the courier. So
- * this hook cannot dispatch, cancel or amend anything, and a row it returns is
- * one the caller was already entitled to see.
+ * `alshrouq_dispatches` carries one RLS policy — `SELECT` for `authenticated`,
+ * qualified by the order's own visibility — and no policy for `INSERT`,
+ * `UPDATE` or `DELETE`, so those commands are denied for any client that is not
+ * the service role. Every write goes through the server function that actually
+ * called the courier. So this hook cannot dispatch, cancel or amend anything,
+ * and a row it returns is one the caller was already entitled to see.
+ *
+ * (The block is the *policy*, not the table grant: `authenticated` holds the
+ * default Supabase write grants on this table. Verified in Phase 10H.)
  *
  * The table is absent from the generated `types.ts` — which Lovable re-emits, so
  * it is never hand-edited — hence the cast this codebase already uses for such

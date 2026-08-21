@@ -481,7 +481,7 @@ describe("duplicate protection", () => {
     const createOrder = vi.fn();
     const supabase = fakeSupabase(storedRow("indeterminate"));
 
-    const cancelled = await cancelScheduledAlShrouqDispatch(ORDER_ID, supabase as any);
+    const cancelled = await cancelScheduledAlShrouqDispatch(ORDER_ID, USER_ID, supabase as any);
     expect(cancelled.kind).toBe("conflict");
     // The row still owns the slot, so the order is still unsendable.
     expect(supabase.state.row!.cancelled_at).toBeNull();
@@ -496,7 +496,7 @@ describe("duplicate protection", () => {
     const createOrder = vi.fn();
     const supabase = fakeSupabase(storedRow("accepted"));
 
-    expect((await cancelScheduledAlShrouqDispatch(ORDER_ID, supabase as any)).kind).toBe(
+    expect((await cancelScheduledAlShrouqDispatch(ORDER_ID, USER_ID, supabase as any)).kind).toBe(
       "conflict",
     );
     const r = await dispatchOrderToAlShrouq(request(), supabase as any, deps(true, createOrder));
@@ -529,7 +529,7 @@ describe("duplicate protection", () => {
 describe("cancelling a scheduled dispatch", () => {
   it("moves scheduled to cancelled and stamps cancelled_at", async () => {
     const supabase = fakeSupabase(storedRow("scheduled"));
-    const r = await cancelScheduledAlShrouqDispatch(ORDER_ID, supabase as any);
+    const r = await cancelScheduledAlShrouqDispatch(ORDER_ID, USER_ID, supabase as any);
 
     expect(r.kind).toBe("cancelled");
     expect(supabase.state.row!.dispatch_status).toBe("cancelled");
@@ -549,7 +549,7 @@ describe("cancelling a scheduled dispatch", () => {
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
     try {
-      const r = await cancelScheduledAlShrouqDispatch(ORDER_ID, supabase as any);
+      const r = await cancelScheduledAlShrouqDispatch(ORDER_ID, USER_ID, supabase as any);
       expect(r.kind).toBe("cancelled");
     } finally {
       globalThis.fetch = originalFetch;
@@ -563,7 +563,7 @@ describe("cancelling a scheduled dispatch", () => {
     const snapshot = { branch_id: BRANCH_ID, client_order_id: "9540", customer_name: "Ahmed" };
     const supabase = fakeSupabase({ ...storedRow("scheduled"), payload_snapshot: snapshot });
 
-    await cancelScheduledAlShrouqDispatch(ORDER_ID, supabase as any);
+    await cancelScheduledAlShrouqDispatch(ORDER_ID, USER_ID, supabase as any);
 
     expect(supabase.state.row!.payload_snapshot).toEqual(snapshot);
     for (const patch of supabase.updates) {
@@ -578,7 +578,7 @@ describe("cancelling a scheduled dispatch", () => {
     ["failed", "already failed"],
   ])("refuses to cancel a %s dispatch, and says why", async (status, phrase) => {
     const supabase = fakeSupabase(storedRow(status));
-    const r = await cancelScheduledAlShrouqDispatch(ORDER_ID, supabase as any);
+    const r = await cancelScheduledAlShrouqDispatch(ORDER_ID, USER_ID, supabase as any);
 
     expect(r.kind).toBe("conflict");
     if (r.kind !== "conflict") throw new Error("unreachable");
@@ -591,13 +591,13 @@ describe("cancelling a scheduled dispatch", () => {
 
   it("reports an already-cancelled dispatch as its own outcome", async () => {
     const supabase = fakeSupabase(storedRow("cancelled"));
-    const r = await cancelScheduledAlShrouqDispatch(ORDER_ID, supabase as any);
+    const r = await cancelScheduledAlShrouqDispatch(ORDER_ID, USER_ID, supabase as any);
     expect(r.kind).toBe("already_cancelled");
   });
 
   it("reports an order with no dispatch at all", async () => {
     const supabase = fakeSupabase(null);
-    const r = await cancelScheduledAlShrouqDispatch(ORDER_ID, supabase as any);
+    const r = await cancelScheduledAlShrouqDispatch(ORDER_ID, USER_ID, supabase as any);
     expect(r.kind).toBe("not_found");
   });
 });
@@ -613,7 +613,7 @@ describe("the race between cancellation and the worker", () => {
     // The worker's compare-and-swap happens first.
     supabase.state.row!.dispatch_status = "processing";
 
-    const r = await cancelScheduledAlShrouqDispatch(ORDER_ID, supabase as any);
+    const r = await cancelScheduledAlShrouqDispatch(ORDER_ID, USER_ID, supabase as any);
 
     expect(r.kind).toBe("conflict");
     if (r.kind !== "conflict") throw new Error("unreachable");
@@ -634,7 +634,7 @@ describe("the race between cancellation and the worker", () => {
       payload_snapshot: { branch_id: BRANCH_ID, client_order_id: "9540" },
     });
 
-    const cancelled = await cancelScheduledAlShrouqDispatch(ORDER_ID, supabase as any);
+    const cancelled = await cancelScheduledAlShrouqDispatch(ORDER_ID, USER_ID, supabase as any);
     expect(cancelled.kind).toBe("cancelled");
 
     // The worker runs immediately afterwards against the same row.
@@ -669,7 +669,7 @@ describe("a cancelled dispatch in the timeline", () => {
       ...storedRow("scheduled"),
       scheduled_at: "2026-08-21T09:00:00.000Z",
     });
-    await cancelScheduledAlShrouqDispatch(ORDER_ID, supabase as any);
+    await cancelScheduledAlShrouqDispatch(ORDER_ID, USER_ID, supabase as any);
 
     const row = supabase.state.row!;
     const events = buildAlShrouqTimeline({
