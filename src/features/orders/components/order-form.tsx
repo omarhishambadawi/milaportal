@@ -58,6 +58,8 @@ import { OrderAssignment } from "@/features/orders/components/order-assignment";
 import { CallCenterInvoiceField } from "@/features/orders/components/call-center-invoice-field";
 import { OrderInvoicePanel, StateTag } from "@/features/orders/components/order-invoice-panel";
 import { BranchPreviewPanel } from "@/features/branches/components/branch-preview-panel";
+import { AlShrouqDispatchSection } from "@/features/alshrouq/components/dispatch-section";
+import { ALSHROUQ } from "@/features/alshrouq/constants";
 
 /** The id the header's submit button reaches the form by, across the layout. */
 const FORM_ID = "order-form";
@@ -669,6 +671,21 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
           {/* Appears the moment a branch is chosen, so the questions a customer
               asks next are answered without leaving a half-typed order. */}
           {form.branch_no && <BranchPreviewPanel branchNo={form.branch_no} />}
+
+          {/* Appears the moment the delivery method is AlShrouq, on a draft as
+              well as a saved order. Read-only: it reflects the state above and
+              takes no part in validation or submit. */}
+          {form.delivery_type === ALSHROUQ && (
+            <AlShrouqDispatchSection
+              mode={mode}
+              orderId={id}
+              customerName={form.customer_name}
+              customerPhone={form.customer_phone}
+              branchNo={form.branch_no}
+              invoiceValue={form.invoice_value}
+              notes={form.notes}
+            />
+          )}
 
           {mode === "edit" && id && <OrderActivityTimeline orderId={id} />}
         </aside>

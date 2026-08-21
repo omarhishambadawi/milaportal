@@ -2898,9 +2898,28 @@ and conditional-required rules in `orderFormSchema` are exactly what broke order
 saving last time. So the extra data is asked for **at dispatch time**, and
 `orderFormSchema` is untouched.
 
-`AlShrouqDispatchCard` renders as a **sibling** of `OrderForm` from
-`_app.orders.$id.tsx`, shares no state with it, and returns `null` unless
-`delivery_type` is `AlShrouq`. `alshrouqDispatchContext` gates on the same rule
+`AlShrouqDispatchSection` renders **inside** the order form's contextual right
+column, beside `OrderInvoicePanel` and `BranchPreviewPanel` and by the same rule
+those follow — the form renders it from live state, exactly as it renders
+`BranchPreviewPanel` on `form.branch_no`. It appears whenever
+`form.delivery_type === "AlShrouq"`, on a draft as well as a saved order, and
+reflects the customer, phone, branch and order value as they are typed. It reads
+that state through props, takes no part in validation or submit, and
+`orderFormSchema` is untouched.
+
+A draft has no id, so it cannot dispatch and does not pretend to: the status
+reads **Pending order creation** and the action is disabled. Statuses are limited
+to what the backend supports — `Pending order creation`, `Checking…`,
+`Ready to send`, `Verification required`, `Not available`, or the stored status
+of an existing dispatch. There is no fake "Sent" or "Delivered".
+
+**No delivery fee is displayed, deliberately.** `GET /integrations/alshrouq/config`
+publishes `branch_options`, `payment_options`, webhook settings and
+`missing_secrets` — and no fee, price, charge, cost, tariff or rate of any kind.
+The "3 SAR" that read as an unexplained charge was a misread branch *name*: the
+CRM's names carry digits (`Arid 3 RDHN`, `SHUBRA 2 TIF`), so `P0304 — fayzia 3
+BUR` was branch code and branch name. Labelling each value in the grid is the
+fix; a fee panel would have been a fiction. `alshrouqDispatchContext` gates on the same rule
 the form uses to allow editing — `edit_all_orders`, or `edit_orders` on an order
 the agent owns — so no new permission, no migration, no parity change. Payment
 type is never guessed from `order_type`: sending a driver to collect cash from
