@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { isAdministrator, useAuth } from "@/lib/auth";
 import {
+  shamsAlshrouqConfigProbe,
   shamsCatalogDiagnostics,
   shamsCrmSearchDiagnostic,
   shamsCrmSmokeTest,
@@ -77,6 +78,8 @@ function ShamsDiagnosticsPage() {
   const crm = useMutation({ mutationFn: () => runCrm({ data: undefined }) });
   const runCrmSearch = useServerFn(shamsCrmSearchDiagnostic);
   const crmSearch = useMutation({ mutationFn: () => runCrmSearch({ data: undefined }) });
+  const runAlshrouq = useServerFn(shamsAlshrouqConfigProbe);
+  const alshrouq = useMutation({ mutationFn: () => runAlshrouq({ data: undefined }) });
 
   if (!isAdministrator(role)) {
     return (
@@ -129,6 +132,81 @@ function ShamsDiagnosticsPage() {
                 {crm.data.cacheReused === null ? "—" : crm.data.cacheReused ? "yes" : "no"}
               </td>
               <td className={TD}>{crm.data.errorKind ?? "—"}</td>
+            </tr>
+          </Table>
+        )}
+      </Section>
+
+      <Section
+        title="AlShrouq — configuration probe"
+        hint="One read of GET /integrations/alshrouq/config. It cannot create, modify or cancel a delivery."
+      >
+        <Button onClick={() => alshrouq.mutate()} disabled={alshrouq.isPending} variant="secondary">
+          {alshrouq.isPending && (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+          )}
+          {alshrouq.isPending ? "Running…" : "Run AlShrouq probe"}
+        </Button>
+
+        {alshrouq.isError && (
+          <p className="text-sm text-destructive">
+            The AlShrouq probe call failed. You may not have administrator access.
+          </p>
+        )}
+
+        {alshrouq.data && (
+          <Table
+            head={[
+              "Configured",
+              "Config read",
+              "Payment IDs",
+              "Branches",
+              "Covered",
+              "Branch fields",
+              "Webhook",
+              "Missing secrets",
+              "Shape",
+              "Error",
+            ]}
+          >
+            <tr className="border-t">
+              <td className={TD}>{alshrouq.data.configured ? "yes" : "no"}</td>
+              <td className={TD}>{alshrouq.data.request ?? "—"}</td>
+              <td className={TD}>
+                {alshrouq.data.paymentOptionIds?.join(", ") ?? "—"}
+                {alshrouq.data.paymentOptionsMatchContract === false && " (unexpected)"}
+              </td>
+              <td className={TD}>{alshrouq.data.branchOptionCount ?? "—"}</td>
+              <td className={TD}>{alshrouq.data.coveredBranchCount ?? "—"}</td>
+              <td className={TD}>
+                {alshrouq.data.branchFieldsComplete === null
+                  ? "—"
+                  : alshrouq.data.branchFieldsComplete
+                    ? "complete"
+                    : "incomplete"}
+              </td>
+              <td className={TD}>
+                {alshrouq.data.webhookUrlPresent === null
+                  ? "—"
+                  : alshrouq.data.webhookUrlPresent && alshrouq.data.webhookAuthHeaderPresent
+                    ? "present"
+                    : "missing"}
+              </td>
+              <td className={TD}>
+                {alshrouq.data.missingSecrets === null
+                  ? "—"
+                  : alshrouq.data.missingSecrets.length === 0
+                    ? "none"
+                    : alshrouq.data.missingSecrets.join(", ")}
+              </td>
+              <td className={TD}>
+                {alshrouq.data.shapeValid === null
+                  ? "—"
+                  : alshrouq.data.shapeValid
+                    ? "ok"
+                    : "check"}
+              </td>
+              <td className={TD}>{alshrouq.data.errorKind ?? "—"}</td>
             </tr>
           </Table>
         )}

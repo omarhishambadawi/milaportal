@@ -2820,8 +2820,31 @@ src/lib/shams-crm/client.server.ts       login + session (X-Session-Token), 401 
 src/lib/shams-crm/catalog.server.ts      full-catalog cache: 6 h TTL, single-flight, stale-on-failure fallback
 src/lib/shams-crm/products.server.ts     the seam: the catalog as the Portal's own ShamsProduct
 src/lib/shams-crm/diagnostics.server.ts  admin-only smoke test (login / catalog / cache reuse)
+src/lib/shams-crm/alshrouq-config.server.ts  admin-only AlShrouq connectivity probe (read-only)
 src/lib/shams-crm/types.ts               wire shapes + normalized models
 ```
+
+### AlShrouq connectivity probe
+
+`alshrouq-config.server.ts` reads `GET /integrations/alshrouq/config` through the
+same `crmFetch` as everything else and reports what it finds: the CRM's payment
+ids, the branch-option count and how many are `covered`, whether every branch
+carries the six contract fields, whether the webhook is configured, and any
+`missing_secrets`. Exposed as `shamsAlshrouqConfigProbe` behind `assertAdmin`,
+rendered on `/admin/shams-diagnostics`.
+
+It is a **read**. Create, refresh and cancel are deliberately absent from the
+module, and a test asserts the only paths it touches are `/login` and the config
+endpoint. Nothing in `src/features/orders` imports it, and nothing should: the
+reverted integration destabilised order entry by reaching into `orderFormSchema`
+and `buildOrderPayload`, so the courier code is kept without an edge into them.
+
+Counts, booleans and an error kind cross the boundary — never the credentials,
+the session token, a header, the webhook auth value or the raw response.
+`missingSecrets` carries the *names* of absent configuration, never a value.
+
+The branch mapping is **not** stored. `branch_options` is the CRM's to publish,
+and it is the only source that also carries `covered`.
 
 **Credentials are `SHAMS_CRM_USERNAME` / `SHAMS_CRM_PASSWORD`, server-only.**
 Temporary and deliberately flagged as such: they are a *person's* Desktop login,

@@ -36,6 +36,7 @@ import type { InvoiceBranchMatch } from "@/lib/shams/types";
 import type { ItemAvailability } from "@/lib/shams/availability";
 import type { CatalogDiagnostics } from "@/lib/shams/diagnostics.server";
 import type { CrmSearchDiagnostics, CrmSmokeResult } from "@/lib/shams-crm/diagnostics.server";
+import type { AlShrouqConfigProbe } from "@/lib/shams-crm/alshrouq-config.server";
 import type { ShamsCrmOffer, ShamsOfferScope } from "@/lib/shams-crm/types";
 import type { ShamsCrmHistory } from "@/lib/shams/types";
 
@@ -632,6 +633,28 @@ export const shamsCrmSearchDiagnostic = createServerFn({ method: "POST" })
 
     const { runCrmSearchDiagnostic } = await import("@/lib/shams-crm/diagnostics.server");
     return runCrmSearchDiagnostic();
+  });
+
+/**
+ * Administrator-only AlShrouq connectivity probe.
+ *
+ * Same gate as the other CRM diagnostics — `assertAdmin`, not `view_shams_mis`
+ * — because it authenticates against the CRM. Narrower than those in what it
+ * touches: one `GET /integrations/alshrouq/config`, which is a read and cannot
+ * create, modify or cancel a delivery.
+ *
+ * The result is the closed shape in `alshrouq-config.server.ts`: counts,
+ * booleans, the CRM's payment ids and an error kind. No credential, token,
+ * header, webhook secret or raw response crosses this boundary.
+ */
+export const shamsAlshrouqConfigProbe = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }): Promise<AlShrouqConfigProbe> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertAdmin(supabase, userId);
+
+    const { runAlShrouqConfigProbe } = await import("@/lib/shams-crm/alshrouq-config.server");
+    return runAlShrouqConfigProbe();
   });
 
 export interface ShamsProductOffersResult {
