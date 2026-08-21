@@ -2966,6 +2966,49 @@ Duplicate protection is checked before anything is built, using the same
 `alshrouq_dispatches_live_order_key`, so the check and the constraint cannot
 disagree. A `23505` on insert is reported as "already sent", not as an error.
 
+### Scheduled AlShrouq dispatch
+
+A courier handoff can be parked and performed later without anyone's browser
+being open.
+
+```
+agent approves → alshrouq_dispatches row (status='scheduled', payload_snapshot)
+pg_cron (every minute) → alshrouq_dispatch_due() → net.http_post
+  → /api/alshrouq-run-scheduled → runDueAlShrouqDispatches → SAFETY GATE
+    → one POST → reconcile → persist
+```
+
+**The cron job is registered by migration** (`20260821210000`), and that is the
+point. This database already lost a pg_cron job: `email_queue_dispatch` ran 54
+times, all succeeded, then stopped at 2026-08-20 23:15:19Z — 56 seconds after
+the Lovable revert — and never returned, because the email migration only
+*describes* it in `--` comments and never calls `cron.schedule`. Outbound email
+has been dead since. A courier dispatch that stops silently is worse, so this one
+is reproducible from the repository.
+
+**The snapshot is the authority.** `payload_snapshot` is written when the agent
+approves and read at dispatch time; the worker never reads `orders` — a test
+asserts the only table it touches is `alshrouq_dispatches`. So a Portal edit
+after scheduling cannot change what a courier is told, because nobody approved
+that version.
+
+**Claiming** is a compare-and-swap (`UPDATE … WHERE id=? AND
+dispatch_status='scheduled'`), so two workers, or a cron firing twice, dispatch
+each order once. The unique index `alshrouq_dispatches_live_order_key` remains
+the backstop — and because a `scheduled` row is not cancelled, scheduling an
+order *reserves its slot* against a second schedule or a manual send.
+
+**States:** `scheduled → processing → accepted | failed | indeterminate |
+cancelled`. `processing` is a claim, not a report. `indeterminate` is terminal
+until a human resolves it, and is never followed by another POST — the whole
+point of scheduling is that nobody is watching.
+
+**With the gate closed the run claims nothing**, sends nothing and invents no
+status; rows stay `scheduled` and are picked up whenever it opens.
+`alshrouq_dispatch_due()` is also a no-op while the vault secrets
+`alshrouq_scheduler_url` / `alshrouq_scheduler_secret` are absent, so applying
+the migration to an unconfigured environment does nothing.
+
 ### AlShrouq create transport
 
 `alshrouq-create.server.ts` owns the create POST and the read that reconciles

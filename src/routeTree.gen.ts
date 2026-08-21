@@ -16,6 +16,7 @@ import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiCspReportRouteImport } from './routes/api/csp-report'
 import { Route as ApiCdrSyncRouteImport } from './routes/api/cdr-sync'
+import { Route as ApiAlshrouqRunScheduledRouteImport } from './routes/api/alshrouq-run-scheduled'
 import { Route as AppShamsRouteImport } from './routes/_app.shams'
 import { Route as AppReportsRouteImport } from './routes/_app.reports'
 import { Route as AppProfileRouteImport } from './routes/_app.profile'
@@ -82,6 +83,11 @@ const ApiCspReportRoute = ApiCspReportRouteImport.update({
 const ApiCdrSyncRoute = ApiCdrSyncRouteImport.update({
   id: '/api/cdr-sync',
   path: '/api/cdr-sync',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAlshrouqRunScheduledRoute = ApiAlshrouqRunScheduledRouteImport.update({
+  id: '/api/alshrouq-run-scheduled',
+  path: '/api/alshrouq-run-scheduled',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppShamsRoute = AppShamsRouteImport.update({
@@ -269,6 +275,7 @@ export interface FileRoutesByFullPath {
   '/profile': typeof AppProfileRoute
   '/reports': typeof AppReportsRoute
   '/shams': typeof AppShamsRoute
+  '/api/alshrouq-run-scheduled': typeof ApiAlshrouqRunScheduledRoute
   '/api/cdr-sync': typeof ApiCdrSyncRoute
   '/api/csp-report': typeof ApiCspReportRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
@@ -310,6 +317,7 @@ export interface FileRoutesByTo {
   '/profile': typeof AppProfileRoute
   '/reports': typeof AppReportsRoute
   '/shams': typeof AppShamsRoute
+  '/api/alshrouq-run-scheduled': typeof ApiAlshrouqRunScheduledRoute
   '/api/cdr-sync': typeof ApiCdrSyncRoute
   '/api/csp-report': typeof ApiCspReportRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
@@ -353,6 +361,7 @@ export interface FileRoutesById {
   '/_app/profile': typeof AppProfileRoute
   '/_app/reports': typeof AppReportsRoute
   '/_app/shams': typeof AppShamsRoute
+  '/api/alshrouq-run-scheduled': typeof ApiAlshrouqRunScheduledRoute
   '/api/cdr-sync': typeof ApiCdrSyncRoute
   '/api/csp-report': typeof ApiCspReportRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
@@ -396,6 +405,7 @@ export interface FileRouteTypes {
     | '/profile'
     | '/reports'
     | '/shams'
+    | '/api/alshrouq-run-scheduled'
     | '/api/cdr-sync'
     | '/api/csp-report'
     | '/.lovable/oauth/consent'
@@ -437,6 +447,7 @@ export interface FileRouteTypes {
     | '/profile'
     | '/reports'
     | '/shams'
+    | '/api/alshrouq-run-scheduled'
     | '/api/cdr-sync'
     | '/api/csp-report'
     | '/.lovable/oauth/consent'
@@ -479,6 +490,7 @@ export interface FileRouteTypes {
     | '/_app/profile'
     | '/_app/reports'
     | '/_app/shams'
+    | '/api/alshrouq-run-scheduled'
     | '/api/cdr-sync'
     | '/api/csp-report'
     | '/.lovable/oauth/consent'
@@ -517,6 +529,7 @@ export interface RootRouteChildren {
   ResetPasswordRoute: typeof ResetPasswordRoute
   Char91DotmcpChar93ListToolsRoute: typeof Char91DotmcpChar93ListToolsRoute
   Char91DotwellKnownChar93OauthProtectedResourceRoute: typeof Char91DotwellKnownChar93OauthProtectedResourceRoute
+  ApiAlshrouqRunScheduledRoute: typeof ApiAlshrouqRunScheduledRoute
   ApiCdrSyncRoute: typeof ApiCdrSyncRoute
   ApiCspReportRoute: typeof ApiCspReportRoute
   DotlovableOauthConsentRoute: typeof DotlovableOauthConsentRoute
@@ -576,6 +589,13 @@ declare module '@tanstack/react-router' {
       path: '/api/cdr-sync'
       fullPath: '/api/cdr-sync'
       preLoaderRoute: typeof ApiCdrSyncRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/alshrouq-run-scheduled': {
+      id: '/api/alshrouq-run-scheduled'
+      path: '/api/alshrouq-run-scheduled'
+      fullPath: '/api/alshrouq-run-scheduled'
+      preLoaderRoute: typeof ApiAlshrouqRunScheduledRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app/shams': {
@@ -879,6 +899,7 @@ const rootRouteChildren: RootRouteChildren = {
   Char91DotmcpChar93ListToolsRoute: Char91DotmcpChar93ListToolsRoute,
   Char91DotwellKnownChar93OauthProtectedResourceRoute:
     Char91DotwellKnownChar93OauthProtectedResourceRoute,
+  ApiAlshrouqRunScheduledRoute: ApiAlshrouqRunScheduledRoute,
   ApiCdrSyncRoute: ApiCdrSyncRoute,
   ApiCspReportRoute: ApiCspReportRoute,
   DotlovableOauthConsentRoute: DotlovableOauthConsentRoute,

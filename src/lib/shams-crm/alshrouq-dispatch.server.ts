@@ -213,19 +213,25 @@ async function liveDispatch(supabase: SupabaseLike, orderId: string): Promise<Di
 }
 
 /**
- * Run the workflow.
+ * Everything before the safety gate: duplicate check, branch, payload.
  *
- * Never throws for an expected outcome — a missing phone number, an uncovered
- * branch and an unreachable CRM are all results, because each is something an
- * agent is told rather than an exception a UI has to decode.
+ * Shared by the immediate path and by scheduling, so an order that is scheduled
+ * for later is validated by exactly the checks it would face if it were sent
+ * now — the agent finds out about an uncovered branch or a missing phone at the
+ * moment they approve it, not silently at 2am.
+ *
+ * Returns a failure `AlShrouqDispatchResult` or the built payload. It never
+ * sends and never writes.
  */
-export async function dispatchOrderToAlShrouq(
+export async function prepareAlShrouqDispatch(
   request: DispatchRequest,
   supabase: SupabaseLike,
-  overrides: Partial<DispatchDeps> = {},
-): Promise<AlShrouqDispatchResult> {
-  const deps: DispatchDeps = { ...defaultDeps, ...overrides };
-  const { orderId, displayNo, branchNo, userId, form } = request;
+  deps: DispatchDeps,
+): Promise<
+  | { ok: true; payload: AlShrouqCreatePayload; summary: DispatchPayloadSummary }
+  | AlShrouqDispatchResult
+> {
+  const { orderId, displayNo, branchNo, form } = request;
 
   // 1. Duplicate protection, before anything is built or sent.
   const existing = await liveDispatch(supabase, orderId);
@@ -280,6 +286,28 @@ export async function dispatchOrderToAlShrouq(
     hasCoordinates: typeof payload.customer_lat === "number",
     hasDetails: typeof payload.details === "string",
   };
+
+  return { ok: true, payload, summary };
+}
+
+/**
+ * Send one order to AlShrouq now.
+ *
+ * Never throws for an expected outcome — a missing phone number, an uncovered
+ * branch and an unreachable CRM are all results, because each is something an
+ * agent is told rather than an exception a UI has to decode.
+ */
+export async function dispatchOrderToAlShrouq(
+  request: DispatchRequest,
+  supabase: SupabaseLike,
+  overrides: Partial<DispatchDeps> = {},
+): Promise<AlShrouqDispatchResult> {
+  const deps: DispatchDeps = { ...defaultDeps, ...overrides };
+  const { userId } = request;
+
+  const prepared = await prepareAlShrouqDispatch(request, supabase, deps);
+  if (!("ok" in prepared)) return prepared;
+  const { payload, summary } = prepared;
 
   /* ---------------------------------------------------------------------- */
   /* THE PRODUCTION SAFETY GATE                                             */
