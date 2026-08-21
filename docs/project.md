@@ -2966,6 +2966,49 @@ Duplicate protection is checked before anything is built, using the same
 `alshrouq_dispatches_live_order_key`, so the check and the constraint cannot
 disagree. A `23505` on insert is reported as "already sent", not as an error.
 
+### AlShrouq order data and scheduling contract
+
+Three pure modules under `src/features/alshrouq`, each testable without a
+browser, a clock or a network.
+
+**`order-fields.ts`** — the fields AlShrouq requires that an ordinary order does
+not: customer name, phone, location, latitude, longitude. **Deliberately not in
+`orderFormSchema`.** The reverted integration put its conditional rules inside
+that schema, which is the mechanism behind the "agents cannot save orders"
+outage: anything there is on the save path for *every* delivery method, so a
+mistake in an AlShrouq branch failed orders unrelated to AlShrouq.
+
+Living outside it buys three properties, each pinned by a test:
+`validateAlShrouqOrderFields` returns `[]` immediately for every other delivery
+method, so the ordinary path is unchanged in *shape* and not merely in
+behaviour; it returns errors rather than throwing, so nothing can escape into a
+submit handler; and deleting the file would restore previous behaviour exactly.
+`orderFormSchema` is byte-identical to the baseline, and a test asserts an
+AlShrouq order with no name, phone or coordinates still parses — the 3,993
+historical ones look like that and must stay editable.
+
+**`scheduling.ts`** — `parseScheduleInput(date, "03:30 PM")` → a canonical UTC
+instant for `scheduled_for`. Riyadh at a fixed +03:00 with no DST, which is what
+makes the arithmetic exact rather than approximate; the browser's zone is never
+consulted. The past is rejected outright, and a time within two minutes counts
+as `immediate` so the clock passing the chosen minute while an agent reads a
+confirmation does not silently turn a "send now" into a scheduled order.
+`formatScheduledFor` renders `Aug 21, 2026 · 03:30 PM` by hand rather than
+through `toLocaleString`, so two machines show the same delivery time.
+
+**`use-scheduled-countdown.ts`** — display only. It has no network call, no
+mutation and no server function; its one effect is a `setInterval` that
+re-renders, and reaching zero changes a label. The target is read from the
+persisted `scheduled_for` on every render, so a refresh, another browser or
+another device reconstruct the same figure with no local state to disagree. Once
+the row leaves `scheduled` the countdown reports `inactive`, because a number
+ticking down beside an order a worker has already claimed is a lie.
+
+**`payload_snapshot` immutability holds structurally.** It is written in exactly
+one place — the insert in `scheduleAlShrouqDispatch` — and appears in no
+`UPDATE` anywhere. The order save path never touches `alshrouq_dispatches`. No
+fix was needed; the invariant is a property of where the write lives.
+
 ### Scheduled AlShrouq dispatch
 
 A courier handoff can be parked and performed later without anyone's browser
