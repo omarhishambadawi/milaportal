@@ -37,6 +37,7 @@
  */
 
 import { formatScheduledFor } from "./scheduling";
+import { blocksNewDispatch } from "@/lib/shams-crm/alshrouq-dispatch-state";
 
 /**
  * The persisted columns this module reads. Exactly the shape the client query
@@ -284,7 +285,12 @@ export interface AlShrouqDispatchSummary {
   /** Short, corporate, and never a claim the row does not support. */
   label: string;
   tone: "muted" | "info" | "success" | "warning" | "danger";
-  /** True once a dispatch exists in any state that is not cancelled. */
+  /**
+   * True once a dispatch exists in any state that is not cancelled — which is
+   * exactly `blocksNewDispatch`, the same rule the service's duplicate check and
+   * the unique index enforce. The card renders no send control while it is true,
+   * so the screen and the server refuse on one rule rather than two.
+   */
   handedOver: boolean;
   /** True only while the row is parked and waiting for its time. */
   awaitingSchedule: boolean;
@@ -327,13 +333,16 @@ export function summariseAlShrouqDispatch(
     return { ...empty, ...base, label: "Cancelled", tone: "warning", trackingUrl: null };
   }
 
+  // One rule, asked once. Every branch below reports it rather than deciding it.
+  const handedOver = blocksNewDispatch(status);
+
   switch (status) {
     case WAITING:
       return {
         ...base,
         label: "Scheduled",
         tone: "info",
-        handedOver: true,
+        handedOver,
         awaitingSchedule: true,
       };
     case "processing":
@@ -341,7 +350,7 @@ export function summariseAlShrouqDispatch(
         ...base,
         label: "Dispatch started",
         tone: "info",
-        handedOver: true,
+        handedOver,
         awaitingSchedule: false,
       };
     case "accepted":
@@ -351,7 +360,7 @@ export function summariseAlShrouqDispatch(
         // than anything this codebase would substitute for it.
         label: row.status?.trim() || "Sent to AlShrouq",
         tone: "success",
-        handedOver: true,
+        handedOver,
         awaitingSchedule: false,
       };
     case "failed":
@@ -359,7 +368,7 @@ export function summariseAlShrouqDispatch(
         ...base,
         label: "Dispatch failed",
         tone: "danger",
-        handedOver: true,
+        handedOver,
         awaitingSchedule: false,
       };
     case "indeterminate":
@@ -367,10 +376,20 @@ export function summariseAlShrouqDispatch(
         ...base,
         label: "Requires review",
         tone: "danger",
-        handedOver: true,
+        handedOver,
         awaitingSchedule: false,
       };
     default:
-      return { ...empty, ...base };
+      /*
+       * A status this build does not recognise — a value added to the database
+       * ahead of the client, or a row written by something newer.
+       *
+       * It is reported as handed over, because `blocksNewDispatch` treats an
+       * unknown state as owning the slot and the UI must agree: offering "Send
+       * to AlShrouq" beside a dispatch nobody here can interpret is precisely
+       * how a second courier gets ordered. The label stays vague rather than
+       * guessing what the state means.
+       */
+      return { ...empty, ...base, label: "Dispatch recorded", handedOver };
   }
 }

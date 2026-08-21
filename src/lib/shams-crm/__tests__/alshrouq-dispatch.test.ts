@@ -380,8 +380,31 @@ describe("dispatchOrderToAlShrouq — live path (mocked transport)", () => {
     if (r.kind !== "indeterminate") throw new Error("unreachable");
     expect(r.reconciled).toBeNull();
     expect(createOrder).toHaveBeenCalledTimes(1);
-    // Not found means "still unknown", never "safe to send again".
-    expect(supabase.inserts).toHaveLength(0);
+
+    /*
+     * Not found means "still unknown", never "safe to send again" — and that is
+     * now enforced by a row rather than by hope.
+     *
+     * This assertion used to be `inserts).toHaveLength(0)`, on the reasoning
+     * that a record must not claim a courier that may not exist. It does not
+     * claim one: it records `indeterminate`, with no reference, no tracking and
+     * no `accepted` anywhere. What it does is take the order's slot in
+     * `alshrouq_dispatches_live_order_key`, which is what makes the next attempt
+     * come back `already_dispatched` instead of POSTing again. Writing nothing
+     * left an order that had already been transmitted looking untouched.
+     */
+    expect(supabase.inserts).toHaveLength(1);
+    const row = supabase.inserts[0] as Record<string, unknown>;
+    expect(row.dispatch_status).toBe("indeterminate");
+    expect(row.last_error).toBe("unknown");
+    expect(row.attempt_count).toBe(1);
+    // No evidence was invented for a send nobody could confirm.
+    expect(row.external_order_id).toBeNull();
+    expect(row.local_id).toBeNull();
+    expect(row.tracking_url).toBeNull();
+    expect(row.status).toBeNull();
+    // And the caller is handed the row, so the page can stop offering to send.
+    expect(r.dispatch).not.toBeNull();
   });
 
   it("an indeterminate result that reconciles is treated as dispatched, not resent", async () => {

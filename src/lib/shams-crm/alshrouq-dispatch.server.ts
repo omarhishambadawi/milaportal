@@ -42,6 +42,23 @@
  * *read*, never another write. If the read finds the order, it is persisted and
  * reported as dispatched; if it does not, the operation stays indeterminate and
  * a human decides. There is no branch in this file that sends a second POST.
+ *
+ * ## An indeterminate result is written down
+ *
+ * Both outcomes persist a row, and the uncertain one persists as
+ * `indeterminate` rather than as nothing. The record does not claim a courier —
+ * it records that a request was made and that the outcome is unknown — and it
+ * takes the order's slot in `alshrouq_dispatches_live_order_key` so that the
+ * duplicate check, the unique index and the order page all refuse to send it
+ * again. An order that had already been POSTed used to look untouched here,
+ * which is the one state that invites a second driver.
+ *
+ * ## Every insert states its status
+ *
+ * `dispatch_status` is written explicitly, never left to the column default.
+ * A default is a fine way to describe rows that predate a feature and a poor way
+ * for code to express intent — and defaulting an uncertain dispatch to
+ * `accepted` would be the worst possible mislabel.
  */
 
 import {
@@ -58,6 +75,7 @@ import {
   type AlShrouqReconciledOrder,
 } from "./alshrouq-create.server";
 import { ShamsCrmError } from "./client.server";
+import type { AlShrouqDispatchStatus } from "./alshrouq-dispatch-state";
 
 /**
  * The production boundary.
@@ -154,6 +172,16 @@ export type AlShrouqDispatchResult =
       errorKind: string;
       message: string;
       reconciled: DispatchView | null;
+      /**
+       * The `indeterminate` row this outcome wrote.
+       *
+       * Present whenever the record was persisted, which is the normal case: an
+       * uncertain send takes the order's dispatch slot so nothing can offer to
+       * send it again. Null only if the write itself failed, and the caller is
+       * still told the outcome rather than an error, because the courier may
+       * exist whatever the database managed to record.
+       */
+      dispatch: DispatchView | null;
     };
 
 /** Minimal Supabase surface, so tests need no client. */
@@ -343,15 +371,50 @@ export async function dispatchOrderToAlShrouq(
 
   if (sent.kind === "indeterminate") {
     if (!found) {
+      /*
+       * Transmitted, and nobody can say what happened.
+       *
+       * **The row is written anyway, as `indeterminate`.** This used to return
+       * without persisting, on the reasoning that a record should not claim a
+       * courier that may not exist — but the record does not claim one. It
+       * records that a *request was made* and that the outcome is unknown, which
+       * is the fact of the matter.
+       *
+       * Writing it is what makes the order stop looking sendable. The row takes
+       * the order's slot in `alshrouq_dispatches_live_order_key`, so the
+       * duplicate check at the top of this function, the unique index behind it
+       * and the card that reads the row all refuse a second send. Returning
+       * nothing left an order that had already been POSTed looking untouched,
+       * and the next click would have put a second driver on the road.
+       *
+       * It is still not `failed`: nothing here reinterprets an unknown outcome
+       * as a refusal, and nothing retries it. Resolving it is a human action.
+       */
+      const persisted = await persist(
+        supabase,
+        request,
+        payload,
+        null,
+        userId,
+        "indeterminate",
+        sent.message,
+      );
+      if (persisted.kind === "conflict") {
+        // Another request won the race. Its record is the honest answer.
+        return { kind: "already_dispatched", dispatch: persisted.dispatch };
+      }
       return {
         kind: "indeterminate",
         operationId,
         errorKind: sent.errorKind,
         message: sent.message,
         reconciled: null,
+        dispatch: persisted.dispatch,
       };
     }
-    const persisted = await persist(supabase, request, payload, found, userId);
+    // The GET found it, so the delivery exists and is named. That is evidence,
+    // and evidence outranks an ambiguous response leg.
+    const persisted = await persist(supabase, request, payload, found, userId, "accepted");
     if (persisted.kind === "conflict") {
       return { kind: "already_dispatched", dispatch: persisted.dispatch };
     }
@@ -359,7 +422,7 @@ export async function dispatchOrderToAlShrouq(
   }
 
   // accepted
-  const persisted = await persist(supabase, request, payload, found, userId);
+  const persisted = await persist(supabase, request, payload, found, userId, "accepted");
   if (persisted.kind === "conflict") {
     return { kind: "already_dispatched", dispatch: persisted.dispatch };
   }
@@ -383,7 +446,20 @@ async function persist(
   payload: AlShrouqCreatePayload,
   found: AlShrouqReconciledOrder | null,
   userId: string,
+  /**
+   * The lifecycle value to store, stated rather than defaulted.
+   *
+   * The column carries `DEFAULT 'accepted'`, which was right for the four rows
+   * that predate scheduling and wrong as a way for application code to express
+   * intent: an insert that omits it reads as though nobody decided, and it would
+   * silently label an *uncertain* dispatch as accepted. The default stays for
+   * those historical rows; every write from here names its state.
+   */
+  status: AlShrouqDispatchStatus,
+  /** A safe sentence for a state that needs explaining. Never a stack trace. */
+  lastError: string | null = null,
 ): Promise<PersistOutcome> {
+  const now = new Date().toISOString();
   const row = {
     order_id: request.orderId,
     client_order_id: payload.client_order_id,
@@ -402,7 +478,13 @@ async function persist(
     tracking_url: found?.trackingUrl ?? null,
     status: found?.statusLabel ?? null,
     dispatched_by: userId,
-    refreshed_at: found ? new Date().toISOString() : null,
+    refreshed_at: found ? now : null,
+    // Explicit, never the column default.
+    dispatch_status: status,
+    last_error: lastError,
+    // One attempt was made. There is never a second.
+    attempt_count: 1,
+    last_attempt_at: now,
   };
 
   const { data, error } = await supabase

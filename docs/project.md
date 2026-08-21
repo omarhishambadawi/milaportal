@@ -2962,8 +2962,10 @@ captured, so `dispatched` is populated from
 
 **An indeterminate result never re-POSTs.** A timeout, 5xx or 401 after
 transmission means the courier may already be moving, so the answer is a read.
-Found → persisted and reported dispatched; not found → stays indeterminate for a
-human. No branch in the file sends a second POST.
+Found → persisted as `accepted` and reported dispatched; not found → **persisted
+as `indeterminate`** and left for a human. No branch in the file sends a second
+POST. Both outcomes write a row, and the uncertain one is what stops the order
+looking sendable — see "An uncertain dispatch is written down" below.
 
 Duplicate protection is checked before anything is built, using the same
 `cancelled_at IS NULL` predicate as the unique index
@@ -3228,6 +3230,148 @@ dispatch, or change the reference or the tracking URL.
 the insert in `scheduleAlShrouqDispatch` — and appears in no `UPDATE` anywhere.
 Tests assert both halves: that the single writer is that insert, and that the
 column appears in no update's argument, including the worker's four.
+
+### The state machine, in one place
+
+`shams-crm/alshrouq-dispatch-state.ts` is pure and dependency-free, and it owns
+the rules the rest of the integration asks about a stored `dispatch_status`:
+
+| Question | Answer |
+| --- | --- |
+| `ownsDispatchSlot` / `blocksNewDispatch` | everything except `cancelled` |
+| `canCancelDispatch` | `scheduled` only |
+| `isWorkerClaimable` | `scheduled` only |
+| `isTerminalDispatchStatus` | `accepted`, `failed`, `indeterminate`, `cancelled` |
+
+These rules used to be spread across a duplicate check, a worker query, a claim
+predicate and a piece of UI, each stating the lifecycle in its own words — and
+the states where they must agree are exactly the states where disagreeing puts a
+second driver at a customer's door. The order card's `handedOver` flag is now
+`blocksNewDispatch` itself, so the screen and the server refuse on one rule.
+
+**An unrecognised status blocks.** A value this build does not know — added to
+the database ahead of the client, or written by something newer — counts as
+owning the slot, and the card reports it as "Dispatch recorded" rather than
+guessing. Offering "Send to AlShrouq" beside a dispatch nobody here can interpret
+is how a second courier gets ordered.
+
+### An uncertain dispatch is written down
+
+An immediate dispatch whose POST cannot be confirmed and whose reconciliation
+finds nothing now **persists a row** with `dispatch_status='indeterminate'`.
+
+It used to return without persisting, on the reasoning that a record must not
+claim a courier that may not exist. It does not claim one: there is no reference,
+no tracking URL and no `accepted` anywhere on the row. What it records is that a
+request was made and the outcome is unknown — which is the fact of the matter.
+
+Writing it is what makes the order stop looking sendable. The row takes the
+order's slot in `alshrouq_dispatches_live_order_key`, so the duplicate check, the
+unique index and the order card all refuse a second send. Returning nothing left
+an order that had already been transmitted looking untouched, and the next click
+would have put a second driver on the road.
+
+**It is still not `failed`.** Nothing reinterprets an unknown outcome as a
+refusal, and nothing retries it — there is no code path in this repository that
+re-POSTs an indeterminate dispatch. Resolving one is a human action.
+
+`approvalChangedDispatchState` includes `indeterminate` for the same reason: the
+page must re-read the row so the card stops offering to send.
+
+### Resend policy, state by state
+
+| State | A second POST? | Why |
+| --- | --- | --- |
+| `scheduled` | blocked | already owns the slot; a schedule reserves it |
+| `processing` | blocked | a worker has claimed it and may be mid-request |
+| `accepted` | blocked | the courier has it |
+| `indeterminate` | blocked | the courier may have it, and nobody can say |
+| `failed` | blocked | existing scheduler semantics, preserved — no retry policy was invented |
+| `cancelled` | allowed | see below |
+
+**`cancelled` is the one state that frees the slot, and that is safe only
+because of what cancellation refuses.** A dispatch can be cancelled *only* while
+`scheduled`, so a cancelled row is always one that contacted nobody. If an
+`indeterminate` row could be cancelled its slot would be released and the order
+would become sendable again — the exact hole this phase closed — so the
+refusal is what the safety rests on, not the cancellation's own care. A test
+pins it from both ends.
+
+**A 4xx on the immediate path still persists nothing**, and that asymmetry with
+the scheduler's `failed` is deliberate: a 4xx is the CRM saying it understood the
+request and declined it, so nothing was created and the order is genuinely
+sendable. A 5xx is not a refusal and never takes this path.
+
+### Cancelling a scheduled dispatch
+
+`cancelScheduledAlShrouqDispatch` moves `scheduled → cancelled`, setting
+`dispatch_status` and `cancelled_at` **in one statement** — they are the two
+markers the unique index, the due query and the timeline all read, and writing
+them separately would leave a window where the row disagreed with itself.
+
+**It contacts nobody.** There is no transport on the path: a scheduled dispatch
+has not been sent, and this integration has no AlShrouq cancellation endpoint to
+call even if there were something to call off. A test replaces `globalThis.fetch`
+and asserts not one outbound request.
+
+**The race with the worker.** An agent can cancel in the same second `pg_cron`
+fires. Both operations want the same transition out of `scheduled`:
+
+```
+worker: UPDATE … SET dispatch_status='processing' WHERE id=?       AND dispatch_status='scheduled'
+cancel: UPDATE … SET dispatch_status='cancelled'  WHERE order_id=? AND dispatch_status='scheduled'
+```
+
+Postgres serialises two updates to one row, so exactly one matches and the other
+matches nothing. There is no window in which both succeed and no read-then-write
+for a concurrent transaction to slip between.
+
+If cancellation wins, the worker's claim finds nothing — and an unclaimed row is
+never sent, even by a run that had already selected it as due. If the worker
+wins, cancellation returns `{ kind: "conflict" }` carrying *"Dispatch is already
+being processed and cannot be cancelled."* It does not retry and it does not
+overwrite a `processing` row, which may be mid-request.
+
+Every other state is refused with a sentence naming it —
+`describeCancelRefusal` — so a state cannot be added to the lifecycle without
+copy for it. `payload_snapshot` is untouched by cancellation, and the order stays
+in MilaPortal unchanged.
+
+The cancelled row produces **"AlShrouq delivery cancelled"** through the existing
+Phase 10F timeline derivation, which already reads `cancelled_at`. No second
+event table, and the worker still touches only `alshrouq_dispatches`.
+
+Who cancelled is not recorded: there is no `cancelled_by` column, and adding one
+would need a migration this phase does not otherwise require. Authorization is
+enforced at the server function — `edit_all_orders`, or `edit_orders` on an order
+the agent owns, the same rule as dispatching and editing.
+
+### Every insert states its status
+
+`dispatch_status` is written explicitly by every application insert, never left
+to the column's `DEFAULT 'accepted'`. The default remains for the four rows that
+predate scheduling; it is a poor way for code to express intent, and defaulting
+an *uncertain* dispatch to `accepted` would be the worst possible mislabel.
+`attempt_count` and `last_attempt_at` are stated on the same insert — one attempt
+was made, and there is never a second.
+
+### Dispatch writes run as the service role
+
+`alshrouq_dispatches` grants `SELECT` to `authenticated` and **no write of any
+kind**, deliberately: a row must never be able to claim a dispatch that did not
+happen, so every write comes from the code that actually called the CRM.
+
+`requireSupabaseAuth` supplies the *caller's* RLS-bound client, so the inserts
+`alshrouqDispatchOrder` needs were being refused by Postgres and no dispatch
+record could ever be written — silently, because the unit tests use a fake
+client. That silence was the danger rather than the failure: an uncertain
+dispatch whose row never lands is an order that still looks sendable.
+
+The dispatch and cancellation writes therefore use `supabaseAdmin`, the pattern
+`admin.functions.ts` uses throughout and the client the scheduled worker already
+runs on — and, as there, only *after* the handler's permission check has passed.
+The order read and the `has_permission` RPCs stay on the caller's client, where
+RLS is exactly what should decide them. No RLS policy was added or weakened.
 
 ### Tracking URL provenance
 

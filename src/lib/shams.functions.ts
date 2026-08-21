@@ -42,7 +42,10 @@ import type {
 } from "@/lib/shams-crm/alshrouq-config.server";
 import type { AlShrouqBranchResolution } from "@/lib/shams-crm/alshrouq-branches";
 import type { AlShrouqDispatchResult } from "@/lib/shams-crm/alshrouq-dispatch.server";
-import type { ScheduleResult } from "@/lib/shams-crm/alshrouq-scheduler.server";
+import type {
+  CancelScheduledResult,
+  ScheduleResult,
+} from "@/lib/shams-crm/alshrouq-scheduler.server";
 import type { AlShrouqLocationResult } from "@/features/alshrouq/location";
 import type { ShamsCrmOffer, ShamsOfferScope } from "@/lib/shams-crm/types";
 import type { ShamsCrmHistory } from "@/lib/shams/types";
@@ -756,15 +759,93 @@ export const alshrouqDispatchOrder = createServerFn({ method: "POST" })
      * comparison is against the server's clock, so a browser with a wrong clock
      * cannot turn a scheduled delivery into an immediate one.
      */
+    /*
+     * The dispatch write goes through the service-role client, not the caller's.
+     *
+     * `alshrouq_dispatches` grants `SELECT` to `authenticated` and **no write of
+     * any kind** — deliberately, so a row can never claim a dispatch that did not
+     * happen; every write must come from the code that actually called the CRM.
+     * The middleware's client is the caller's own, RLS-bound, so the insert this
+     * function needs would be refused by Postgres and no dispatch record would
+     * ever be written.
+     *
+     * That silence was the danger, not the failure: an uncertain dispatch whose
+     * row never lands is an order that still looks sendable. So the writes use
+     * `supabaseAdmin`, the same pattern `admin.functions.ts` uses throughout and
+     * the same client the scheduled worker already runs on — and, as there, only
+     * *after* the permission check above has passed. Authorization is enforced by
+     * this handler; RLS is not what is protecting this table's writes, because
+     * there are no writes for it to protect.
+     *
+     * The order read and the permission RPCs above stay on the caller's client,
+     * where RLS is exactly what should decide them.
+     */
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
     const scheduledFor = data.scheduledFor ? new Date(data.scheduledFor) : null;
     if (scheduledFor && scheduledFor.getTime() > Date.now()) {
       const { scheduleAlShrouqDispatch } =
         await import("@/lib/shams-crm/alshrouq-scheduler.server");
-      return scheduleAlShrouqDispatch(request, scheduledFor, supabase);
+      return scheduleAlShrouqDispatch(request, scheduledFor, supabaseAdmin);
     }
 
     const { dispatchOrderToAlShrouq } = await import("@/lib/shams-crm/alshrouq-dispatch.server");
-    return dispatchOrderToAlShrouq(request, supabase);
+    return dispatchOrderToAlShrouq(request, supabaseAdmin);
+  });
+
+/**
+ * Call off a scheduled AlShrouq delivery.
+ *
+ * **It contacts nobody.** There is no transport on this path: a scheduled
+ * dispatch has not been sent, so calling it off is a local decision about a
+ * request that was never made. This function cannot reach `createAlshrouqOrder`,
+ * and there is no branch in it that sends anything.
+ *
+ * Gated on the same rule as dispatching and as editing the order —
+ * `edit_all_orders`, or `edit_orders` on an order the agent owns. Cancelling a
+ * delivery an agent could have sent needs no wider ceiling than sending it, and
+ * a new permission key would mean a migration plus a parity change for no gain.
+ *
+ * Only a `scheduled` dispatch can be cancelled. The service refuses every other
+ * state and says which one it is in — in particular it will not touch a
+ * `processing` row, which a worker may be mid-request on, and will not mark an
+ * `indeterminate` one cancelled, because that would free the order's slot on the
+ * strength of an outcome nobody has established.
+ */
+export const alshrouqCancelScheduledDispatch = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => z.object({ orderId: z.string().uuid() }).parse(d))
+  .handler(async ({ context, data }): Promise<CancelScheduledResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+
+    // RLS already limits this read to orders the caller may see.
+    const { data: order, error } = await supabase
+      .from("orders")
+      .select("id,agent_id")
+      .eq("id", data.orderId)
+      .maybeSingle();
+    if (error || !order) throw new Error("Order not found");
+
+    const { data: canAll } = await supabase.rpc("has_permission", {
+      _user_id: userId,
+      _permission: "edit_all_orders",
+    });
+    const { data: canOwn } = await supabase.rpc("has_permission", {
+      _user_id: userId,
+      _permission: "edit_orders",
+    });
+    if (!canAll && !(order.agent_id === userId && canOwn)) {
+      throw new Error("Forbidden: insufficient permissions");
+    }
+
+    // The write, like every other write to this table, runs as the service role
+    // after this handler has decided the caller may make it. See the note in
+    // `alshrouqDispatchOrder`.
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { cancelScheduledAlShrouqDispatch } =
+      await import("@/lib/shams-crm/alshrouq-scheduler.server");
+
+    return cancelScheduledAlShrouqDispatch(data.orderId, supabaseAdmin);
   });
 
 /**

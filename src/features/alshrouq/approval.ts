@@ -15,7 +15,10 @@
  */
 
 import { formatScheduledFor } from "./scheduling";
-import type { ScheduleResult } from "@/lib/shams-crm/alshrouq-scheduler.server";
+import type {
+  CancelScheduledResult,
+  ScheduleResult,
+} from "@/lib/shams-crm/alshrouq-scheduler.server";
 
 /** What the agent approved. Identical for a new order and an existing one. */
 export interface AlShrouqApprovalPlan {
@@ -168,11 +171,43 @@ export function describeApprovalResult(
  * state. Everything that stops before the gate — `prepared`, `invalid`, an
  * unresolved branch — changed nothing, so re-reading would only spend a request
  * to be told the same thing.
+ *
+ * **`indeterminate` is in this list, and it is the important entry.** An
+ * uncertain send now persists a row that takes the order's dispatch slot, so the
+ * page must re-read it: the card has to stop offering to send an order that has
+ * already been POSTed. Leaving it out would put the safest state behind the
+ * stalest view.
+ *
+ * A `rejected` 4xx is deliberately absent — the immediate path persists nothing
+ * for it, because a 4xx is the CRM saying it understood the request and declined
+ * it, and nothing was created.
  */
 export function approvalChangedDispatchState(result: ScheduleResult): boolean {
   return (
     result.kind === "scheduled" ||
     result.kind === "dispatched" ||
-    result.kind === "already_dispatched"
+    result.kind === "already_dispatched" ||
+    result.kind === "indeterminate"
   );
+}
+
+/** What the agent is told when a cancellation comes back. */
+export function describeCancelResult(result: CancelScheduledResult): {
+  tone: "success" | "info" | "error";
+  message: string;
+} {
+  switch (result.kind) {
+    case "cancelled":
+      return {
+        tone: "success",
+        message: "Scheduled AlShrouq delivery cancelled. No courier was contacted.",
+      };
+    case "already_cancelled":
+      return { tone: "info", message: "This delivery was already cancelled." };
+    case "not_found":
+      return { tone: "error", message: "There is no scheduled AlShrouq delivery for this order." };
+    case "conflict":
+      // The server's own sentence, which names the state it refused from.
+      return { tone: "error", message: result.message };
+  }
 }

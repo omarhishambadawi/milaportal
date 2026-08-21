@@ -55,15 +55,21 @@ import {
 } from "./alshrouq-create.server";
 import { fetchAlShrouqDispatchOptions } from "./alshrouq-config.server";
 import type { AlShrouqCreatePayload } from "./alshrouq-payload";
+import {
+  canCancelDispatch,
+  describeCancelRefusal,
+  type AlShrouqDispatchStatus as DispatchStatus,
+} from "./alshrouq-dispatch-state";
 
-/** The lifecycle, as the database stores it. */
-export type AlShrouqDispatchStatus =
-  | "scheduled"
-  | "processing"
-  | "accepted"
-  | "failed"
-  | "indeterminate"
-  | "cancelled";
+/**
+ * The lifecycle, as the database stores it.
+ *
+ * Re-exported rather than redeclared: the states and the rules about them live
+ * in `alshrouq-dispatch-state.ts`, so the worker, the cancellation and the
+ * duplicate check cannot end up with three slightly different ideas of what
+ * `indeterminate` means.
+ */
+export type { AlShrouqDispatchStatus } from "./alshrouq-dispatch-state";
 
 interface SupabaseLike {
   from: (table: string) => any;
@@ -309,4 +315,115 @@ export async function runDueAlShrouqDispatches(
   }
 
   return summary;
+}
+
+/**
+ * Calling off a scheduled dispatch.
+ *
+ * The inverse of `scheduleAlShrouqDispatch`, and like it, **it contacts
+ * nobody**. There is no transport in this function: cancelling a parked dispatch
+ * is a local decision about a request that was never made, and there is no
+ * AlShrouq cancellation endpoint in this integration to call even if there were
+ * something to call off.
+ *
+ * ## Only `scheduled`, and why
+ *
+ * `canCancelDispatch` allows exactly one state. A parked row has contacted
+ * nobody, so calling it off costs nothing and tells no one. Every other state is
+ * refused with a sentence naming the reason — see `describeCancelRefusal`. The
+ * refusal that matters most is `indeterminate`: recording "cancelled" against an
+ * outcome nobody can establish would be a claim the data does not support, and
+ * it would quietly free the order's slot for a resend.
+ *
+ * ## The race with the worker
+ *
+ * An agent can click Cancel in the same second `pg_cron` fires. Both operations
+ * want the same transition out of `scheduled`:
+ *
+ *   worker: UPDATE … SET dispatch_status='processing' WHERE id=? AND dispatch_status='scheduled'
+ *   cancel: UPDATE … SET dispatch_status='cancelled'  WHERE order_id=? AND dispatch_status='scheduled'
+ *
+ * Postgres serialises two updates to one row, so exactly one matches
+ * `dispatch_status='scheduled'` and the other matches nothing. There is no
+ * window in which both succeed, and no read-then-write for a concurrent
+ * transaction to slip between.
+ *
+ * If cancellation wins, the row is `cancelled` and the worker's claim finds
+ * nothing — and even if that worker had already selected the row in its due
+ * query, it cannot claim it, and an unclaimed row is never sent.
+ *
+ * If the worker wins, cancellation returns `conflict` and **says so**. It does
+ * not retry, and it does not overwrite a `processing` row: that row may be
+ * mid-request, and marking it cancelled would record a delivery as called off
+ * while a driver was being assigned.
+ */
+export type CancelScheduledResult =
+  /** Called off. Nothing was sent, and nothing will be. */
+  | { kind: "cancelled"; cancelledAt: string }
+  /** No dispatch for this order at all. */
+  | { kind: "not_found" }
+  /** Already cancelled — reported as its own outcome, not as an error. */
+  | { kind: "already_cancelled" }
+  /**
+   * The dispatch is in a state cancellation may not touch. `status` is what it
+   * is actually in, and `message` is what to tell the agent.
+   */
+  | { kind: "conflict"; status: DispatchStatus | null; message: string };
+
+/**
+ * Who cancelled is deliberately not recorded here. There is no `cancelled_by`
+ * column, and adding one would mean a migration this phase does not otherwise
+ * need — so the caller's authorization is enforced (and logged) at the server
+ * function, and the row records only that it was called off and when.
+ */
+export async function cancelScheduledAlShrouqDispatch(
+  orderId: string,
+  supabase: SupabaseLike,
+): Promise<CancelScheduledResult> {
+  const cancelledAt = new Date().toISOString();
+
+  /*
+   * The compare-and-swap. `dispatch_status='scheduled'` is the guard, and it is
+   * the same predicate the worker's claim uses, so the two cannot both win.
+   *
+   * `cancelled_at` is set in the same statement as the status. They are the two
+   * markers the rest of the system reads — the unique index keys on
+   * `cancelled_at IS NULL`, the due query and the timeline on both — and writing
+   * them separately would leave a window where the row disagreed with itself.
+   */
+  const { data: cancelled } = await supabase
+    .from("alshrouq_dispatches")
+    .update({
+      dispatch_status: "cancelled",
+      cancelled_at: cancelledAt,
+    })
+    .eq("order_id", orderId)
+    .eq("dispatch_status", "scheduled")
+    .is("cancelled_at", null)
+    .select("id,cancelled_at")
+    .maybeSingle();
+
+  if (cancelled) return { kind: "cancelled", cancelledAt };
+
+  /*
+   * Nothing was updated. Read the row to say *why* — a cancellation that failed
+   * silently, or that reported success it did not achieve, is worse than one
+   * that explains itself. This read happens only on the failure path, so the
+   * common case is a single statement.
+   */
+  const { data: current } = await supabase
+    .from("alshrouq_dispatches")
+    .select("dispatch_status,cancelled_at")
+    .eq("order_id", orderId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!current) return { kind: "not_found" };
+
+  const status = (current.dispatch_status ?? null) as DispatchStatus | null;
+  if (status === "cancelled" || current.cancelled_at) return { kind: "already_cancelled" };
+
+  // Never silently mutate a row cancellation may not have. Report the state.
+  return { kind: "conflict", status, message: describeCancelRefusal(status) };
 }

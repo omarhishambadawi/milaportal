@@ -51,14 +51,34 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { ExternalLink, Info, Loader2, MapPin, PackageCheck, Send, Truck } from "lucide-react";
+import {
+  CalendarX,
+  ExternalLink,
+  Info,
+  Loader2,
+  MapPin,
+  PackageCheck,
+  Send,
+  Truck,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { fmtSAR } from "@/lib/branches";
 import { queryKeys } from "@/lib/query-keys";
 import {
+  alshrouqCancelScheduledDispatch,
   alshrouqDispatchContext,
   alshrouqDispatchOrder,
   type AlShrouqDispatchContext,
@@ -68,6 +88,7 @@ import type { ScheduleResult } from "@/lib/shams-crm/alshrouq-scheduler.server";
 import {
   approvalChangedDispatchState,
   describeApprovalResult,
+  describeCancelResult,
   dispatchInputFor,
   type AlShrouqApprovalPlan,
 } from "../approval";
@@ -189,6 +210,32 @@ export function AlShrouqDispatchSection({
         setOpen(false);
       }
     },
+  });
+
+  /**
+   * Calling off a scheduled delivery.
+   *
+   * Contacts nobody: the server refuses anything that is not `scheduled`, and a
+   * scheduled dispatch has not been sent. If the worker claimed the row first
+   * the server returns a conflict and this reports it rather than pretending the
+   * cancellation worked — the row is re-read either way, because the honest
+   * state is whatever the database now holds.
+   */
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const cancelFn = useServerFn(alshrouqCancelScheduledDispatch);
+  const cancel = useMutation({
+    mutationFn: () => cancelFn({ data: { orderId: orderId! } }),
+    onSuccess: (r) => {
+      const { tone, message } = describeCancelResult(r);
+      if (tone === "error") toast.error(message);
+      else if (tone === "success") toast.success(message);
+      else toast.info(message);
+      qc.invalidateQueries({ queryKey: queryKeys.orders.dispatch(orderId) });
+    },
+    onError: () => {
+      toast.error("The delivery could not be cancelled. Nothing was changed.");
+    },
+    onSettled: () => setConfirmingCancel(false),
   });
 
   const errors: AlShrouqFieldError[] = result?.kind === "invalid" ? result.errors : [];
@@ -387,6 +434,24 @@ export function AlShrouqDispatchSection({
                   </a>
                 </Button>
               )}
+              {/* Only while the dispatch is still parked. A claimed, sent or
+                  unconfirmed delivery cannot be called off from here, and the
+                  server refuses it independently of whether this renders. */}
+              {summary.awaitingSchedule && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setConfirmingCancel(true)}
+                  disabled={cancel.isPending}
+                >
+                  {cancel.isPending ? (
+                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <CalendarX className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                  )}
+                  {cancel.isPending ? "Cancelling…" : "Cancel scheduled delivery"}
+                </Button>
+              )}
             </>
           ) : (
             /* The only send control on this page. It is absent — not disabled —
@@ -411,6 +476,44 @@ export function AlShrouqDispatchSection({
           )}
         </div>
       </Card>
+
+      <AlertDialog open={confirmingCancel} onOpenChange={setConfirmingCancel}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel the scheduled AlShrouq delivery?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm">
+                <p>
+                  This delivery is scheduled for{" "}
+                  <span className="font-medium text-foreground">
+                    {formatScheduledFor(summary.scheduledFor) ?? "a scheduled time"}
+                  </span>{" "}
+                  and <span className="font-medium text-foreground">has not been sent</span>. No
+                  courier has been contacted, and cancelling contacts nobody either.
+                </p>
+                <p className="text-muted-foreground">
+                  The order itself stays in MilaPortal, unchanged. If AlShrouq has already started
+                  processing this delivery it cannot be cancelled here, and you will be told so.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={cancel.isPending}>Keep it scheduled</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                // Handled by the mutation, so the dialog closes on the result
+                // rather than the moment the button is pressed.
+                event.preventDefault();
+                cancel.mutate();
+              }}
+              disabled={cancel.isPending}
+            >
+              {cancel.isPending ? "Cancelling…" : "Cancel delivery"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* The shared dialog — the same one the create journey opens. Mounted only
           while there is something to approve. */}
