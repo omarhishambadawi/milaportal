@@ -8,6 +8,7 @@ import { actorName, useOrderActivity, type OrderActivityEvent } from "../hooks/u
 import {
   buildAlShrouqTimeline,
   type AlShrouqTimelineEvent,
+  type AlShrouqTimelineKind,
 } from "@/features/alshrouq/dispatch-timeline";
 import { useOrderAlShrouqDispatch } from "@/features/alshrouq/use-order-dispatch";
 import { useScheduledDispatchCountdown } from "@/features/alshrouq/use-scheduled-countdown";
@@ -185,6 +186,14 @@ interface TimelineEntry {
   tone: "default" | "automated" | "success" | "warning" | "danger";
   /** Who or what did it. `null` renders no attribution at all. */
   actor: { kind: "person" | "system" | "delivery"; name: string } | null;
+  /**
+   * For a dispatch entry, which lifecycle step it is.
+   *
+   * The countdown attaches to the scheduled step by this, not by matching its
+   * title: copy gets rewritten, and a renamed heading silently detaching the
+   * countdown is exactly the kind of break nothing would catch.
+   */
+  dispatchKind?: AlShrouqTimelineKind;
   /** Only ever a persisted, absolute tracking URL. Never assembled. */
   trackingUrl?: string | null;
 }
@@ -196,9 +205,6 @@ const DOT: Record<TimelineEntry["tone"], string> = {
   warning: "bg-warning",
   danger: "bg-destructive",
 };
-
-/** The scheduled entry's title, matched to attach the countdown to it. */
-const SCHEDULED_TITLE = "AlShrouq delivery scheduled";
 
 /** An `order_activity` row, as the timeline renders it. */
 function fromActivity(e: OrderActivityEvent): TimelineEntry {
@@ -240,6 +246,7 @@ function fromDispatch(e: AlShrouqTimelineEvent, index: number): TimelineEntry {
     // acknowledgement to whoever last touched the order.
     actor: { kind: "delivery", name: "AlShrouq" },
     trackingUrl: e.trackingUrl,
+    dispatchKind: e.kind,
   };
 }
 
@@ -281,9 +288,11 @@ export function OrderActivityTimeline({ orderId }: { orderId: string }) {
    */
   const countdownLine =
     countdown.state === "waiting"
-      ? `Dispatching in ${countdown.remainingLabel}`
+      ? `Dispatch begins in ${countdown.remainingLabel}`
       : countdown.state === "due"
-        ? "Dispatch pending"
+        ? // The moment has passed but the worker has not reported yet. It has
+          // not been sent, and this must not read as though it had.
+          "Awaiting dispatch"
         : null;
 
   return (
@@ -302,7 +311,7 @@ export function OrderActivityTimeline({ orderId }: { orderId: string }) {
           {entries.map((e, i, all) => {
             const last = i === all.length - 1;
             const countdownHere =
-              countdownLine && e.title === SCHEDULED_TITLE ? countdownLine : null;
+              countdownLine && e.dispatchKind === "scheduled" ? countdownLine : null;
             return (
               <li key={e.id} className="flex gap-2.5">
                 {/* The rail: a dot per event and a hairline joining them, so the

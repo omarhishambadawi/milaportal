@@ -38,6 +38,7 @@ function row(over: Partial<AlShrouqDispatchRow> = {}): AlShrouqDispatchRow {
     cancelled_at: null,
     external_order_id: null,
     tracking_url: null,
+    refreshed_at: null,
     last_error: null,
     status: null,
     ...over,
@@ -178,7 +179,10 @@ describe("dispatch started", () => {
     const events = buildAlShrouqTimeline(processingRow);
     expect(kinds(processingRow)).toEqual(["scheduled", "started"]);
     const started = events[1];
-    expect(started.title).toBe("AlShrouq dispatch started");
+    expect(started.title).toBe("AlShrouq dispatch initiated");
+    // Named as a submission, not as an outcome: the claim says a request went,
+    // never that anybody accepted it.
+    expect(started.detail).toBe("Submitted to AlShrouq");
     expect(started.at).toBe(CLAIMED_AT);
   });
 
@@ -191,7 +195,7 @@ describe("dispatch started", () => {
   it("claims no outcome", () => {
     const events = buildAlShrouqTimeline(processingRow);
     expect(events.some((e) => e.kind === "accepted")).toBe(false);
-    expect(summariseAlShrouqDispatch(processingRow).label).toBe("Dispatch started");
+    expect(summariseAlShrouqDispatch(processingRow).label).toBe("Sending to AlShrouq");
   });
 });
 
@@ -199,7 +203,7 @@ describe("accepted", () => {
   it("renders the full sequence, ending with the send", () => {
     expect(kinds(acceptedRow)).toEqual(["scheduled", "started", "accepted"]);
     const accepted = buildAlShrouqTimeline(acceptedRow)[2];
-    expect(accepted.title).toBe("Order sent to AlShrouq");
+    expect(accepted.title).toBe("Accepted by AlShrouq");
     expect(accepted.at).toBe(SENT_AT);
     expect(accepted.tone).toBe("success");
   });
@@ -209,9 +213,18 @@ describe("accepted", () => {
     expect(times).toEqual([...times].sort((a, b) => a - b));
   });
 
-  it("shows the courier's own status word rather than one of ours", () => {
+  /**
+   * The courier's own word is context, not the heading.
+   *
+   * The badge used to read "Order Created" — AlShrouq's vocabulary, which an
+   * agent has never seen and which reads as a fault. The state now has one name
+   * this system defines, and the verbatim value keeps its place on the event
+   * beside the reference.
+   */
+  it("keeps the courier's own status word as detail, not as the label", () => {
     expect(buildAlShrouqTimeline(acceptedRow)[2].detail).toContain("Order Created");
-    expect(summariseAlShrouqDispatch(acceptedRow).label).toBe("Order Created");
+    expect(summariseAlShrouqDispatch(acceptedRow).label).toBe("Accepted by AlShrouq");
+    expect(summariseAlShrouqDispatch(acceptedRow).courierStatus).toBe("Order Created");
   });
 });
 
@@ -250,13 +263,30 @@ describe("the tracking URL", () => {
     tracking_url: "https://track.example.com/o/6099196",
   });
 
-  it("is shown when the reconciliation persisted one", () => {
-    expect(buildAlShrouqTimeline(tracked)[0].trackingUrl).toBe(
-      "https://track.example.com/o/6099196",
-    );
+  it("is shown on its own event when the reconciliation persisted one", () => {
+    const events = buildAlShrouqTimeline(tracked);
+    // Its own step, because a delivery can be accepted with no tracking page.
+    expect(events.map((e) => e.kind)).toEqual(["accepted", "tracking"]);
+    const trackingEvent = events[1];
+    expect(trackingEvent.title).toBe("Tracking available");
+    expect(trackingEvent.trackingUrl).toBe("https://track.example.com/o/6099196");
+    // Offered once, not twice in a row.
+    expect(events[0].trackingUrl).toBeNull();
     expect(summariseAlShrouqDispatch(tracked).trackingUrl).toBe(
       "https://track.example.com/o/6099196",
     );
+  });
+
+  /** Anchored to when the record carrying it was read, never to "now". */
+  it("takes its timestamp from the reconciliation read", () => {
+    const events = buildAlShrouqTimeline({ ...tracked, refreshed_at: "2026-08-21T12:31:00.000Z" });
+    expect(events.find((e) => e.kind === "tracking")!.at).toBe("2026-08-21T12:31:00.000Z");
+  });
+
+  /** No tracking URL, no tracking event. The lifecycle simply ends earlier. */
+  it("produces no tracking event when none was persisted", () => {
+    const events = buildAlShrouqTimeline({ ...tracked, tracking_url: null });
+    expect(events.some((e) => e.kind === "tracking")).toBe(false);
   });
 
   /**
@@ -342,7 +372,7 @@ describe("indeterminate", () => {
   it("renders as review required, not as a failure", () => {
     const event = buildAlShrouqTimeline(unknown).at(-1)!;
     expect(event.kind).toBe("indeterminate");
-    expect(event.title).toBe("AlShrouq dispatch requires review");
+    expect(event.title).toBe("Delivery status unavailable");
     expect(event.at).toBe(CLAIMED_AT);
   });
 
@@ -374,13 +404,15 @@ describe("indeterminate", () => {
    */
   it("states that it was not retried automatically", () => {
     const event = buildAlShrouqTimeline(unknown).at(-1)!;
-    expect(event.detail).toMatch(/not sent again automatically/i);
+    expect(event.detail).toMatch(/has not been automatically retried/i);
+    expect(event.detail).toContain("could not be confirmed");
+    // The persisted reason is kept alongside it, not instead of it.
     expect(event.detail).toContain("did not respond in time");
   });
 
   it("summarises as requiring review, and as already spoken for", () => {
     const s = summariseAlShrouqDispatch(unknown);
-    expect(s.label).toBe("Requires review");
+    expect(s.label).toBe("Delivery status unavailable");
     // The critical flag: an unconfirmed send is exactly where a second attempt
     // does the most damage, so the UI must treat it as handed over.
     expect(s.handedOver).toBe(true);
@@ -415,7 +447,7 @@ describe("cancelled", () => {
   /** A cancelled row frees the unique index's slot, so a resend is legitimate. */
   it("leaves the order sendable again", () => {
     const s = summariseAlShrouqDispatch(cancelled);
-    expect(s.label).toBe("Cancelled");
+    expect(s.label).toBe("Scheduled delivery cancelled");
     expect(s.handedOver).toBe(false);
   });
 });

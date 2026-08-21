@@ -41,6 +41,7 @@ const emptyRow: AlShrouqDispatchRow = {
   cancelled_at: null,
   external_order_id: null,
   tracking_url: null,
+  refreshed_at: null,
   last_error: null,
   status: null,
 };
@@ -680,6 +681,7 @@ describe("a cancelled dispatch in the timeline", () => {
       cancelled_at: row.cancelled_at as string,
       external_order_id: null,
       tracking_url: null,
+      refreshed_at: null,
       last_error: null,
       status: null,
     });

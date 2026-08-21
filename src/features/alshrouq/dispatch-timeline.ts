@@ -57,6 +57,13 @@ export interface AlShrouqDispatchRow {
   cancelled_at: string | null;
   external_order_id: string | null;
   tracking_url: string | null;
+  /**
+   * When the reconciliation read ran — and so when a tracking URL, if there is
+   * one, became known. The tracking event's own timestamp; there is no separate
+   * "tracking became available" column, and this is the honest stand-in because
+   * it is the moment the record carrying the URL was read.
+   */
+  refreshed_at: string | null;
   last_error: string | null;
   /** The courier's own status word, stored verbatim and never translated. */
   status: string | null;
@@ -66,6 +73,7 @@ export type AlShrouqTimelineKind =
   | "scheduled"
   | "started"
   | "accepted"
+  | "tracking"
   | "failed"
   | "indeterminate"
   | "cancelled";
@@ -190,8 +198,8 @@ export function buildAlShrouqTimeline(
   if (startedAt) {
     events.push({
       kind: "started",
-      title: "AlShrouq dispatch started",
-      detail: null,
+      title: "AlShrouq dispatch initiated",
+      detail: "Submitted to AlShrouq",
       at: startedAt,
       externalOrderId: null,
       trackingUrl: null,
@@ -205,7 +213,7 @@ export function buildAlShrouqTimeline(
     events.push({
       kind: "cancelled",
       title: "AlShrouq delivery cancelled",
-      detail: "No delivery is active for this order.",
+      detail: "Cancelled before dispatch",
       at: cancelledAt,
       externalOrderId: ref,
       trackingUrl: null,
@@ -218,19 +226,41 @@ export function buildAlShrouqTimeline(
     const at = iso(row.dispatched_at);
     if (at) {
       const parts: string[] = [];
-      if (ref) parts.push(`Reference ${ref}`);
+      // The reference AlShrouq knows this delivery by — a user-facing number an
+      // agent can quote on the phone, not an internal id.
+      if (ref) parts.push(`Reference: ${ref}`);
       // The courier's own word for where the delivery is, when it reported one.
       if (row.status && row.status.trim() !== "") parts.push(row.status.trim());
       events.push({
         kind: "accepted",
-        title: "Order sent to AlShrouq",
+        title: "Accepted by AlShrouq",
         detail: parts.length > 0 ? parts.join(" · ") : null,
         at,
         externalOrderId: ref,
-        // Shown only because it was persisted. Never built from the reference.
-        trackingUrl: tracking,
+        // The link lives on the tracking event below, so one destination is
+        // offered once rather than twice in a row.
+        trackingUrl: null,
         tone: "success",
       });
+
+      /* Tracking became available. -----------------------------------------
+         Its own step because it is its own fact: a delivery can be accepted
+         with no tracking page at all, and pretending otherwise would put a
+         dead link on the timeline. `refreshed_at` is when the reconciliation
+         record carrying the URL was read, which is the moment it became
+         known; a row that somehow has the URL without that timestamp is
+         anchored to the send instead of being dropped. */
+      if (tracking) {
+        events.push({
+          kind: "tracking",
+          title: "Tracking available",
+          detail: null,
+          at: iso(row.refreshed_at) ?? at,
+          externalOrderId: ref,
+          trackingUrl: tracking,
+          tone: "success",
+        });
+      }
     }
   } else if (status === "failed") {
     const at = iso(row.last_attempt_at) ?? iso(row.dispatched_at);
@@ -253,13 +283,17 @@ export function buildAlShrouqTimeline(
       const reason = safeFailureReason(row.last_error);
       events.push({
         kind: "indeterminate",
-        title: "AlShrouq dispatch requires review",
+        title: "Delivery status unavailable",
         /* Never collapsed into "failed". A failure is AlShrouq saying no; this
            is nobody knowing, which is a different instruction to the person
            reading it — and the sentence they must not miss is the second one. */
-        detail: `${
-          reason ?? "The delivery could not be confirmed."
-        } It was not sent again automatically — check with AlShrouq before anyone resends it.`,
+        /* Never collapsed into "failed", and never softened. The first sentence
+           is what is known; the second is the one an agent must not miss,
+           because reading this as a failure is what makes someone send it
+           again. `reason` is the persisted, sanitised text when there is one. */
+        detail: `AlShrouq response could not be confirmed. The order has not been automatically retried.${
+          reason ? ` (${reason})` : ""
+        }`,
         at,
         externalOrderId: ref,
         trackingUrl: null,
@@ -297,6 +331,13 @@ export interface AlShrouqDispatchSummary {
   externalOrderId: string | null;
   trackingUrl: string | null;
   scheduledFor: string | null;
+  /** The persisted failure text, sanitised. Null unless the dispatch failed. */
+  failureReason: string | null;
+  /**
+   * AlShrouq's own word for where the delivery is, verbatim. Context beside the
+   * label, never the label itself — see the `accepted` case.
+   */
+  courierStatus: string | null;
 }
 
 /**
@@ -318,6 +359,8 @@ export function summariseAlShrouqDispatch(
     externalOrderId: null,
     trackingUrl: null,
     scheduledFor: null,
+    failureReason: null,
+    courierStatus: null,
   };
   if (!row) return empty;
 
@@ -327,10 +370,20 @@ export function summariseAlShrouqDispatch(
     externalOrderId: reference(row),
     trackingUrl: safeTrackingUrl(row.tracking_url),
     scheduledFor: iso(row.scheduled_for),
+    // Only meaningful for a failure; carried on every state so the card reads
+    // one shape rather than branching on which fields exist.
+    failureReason: status === "failed" ? safeFailureReason(row.last_error) : null,
+    courierStatus: row.status?.trim() || null,
   };
 
   if (row.cancelled_at) {
-    return { ...empty, ...base, label: "Cancelled", tone: "warning", trackingUrl: null };
+    return {
+      ...empty,
+      ...base,
+      label: "Scheduled delivery cancelled",
+      tone: "warning",
+      trackingUrl: null,
+    };
   }
 
   // One rule, asked once. Every branch below reports it rather than deciding it.
@@ -348,7 +401,8 @@ export function summariseAlShrouqDispatch(
     case "processing":
       return {
         ...base,
-        label: "Dispatch started",
+        // A claim, said as an action in progress rather than as an outcome.
+        label: "Sending to AlShrouq",
         tone: "info",
         handedOver,
         awaitingSchedule: false,
@@ -356,9 +410,16 @@ export function summariseAlShrouqDispatch(
     case "accepted":
       return {
         ...base,
-        // The courier's own word when it gave one, since it is more specific
-        // than anything this codebase would substitute for it.
-        label: row.status?.trim() || "Sent to AlShrouq",
+        /*
+         * One heading for the state, not the courier's vocabulary.
+         *
+         * This used to show `row.status` — AlShrouq's own word, e.g. "Order
+         * Created" — as the badge. It is more specific but it is not a status
+         * *this* system defines, and a courier word an agent has never seen
+         * reads as a fault. The verbatim value is still shown, on the timeline
+         * event beside the reference, where it is context rather than a label.
+         */
+        label: "Accepted by AlShrouq",
         tone: "success",
         handedOver,
         awaitingSchedule: false,
@@ -374,7 +435,8 @@ export function summariseAlShrouqDispatch(
     case "indeterminate":
       return {
         ...base,
-        label: "Requires review",
+        // Not "failed", and not a word that sounds like an internal queue.
+        label: "Delivery status unavailable",
         tone: "danger",
         handedOver,
         awaitingSchedule: false,

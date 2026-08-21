@@ -3166,13 +3166,26 @@ cancelled` — and the timestamps beside it are the history:
 clock — and maps a row to events:
 
 ```
-scheduled_at         → "AlShrouq delivery scheduled"      (+ due time, + countdown)
-last_attempt_at      → "AlShrouq dispatch started"
-status=accepted      → "Order sent to AlShrouq"           (+ reference, + tracking)
-status=failed        → "AlShrouq dispatch failed"         (+ safe reason)
-status=indeterminate → "AlShrouq dispatch requires review"(+ "not sent again")
-cancelled_at         → "AlShrouq delivery cancelled"
+scheduled_at         → "AlShrouq delivery scheduled"   (+ due time, + countdown)
+last_attempt_at      → "AlShrouq dispatch initiated"   ("Submitted to AlShrouq")
+status=accepted      → "Accepted by AlShrouq"          ("Reference: 6099196")
+refreshed_at + url   → "Tracking available"            (+ the link)
+status=failed        → "AlShrouq dispatch failed"      (+ safe reason)
+status=indeterminate → "Delivery status unavailable"   (+ "not automatically retried")
+cancelled_at         → "AlShrouq delivery cancelled"   ("Cancelled before dispatch")
 ```
+
+**Tracking is its own step, not a badge on the acceptance.** A delivery can be
+accepted with no tracking page at all, so the link is a separate event or it is
+absent — and it appears once rather than on both. Its timestamp is `refreshed_at`,
+the moment the reconciliation record carrying the URL was read; there is no
+"tracking became available" column and this is the honest stand-in, falling back
+to `dispatched_at` only when a row has the URL without it.
+
+**Nothing says "Delivered".** No backend evidence of delivery exists — the
+reconciliation record carries a status word, not a lifecycle — so no event
+claims one, and a test sweeps every state asserting that no title mentions
+delivered, out for delivery, en route or a driver.
 
 An event with no persisted timestamp is **not emitted**. A row that says
 `scheduled` but carries no `scheduled_at` produces nothing rather than a guessed
@@ -3198,6 +3211,39 @@ re-read on invalidation after an approval, and that is all.
 `alshrouqDispatchContext` no longer returns the dispatch row — it used to, which
 made two reads of one row that could show different things.
 
+### What each state is called on screen
+
+The badge and the timeline use one vocabulary, and it is not the database's:
+
+| `dispatch_status` | On screen |
+| --- | --- |
+| `scheduled` | Scheduled |
+| `processing` | Sending to AlShrouq |
+| `accepted` | Accepted by AlShrouq |
+| `failed` | Dispatch failed |
+| `indeterminate` | Delivery status unavailable |
+| `cancelled` | Scheduled delivery cancelled |
+| anything unrecognised | Dispatch recorded |
+
+`accepted` used to show `row.status` — AlShrouq's own word, e.g. "Order Created".
+It is more specific, but it is not a status *this* system defines, and a courier
+word an agent has never seen reads as a fault. The verbatim value is still shown
+on the timeline event beside the reference, where it is context rather than a
+label; the summary carries it as `courierStatus`.
+
+Two states get a sentence rather than a badge, in a bordered band on the card:
+
+* **indeterminate** — fixed copy: *"AlShrouq response could not be confirmed.
+  The order has not been automatically retried."* The second sentence is the one
+  an agent must not miss, because reading this as a failure is what makes someone
+  send it again.
+* **failed** — the persisted `last_error`, but only through `safeFailureReason`,
+  which drops anything shaped like a URL, a header, a token or a stack trace and
+  falls back to a generic sentence.
+
+A test asserts no label contains `dispatch_status`, `payload`, `snapshot`,
+`POST`, `cron`, `worker` or `reconcil`.
+
 ### The one-time immutable handoff
 
 Once an order has a dispatch row in any state but `cancelled`, the Portal offers
@@ -3205,6 +3251,13 @@ no way to send it again. `summariseAlShrouqDispatch(row).handedOver` is the flag
 and it is **true for `indeterminate` as well as `accepted`** — an unconfirmed
 send is exactly where a second attempt does the most damage, because the courier
 may already be moving.
+
+The card says so in as many words: *"AlShrouq submission completed. Changes made
+in MilaPortal after submission are not sent to AlShrouq."* There is no AlShrouq
+order-update endpoint in this integration, so there is no "Update AlShrouq"
+control and no "Syncing" state — a test asserts the card contains no such
+wording. The page's primary action for a saved order is **Update order**; the
+approval dialog is intercepted on create only.
 
 The send control is **absent, not disabled**: a disabled button beside a delivery
 already on its way still invites a click. Three layers enforce this and they
@@ -3397,7 +3450,14 @@ card and beside the timeline's scheduled event. It reads the persisted
 `scheduled_for` on every render, so a refresh, another browser or another device
 reconstruct the same figure — there is no local state to disagree with the row.
 
-Reaching zero changes a label to **"Dispatch pending"** and nothing else. The
+The card presents it as two labelled values — **Scheduled for** with the instant,
+and **Dispatch begins in** with the remaining time — rather than a running clock
+that dominates the panel.
+
+Reaching zero changes a label to **"Awaiting dispatch"** and nothing else. That
+wording is load-bearing: the moment has passed and the worker has not reported,
+so the delivery has *not* been sent, and a screen that said otherwise on the
+strength of a clock would be claiming something no row supports. The
 hook has no network call, no mutation and no server function; its only effect is
 a `setInterval` that re-renders. The dispatch is performed by `pg_cron` → the
 worker → the safety gate, which is why a closed laptop, a logged-out agent or a

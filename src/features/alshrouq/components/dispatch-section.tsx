@@ -52,6 +52,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import {
+  AlertTriangle,
   CalendarX,
   ExternalLink,
   Info,
@@ -287,7 +288,7 @@ export function AlShrouqDispatchSection({
 
   const coordinates =
     current?.customer_lat != null && current?.customer_lng != null
-      ? `${current.customer_lat}, ${current.customer_lng}`
+      ? { lat: String(current.customer_lat), lng: String(current.customer_lng) }
       : null;
 
   return (
@@ -316,7 +317,7 @@ export function AlShrouqDispatchSection({
             </div>
             <p className="mt-1 text-[11.5px] leading-tight text-muted-foreground">
               {summary.handedOver
-                ? "This order has been handed to AlShrouq. Later edits here do not change the delivery."
+                ? "AlShrouq submission completed. Changes made in MilaPortal after submission are not sent to AlShrouq."
                 : "Create and send this order to AlShrouq for delivery"}
             </p>
           </div>
@@ -362,16 +363,27 @@ export function AlShrouqDispatchSection({
               </p>
             </div>
           )}
+          {/* Latitude and longitude separately, as the courier contract names
+              them. Read-only: they are the product of a resolved link and were
+              never typed, so there is nothing here to edit. */}
           {coordinates && (
-            <div className="min-w-0 space-y-0.5 sm:col-span-2">
-              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                Coordinates
-              </p>
-              <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
-                <MapPin className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                {coordinates}
-              </p>
-            </div>
+            <>
+              <div className="min-w-0 space-y-0.5">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Latitude
+                </p>
+                <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
+                  <MapPin className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  {coordinates.lat}
+                </p>
+              </div>
+              <div className="min-w-0 space-y-0.5">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Longitude
+                </p>
+                <p className="font-mono text-xs text-muted-foreground">{coordinates.lng}</p>
+              </div>
+            </>
           )}
         </div>
 
@@ -379,19 +391,53 @@ export function AlShrouqDispatchSection({
             only — the dispatch is performed server-side by pg_cron and the
             worker, whether or not this page is open. */}
         {summary.scheduledFor && (
-          <div className="border-t border-border/60 bg-muted/20 px-4 py-3 dark:bg-muted/10">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Scheduled delivery
-            </p>
-            <p className="mt-0.5 text-sm font-medium text-foreground">
-              {formatScheduledFor(summary.scheduledFor) ?? "—"}
-            </p>
-            <p className="mt-0.5 text-[11.5px] text-muted-foreground">
-              {countdown.state === "waiting"
-                ? `Dispatching in ${countdown.remainingLabel}`
-                : countdown.state === "due"
-                  ? "Dispatch pending"
-                  : summary.label}
+          <div className="grid grid-cols-1 gap-x-4 gap-y-3 border-t border-border/60 bg-muted/20 px-4 py-3 dark:bg-muted/10 sm:grid-cols-2">
+            <div className="min-w-0 space-y-0.5">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Scheduled for
+              </p>
+              <p className="text-sm font-medium text-foreground">
+                {formatScheduledFor(summary.scheduledFor) ?? "—"}
+              </p>
+            </div>
+            <div className="min-w-0 space-y-0.5">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                {countdown.state === "waiting" ? "Dispatch begins in" : "Status"}
+              </p>
+              <p className="text-sm font-medium text-foreground">
+                {countdown.state === "waiting"
+                  ? countdown.remainingLabel
+                  : countdown.state === "due"
+                    ? /* The moment has passed and the worker has not reported
+                         yet. Nothing has been sent, and this must not read as
+                         though it had. */
+                      "Awaiting dispatch"
+                    : /* No longer waiting: the persisted status is the truth,
+                         whatever the clock says. */
+                      summary.label}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* The two states that need a sentence rather than a badge.
+
+            `indeterminate` gets fixed copy, because the one thing an agent must
+            take from it is that nothing was retried — reading it as a failure is
+            what makes someone send it again. `failed` shows the persisted
+            reason, but only through `safeFailureReason`, which drops anything
+            shaped like a URL, a header, a token or a stack trace. */}
+        {(summary.status === "indeterminate" || summary.status === "failed") && (
+          <div className="flex items-start gap-2 border-t border-border/60 bg-destructive/5 px-4 py-3 text-[11.5px] leading-snug text-muted-foreground">
+            <AlertTriangle
+              className="mt-px h-3.5 w-3.5 shrink-0 text-destructive"
+              aria-hidden="true"
+            />
+            <p>
+              {summary.status === "indeterminate"
+                ? "AlShrouq response could not be confirmed. The order has not been automatically retried. Check with AlShrouq before anyone sends it again."
+                : (summary.failureReason ??
+                  "AlShrouq did not accept this delivery. Nothing was sent.")}
             </p>
           </div>
         )}

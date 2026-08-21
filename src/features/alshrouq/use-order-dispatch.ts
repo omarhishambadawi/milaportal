@@ -65,7 +65,7 @@ export interface AlShrouqOrderDispatch extends AlShrouqDispatchRow {
 
 const COLUMNS =
   "dispatch_status,scheduled_for,scheduled_at,last_attempt_at,dispatched_at,cancelled_at," +
-  "external_order_id,tracking_url,last_error,status,payment_type,value," +
+  "external_order_id,tracking_url,refreshed_at,last_error,status,payment_type,value," +
   "customer_address,customer_lat,customer_lng,branch_no,created_at";
 
 export interface AlShrouqOrderDispatchState {
