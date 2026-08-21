@@ -2906,9 +2906,46 @@ the agent owns — so no new permission, no migration, no parity change. Payment
 type is never guessed from `order_type`: sending a driver to collect cash from
 someone who has already paid is the failure that blank prevents.
 
-**It does not dispatch.** Submitting validates through the Phase 6 builder and
-stops. Nothing reaches `createAlshrouqOrder`, no courier is contacted, and
-nothing is written. A live dispatch is a separately reviewed step.
+The dialog sends what the agent typed to `alshrouqDispatchOrder` and nothing
+else — no payload, no endpoint, no branch id. A component that assembled
+requests is how the previous integration turned a re-render into a second
+courier.
+
+### The dispatch service and the production safety gate
+
+`alshrouq-dispatch.server.ts` owns the whole workflow:
+
+```
+duplicate check → branch resolution → Phase 6 payload → SAFETY GATE
+→ POST (once) → reconcile by client_order_id → persist → result
+```
+
+Everything up to the gate runs today. Everything after it is written, typed and
+tested against a mocked transport, and **unreachable**.
+
+**The gate** is `ALSHROUQ_LIVE_DISPATCH_ENABLED`, read from `process.env` inside
+that one module. It is server-side and un-prefixed (a `VITE_` copy would be
+inlined into the browser bundle, where a courier switch has no business being);
+**not an argument** — `DispatchRequest` has no `live` field and the server
+function's validator accepts only an order id and eight form strings, so no
+caller can ask for a live dispatch, only the deployment can permit one; and
+default-safe — only the exact string `"true"` opens it, so a typo fails closed.
+With it shut the service returns `prepared`: nothing sent, nothing written, no
+fabricated reference.
+
+**The reference never comes from the POST body.** That response has never been
+captured, so `dispatched` is populated from
+`findAlshrouqOrderByClientOrderId` — the GET whose shape *is* evidence-backed.
+
+**An indeterminate result never re-POSTs.** A timeout, 5xx or 401 after
+transmission means the courier may already be moving, so the answer is a read.
+Found → persisted and reported dispatched; not found → stays indeterminate for a
+human. No branch in the file sends a second POST.
+
+Duplicate protection is checked before anything is built, using the same
+`cancelled_at IS NULL` predicate as the unique index
+`alshrouq_dispatches_live_order_key`, so the check and the constraint cannot
+disagree. A `23505` on insert is reported as "already sent", not as an error.
 
 ### AlShrouq create transport
 

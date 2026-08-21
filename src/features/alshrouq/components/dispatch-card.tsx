@@ -26,7 +26,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useParams } from "@tanstack/react-router";
 import { Loader2, PackageCheck, Truck } from "lucide-react";
@@ -50,11 +50,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { alshrouqDispatchContext, type AlShrouqDispatchContext } from "@/lib/shams.functions";
 import {
-  buildAlshrouqOrderPayload,
-  type AlShrouqFieldError,
-} from "@/lib/shams-crm/alshrouq-payload";
+  alshrouqDispatchContext,
+  alshrouqDispatchOrder,
+  type AlShrouqDispatchContext,
+} from "@/lib/shams.functions";
+import type { AlShrouqFieldError } from "@/lib/shams-crm/alshrouq-payload";
+import type { AlShrouqDispatchResult } from "@/lib/shams-crm/alshrouq-dispatch.server";
 import { ALSHROUQ } from "../constants";
 
 /** What the agent types in the dialog. A form holds text, not numbers. */
@@ -101,6 +103,106 @@ function branchLine(ctx: AlShrouqDispatchContext): { text: string; ok: boolean }
   return { text: `${ctx.branchNo} — not in the CRM's branch list`, ok: false };
 }
 
+/**
+ * What came back, said plainly.
+ *
+ * The `prepared` wording is the load-bearing part: with the safety gate closed
+ * the pipeline runs to completion and stops before the POST, and an agent must
+ * not read that as a delivery being on its way. It says no courier was
+ * contacted, because none was.
+ */
+function ResultNotice({ result }: { result: AlShrouqDispatchResult }) {
+  const box = "rounded-md border p-3 text-sm";
+
+  if (result.kind === "prepared") {
+    return (
+      <div className={`${box} border-dashed text-muted-foreground`}>
+        <p className="font-medium text-foreground">Checked — not sent.</p>
+        <p className="mt-1">
+          Everything AlShrouq needs is present, and the order was prepared for branch{" "}
+          {result.payload.branchId} as {result.payload.clientOrderId}.{" "}
+          <strong className="font-medium">
+            Live dispatch is switched off, so no courier was contacted
+          </strong>{" "}
+          and nothing was saved.
+        </p>
+      </div>
+    );
+  }
+
+  if (result.kind === "already_dispatched") {
+    return (
+      <div className={`${box} text-muted-foreground`}>
+        <p className="font-medium text-foreground">This order has already been sent.</p>
+        <p className="mt-1">
+          {result.dispatch.externalOrderId
+            ? `AlShrouq reference ${result.dispatch.externalOrderId}`
+            : "A courier record already exists"}
+          {result.dispatch.status ? ` · ${result.dispatch.status}` : ""}. It was not sent again.
+        </p>
+      </div>
+    );
+  }
+
+  if (result.kind === "dispatched") {
+    return (
+      <div className={`${box} text-muted-foreground`}>
+        <p className="font-medium text-foreground">Sent to AlShrouq.</p>
+        <p className="mt-1">
+          {result.dispatch.externalOrderId
+            ? `Reference ${result.dispatch.externalOrderId}`
+            : "The courier was created"}
+          {result.dispatch.status ? ` · ${result.dispatch.status}` : ""}.
+        </p>
+      </div>
+    );
+  }
+
+  if (result.kind === "rejected") {
+    return (
+      <div className={`${box} border-destructive/40 text-destructive`}>
+        <p className="font-medium">AlShrouq refused this order.</p>
+        <p className="mt-1">{result.message} Nothing was dispatched.</p>
+      </div>
+    );
+  }
+
+  if (result.kind === "indeterminate") {
+    return (
+      <div className={`${box} border-destructive/40 text-destructive`}>
+        <p className="font-medium">The result is unknown.</p>
+        <p className="mt-1">
+          {result.message} It has <strong>not</strong> been sent again — check with AlShrouq before
+          anyone tries.
+        </p>
+      </div>
+    );
+  }
+
+  if (result.kind === "branch_unresolved") {
+    return (
+      <div className={`${box} border-destructive/40 text-destructive`}>
+        <p>This branch cannot be dispatched to. Nothing was sent.</p>
+      </div>
+    );
+  }
+
+  if (result.kind === "options_unavailable") {
+    return (
+      <div className={`${box} border-destructive/40 text-destructive`}>
+        <p>The CRM could not be reached, so nothing was sent. Try again shortly.</p>
+      </div>
+    );
+  }
+
+  // `invalid` — the field messages are shown beside their inputs.
+  return (
+    <div className={`${box} border-destructive/40 text-destructive`}>
+      <p>Some details are still needed. Nothing was sent.</p>
+    </div>
+  );
+}
+
 export function AlShrouqDispatchCard() {
   const params = useParams({ strict: false }) as { id?: string };
   const orderId = params?.id;
@@ -115,11 +217,44 @@ export function AlShrouqDispatchCard() {
     queryFn: () => load({ data: { orderId: orderId! } }),
   });
 
+  const qc = useQueryClient();
+  const send = useServerFn(alshrouqDispatchOrder);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<DispatchForm | null>(null);
-  const [errors, setErrors] = useState<AlShrouqFieldError[]>([]);
-  const [validated, setValidated] = useState(false);
+  const [result, setResult] = useState<AlShrouqDispatchResult | null>(null);
 
+  /**
+   * The one call this component makes.
+   *
+   * It sends what the agent typed and nothing else — no payload, no endpoint, no
+   * branch id. The server builds, checks and (when the gate is open) sends. A
+   * component that assembled requests is how the previous integration turned a
+   * re-render into a second courier.
+   */
+  const dispatch = useMutation({
+    mutationFn: (f: DispatchForm) =>
+      send({
+        data: {
+          orderId: orderId!,
+          customerName: f.customerName,
+          customerPhone: f.customerPhone,
+          paymentType: f.paymentType,
+          mapUrl: f.mapUrl,
+          lat: f.lat,
+          lng: f.lng,
+          orderValue: f.orderValue,
+          details: f.details,
+        },
+      }),
+    onSuccess: (r) => {
+      setResult(r);
+      if (r.kind === "dispatched" || r.kind === "already_dispatched") {
+        qc.invalidateQueries({ queryKey: ["alshrouq", "dispatch-context", orderId] });
+      }
+    },
+  });
+
+  const errors: AlShrouqFieldError[] = result?.kind === "invalid" ? result.errors : [];
   const branch = useMemo(() => (ctx ? branchLine(ctx) : null), [ctx]);
 
   // Nothing to offer: not an AlShrouq order, or the caller may not act on it.
@@ -130,55 +265,20 @@ export function AlShrouqDispatchCard() {
 
   const start = () => {
     setForm(toForm(ctx));
-    setErrors([]);
-    setValidated(false);
+    setResult(null);
+    dispatch.reset();
     setOpen(true);
   };
 
-  /**
-   * Validate, and stop.
-   *
-   * The payload is built by the Phase 6 builder — the same pure function the
-   * transport will use — so what is checked here is exactly what would be sent.
-   * Nothing is sent: this step deliberately ends at a validated payload.
-   */
-  const validate = () => {
-    if (!form || ctx.branch.kind !== "resolved") return;
-    setValidated(false);
-    const result = buildAlshrouqOrderPayload(
-      {
-        display_no: ctx.displayNo,
-        customer_name: form.customerName,
-        customer_phone: form.customerPhone,
-        alshrouq_map_url: form.mapUrl || null,
-        alshrouq_lat: form.lat || null,
-        alshrouq_lng: form.lng || null,
-        alshrouq_payment_type: form.paymentType || null,
-        invoice_value: form.orderValue || null,
-        notes: form.details || null,
-      },
-      {
-        alshrouqBranchId: ctx.branch.branchId,
-        // The CRM's own list, read live. No enum in the app.
-        paymentOptionIds: ctx.paymentOptions.map((p) => p.id),
-      },
-    );
-    if (result.ok) {
-      setErrors([]);
-      setValidated(true);
-      return;
-    }
-    setValidated(false);
-    setErrors(
-      result.reason === "invalid"
-        ? result.errors
-        : [{ field: "branch_id", message: "This branch has no AlShrouq id." }],
-    );
+  const submit = () => {
+    if (!form || dispatch.isPending) return;
+    setResult(null);
+    dispatch.mutate(form);
   };
 
   const set = (patch: Partial<DispatchForm>) => {
     setForm((f) => (f ? { ...f, ...patch } : f));
-    setValidated(false);
+    setResult(null);
   };
   const errorFor = (field: string) => errors.find((e) => e.field === field)?.message;
 
@@ -342,13 +442,14 @@ export function AlShrouqDispatchCard() {
                 />
               </div>
 
-              {validated && (
-                <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
-                  These details are complete and would be accepted by the AlShrouq contract.
-                  <strong className="font-medium"> Sending is not enabled yet</strong> — no courier
-                  has been contacted and nothing has been saved.
+              {dispatch.isError && (
+                <p className="rounded-md border border-destructive/40 p-3 text-sm text-destructive">
+                  The dispatch check could not be completed. You may not have permission to send
+                  this order.
                 </p>
               )}
+
+              {result && <ResultNotice result={result} />}
             </div>
           )}
 
@@ -356,12 +457,11 @@ export function AlShrouqDispatchCard() {
             <Button variant="ghost" onClick={() => setOpen(false)}>
               Close
             </Button>
-            <Button onClick={validate} disabled={!form}>
-              Check details
-            </Button>
-            <Button disabled title="Live dispatch is not enabled yet">
-              <Loader2 className="mr-2 hidden h-4 w-4 animate-spin" aria-hidden="true" />
-              Send to AlShrouq
+            <Button onClick={submit} disabled={!form || dispatch.isPending}>
+              {dispatch.isPending && (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+              )}
+              {dispatch.isPending ? "Checking…" : "Send to AlShrouq"}
             </Button>
           </DialogFooter>
         </DialogContent>

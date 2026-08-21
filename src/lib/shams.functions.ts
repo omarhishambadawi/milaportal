@@ -41,6 +41,7 @@ import type {
   AlShrouqPaymentOption,
 } from "@/lib/shams-crm/alshrouq-config.server";
 import type { AlShrouqBranchResolution } from "@/lib/shams-crm/alshrouq-branches";
+import type { AlShrouqDispatchResult } from "@/lib/shams-crm/alshrouq-dispatch.server";
 import type { ShamsCrmOffer, ShamsOfferScope } from "@/lib/shams-crm/types";
 import type { ShamsCrmHistory } from "@/lib/shams/types";
 
@@ -659,6 +660,85 @@ export const shamsAlshrouqConfigProbe = createServerFn({ method: "POST" })
 
     const { runAlShrouqConfigProbe } = await import("@/lib/shams-crm/alshrouq-config.server");
     return runAlShrouqConfigProbe();
+  });
+
+/**
+ * Send an order to AlShrouq.
+ *
+ * The browser's only route to a courier, and it is a narrow one: the handler
+ * takes an order id plus what the agent typed, re-reads the order server-side,
+ * and hands the whole workflow to `dispatchOrderToAlShrouq`. The payload, the
+ * endpoint and the transport are never assembled here or in a component.
+ *
+ * **Authorization is enforced here, independently of the UI** — the same rule
+ * the order form uses to decide whether this agent may edit this order. A
+ * request that skips the dialog entirely still has to pass it.
+ *
+ * **There is no way to ask for a live dispatch.** The input carries no such
+ * field, and the service reads the gate from the server environment. With
+ * `ALSHROUQ_LIVE_DISPATCH_ENABLED` unset, the only outcome that can reach a
+ * caller is `prepared` — nothing is sent and nothing is written.
+ */
+export const alshrouqDispatchOrder = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) =>
+    z
+      .object({
+        orderId: z.string().uuid(),
+        customerName: z.string().max(120),
+        customerPhone: z.string().max(40),
+        paymentType: z.string().max(12),
+        mapUrl: z.string().max(2048),
+        lat: z.string().max(32),
+        lng: z.string().max(32),
+        orderValue: z.string().max(32),
+        details: z.string().max(500),
+      })
+      .parse(d),
+  )
+  .handler(async ({ context, data }): Promise<AlShrouqDispatchResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+
+    const { data: order, error } = await supabase
+      .from("orders")
+      .select("id,display_no,branch_no,delivery_type,agent_id")
+      .eq("id", data.orderId)
+      .maybeSingle();
+    if (error || !order) throw new Error("Order not found");
+
+    const { data: canAll } = await supabase.rpc("has_permission", {
+      _user_id: userId,
+      _permission: "edit_all_orders",
+    });
+    const { data: canOwn } = await supabase.rpc("has_permission", {
+      _user_id: userId,
+      _permission: "edit_orders",
+    });
+    if (!canAll && !(order.agent_id === userId && canOwn)) {
+      throw new Error("Forbidden: insufficient permissions");
+    }
+
+    const { dispatchOrderToAlShrouq } = await import("@/lib/shams-crm/alshrouq-dispatch.server");
+    return dispatchOrderToAlShrouq(
+      {
+        orderId: order.id,
+        displayNo: order.display_no ?? null,
+        branchNo: order.branch_no ?? null,
+        // The authenticated caller. Never defaulted to anyone.
+        userId,
+        form: {
+          customerName: data.customerName,
+          customerPhone: data.customerPhone,
+          paymentType: data.paymentType,
+          mapUrl: data.mapUrl,
+          lat: data.lat,
+          lng: data.lng,
+          orderValue: data.orderValue,
+          details: data.details,
+        },
+      },
+      supabase,
+    );
   });
 
 /** A live courier record for an order, if one exists. Read-only here. */
