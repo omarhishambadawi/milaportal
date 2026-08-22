@@ -3936,11 +3936,15 @@ that no order column holds: where the customer is, how they pay, and — read
 rather than asked — the point a driver routes to. Customer name and phone gain a
 required marker in the same moment.
 
-**The dialog is now six read-only lines and one choice.** Customer, phone,
-branch, order value, payment, location; then *when*; then **Create order only**
-or **Create order + AlShrouq delivery**. Tests assert it contains no `<Input>`,
-no `<Textarea>`, no `<Select>`, no `useQuery`, no `useMutation`, no
-`useServerFn`, and exactly one piece of state — the chosen slot.
+**The dialog is a read-only summary and one choice.** Customer, phone, branch,
+order value, payment, location and the delivery it is about to arrange; then
+*when*; then the delivery note; then **Create order only** or **Create order +
+AlShrouq delivery**. Tests assert it contains no `<Input>`, no `useQuery`, no
+`useMutation`, no `useServerFn`, exactly one `<Textarea>` (the note), exactly
+three `<Select>`s (hour, minute, AM/PM) and no `paymentOptions` or
+`branchOptions` — and that its only state is the timing choice, the date and time
+behind it, and whether the calendar is open. Nothing it shows about the order is
+a copy it owns.
 
 **Coordinates are read in the browser, keylessly.** `parseMapsUrl` was already
 pure and already handled every shape a shared Maps link takes — the
@@ -3980,15 +3984,45 @@ columns, none of which is in this repository and none of which this code reads.
 Tests assert no branch id, no quoted branch code and no AlShrouq credential
 appears in any of the new modules.
 
-**Timing is a list of slots.** "Leave the date and time blank to send now" was
-replaced last phase by two radios and a date/time pair; it is now the next whole
-hours in Riyadh, in 12-hour time, generated from the clock at the moment the
-dialog opens. `scheduleOptionsAt` is pure and produces nothing but `{ date,
-time }` pairs in exactly the shape `parseScheduleInput` already takes — the
-arithmetic, the rejection of the past and the two-minute immediate window are
-untouched. The first slot is at least 30 minutes out, so reading the
-confirmation cannot make the chosen time fall behind `now()`; slots roll into
-*Tomorrow* rather than into the past; and there is no free-typed time anywhere.
+**Timing is a calendar and an exact time.** The generated slot list — five whole
+hours as radio cards, from `scheduleOptionsAt` — is **gone**, and the module with
+it. It was the tallest block in a dialog that had to fit an 800px screen, it
+could not express 7:30, and a "slot" implies AlShrouq knows about one when it has
+been told nothing.
+
+The choice is now **As soon as possible** or **Schedule delivery**; the second
+reveals the portal's own `Calendar` in a `Popover` — the same pair
+`DateRangePicker` uses, no second calendar was written — plus three compact
+`Select`s for hour, minute and AM/PM. Every minute is offered, so 07:47 PM is
+expressible.
+
+`features/alshrouq/schedule-picker.ts` is the pure module behind it and produces
+nothing but the `{ date, time }` pair — `"2026-08-23"`, `"07:30 PM"` — that
+`parseScheduleInput` has always taken. **No new date/time format reaches the
+backend**: the arithmetic, the rejection of the past and the two-minute immediate
+window are untouched, and `scheduled_for` still stores the instant that function
+returns.
+
+The past is refused in three agreeing places, all from `earliestMinutesOn`: the
+calendar disables days before today, the selects disable hours, minutes and a
+meridiem that have gone, and `clampSelection` pulls a stranded time forward when
+the date changes from tomorrow to today. "Today" and "past" are answered in
+Riyadh business time, never the browser's. `calendarDate`/`dateFromCalendar`
+convert through **local** parts on both sides, because `react-day-picker`
+compares days locally and a UTC-midnight `Date` is the previous day everywhere
+west of UTC.
+
+**The confirmation fits an 800px screen.** Measured, not asserted: 517×492
+(ASAP) and 517×568 (scheduled) at 1280×800, 517×568 at 1440×900, and 326×587 at
+375×812 — no scrolling on either axis in any of those. The dialog is `max-w-[34rem]`;
+the summary is a two-column definition grid rather than seven bordered rows; the
+description is one line; the tinted outcome panel above the buttons is replaced
+by the muted sentence it contained; and on a phone the two secondary actions
+share a row through a wrapper that becomes `display: contents` from `sm` up, so
+the desktop footer is unchanged. `max-h-[85vh]`/`overflow-y-auto` remain only as
+a last resort — on a 375×812 phone with the scheduling panel open the content is
+~74px over that cap and scrolls, which is the one case that genuinely does not
+fit. Nothing is clipped, and no font was shrunk to buy the room.
 
 **The card no longer disappears when an order is reopened.**
 `useOrderAlShrouqDispatch` defines `current` as the row that is **not**

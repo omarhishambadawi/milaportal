@@ -38,14 +38,32 @@ import {
   type AlShrouqOrderInput,
   type BranchCoverage,
 } from "../order-requirements";
-import { SCHEDULE_OPTION_COUNT, scheduleOptionsAt } from "../schedule-options";
 import { parseScheduleInput } from "../scheduling";
+import {
+  HOUR_OPTIONS,
+  MERIDIEM_OPTIONS,
+  MINUTE_OPTIONS,
+  businessDate,
+  businessMinutes,
+  calendarDate,
+  clampSelection,
+  dateFromCalendar,
+  defaultScheduleSelection,
+  earliestMinutesOn,
+  formatPickedDate,
+  isSelectionPast,
+  minutesOfDay,
+  scheduleInputFor,
+} from "../schedule-picker";
 import { resolveAlShrouqBranch } from "@/lib/shams-crm/alshrouq-branches";
 import type { AlShrouqBranchOption } from "@/lib/shams-crm/alshrouq-branches";
 import { scheduledCountdownAt } from "../use-scheduled-countdown";
 
 const read = (relative: string) =>
   readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
+
+/** A fixed instant. Every schedule assertion pins the clock rather than reading it. */
+const at = (iso: string) => new Date(iso);
 
 const card = read("../components/dispatch-section.tsx");
 const dialog = read("../components/approval-dialog.tsx");
@@ -752,12 +770,23 @@ describe("what confirming will do", () => {
     }
   });
 
-  /** The button and the paragraph explaining it are the same words, written once. */
-  it("heads the explanation with the primary button's own label", () => {
+  /**
+   * The button says what will happen; one muted line says what that means.
+   *
+   * The label used to be printed twice — once on the button and once as the
+   * heading of a tinted outcome panel above it. The panel is gone: it repeated
+   * the button in a coloured box and was a large part of why the dialog did not
+   * fit an 800px screen. The sentence underneath it survived, because it is the
+   * part the button has no room for and the one that must never read as "sent".
+   */
+  it("says once what the primary button will do", () => {
     expect(dialog).toContain("const primaryLabel = creating");
-    expect(dialog.match(/\{primaryLabel\}/g) ?? []).toHaveLength(2);
+    expect(dialog.match(/\{primaryLabel\}/g) ?? []).toHaveLength(1);
+    expect(dialog).toContain('describeApprovalAction(mode, "dispatch", scheduledLabel)');
     expect(dialog).toContain("Create order only");
     expect(dialog).toContain("Create order + AlShrouq delivery");
+    // No tinted panel around it: a confirmation is text and buttons.
+    expect(dialog).not.toContain("outcomeTone");
   });
 });
 
@@ -774,8 +803,16 @@ describe("the confirmation dialog", () => {
    */
   it("has no order-form controls left in it", () => {
     expect(dialog).not.toContain("<Input");
-    expect(dialog).not.toContain("<Select");
-    expect(dialog).not.toContain("<SelectTrigger");
+    /*
+     * Three `Select`s, and all three are the hour, the minute and the AM/PM of
+     * the delivery time — never a payment method, a branch or anything else the
+     * order form already asked for. The count is the guard: a fourth would mean
+     * a field crept back in.
+     */
+    expect(dialog.match(/<SelectTrigger/g) ?? []).toHaveLength(1);
+    expect(dialog.match(/<TimeUnit/g) ?? []).toHaveLength(3);
+    expect(dialog).not.toContain("paymentOptions");
+    expect(dialog).not.toContain("branchOptions");
     // Two controls, and only two: when the delivery starts, and the note the
     // driver gets. The note came back deliberately — it is the one thing that
     // belongs at the moment of handover rather than in the order above it — and
@@ -795,11 +832,23 @@ describe("the confirmation dialog", () => {
     expect(dialog).not.toContain("alshrouqDeliveryOptions");
   });
 
-  /** And it holds no copy of what the form already knows. */
-  it("keeps no state but the chosen slot", () => {
+  /**
+   * And it holds no copy of what the form already knows.
+   *
+   * Three pieces of state, and all three are about *when* — the choice, the
+   * date and time behind it, and whether the calendar is open. Nothing here
+   * duplicates the customer, the branch, the payment method or the note: those
+   * arrive as props and are handed straight back in the plan.
+   */
+  it("keeps no state but the delivery timing", () => {
     const states = dialog.match(/useState[<(]/g) ?? [];
-    expect(states).toHaveLength(1);
-    expect(dialog).toContain("const [slotId, setSlotId]");
+    expect(states).toHaveLength(3);
+    expect(dialog).toContain("const [timing, setTiming]");
+    expect(dialog).toContain("const [when, setWhen]");
+    expect(dialog).toContain("const [dateOpen, setDateOpen]");
+    for (const owned of ["customerName", "paymentType", "mapUrl", "details"]) {
+      expect(dialog).not.toContain(`useState<string>(${owned}`);
+    }
   });
 
   /** What it shows is a summary of the order, read-only. */
@@ -834,78 +883,168 @@ describe("the confirmation dialog", () => {
 /* ------------------------------------------------------------------------- */
 
 describe("choosing when to deliver", () => {
-  const at = (iso: string) => new Date(iso);
-
-  /** Slots, not a text box. Nothing anywhere accepts a typed time. */
-  it("offers a list and accepts no typed time", () => {
-    expect(dialog).toContain("scheduleOptionsAt(new Date())");
+  /**
+   * The generated slot list is gone, and must not come back.
+   *
+   * It offered five whole hours as radio cards — the tallest block in a dialog
+   * that had to fit 800px — could not express 7:30, and implied AlShrouq knew
+   * about a "slot" it had never been told of. What replaced it is a binary
+   * choice plus the portal's own calendar and an hour / minute / AM-PM triple.
+   */
+  it("offers two choices, not a list of generated times", () => {
     expect(dialog).toContain("As soon as possible");
+    expect(dialog).toContain("Schedule delivery");
+    // The module that generated them no longer exists, and nothing imports it.
+    expect(dialog).not.toContain("scheduleOptionsAt");
+    expect(dialog).not.toContain("schedule-options");
+    expect(dialog).not.toContain("SlotOption");
+  });
+
+  /** A calendar, and the portal's own — not a second one written for this. */
+  it("picks the date with the shared Calendar primitive", () => {
+    expect(dialog).toContain('from "@/components/ui/calendar"');
+    expect(dialog).toContain('mode="single"');
+    // A day already gone cannot be chosen.
+    expect(dialog).toContain("{ before: today }");
+    // And still not a typed date box, which is what the calendar replaced.
     expect(dialog).not.toContain('type="date"');
-    expect(dialog).not.toContain('placeholder="03:30 PM"');
     expect(dialog).not.toContain("<Input");
   });
 
-  /** Every slot is 12-hour, and never 24. */
-  it("names every slot in 12-hour time", () => {
-    const options = scheduleOptionsAt(at("2026-08-22T09:05:00.000Z"));
-    expect(options).toHaveLength(SCHEDULE_OPTION_COUNT);
-    for (const option of options) {
-      expect(option.clock).toMatch(/^(1[0-2]|[1-9]):00 (AM|PM)$/);
-      expect(option.time).toMatch(/^(0[1-9]|1[0-2]):00 (AM|PM)$/);
-      // A 24-hour hour would show as 13:00 or later, which this cannot produce.
-      expect(option.clock).not.toMatch(/^(1[3-9]|2[0-4]):/);
-    }
+  /** Hour, minute and AM/PM — every minute, and never a 24-hour clock. */
+  it("picks the time to the minute, in 12-hour form", () => {
+    expect(dialog).toContain('label="Hour"');
+    expect(dialog).toContain('label="Minute"');
+    expect(dialog).toContain('label="AM or PM"');
+    expect(HOUR_OPTIONS).toHaveLength(12);
+    expect(HOUR_OPTIONS[0]).toBe("01");
+    expect(HOUR_OPTIONS[11]).toBe("12");
+    // Every minute, so 7:47 is expressible. Not quarters, not whole hours.
+    expect(MINUTE_OPTIONS).toHaveLength(60);
+    expect(MINUTE_OPTIONS).toContain("47");
+    expect(MERIDIEM_OPTIONS).toEqual(["AM", "PM"]);
+    // A 24-hour hour would show as 13 or later, which this cannot produce.
+    for (const hour of HOUR_OPTIONS) expect(Number(hour)).toBeLessThanOrEqual(12);
   });
 
-  /** Each one is a `{date, time}` pair the existing parser accepts, in future. */
-  it("produces slots the existing parser accepts as scheduled", () => {
-    const now = at("2026-08-22T09:05:00.000Z"); // 12:05 PM Riyadh
-    for (const option of scheduleOptionsAt(now)) {
-      const parsed = parseScheduleInput(option.date, option.time, now);
-      expect(parsed.ok).toBe(true);
-      if (parsed.ok) expect(parsed.timing).toBe("scheduled");
-    }
+  /** The arithmetic is untouched: the same parser, on the same two strings. */
+  it("changes no scheduling logic", () => {
+    expect(dialog).toContain("parseScheduleInput(input.date, input.time)");
+    // "As soon as possible" sends no instant at all, as a blank pair always did.
+    expect(dialog).toContain('if (timing === "asap") return { ok: true as const, iso: null');
+    const picker = read("../schedule-picker.ts");
+    expect(picker).not.toContain("Date.now()");
+    expect(picker).not.toMatch(/\bfetch\(|useMutation|useServerFn|supabase/);
   });
 
-  /** The first slot is far enough out that reading the dialog cannot expire it. */
-  it("never offers a slot that has already gone", () => {
-    // 2:58 PM Riyadh — the next whole hour is 3 PM, only two minutes away.
-    const now = at("2026-08-22T11:58:00.000Z");
-    const first = scheduleOptionsAt(now)[0]!;
-    const parsed = parseScheduleInput(first.date, first.time, now);
+  /** The selection is handed to the parser in exactly the shape it takes. */
+  it("produces the pair the existing parser accepts", () => {
+    const selection = { date: "2026-08-23", hour: "07", minute: "30", meridiem: "PM" as const };
+    expect(scheduleInputFor(selection)).toEqual({ date: "2026-08-23", time: "07:30 PM" });
+
+    const now = at("2026-08-22T09:05:00.000Z");
+    const parsed = parseScheduleInput("2026-08-23", "07:30 PM", now);
     expect(parsed.ok).toBe(true);
     if (parsed.ok) expect(parsed.timing).toBe("scheduled");
-    // Which means it skipped 3 PM and started at 4 PM.
-    expect(first.clock).toBe("4:00 PM");
   });
+});
 
-  /** Slots are labelled by day, and roll over midnight rather than into the past. */
-  it("rolls into tomorrow instead of offering a time that has passed", () => {
-    // 10:30 PM Riyadh: only one whole hour left today.
-    const options = scheduleOptionsAt(at("2026-08-22T19:30:00.000Z"));
-    expect(options[0]!.day).toBe("Today");
-    expect(options[0]!.clock).toBe("11:00 PM");
-    expect(options[1]!.day).toBe("Tomorrow");
-    expect(options[1]!.clock).toBe("12:00 AM");
-    expect(options[1]!.date).not.toBe(options[0]!.date);
+/* ------------------------------------------------------------------------- */
+/* The date and time the picker offers                                       */
+/* ------------------------------------------------------------------------- */
+
+describe("the schedule picker", () => {
+  // 12:05 PM in Riyadh, which is 09:05 UTC.
+  const NOON_ISH = at("2026-08-22T09:05:00.000Z");
+
+  it("reads the day and the clock in Riyadh, not in the host zone", () => {
+    expect(businessDate(NOON_ISH)).toBe("2026-08-22");
+    expect(businessMinutes(NOON_ISH)).toBe(12 * 60 + 5);
+    // 10:30 PM UTC is already the next day in Riyadh.
+    expect(businessDate(at("2026-08-22T21:30:00.000Z"))).toBe("2026-08-23");
   });
 
   /** Midnight and noon, the two the naive 12-hour formula gets wrong. */
-  it("names midnight and noon correctly", () => {
-    const overnight = scheduleOptionsAt(at("2026-08-22T20:10:00.000Z"));
-    expect(overnight.map((o) => o.clock)).toContain("12:00 AM");
-    const morning = scheduleOptionsAt(at("2026-08-22T08:10:00.000Z"));
-    expect(morning.map((o) => o.clock)).toContain("12:00 PM");
+  it("converts midnight and noon correctly", () => {
+    expect(minutesOfDay("12", "00", "AM")).toBe(0);
+    expect(minutesOfDay("12", "00", "PM")).toBe(12 * 60);
+    expect(minutesOfDay("07", "30", "PM")).toBe(19 * 60 + 30);
+    expect(minutesOfDay("01", "05", "AM")).toBe(65);
   });
 
-  /** The arithmetic is untouched: the same parser, on the same shapes. */
-  it("changes no scheduling logic", () => {
-    expect(dialog).toContain("parseScheduleInput(slot.date, slot.time)");
-    // "As soon as possible" sends no instant at all, as a blank pair always did.
-    expect(dialog).toContain("if (!slot) return { ok: true as const, iso: null");
-    const options = read("../schedule-options.ts");
-    expect(options).not.toContain("Date.now()");
-    expect(options).not.toMatch(/\bfetch\(|useMutation|useServerFn|supabase/);
+  /** The default is far enough out that reading the dialog cannot expire it. */
+  it("starts at a time the parser accepts as scheduled", () => {
+    const selection = defaultScheduleSelection(NOON_ISH);
+    const { date, time } = scheduleInputFor(selection);
+    const parsed = parseScheduleInput(date, time, NOON_ISH);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.timing).toBe("scheduled");
+    // 12:05 PM + 30 minutes, rounded up to the quarter hour.
+    expect(time).toBe("12:45 PM");
+    expect(date).toBe("2026-08-22");
+  });
+
+  /** Rather than offering a time that has gone, it rolls into tomorrow. */
+  it("rolls past midnight into the next day", () => {
+    // 11:50 PM Riyadh: the lead time lands after midnight.
+    const late = at("2026-08-22T20:50:00.000Z");
+    const selection = defaultScheduleSelection(late);
+    expect(selection.date).toBe("2026-08-23");
+    const { date, time } = scheduleInputFor(selection);
+    const parsed = parseScheduleInput(date, time, late);
+    expect(parsed.ok).toBe(true);
+  });
+
+  /** A future day is wide open; today is bounded by the clock. */
+  it("bounds only the current day", () => {
+    expect(earliestMinutesOn("2026-08-23", NOON_ISH)).toBe(0);
+    expect(earliestMinutesOn("2026-08-22", NOON_ISH)).toBe(12 * 60 + 5 + 30);
+    // A day already gone has nothing on it at all — the calendar refuses it too.
+    expect(earliestMinutesOn("2026-08-21", NOON_ISH)).toBe(24 * 60);
+  });
+
+  it("knows a chosen time that has passed", () => {
+    const past = { date: "2026-08-22", hour: "09", minute: "00", meridiem: "AM" as const };
+    expect(isSelectionPast(past, NOON_ISH)).toBe(true);
+    const future = { date: "2026-08-22", hour: "09", minute: "00", meridiem: "PM" as const };
+    expect(isSelectionPast(future, NOON_ISH)).toBe(false);
+  });
+
+  /**
+   * Changing the date from tomorrow to today can strand a time that was fine.
+   * It is pulled forward rather than left selected-but-unavailable.
+   */
+  it("pulls a stranded time forward instead of leaving it in the past", () => {
+    const stranded = { date: "2026-08-22", hour: "08", minute: "00", meridiem: "AM" as const };
+    const fixed = clampSelection(stranded, NOON_ISH);
+    expect(isSelectionPast(fixed, NOON_ISH)).toBe(false);
+    expect(fixed.date).toBe("2026-08-22");
+
+    // A time that is already fine is left exactly as the agent set it.
+    const fine = { date: "2026-08-22", hour: "07", minute: "30", meridiem: "PM" as const };
+    expect(clampSelection(fine, NOON_ISH)).toEqual(fine);
+  });
+
+  /** The trigger reads as a date, not as an ISO string. */
+  it("labels the chosen date the way a person reads one", () => {
+    expect(formatPickedDate("2026-08-23")).toBe("Sun, Aug 23, 2026");
+  });
+
+  /**
+   * The calendar works in the browser's own `Date`, so the two conversions must
+   * be each other's inverse — otherwise a click lands on the previous day for
+   * anyone west of UTC.
+   */
+  it("round-trips a calendar day without shifting it", () => {
+    for (const date of ["2026-08-23", "2026-01-01", "2026-12-31", "2027-03-01"]) {
+      expect(dateFromCalendar(calendarDate(date)!)).toBe(date);
+    }
+    // Local parts on both sides, never `Date.UTC` on one of them: a UTC-midnight
+    // Date is the *previous* day everywhere west of UTC, which would highlight
+    // the wrong cell and cut `disabled: { before }` a day short.
+    const day = calendarDate("2026-08-23")!;
+    expect([day.getFullYear(), day.getMonth(), day.getDate()]).toEqual([2026, 7, 23]);
+    expect(day.getHours()).toBe(0);
   });
 });
 
@@ -1206,7 +1345,9 @@ describe("what AlShrouq requires of an order", () => {
 
   /** And the handover is refused while anything is missing. */
   it("disables the handover until every requirement is met", () => {
-    expect(dialog).toContain("disabled={busy || !ready}");
+    // `schedulePast` joined the guard with the picker: the controls disable a
+    // time that has gone, and this refuses one that got through anyway.
+    expect(dialog).toContain("disabled={busy || !ready || schedulePast}");
     expect(dialog).toContain("AlShrouq delivery is not available yet");
   });
 });
@@ -1235,7 +1376,10 @@ describe("the layout survives a phone", () => {
   it("bounds the dialog to the viewport", () => {
     expect(dialog).toContain("max-h-[85vh]");
     expect(dialog).toContain("w-[calc(100vw-2rem)]");
-    expect(dialog).toContain("max-w-xl");
+    // 34rem = 544px, inside the 500–560px this confirmation is designed for.
+    // `max-h`/`overflow-y-auto` are a last resort for a genuinely short screen,
+    // not the way the height is made to fit — see the density notes in the file.
+    expect(dialog).toContain("max-w-[34rem]");
   });
 
   /**
@@ -1271,11 +1415,22 @@ describe("the layout survives a phone", () => {
     }
   });
 
-  /** The actions are thumb-sized targets on a narrow screen. */
+  /**
+   * The actions are thumb-sized targets on a narrow screen, and cost two rows
+   * rather than three.
+   *
+   * Three stacked full-width buttons were 136px of a phone's height, which is
+   * most of what pushed the scheduling state past the viewport. The two
+   * secondary actions now share a row inside a wrapper that becomes
+   * `display: contents` from `sm` up, so the desktop footer is one row of three
+   * exactly as before and nothing was removed to buy the space.
+   */
   it("gives the actions room on a phone", () => {
-    expect(dialog.match(/w-full sm:w-auto/g) ?? []).toHaveLength(3);
+    // The primary spans the width on its own; the secondaries share a row.
+    expect(dialog.match(/w-full sm:w-auto/g) ?? []).toHaveLength(1);
+    expect(dialog.match(/flex-1 sm:w-auto sm:flex-none/g) ?? []).toHaveLength(2);
+    expect(dialog).toContain('className="flex gap-2 sm:contents"');
     expect(card).toContain("w-full sm:w-auto");
-    // The primary sits last in source and so lowest on a stacked phone footer.
     expect(dialog).toContain("flex-col-reverse gap-2 sm:flex-row sm:justify-end");
   });
 
