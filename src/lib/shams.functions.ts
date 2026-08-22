@@ -952,20 +952,41 @@ export const alshrouqResolveDispatch = createServerFn({ method: "POST" })
  * Gated on `create_orders`: choosing a branch and a payment method is part of
  * taking an order. Reads only; dispatches nothing.
  */
+/**
+ * The CRM's two option lists, plus whether this deployment can call a courier.
+ *
+ * A superset rather than a change to `AlShrouqDispatchOptions`: that type is the
+ * shape of the CRM's own configuration response, and the safety gate is a fact
+ * about *this installation*. Merging the gate into it would put a deployment
+ * concern inside a description of somebody else's API.
+ */
+export interface AlShrouqOrderFormOptions extends AlShrouqDispatchOptions {
+  /** Read-only, one-way. Nothing a client sends can set it. */
+  dispatchAvailable: boolean;
+}
+
 export const alshrouqDeliveryOptions = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .handler(async ({ context }): Promise<AlShrouqDispatchOptions> => {
+  .handler(async ({ context }): Promise<AlShrouqOrderFormOptions> => {
     const { supabase, userId } = context as { supabase: any; userId: string };
     await assertPermission(supabase, userId, "create_orders");
 
     const { fetchAlShrouqDispatchOptions } = await import("@/lib/shams-crm/alshrouq-config.server");
+    // The same one-way report `alshrouqDispatchContext` carries. The create
+    // journey has no order id yet, so it cannot ask that function — and it is
+    // the journey where the misleading promise was made, so it needs the answer
+    // most. Read through the service's accessor, never from `process.env` here.
+    const { isAlShrouqLiveDispatchEnabled } =
+      await import("@/lib/shams-crm/alshrouq-dispatch.server");
+    const dispatchAvailable = isAlShrouqLiveDispatchEnabled();
+
     try {
-      return await fetchAlShrouqDispatchOptions();
+      return { ...(await fetchAlShrouqDispatchOptions()), dispatchAvailable };
     } catch {
       // An unreachable CRM leaves the form with no methods to choose and no
       // coverage to report, which blocks the handover — the correct outcome,
       // and better than a guessed list or an assumed "covered".
-      return { branchOptions: [], paymentOptions: [] };
+      return { branchOptions: [], paymentOptions: [], dispatchAvailable };
     }
   });
 
@@ -1059,6 +1080,23 @@ export interface AlShrouqDispatchContext {
   paymentOptions: AlShrouqPaymentOption[];
   /** Set when the CRM could not be reached, so the dialog can say so. */
   optionsError: string | null;
+  /**
+   * Whether a courier can actually be contacted from this deployment.
+   *
+   * A **report**, never a request field and never a switch. It is computed on
+   * the server from the production gate and travels one way, so the screen can
+   * stop offering an action it knows will not reach anybody. Nothing the client
+   * sends can set it, and `dispatchOrderToAlShrouq` does not consult it — the
+   * gate is still read inside that module, from the environment, and remains the
+   * only thing that permits a send.
+   *
+   * The reason it has to exist: with the gate shut an immediate handover returns
+   * `prepared` and writes no row, so the card fell back to *"Ready to send"* and
+   * the button promised a courier the deployment could not call. That promise is
+   * the bug; this is what lets the card tell the truth **before** the agent
+   * commits rather than in a toast afterwards.
+   */
+  dispatchAvailable: boolean;
   prefill: {
     customerName: string;
     customerPhone: string;
@@ -1125,6 +1163,10 @@ export const alshrouqDispatchContext = createServerFn({ method: "POST" })
     const { stripOrderPrefix } = await import("@/lib/branches");
     const { resolveAlShrouqBranch } = await import("@/lib/shams-crm/alshrouq-branches");
     const { fetchAlShrouqDispatchOptions } = await import("@/lib/shams-crm/alshrouq-config.server");
+    // Read through the service's own accessor rather than `process.env` here, so
+    // the gate keeps exactly one reader and this stays a report of it.
+    const { isAlShrouqLiveDispatchEnabled } =
+      await import("@/lib/shams-crm/alshrouq-dispatch.server");
 
     let branch: AlShrouqBranchResolution = { kind: "unknown", reason: "not_in_crm" };
     let paymentOptions: AlShrouqPaymentOption[] = [];
@@ -1151,6 +1193,7 @@ export const alshrouqDispatchContext = createServerFn({ method: "POST" })
       branch,
       paymentOptions,
       optionsError,
+      dispatchAvailable: isAlShrouqLiveDispatchEnabled(),
       prefill: {
         customerName: order.customer_name ?? "",
         customerPhone: order.customer_phone ?? "",

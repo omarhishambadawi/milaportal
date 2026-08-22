@@ -3032,6 +3032,50 @@ Duplicate protection is checked before anything is built, using the same
 `alshrouq_dispatches_live_order_key`, so the check and the constraint cannot
 disagree. A `23505` on insert is reported as "already sent", not as an error.
 
+#### The gate is reported to the UI, one way
+
+The gate is read in `alshrouq-dispatch.server.ts` and nowhere else, and it is
+still not an argument. But its *answer* is now reported to the screen, because
+not reporting it produced the worst sequence this feature had: with the gate
+shut an immediate handover returns `prepared` and writes **no row**, so the card
+fell back to readiness and showed **"Ready to send"** beside a **Send to
+AlShrouq** button — and the agent learned the deployment could not call a courier
+only from a toast, *after* committing. Everything it said was true; it was said
+too late.
+
+Two server functions therefore carry a read-only boolean:
+
+- `alshrouqDispatchContext` → `dispatchAvailable`, for a saved order's card.
+- `alshrouqDeliveryOptions` → `dispatchAvailable` (typed as
+  `AlShrouqOrderFormOptions`, a superset of the CRM's own
+  `AlShrouqDispatchOptions`), for the **create** dialog, which has no order id
+  yet and so cannot ask the first function.
+
+Both compute it through `isAlShrouqLiveDispatchEnabled()` rather than reading
+`process.env` a second time, so the gate keeps exactly one reader. It travels
+one way: no validator accepts it, nothing assigns it from a request, and
+`dispatchOrderToAlShrouq` does not consult it — the environment is still the only
+thing that permits a send. The env var name stays out of the browser bundle,
+which the build output is checked against.
+
+What the surfaces do with it:
+
+- The card gains a readiness, `prepared_only`, badged **"Prepared — dispatch
+  unavailable"**. It is distinct from `unavailable`, which is a fact about the
+  *branch*: this order could be delivered, and this installation cannot ask.
+- The card withholds the send control (`covered && canContactCourier`).
+- The dialog disables the dispatch action, labels it **"AlShrouq dispatch
+  unavailable"**, and states the reason above the buttons.
+- `describeApprovalAction` takes a fourth argument and drops the hand-over
+  wording. The scheduled sentence changes too: a `scheduled` row would be picked
+  up by a worker reading the same gate, so promising a courier for it would be
+  just as wrong.
+
+Both are optimistic while the query is in flight — a card that flashed "switched
+off" on every load is one agents would learn to ignore. **No order data is
+withheld**: every AlShrouq field is saved by the ordinary insert either way, and
+"Create order only" remains a complete, honest outcome that keeps all of it.
+
 ### Creating an AlShrouq order — the approval flow
 
 One primary action. For a new AlShrouq order the header's **Create order** button

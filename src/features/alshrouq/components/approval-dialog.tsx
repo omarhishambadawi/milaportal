@@ -149,6 +149,14 @@ export interface AlShrouqApprovalDialogProps {
    * hold until somebody remembers to press Save.
    */
   onDetailsChange?: (value: string) => void;
+  /**
+   * Whether this deployment can reach a courier.
+   *
+   * Reported by the server and read here only to choose wording and to withhold
+   * the dispatch action. Defaults to `true` so a caller that does not know yet
+   * behaves exactly as before; the card supplies it once its context resolves.
+   */
+  dispatchAvailable?: boolean;
   /** Server-side field errors from a refused approval, shown as one line. */
   errors?: AlShrouqFieldError[];
   /** The last outcome, shown inline. The create journey reports it as a toast. */
@@ -294,6 +302,7 @@ export function AlShrouqApprovalDialog({
   displayNo,
   details = "",
   onDetailsChange,
+  dispatchAvailable = true,
   errors = [],
   result = null,
   busy,
@@ -377,13 +386,24 @@ export function AlShrouqApprovalDialog({
     });
   };
 
-  const primaryLabel = creating
-    ? scheduledIso
-      ? "Create order + schedule delivery"
-      : "Create order + AlShrouq delivery"
-    : scheduledIso
-      ? "Schedule delivery"
-      : "Send to AlShrouq";
+  /*
+   * The label never promises what the deployment cannot do.
+   *
+   * With the gate shut, "Create order + AlShrouq delivery" and "Send to
+   * AlShrouq" both describe a courier being called, and neither would happen.
+   * The action is withheld instead, and the create journey keeps its honest
+   * sibling — "Create order only" — which saves every AlShrouq field the agent
+   * entered. So nothing is lost by refusing to pretend.
+   */
+  const primaryLabel = !dispatchAvailable
+    ? "AlShrouq dispatch unavailable"
+    : creating
+      ? scheduledIso
+        ? "Create order + schedule delivery"
+        : "Create order + AlShrouq delivery"
+      : scheduledIso
+        ? "Schedule delivery"
+        : "Send to AlShrouq";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -715,7 +735,20 @@ export function AlShrouqApprovalDialog({
             has been. */}
         {ready && !schedulePast && (
           <p className="text-[11.5px] leading-snug text-muted-foreground">
-            {describeApprovalAction(mode, "dispatch", scheduledLabel)}
+            {describeApprovalAction(mode, "dispatch", scheduledLabel, dispatchAvailable)}
+          </p>
+        )}
+
+        {/* The gate, stated before the agent commits rather than in a toast
+            afterwards. It is the one thing on this screen that changes what
+            pressing the button can achieve, so it sits with the button. */}
+        {!dispatchAvailable && (
+          <p className="text-[11.5px] leading-snug text-warning">
+            Live AlShrouq dispatch is switched off for this installation, so no courier can be
+            contacted.{" "}
+            {creating
+              ? "Create the order to keep every delivery detail you have entered, and hand it over once dispatch is enabled."
+              : "The delivery details are saved and this order can be handed over once it is enabled."}
           </p>
         )}
 
@@ -754,7 +787,7 @@ export function AlShrouqApprovalDialog({
           <Button
             className="w-full sm:w-auto"
             onClick={() => approve("dispatch")}
-            disabled={busy || !ready || schedulePast}
+            disabled={busy || !ready || schedulePast || !dispatchAvailable}
           >
             {busy ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />

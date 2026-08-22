@@ -416,13 +416,28 @@ export function AlShrouqDispatchSection({
   const covered = coverageAllowsDispatch(coverage);
 
   /**
+   * Whether a courier can be reached from this deployment at all.
+   *
+   * Reported by the server alongside the branch resolution. Undefined while the
+   * context is still loading, and treated as *available* until it answers — the
+   * card must not flash "switched off" at an agent on every page load, and the
+   * states below already hold the action back while `ctxPending`.
+   */
+  const canContactCourier = ctx?.dispatchAvailable !== false;
+
+  /**
    * Whether anything may still be approved.
    *
    * Never true once a dispatch exists. `dispatchPending` keeps the action out of
    * the way until the row is known, so a slow query cannot briefly offer "Send"
    * on an order that has already gone.
+   *
+   * A deployment that cannot reach a courier is excluded here, which is what
+   * withholds the send control for a handover that would stop at the gate. The
+   * order and its details are untouched by this — only the promise is withdrawn.
    */
-  const ready = saved && !dispatchPending && !summary.handedOver && !!ctx && covered;
+  const ready =
+    saved && !dispatchPending && !summary.handedOver && !!ctx && covered && canContactCourier;
 
   /**
    * Where the agent is *before* anything has been approved.
@@ -442,7 +457,12 @@ export function AlShrouqDispatchSection({
       : ctxError
         ? "unverified"
         : covered
-          ? "ready"
+          ? // Coverage is about the branch and the gate is about the deployment.
+            // Both have to be right before anything may be offered, and they are
+            // reported separately so the agent is told which one is missing.
+            canContactCourier
+            ? "ready"
+            : "prepared_only"
           : "unavailable";
 
   /**
@@ -465,7 +485,12 @@ export function AlShrouqDispatchSection({
             ? { label: "Verification required", tone: "warning" }
             : readiness === "ready"
               ? { label: "Ready to send", tone: "info" }
-              : { label: "Not available", tone: "warning" };
+              : readiness === "prepared_only"
+                ? // Not "Ready to send", because it is not, and not an error
+                  // either: the order is complete and correct. It is prepared,
+                  // and the courier step is the part that cannot run here.
+                  { label: "Prepared — dispatch unavailable", tone: "warning" }
+                : { label: "Not available", tone: "warning" };
 
   const tone = alshrouqToneStyle(status.tone);
 
@@ -1055,6 +1080,7 @@ export function AlShrouqDispatchSection({
           displayNo={ctx?.displayNo ?? null}
           invoiceValue={ctx?.prefill.orderValue || invoiceValue}
           details={ctx?.prefill.notes || notes}
+          dispatchAvailable={canContactCourier}
           errors={errors}
           result={result}
           busy={dispatch.isPending}

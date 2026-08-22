@@ -777,9 +777,14 @@ describe("what confirming will do", () => {
    * part the button has no room for and the one that must never read as "sent".
    */
   it("says once what the primary button will do", () => {
-    expect(dialog).toContain("const primaryLabel = creating");
+    // The gate is now the first thing the label consults, because a label that
+    // promises a courier this deployment cannot call is the bug this branch
+    // exists to remove. The two create labels still follow it.
+    expect(dialog).toContain("const primaryLabel = !dispatchAvailable");
     expect(dialog.match(/\{primaryLabel\}/g) ?? []).toHaveLength(1);
-    expect(dialog).toContain('describeApprovalAction(mode, "dispatch", scheduledLabel)');
+    expect(dialog).toContain(
+      'describeApprovalAction(mode, "dispatch", scheduledLabel, dispatchAvailable)',
+    );
     expect(dialog).toContain("Create order only");
     expect(dialog).toContain("Create order + AlShrouq delivery");
     // No tinted panel around it: a confirmation is text and buttons.
@@ -1445,7 +1450,10 @@ describe("what AlShrouq requires of an order", () => {
   it("disables the handover until every requirement is met", () => {
     // `schedulePast` joined the guard with the picker: the controls disable a
     // time that has gone, and this refuses one that got through anyway.
-    expect(dialog).toContain("disabled={busy || !ready || schedulePast}");
+    // `!dispatchAvailable` joined the same guard: a deployment that cannot
+    // reach a courier refuses the action outright rather than reporting it as
+    // switched off in a toast once the agent has already committed.
+    expect(dialog).toContain("disabled={busy || !ready || schedulePast || !dispatchAvailable}");
     expect(dialog).toContain("AlShrouq delivery is not available yet");
   });
 });

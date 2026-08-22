@@ -117,7 +117,18 @@ export function explainAlShrouqState(summary: AlShrouqDispatchSummary): string {
  * there is no dispatch. They are the reasons the send control is or is not
  * available, said as a next action rather than as a status.
  */
-export type AlShrouqReadiness = "draft" | "checking" | "ready" | "unverified" | "unavailable";
+export type AlShrouqReadiness =
+  | "draft"
+  | "checking"
+  | "ready"
+  /**
+   * Everything about the *order* is right and the deployment cannot call a
+   * courier. Distinct from `unavailable`, which is a fact about the branch: this
+   * order could be delivered, and this installation cannot ask for it.
+   */
+  | "prepared_only"
+  | "unverified"
+  | "unavailable";
 
 export function explainAlShrouqReadiness(readiness: AlShrouqReadiness): string {
   switch (readiness) {
@@ -127,6 +138,12 @@ export function explainAlShrouqReadiness(readiness: AlShrouqReadiness): string {
       return "Checking whether this branch can be delivered by AlShrouq.";
     case "ready":
       return "This order can be handed to AlShrouq. You will confirm the details before anything is sent.";
+    case "prepared_only":
+      // Says what is true of the *deployment*, and never blames the order: the
+      // details are complete and keeping them is the point. It also says what
+      // will happen next, because an agent who reads "unavailable" with no
+      // instruction will try the button again.
+      return "Live AlShrouq dispatch is switched off for this installation, so no courier can be contacted. The delivery details are saved and this order can be handed over once it is enabled.";
     case "unverified":
       return "Branch coverage could not be checked, so this order cannot be handed over yet.";
     case "unavailable":
@@ -146,9 +163,31 @@ export function describeApprovalAction(
   mode: "create" | "existing",
   intent: "order_only" | "dispatch",
   scheduledLabel: string | null,
+  /**
+   * Whether this deployment can reach a courier at all.
+   *
+   * Defaulted to `true` so every existing caller and test keeps its wording. It
+   * is the *dispatch* sentences that change when it is false — never the
+   * `order_only` one, which was already accurate about contacting nobody.
+   */
+  dispatchAvailable = true,
 ): string {
   if (intent === "order_only") {
     return "Saves the order in MilaPortal only. AlShrouq is not contacted, and you can hand it over later from the order page.";
+  }
+  if (!dispatchAvailable) {
+    /*
+     * The gate is shut, and the button must not say "hands it to AlShrouq".
+     *
+     * Both timings are covered by one sentence because both end the same way on
+     * this deployment: the immediate path stops at the gate and writes nothing,
+     * and a scheduled row would be picked up by a worker that reads the same
+     * gate. Promising a courier for either would be the lie this whole change
+     * exists to remove.
+     */
+    return mode === "create"
+      ? "Saves the order with its AlShrouq delivery details. Live dispatch is switched off, so no courier is contacted and nothing is sent."
+      : "Live dispatch is switched off for this installation, so no courier is contacted and nothing is sent.";
   }
   if (scheduledLabel) {
     return mode === "create"

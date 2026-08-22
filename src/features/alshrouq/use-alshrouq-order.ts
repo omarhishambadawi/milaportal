@@ -27,7 +27,7 @@ import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { alshrouqDeliveryOptions } from "@/lib/shams.functions";
-import type { AlShrouqDispatchOptions } from "@/lib/shams-crm/alshrouq-config.server";
+import type { AlShrouqOrderFormOptions } from "@/lib/shams.functions";
 import { resolveAlShrouqBranch } from "@/lib/shams-crm/alshrouq-branches";
 import { ALSHROUQ } from "./constants";
 import {
@@ -56,8 +56,20 @@ export interface AlShrouqOrderState {
   setPaymentType: (value: string) => void;
   paymentLabel: string | null;
   coverage: BranchCoverage;
-  options: AlShrouqDispatchOptions;
+  options: AlShrouqOrderFormOptions;
   optionsPending: boolean;
+  /**
+   * Whether this deployment can actually reach a courier.
+   *
+   * Server-reported and read-only. The create dialog has no order id, so this
+   * is the only place the create journey can learn the gate is shut — which is
+   * exactly the journey that used to promise "Create order + AlShrouq
+   * delivery" and then contact nobody.
+   *
+   * Optimistic while the query is in flight: the dialog must not flash
+   * "unavailable" before the server has answered.
+   */
+  dispatchAvailable: boolean;
   /** Everything still standing between this order and a courier. */
   requirements: AlShrouqRequirement[];
   ready: boolean;
@@ -161,7 +173,7 @@ export function useAlShrouqOrder(
    * query key, so a page holding the form and the dispatch card fetches once.
    */
   const load = useServerFn(alshrouqDeliveryOptions);
-  const { data: options, isPending: optionsPending } = useQuery<AlShrouqDispatchOptions>({
+  const { data: options, isPending: optionsPending } = useQuery<AlShrouqOrderFormOptions>({
     queryKey: ["alshrouq", "delivery-options"],
     enabled: active,
     staleTime: 5 * 60_000,
@@ -208,8 +220,9 @@ export function useAlShrouqOrder(
     setPaymentType,
     paymentLabel,
     coverage,
-    options: options ?? { branchOptions: [], paymentOptions: [] },
+    options: options ?? { branchOptions: [], paymentOptions: [], dispatchAvailable: true },
     optionsPending,
+    dispatchAvailable: options?.dispatchAvailable !== false,
     requirements,
     ready: requirements.length === 0,
     input,

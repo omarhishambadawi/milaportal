@@ -874,6 +874,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
           invoiceValue={form.invoice_value}
           details={form.notes}
           onDetailsChange={(value) => setForm((f) => ({ ...f, notes: value }))}
+          dispatchAvailable={alshrouq.dispatchAvailable}
           busy={busy}
           onApprove={(plan) =>
             approval.approve(plan, () =>
