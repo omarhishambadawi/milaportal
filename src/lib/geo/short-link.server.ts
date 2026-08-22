@@ -1,4 +1,4 @@
-import { parseMapsUrl } from "./maps-url";
+import { MAPS_HOSTS, parseMapsUrl } from "./maps-url";
 import type { LatLng } from "./types";
 
 /**
@@ -45,7 +45,7 @@ import type { LatLng } from "./types";
  * a country domain (`google.com.sa`, `google.co.uk`) when the sharer's Maps app
  * is set to one.
  */
-const ALLOWED_HOSTS = /^(maps\.app\.goo\.gl|goo\.gl|(www\.|maps\.)?google(\.[a-z]{2,3}){1,2})$/i;
+const ALLOWED_HOSTS = MAPS_HOSTS;
 
 /**
  * Redirect hops followed before giving up.

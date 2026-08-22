@@ -151,11 +151,26 @@ export function resolveNavUrl(record: {
  * courier routes to, and a `maps.app.goo.gl` link carries neither.
  */
 
-/** Google's map hosts, including the country domains a shared link can land on. */
-const MAPS_HOSTS = /(^|\.)(google\.[a-z.]+|goo\.gl)$/i;
+/**
+ * Google's map hosts, including the country domains a shared link can land on.
+ *
+ * Fully anchored, and **the single definition** — `short-link.server.ts` imports
+ * this one rather than keeping its own, so what the parser calls a Maps link and
+ * what the resolver is willing to fetch cannot drift apart.
+ *
+ * The previous pattern was `(^|\.)(google\.[a-z.]+|goo\.gl)$`, which accepts
+ * `google.com.evil.example`: `[a-z.]+` happily swallows the rest of the name, so
+ * any host with `google.` in it and letters after passed. The resolver's own
+ * allow-list was already written this way and refused such a host, so nothing
+ * could be *fetched* — but the parser calling it a Google link was wrong on its
+ * own terms, and became worth fixing the moment a scheme-less string could be
+ * normalised into one.
+ */
+export const MAPS_HOSTS =
+  /^(maps\.app\.goo\.gl|goo\.gl|(www\.|maps\.)?google(\.[a-z]{2,3}){1,2})$/i;
 
 /** The shorteners, which hold a redirect and nothing else. */
-const SHORTENER_HOSTS = /(^|\.)goo\.gl$/i;
+const SHORTENER_HOSTS = /^(maps\.app\.goo\.gl|goo\.gl)$/i;
 
 /** The dropped pin inside a `/data=` blob — the place the person actually chose. */
 const PLACE_PIN = /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/;
@@ -163,10 +178,31 @@ const PLACE_PIN = /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/;
 /** The map camera. Where the view was, which is close but not the pin. */
 const CAMERA = /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/;
 
-const PAIR = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/;
+/**
+ * A coordinate pair, as a query parameter carries one.
+ *
+ * Separated by a comma or by whitespace: `?query=24.53,46.64` is the documented
+ * form, and `?query=24.53+46.64` is what arrives when the sharer's client
+ * encoded the separator as a plus, which `URLSearchParams` decodes to a space.
+ * An optional `loc:` prefix is Android's share format (`?q=loc:24.53,46.64`).
+ */
+const PAIR = /^\s*(?:loc:)?\s*(-?\d+(?:\.\d+)?)\s*(?:,|\s)\s*(-?\d+(?:\.\d+)?)\s*$/i;
 
 /** Query parameters Maps uses to carry a point. */
 const COORDINATE_PARAMS = ["query", "q", "ll", "center", "destination", "daddr"] as const;
+
+/**
+ * Something that could be a bare host, for the scheme-less case below.
+ *
+ * Deliberately narrow: a dotted label sequence, optionally followed by a path,
+ * query or fragment. It is only ever used to *try* prefixing `https://`, and the
+ * host that results is then held to {@link MAPS_HOSTS} like any other — so this
+ * widens what can be typed, not what can be reached.
+ */
+const BARE_HOST = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:[/?#]|$)/i;
+
+/** Longer than any real Maps link. `new URL` on unbounded input is free work. */
+const MAX_URL_LENGTH = 2048;
 
 export interface MapsUrlParse {
   /** The location, when the link carries one and it falls inside the country. */
@@ -181,13 +217,56 @@ export interface MapsUrlParse {
    * the shortener sends no CORS headers — so the caller must ask the server.
    */
   needsResolution: boolean;
+  /**
+   * The link as an absolute `https:` URL, when the text was one or could be read
+   * as one — `null` otherwise.
+   *
+   * Exists for the scheme-less case. An agent pasting from WhatsApp very often
+   * pastes `maps.app.goo.gl/aBcD`, with no scheme, because that is how the
+   * message renders; `new URL` refuses it, so the whole link read as "not a map
+   * link" and the coordinates never appeared. Prefixing `https://` is not
+   * rewriting a destination — it is naming the one the text already meant — and
+   * the result is still held to the host list.
+   *
+   * Callers that go on to *fetch* the link should send this rather than the raw
+   * text, because the resolver requires an absolute HTTPS URL. What is stored
+   * and sent to the courier stays exactly what the customer wrote.
+   */
+  normalizedUrl: string | null;
 }
 
-const NOTHING: MapsUrlParse = { point: null, outOfRange: false, needsResolution: false };
+const NOTHING: MapsUrlParse = {
+  point: null,
+  outOfRange: false,
+  needsResolution: false,
+  normalizedUrl: null,
+};
 
-function fromPair(latRaw: string, lngRaw: string): MapsUrlParse {
+function fromPair(latRaw: string, lngRaw: string, normalizedUrl: string | null): MapsUrlParse {
   const { point, outOfRange } = parseCoordinatePair(latRaw, lngRaw);
-  return { point, outOfRange, needsResolution: false };
+  return { point, outOfRange, needsResolution: false, normalizedUrl };
+}
+
+/**
+ * Read the text as a URL, supplying the scheme it omitted.
+ *
+ * `https` only, and never upgraded from an explicit `http` — a caller that
+ * typed a scheme gets the one they typed, and a caller that typed none gets the
+ * secure one rather than a guess.
+ */
+function asUrl(text: string): URL | null {
+  if (text.length > MAX_URL_LENGTH) return null;
+  try {
+    return new URL(text);
+  } catch {
+    // Not absolute. Only worth a second try when it looks like a bare host.
+    if (!BARE_HOST.test(text)) return null;
+    try {
+      return new URL(`https://${text}`);
+    } catch {
+      return null;
+    }
+  }
 }
 
 /**
@@ -212,34 +291,52 @@ export function parseMapsUrl(raw: string | null | undefined): MapsUrlParse {
 
   // `geo:` is what a phone's "share location" produces outside Google Maps.
   const geo = /^geo:(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/i.exec(text);
-  if (geo) return fromPair(geo[1]!, geo[2]!);
+  if (geo) return fromPair(geo[1]!, geo[2]!, null);
 
-  let url: URL;
-  try {
-    url = new URL(text);
-  } catch {
-    // Not a URL. A bare "24.71, 46.67" is still a location an agent may paste.
+  const url = asUrl(text);
+  if (!url) {
+    // Not a URL at all. A bare "24.71, 46.67" is still a location an agent may
+    // paste, and reading it costs nothing.
     const pair = PAIR.exec(text);
-    return pair ? fromPair(pair[1]!, pair[2]!) : NOTHING;
+    return pair ? fromPair(pair[1]!, pair[2]!, null) : NOTHING;
   }
 
-  const host = url.hostname.replace(/^www\./, "");
+  // The hostname as it stands: the pattern names the `www.`/`maps.` prefixes it
+  // allows, rather than stripping one and hoping the rest is safe.
+  const host = url.hostname;
   if (!MAPS_HOSTS.test(host)) return NOTHING;
 
+  /*
+   * The absolute form, for a caller that has to fetch it.
+   *
+   * Only ever a Google Maps host, because we are past the check above; the
+   * server's own allow-list is re-applied on every hop regardless, so this
+   * widens nothing.
+   */
+  const normalizedUrl = url.protocol === "https:" ? url.href : null;
+
   const pin = PLACE_PIN.exec(url.href);
-  if (pin) return fromPair(pin[1]!, pin[2]!);
+  if (pin) return fromPair(pin[1]!, pin[2]!, normalizedUrl);
 
   for (const key of COORDINATE_PARAMS) {
     const value = url.searchParams.get(key);
     const pair = value ? PAIR.exec(value) : null;
-    if (pair) return fromPair(pair[1]!, pair[2]!);
+    if (pair) return fromPair(pair[1]!, pair[2]!, normalizedUrl);
   }
 
   const camera = CAMERA.exec(url.href);
-  if (camera) return fromPair(camera[1]!, camera[2]!);
+  if (camera) return fromPair(camera[1]!, camera[2]!, normalizedUrl);
 
-  // A shortener that got this far genuinely holds nothing but the redirect.
-  if (SHORTENER_HOSTS.test(host)) return { ...NOTHING, needsResolution: true };
+  /*
+   * A shortener that got this far genuinely holds nothing but the redirect.
+   *
+   * Only recoverable when it can be handed to the resolver, which takes HTTPS
+   * only — an `http:` shortener is reported as carrying no coordinates rather
+   * than as something a "Check location" button could ever fix.
+   */
+  if (SHORTENER_HOSTS.test(host) && normalizedUrl) {
+    return { ...NOTHING, needsResolution: true, normalizedUrl };
+  }
 
-  return NOTHING;
+  return { ...NOTHING, normalizedUrl };
 }

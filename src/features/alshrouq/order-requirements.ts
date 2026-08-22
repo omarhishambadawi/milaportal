@@ -46,7 +46,12 @@ import { validateAlShrouqOrderFields, type AlShrouqFieldIssue } from "./order-fi
 export type LocationReading =
   | { kind: "empty" }
   | { kind: "resolved"; latitude: number; longitude: number }
-  | { kind: "needs_check" }
+  /**
+   * A Google shortener. `url` is the absolute HTTPS form to hand the resolver —
+   * the raw text may have arrived without a scheme, and the resolver takes
+   * absolute HTTPS only.
+   */
+  | { kind: "needs_check"; url: string }
   | { kind: "out_of_range" }
   | { kind: "unsupported" };
 
@@ -68,7 +73,11 @@ export function readLocation(raw: string | null | undefined): LocationReading {
     return { kind: "resolved", latitude: parsed.point.lat, longitude: parsed.point.lng };
   }
   if (parsed.outOfRange) return { kind: "out_of_range" };
-  if (parsed.needsResolution) return { kind: "needs_check" };
+  // `normalizedUrl` is always present alongside `needsResolution`; the guard is
+  // the type's, not a doubt about the parser.
+  if (parsed.needsResolution && parsed.normalizedUrl) {
+    return { kind: "needs_check", url: parsed.normalizedUrl };
+  }
   return { kind: "unsupported" };
 }
 
@@ -79,11 +88,11 @@ export function describeLocationReading(reading: LocationReading): string | null
     case "resolved":
       return null;
     case "needs_check":
-      return "This is a short link. Check the location to read its coordinates.";
+      return "This is a shortened Google Maps link. Check the location to read its coordinates.";
     case "out_of_range":
       return "Those coordinates fall outside Saudi Arabia. Check the link points at the delivery address.";
     case "unsupported":
-      return "That link carries no coordinates. Drop a pin on the exact spot and share that link instead.";
+      return "This link does not carry an exact location. Ask the customer to drop a pin on the delivery spot and share that Google Maps link.";
   }
 }
 

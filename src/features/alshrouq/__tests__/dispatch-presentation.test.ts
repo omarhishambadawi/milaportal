@@ -1153,7 +1153,7 @@ describe("reading a location out of a link", () => {
   it("asks for a check rather than guessing at a short link", () => {
     const reading = readLocation("https://maps.app.goo.gl/aBcDeFgHiJkLmNoP");
     expect(reading.kind).toBe("needs_check");
-    expect(describeLocationReading(reading)).toMatch(/short link/i);
+    expect(describeLocationReading(reading)).toMatch(/shortened Google Maps link/i);
     // And no coordinate is invented on the way.
     expect(JSON.stringify(reading)).not.toMatch(/latitude|longitude/);
   });
