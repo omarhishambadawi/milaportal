@@ -3748,6 +3748,111 @@ coordinates, the scheduled slot with its countdown, the external reference, and
 the tracking link when one exists. It builds no payload, knows no endpoint, and
 reaches the transport through nothing.
 
+### What the AlShrouq screens say — Phase 11
+
+No backend changed in this phase: no migration, no schema, no scheduler, no
+state machine, no RLS, and `orderFormSchema` is still byte-identical. What
+changed is what an agent reads.
+
+**`features/alshrouq/dispatch-presentation.ts` is the vocabulary and the
+palette.** Pure, no React, so it is asserted the way the rest of this feature is
+— over values, in Node, with nothing rendered. It holds three things:
+`explainAlShrouqState` (what a state *means*, one sentence), `alshrouqToneStyle`
+(tone → the portal's own utility classes) and `describeApprovalAction` (what
+pressing the button will do). The card, the approval dialog and the tests read
+one source for all three, so they cannot drift into three accounts of one row.
+
+**A badge names a state; it cannot say what to do about one.** "Scheduled" needs
+nothing from anybody and "Delivery status unavailable" needs a phone call, and
+nothing on the old card distinguished them except a colour an agent had to have
+been taught. Each state now carries a line beneath the badge saying whether a
+courier was contacted — the only fact that changes what the agent should do.
+Tests pin the three that must never merge: `scheduled` says AlShrouq has *not*
+been contacted, `cancelled` says nobody was, and `indeterminate` says it is not
+known and has not been sent again, in words that are neither "failed" nor
+"rejected".
+
+**Five tones, from the existing tokens.** The badge used to collapse everything
+to "ok or warn" — a scheduled delivery and an accepted one were the same colour,
+and a failure and an unreachable CRM were the other. It now maps
+`summary.tone` straight through: `muted`, `info` (`primary`, the brand
+turquoise, because a scheduled delivery is in hand and is neither a warning nor
+a success), `success`, `warning`, `destructive`. A test asserts every class
+string is an existing token — no hex, no `rgb()`, no Tailwind palette number —
+so light and dark are the theme's problem and not this feature's.
+
+**Two corrections the phase found, both by looking at the rendered card.**
+
+1. *The handover notice was appearing on deliveries nobody had been told about.*
+   "AlShrouq submission completed. Changes made in MilaPortal after submission
+   are not sent to AlShrouq" was gated on `handedOver`, which is true for
+   `scheduled` — a state that reserves the slot without transmitting anything.
+   It is now gated on `submitted`, which excludes `scheduled` and `failed`. The
+   distinction matters because a line that is sometimes false is a line agents
+   learn to skip, including on `indeterminate`, where it is the most important
+   sentence on the card.
+
+2. *A cancelled delivery had disappeared from the card entirely.*
+   `useOrderAlShrouqDispatch` defines `current` as the row that is **not**
+   cancelled, so a cancelled dispatch reaches the card as no dispatch at all —
+   correct about what may happen next, and silent about what just happened. The
+   badge is right to read "Ready to send"; the card now also reads the cancelled
+   row out of `rows`, which the same query already holds, and says a slot was
+   booked and called off and that nobody was contacted. No new query, no new
+   column.
+
+**The location is presented as a verified fact, not as fields.** It was a
+truncated address followed by two rows labelled "Latitude" and "Longitude". It
+is now one block: a **Verified** pill shown only where a resolved point actually
+exists, the customer's own link as a link rather than as text to copy by hand,
+and the coordinates labelled `Lat`/`Lng` so a number is never mistaken for a
+reference. The stored `customer_address` goes through `safeTrackingUrl` — the
+same http/https-absolute guard the tracking link uses, aliased at the import
+rather than reimplemented — before it can reach an anchor, and a value that
+fails it is shown as the text it is.
+
+**Timing is a choice.** "Leave the date and time blank to send now" was the
+rule, and it is a rule an agent has to be told: a blank field is not an answer,
+and here the unanswered question is whether a driver leaves in a minute or
+tomorrow. It is two radio options now — *As soon as possible* and *At a set
+time* — over the same `parseScheduleInput`, the same validation and the same
+server-side decision. Choosing "now" sends no instant, exactly as two blank
+boxes did.
+
+**The dialog says what the button will do, in the button's own words.** A
+`What happens when you confirm` block heads each outcome with the exact label on
+its control — so on the create journey *Create order only* and *Create order and
+send* are explained side by side rather than being two verbs at the bottom of a
+scroll. The scheduled wording names the instant, adds how far away it is, and
+says **no courier is contacted now**; a test asserts it never reads "straight
+away", "immediately" or "on its way".
+
+**A draft is told where its action lives.** The card used to end in a
+permanently disabled *Send to AlShrouq* beside an order that cannot be sent,
+which invites a click that can never work. It now points at the page's own
+**Create order** button, which is where the create journey's approval actually
+is. The send control remains *absent, not disabled*, once a dispatch exists —
+that rule is unchanged.
+
+**Choosing AlShrouq explains itself where the choice is made.** The delivery
+method is the one field whose value changes what the page's primary button does,
+so the field carries a line saying so. The button's label is untouched.
+
+**Responsive, and asserted as such.** Every grid in the card and the dialog
+starts at one column and earns a second at `sm`; long values truncate rather
+than widening their container; the dialog's actions are full-width targets on a
+phone with the primary lowest in a `flex-col-reverse` footer, and the dialog
+keeps `max-h-[85vh] overflow-y-auto` so its buttons are always reachable. Tests
+pin all of it, including the absence of fixed pixel widths, which are what
+actually force a sideways scroll.
+
+**Verified in a browser**, against a temporary unauthenticated route that seeded
+the dispatch query cache rather than fetching it: every state above, at 1280px
+and 375px, in light and dark. `document.documentElement.scrollWidth` equalled
+the viewport at both widths, and the dark palette resolved to the `.dark` tokens
+on load. The harness was deleted before commit. The order form's own create
+journey could not be reached — it sits behind `/_app`, which requires a session.
+
 ### AlShrouq create transport
 
 `alshrouq-create.server.ts` owns the create POST and the read that reconciles

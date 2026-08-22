@@ -19,12 +19,21 @@ import {
   summariseAlShrouqDispatch,
   type AlShrouqDispatchRow,
 } from "../dispatch-timeline";
+import {
+  ALSHROUQ_TONE_STYLES,
+  alshrouqToneStyle,
+  describeApprovalAction,
+  explainAlShrouqReadiness,
+  explainAlShrouqState,
+  type AlShrouqReadiness,
+} from "../dispatch-presentation";
 import { scheduledCountdownAt } from "../use-scheduled-countdown";
 
 const read = (relative: string) =>
   readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
 
 const card = read("../components/dispatch-section.tsx");
+const dialog = read("../components/approval-dialog.tsx");
 const timeline = read("../../orders/components/order-activity-timeline.tsx");
 const countdownHook = read("../use-scheduled-countdown.ts");
 const orderForm = read("../../orders/components/order-form.tsx");
@@ -414,5 +423,383 @@ describe("no internals reach the timeline", () => {
     // here, and that sentence is not a use of it.
     expect(hook).toContain(".select(COLUMNS)");
     expect(hook).not.toContain('.select("*")');
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* What the state means, not what it is called                               */
+/* ------------------------------------------------------------------------- */
+
+describe("every state explains itself", () => {
+  const states = [
+    "scheduled",
+    "processing",
+    "accepted",
+    "failed",
+    "indeterminate",
+    "cancelled",
+  ] as const;
+
+  const summaryFor = (dispatch_status: string) =>
+    summariseAlShrouqDispatch(
+      row({
+        dispatch_status,
+        cancelled_at: dispatch_status === "cancelled" ? "2026-08-21T11:00:00.000Z" : null,
+      }),
+    );
+
+  /**
+   * A badge names a state; it cannot say what to do about one. "Scheduled" needs
+   * nothing from anybody and "Delivery status unavailable" needs a phone call,
+   * and an agent should not have to have been told which is which.
+   */
+  it.each(states)("gives %s a sentence an agent can act on", (status) => {
+    const sentence = explainAlShrouqState(summaryFor(status));
+    expect(sentence.length).toBeGreaterThan(20);
+    expect(sentence).not.toBe(summaryFor(status).label);
+    expect(sentence.trim()).toMatch(/\.$/);
+  });
+
+  /** The same prohibition the labels are under. No table talk on an ops screen. */
+  it("exposes no internal terminology in any explanation", () => {
+    const all = [
+      ...states.map((s) => explainAlShrouqState(summaryFor(s))),
+      explainAlShrouqState(summariseAlShrouqDispatch(null)),
+      ...(["draft", "checking", "ready", "unverified", "unavailable"] as AlShrouqReadiness[]).map(
+        explainAlShrouqReadiness,
+      ),
+    ];
+    for (const sentence of all) {
+      expect(sentence).not.toMatch(
+        /dispatch_status|payload|snapshot|POST|cron|worker|reconcil|server function|endpoint/i,
+      );
+    }
+  });
+
+  /**
+   * The distinction the whole integration rests on: whether a courier was
+   * contacted. Each of these is a different instruction to the reader, and
+   * collapsing any two is what puts a second driver on the road.
+   */
+  it("says whether a courier was contacted, per state", () => {
+    expect(explainAlShrouqState(summaryFor("scheduled"))).toMatch(/not been contacted/i);
+    expect(explainAlShrouqState(summaryFor("cancelled"))).toMatch(/no courier was contacted/i);
+    // Never a failure, and never something anyone should send again.
+    const unknown = explainAlShrouqState(summaryFor("indeterminate"));
+    expect(unknown).toMatch(/not known/i);
+    expect(unknown).toMatch(/not been sent again/i);
+    expect(unknown).not.toMatch(/failed|rejected/i);
+    // And a failure is stated as one, with nothing on its way.
+    expect(explainAlShrouqState(summaryFor("failed"))).toMatch(/did not accept/i);
+  });
+
+  /** An unrecognised state is reported, never guessed at. */
+  it("reports a state this build does not know without inventing a meaning", () => {
+    const sentence = explainAlShrouqState(summaryFor("some_future_state"));
+    expect(sentence).toMatch(/cannot be sent again/i);
+    expect(sentence).not.toContain("some_future_state");
+  });
+
+  /** No dispatch row at all is its own answer, not an error. */
+  it("says plainly when nothing has been arranged", () => {
+    expect(explainAlShrouqState(summariseAlShrouqDispatch(null))).toMatch(/no alshrouq delivery/i);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* One colour language, and it is the portal's own                           */
+/* ------------------------------------------------------------------------- */
+
+describe("the state colours", () => {
+  const tones = ["muted", "info", "success", "warning", "danger"] as const;
+
+  it("covers every tone the summary can report", () => {
+    for (const tone of tones) {
+      const style = alshrouqToneStyle(tone);
+      expect(style.badge).not.toBe("");
+      expect(style.band).not.toBe("");
+      expect(style.icon).not.toBe("");
+    }
+    expect(Object.keys(ALSHROUQ_TONE_STYLES).sort()).toEqual([...tones].sort());
+  });
+
+  /**
+   * The design system, not a new one. Every colour is an existing token —
+   * `primary`, `success`, `warning`, `destructive`, `muted`, `border`,
+   * `foreground` — so light and dark mode are handled by the theme rather than
+   * by anything written here.
+   */
+  it("uses only the portal's own tokens, and no literal colours", () => {
+    const classes = Object.values(ALSHROUQ_TONE_STYLES)
+      .flatMap((s) => [s.badge, s.band, s.icon])
+      .join(" ");
+    expect(classes).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+    expect(classes).not.toMatch(/\b(rgb|hsl|oklch)\(/);
+    for (const token of classes.split(/\s+/).filter(Boolean)) {
+      expect(token).toMatch(
+        /^(dark:)?(text|bg|border)-(primary|success|warning|destructive|muted|foreground|border)(-foreground)?(\/\d{1,3})?$/,
+      );
+    }
+  });
+
+  /** Trouble does not arrive in the same colour as an accepted delivery. */
+  it("does not paint an uncertain dispatch like an accepted one", () => {
+    const accepted = summariseAlShrouqDispatch(row({ dispatch_status: "accepted" }));
+    const unknown = summariseAlShrouqDispatch(row({ dispatch_status: "indeterminate" }));
+    const waiting = summariseAlShrouqDispatch(row({ dispatch_status: "scheduled" }));
+    expect(alshrouqToneStyle(accepted.tone)).not.toEqual(alshrouqToneStyle(unknown.tone));
+    expect(alshrouqToneStyle(waiting.tone)).not.toEqual(alshrouqToneStyle(accepted.tone));
+  });
+
+  /** The card asks for the tone rather than deciding it, so the two cannot drift. */
+  it("is applied by the card from the summary's own tone", () => {
+    expect(card).toContain("alshrouqToneStyle(status.tone)");
+    expect(card).toContain("{ label: summary.label, tone: summary.tone }");
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* A cancelled delivery is still something that happened                     */
+/* ------------------------------------------------------------------------- */
+
+describe("a cancelled dispatch", () => {
+  const cancelled = row({
+    dispatch_status: "cancelled",
+    scheduled_at: APPROVED_AT,
+    scheduled_for: DUE_AT,
+    cancelled_at: "2026-08-21T11:00:00.000Z",
+  });
+
+  /**
+   * `current` is by definition the row that is *not* cancelled, so a cancelled
+   * dispatch reaches the card as no dispatch at all. The badge is therefore
+   * right to read "Ready to send" — and the card would otherwise be completely
+   * silent about a slot that was booked and called off, which is what this band
+   * exists to say.
+   */
+  it("is still reported, from the history the card already holds", () => {
+    expect(summariseAlShrouqDispatch(cancelled).label).toBe("Scheduled delivery cancelled");
+    expect(card).toContain("const lastCancelled");
+    expect(card).toContain("(r) => r.cancelled_at != null");
+    expect(card).toContain("{!current && lastCancelled && (");
+    expect(card).toMatch(/was cancelled[\s\S]{0,240}No courier was contacted/);
+  });
+
+  /** A persisted state still outranks the readiness fallback on the badge. */
+  it("lets a live dispatch name itself before any readiness is consulted", () => {
+    expect(card).toContain("summary.status !== null");
+    expect(card.indexOf("summary.status !== null")).toBeLessThan(
+      card.indexOf('{ label: "Ready to send"'),
+    );
+  });
+
+  /**
+   * And nothing tells an agent their edits will not reach a courier that was
+   * never contacted. `handedOver` covers the slot, not the submission.
+   */
+  it("claims a completed submission only where one happened", () => {
+    expect(card).toContain(
+      'summary.handedOver && summary.status !== "scheduled" && summary.status !== "failed"',
+    );
+    expect(card).toContain("{submitted && (");
+    for (const status of ["accepted", "indeterminate"]) {
+      expect(summariseAlShrouqDispatch(row({ dispatch_status: status })).handedOver).toBe(true);
+    }
+  });
+
+  /** The order is still sendable, because the slot really is free. */
+  it("still leaves the order sendable", () => {
+    expect(summariseAlShrouqDispatch(cancelled).handedOver).toBe(false);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* The two create choices                                                    */
+/* ------------------------------------------------------------------------- */
+
+describe("what confirming will do", () => {
+  it("distinguishes saving the order from handing it over", () => {
+    const only = describeApprovalAction("create", "order_only", null);
+    const send = describeApprovalAction("create", "dispatch", null);
+    expect(only).not.toBe(send);
+    expect(only).toMatch(/not contacted/i);
+    expect(only).toMatch(/later/i);
+    expect(send).toMatch(/straight away/i);
+  });
+
+  /**
+   * "Send" reads as *sent* to somebody in a hurry, and on the scheduled path
+   * nothing is sent at all. So the scheduled wording names the time and says so.
+   */
+  it("never lets the scheduled wording imply a courier is already moving", () => {
+    const at = "Aug 22, 2026 · 04:00 PM";
+    for (const mode of ["create", "existing"] as const) {
+      const sentence = describeApprovalAction(mode, "dispatch", at);
+      expect(sentence).toContain(at);
+      expect(sentence).toMatch(/no courier is contacted now/i);
+      expect(sentence).not.toMatch(/straight away|immediately|on its way/i);
+    }
+  });
+
+  /** The button and the paragraph explaining it are the same words, written once. */
+  it("heads the explanation with the primary button's own label", () => {
+    expect(dialog).toContain("const primaryLabel = creating");
+    expect(dialog.match(/\{primaryLabel\}/g) ?? []).toHaveLength(2);
+    expect(dialog).toContain("What happens when you confirm");
+    expect(dialog).toContain('describeApprovalAction(mode, "order_only", null)');
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* Timing is a choice, not a blank field                                     */
+/* ------------------------------------------------------------------------- */
+
+describe("choosing when to deliver", () => {
+  /**
+   * The rule used to be "leave the date and time blank to send now" — a rule an
+   * agent has to be told, standing between a driver leaving in a minute and a
+   * driver leaving tomorrow.
+   */
+  it("asks for immediate or scheduled outright", () => {
+    expect(dialog).toContain('useState<"now" | "later">("now")');
+    expect(dialog).toContain("As soon as possible");
+    expect(dialog).toContain("At a set time");
+    expect(dialog).not.toContain("Leave both blank");
+  });
+
+  /** The arithmetic is untouched: the same parser, on the same inputs. */
+  it("changes no scheduling logic", () => {
+    expect(dialog).toContain("parseScheduleInput(date, time)");
+    // "Now" means no instant is sent at all, exactly as two blank boxes did.
+    expect(dialog).toContain('if (timing === "now")');
+    // No clock arithmetic of its own beyond the one figure it renders.
+    expect(dialog.match(/Date\.now\(\)/g) ?? []).toHaveLength(1);
+  });
+
+  /** The date and time are only asked for when they are going to be used. */
+  it("shows the date and time only for a scheduled delivery", () => {
+    expect(dialog).toContain('{timing === "later" && (');
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* The delivery location reads as verified order information                 */
+/* ------------------------------------------------------------------------- */
+
+describe("the delivery location", () => {
+  /**
+   * Different facts, kept apart: the link the customer sent, the place it
+   * resolved to, and the point a driver routes to. Merging them is how an agent
+   * ends up checking the wrong one.
+   */
+  it("separates the customer's link from the coordinates", () => {
+    expect(card).toContain("Delivery location");
+    expect(card).toContain("Location shared by the customer");
+    expect(card).toContain(">Lat<");
+    expect(card).toContain(">Lng<");
+    expect(dialog).toContain("Location verified");
+    expect(dialog).toContain("Open the customer's link");
+  });
+
+  /** Verified is claimed only where there is a resolved point to justify it. */
+  it("claims verification only when coordinates exist", () => {
+    expect(card).toMatch(/\{coordinates && \([\s\S]{0,400}Verified/);
+  });
+
+  /**
+   * The stored address is upstream-influenced text that ends up behind an
+   * anchor, so it goes through the same guard the tracking link uses rather than
+   * a second, subtly different one.
+   */
+  it("opens the stored link through the existing URL guard", () => {
+    expect(card).toContain("safeTrackingUrl as safeExternalUrl");
+    expect(card).toContain("safeExternalUrl(locationText)");
+    expect(card).toMatch(/href=\{customerLink\}[\s\S]{0,200}rel="noopener noreferrer"/);
+    // Nothing is assembled: the destination is the persisted value or nothing.
+    expect(card).not.toMatch(/["'`]https?:\/\/[^"'`]*\$\{/);
+  });
+
+  /** Latitude and longitude are read-only evidence — there is no input for them. */
+  it("offers no way to type a coordinate", () => {
+    expect(card).not.toMatch(/<Input[\s\S]{0,200}(lat|lng|latitude|longitude)/i);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* Nothing cramps, and nothing scrolls sideways                              */
+/* ------------------------------------------------------------------------- */
+
+describe("the layout survives a phone", () => {
+  /**
+   * The card lives in a column that is full-width on a phone and roughly a third
+   * of the page on a desktop. Every grid in it therefore starts at one column
+   * and earns a second, rather than starting at two and being squeezed.
+   */
+  it("stacks its grids before it splits them", () => {
+    for (const source of [card, dialog]) {
+      for (const grid of source.match(/(?<!sm:)grid-cols-\d/g) ?? []) {
+        expect(grid).toBe("grid-cols-1");
+      }
+      expect(source).toContain("sm:grid-cols-2");
+    }
+  });
+
+  /**
+   * Long values shorten instead of widening their container: an Arabic branch
+   * name or a customer's map URL must not push the page sideways.
+   */
+  it("truncates rather than overflowing", () => {
+    for (const source of [card, dialog]) {
+      expect(source).toContain("min-w-0");
+      expect(source).toContain("truncate");
+      // No fixed pixel widths, which are what actually force a sideways scroll.
+      expect(source).not.toMatch(/\bw-\[\d+px\]/);
+      expect(source).not.toMatch(/\bmin-w-\[\d{3,}px\]/);
+    }
+  });
+
+  /** The actions are thumb-sized targets on a narrow screen. */
+  it("gives the actions room on a phone", () => {
+    expect(dialog.match(/w-full sm:w-auto/g) ?? []).toHaveLength(3);
+    expect(card).toContain("w-full sm:w-auto");
+    // The primary sits last in source and so lowest on a stacked phone footer.
+    expect(dialog).toContain("flex-col-reverse gap-2 sm:flex-row sm:justify-end");
+  });
+
+  /** The dialog can always be scrolled to its buttons, however tall it gets. */
+  it("keeps a tall dialog inside the viewport", () => {
+    expect(dialog).toContain("max-h-[85vh] overflow-y-auto");
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* The create journey says what it is about to do                            */
+/* ------------------------------------------------------------------------- */
+
+describe("choosing AlShrouq on the order form", () => {
+  /**
+   * Choosing AlShrouq changes what the page's primary button does. Saying so at
+   * the point of choice is what stops the approval dialog arriving as a surprise
+   * two fields later.
+   */
+  it("explains the choice where the choice is made", () => {
+    expect(orderForm).toContain("form.delivery_type === ALSHROUQ ? (");
+    expect(orderForm).toMatch(/AlShrouq delivers this order/);
+    expect(orderForm).toMatch(/save it only, or to hand the delivery to AlShrouq/);
+  });
+
+  /** And the intercepted button still names itself honestly. */
+  it("leaves the primary action's own label alone", () => {
+    expect(orderForm).toContain('mode === "create" ? "Create order" : "Update order"');
+  });
+
+  /**
+   * A draft cannot dispatch, and a permanently disabled button beside it invites
+   * a click that can never work. The card points at the real action instead.
+   */
+  it("points a draft at the page's own primary action", () => {
+    expect(card).toContain("Choose <span");
+    expect(card).toMatch(/Create order<\/span> at the top of/);
+    expect(card).not.toMatch(/disabled[\s\S]{0,80}Pending order creation/);
   });
 });

@@ -53,10 +53,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import {
   AlertTriangle,
+  CalendarClock,
   CalendarX,
+  CheckCircle2,
   ClipboardCheck,
   ExternalLink,
+  Hourglass,
   Info,
+  Link2,
   Loader2,
   MapPin,
   PackageCheck,
@@ -108,7 +112,20 @@ import {
   dispatchInputFor,
   type AlShrouqApprovalPlan,
 } from "../approval";
-import { summariseAlShrouqDispatch } from "../dispatch-timeline";
+import {
+  // The same absolute-http/https guard the tracking link uses. Aliased because
+  // it is applied here to the customer's own map link, and duplicating a URL
+  // check is how the two quietly stop agreeing about what is safe to open.
+  safeTrackingUrl as safeExternalUrl,
+  summariseAlShrouqDispatch,
+} from "../dispatch-timeline";
+import {
+  alshrouqToneStyle,
+  explainAlShrouqReadiness,
+  explainAlShrouqState,
+  type AlShrouqReadiness,
+  type AlShrouqTone,
+} from "../dispatch-presentation";
 import { formatScheduledFor } from "../scheduling";
 import { useOrderAlShrouqDispatch } from "../use-order-dispatch";
 import { useScheduledDispatchCountdown } from "../use-scheduled-countdown";
@@ -136,7 +153,14 @@ function branchLine(ctx: AlShrouqDispatchContext): { text: string; ok: boolean }
   return { text: "Not in the CRM's branch list", ok: false };
 }
 
-/** One labelled value in the information grid. */
+/**
+ * One labelled value in the information grid.
+ *
+ * `truncate` on the value and `min-w-0` on the cell are what keep this card
+ * inside its column: an Arabic branch name or a long customer name shortens
+ * rather than widening the grid, so the page never gains a sideways scrollbar on
+ * a phone. The full text stays reachable through the tooltip.
+ */
 function Row({ label, value, muted }: { label: string; value: string; muted?: boolean }) {
   return (
     <div className="min-w-0 space-y-0.5">
@@ -146,9 +170,48 @@ function Row({ label, value, muted }: { label: string; value: string; muted?: bo
       <p
         className={`truncate text-sm ${muted ? "text-muted-foreground" : "font-medium text-foreground"}`}
         title={value}
+        dir="auto"
       >
         {value}
       </p>
+    </div>
+  );
+}
+
+/**
+ * The one sentence an agent must not miss once an order has gone.
+ *
+ * A constant rather than JSX text so it stays a single contiguous string: there
+ * is no AlShrouq update endpoint in this integration, and a line break inserted
+ * by a formatter is not a good reason for the assertion that guards this wording
+ * to stop finding it.
+ */
+const HANDOVER_NOTICE =
+  "AlShrouq submission completed. Changes made in MilaPortal after submission are not sent to AlShrouq.";
+
+/**
+ * A full-width sentence in the card's own colour language.
+ *
+ * The states that need explaining need more room than a badge and less ceremony
+ * than a dialog — an uncertain dispatch, a refusal, an operator's conclusion. One
+ * component so they line up rather than each inventing its own border.
+ */
+function Band({
+  icon: Icon,
+  tone,
+  children,
+}: {
+  icon: typeof Info;
+  tone: AlShrouqTone;
+  children: React.ReactNode;
+}) {
+  const style = alshrouqToneStyle(tone);
+  return (
+    <div
+      className={`flex items-start gap-2.5 border-t px-4 py-3 text-[11.5px] leading-snug ${style.band}`}
+    >
+      <Icon className={`mt-px h-3.5 w-3.5 shrink-0 ${style.icon}`} aria-hidden="true" />
+      <div className="min-w-0 flex-1">{children}</div>
     </div>
   );
 }
@@ -304,21 +367,85 @@ export function AlShrouqDispatchSection({
   const ready =
     saved && !dispatchPending && !summary.handedOver && !!ctx && !ctx.optionsError && !!branch?.ok;
 
-  /** Never a state the backend cannot support, and never a fake "Sent". */
-  const status: { label: string; tone: "muted" | "ok" | "warn" } = summary.handedOver
-    ? {
-        label: summary.label,
-        tone: summary.tone === "danger" || summary.tone === "warning" ? "warn" : "ok",
-      }
-    : !saved
-      ? { label: "Pending order creation", tone: "muted" }
-      : dispatchPending || ctxPending
-        ? { label: "Checking…", tone: "muted" }
-        : ctxError || ctx?.optionsError
-          ? { label: "Verification required", tone: "warn" }
-          : branch?.ok
-            ? { label: "Ready to send", tone: "ok" }
-            : { label: "Not available", tone: "warn" };
+  /**
+   * Where the agent is *before* anything has been approved.
+   *
+   * This is not a dispatch state — there is no dispatch. It is the reason the
+   * send control is or is not offered, phrased as a next step rather than as a
+   * status, and it is consulted only while the row is absent.
+   */
+  const readiness: AlShrouqReadiness = !saved
+    ? "draft"
+    : dispatchPending || ctxPending
+      ? "checking"
+      : ctxError || ctx?.optionsError
+        ? "unverified"
+        : branch?.ok
+          ? "ready"
+          : "unavailable";
+
+  /**
+   * Never a state the backend cannot support, and never a fake "Sent".
+   *
+   * A persisted row wins outright and the readiness is the fallback, rather than
+   * the other way round: a status this build does not recognise must still be
+   * reported rather than being papered over with "Ready to send". A *cancelled*
+   * row never arrives here at all — `current` is by definition the row that is
+   * not cancelled — which is why that history is said in its own band below
+   * instead of in this badge.
+   */
+  const status: { label: string; tone: AlShrouqTone } =
+    summary.status !== null
+      ? { label: summary.label, tone: summary.tone }
+      : readiness === "draft"
+        ? { label: "Pending order creation", tone: "muted" }
+        : readiness === "checking"
+          ? { label: "Checking…", tone: "muted" }
+          : readiness === "unverified"
+            ? { label: "Verification required", tone: "warning" }
+            : readiness === "ready"
+              ? { label: "Ready to send", tone: "info" }
+              : { label: "Not available", tone: "warning" };
+
+  const tone = alshrouqToneStyle(status.tone);
+
+  /**
+   * The line under the badge: what this state means for the person reading it.
+   *
+   * "Scheduled" and "Delivery status unavailable" are accurate and neither
+   * answers *what do I do now*. The sentences live in `dispatch-presentation.ts`
+   * so the card, the timeline and the tests read one vocabulary.
+   */
+  const meaning =
+    summary.status !== null ? explainAlShrouqState(summary) : explainAlShrouqReadiness(readiness);
+
+  /**
+   * Whether AlShrouq may actually be holding this order.
+   *
+   * Narrower than `handedOver` on purpose. That flag is about the *slot* — it is
+   * true for `scheduled`, which reserves one without anybody having been
+   * contacted — and the handover notice is about a submission that has happened.
+   * Telling an agent their edits will not reach AlShrouq, beside a delivery
+   * AlShrouq has never been told about, is false; and a line that is sometimes
+   * false is a line agents learn to skip, including on the states where it is
+   * the most important sentence on the card.
+   */
+  const submitted =
+    summary.handedOver && summary.status !== "scheduled" && summary.status !== "failed";
+
+  /**
+   * The most recent delivery that was called off.
+   *
+   * `current` is by definition the row that is *not* cancelled, so a cancelled
+   * dispatch reaches this card as no dispatch at all — correct about what may
+   * happen next, and silent about what just happened. The history is already in
+   * the same query, so the card says it rather than leaving the agent to find it
+   * on the timeline.
+   */
+  const lastCancelled = useMemo(
+    () => [...(dispatchState?.rows ?? [])].reverse().find((r) => r.cancelled_at != null) ?? null,
+    [dispatchState?.rows],
+  );
 
   const branchValue = branchNo
     ? branch && saved && !ctxPending && !ctxError
@@ -343,6 +470,19 @@ export function AlShrouqDispatchSection({
       ? { lat: String(current.customer_lat), lng: String(current.customer_lng) }
       : null;
 
+  /**
+   * The stored `customer_address`, which is the customer's own map link in
+   * almost every real delivery — 104 of the CRM's 126 carry an unresolved short
+   * link — but is free text in the rest.
+   *
+   * Checked with the same guard the tracking link uses rather than a second
+   * one: http/https and absolute only, so no stored value can reach an anchor as
+   * a `javascript:` destination or be read as a Portal route. A value that fails
+   * it is shown as the text it is.
+   */
+  const locationText = current?.customer_address?.trim() || null;
+  const customerLink = safeExternalUrl(locationText);
+
   return (
     <>
       <Card className="overflow-hidden shadow-sm">
@@ -354,24 +494,21 @@ export function AlShrouqDispatchSection({
             <Truck className="h-3.5 w-3.5" />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
+            {/* Title and state on one wrapping line: on a phone the badge drops
+                below the heading instead of squeezing it. */}
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <h2 className="text-sm font-semibold leading-none tracking-tight text-foreground">
                 AlShrouq delivery
               </h2>
               <Badge
-                variant={status.tone === "ok" ? "default" : "secondary"}
-                className={`text-[10px] font-medium ${
-                  status.tone === "warn" ? "bg-destructive/10 text-destructive" : ""
-                }`}
+                variant="secondary"
+                className={`border-transparent px-2 py-0.5 text-[10px] font-semibold ${tone.badge}`}
               >
                 {status.label}
               </Badge>
             </div>
-            <p className="mt-1 text-[11.5px] leading-tight text-muted-foreground">
-              {summary.handedOver
-                ? "AlShrouq submission completed. Changes made in MilaPortal after submission are not sent to AlShrouq."
-                : "Create and send this order to AlShrouq for delivery"}
-            </p>
+            {/* What that state means, not what it is called. */}
+            <p className="mt-1.5 text-[11.5px] leading-snug text-muted-foreground">{meaning}</p>
           </div>
         </header>
 
@@ -402,61 +539,102 @@ export function AlShrouqDispatchSection({
             }
             muted={current?.value == null && !invoiceValue.trim()}
           />
-
-          {/* Persisted delivery details, shown only once they exist. Nothing
-              here is derived from the form: it is what AlShrouq was told. */}
-          {current?.customer_address && (
-            <div className="min-w-0 space-y-0.5 sm:col-span-2">
-              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                Customer location
-              </p>
-              <p className="truncate text-sm font-medium" title={current.customer_address}>
-                {current.customer_address}
-              </p>
-            </div>
-          )}
-          {/* Latitude and longitude separately, as the courier contract names
-              them. Read-only: they are the product of a resolved link and were
-              never typed, so there is nothing here to edit. */}
-          {coordinates && (
-            <>
-              <div className="min-w-0 space-y-0.5">
-                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Latitude
-                </p>
-                <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
-                  <MapPin className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                  {coordinates.lat}
-                </p>
-              </div>
-              <div className="min-w-0 space-y-0.5">
-                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Longitude
-                </p>
-                <p className="font-mono text-xs text-muted-foreground">{coordinates.lng}</p>
-              </div>
-            </>
-          )}
         </div>
+
+        {/* --------------------------------------------------------------
+            The delivery location, presented as verified order information.
+
+            Persisted values only — nothing here is derived from the form:
+            it is what AlShrouq was told. Two facts, deliberately kept
+            apart because they answer two different questions: the link the
+            customer themself sent, and the point a courier routes to. The
+            coordinates were never typed — they are the product of
+            resolving that link — so they read as evidence rather than as a
+            field somebody could have got wrong.
+            -------------------------------------------------------------- */}
+        {(customerLink || locationText || coordinates) && (
+          <div className="space-y-2 border-t border-border/60 px-4 py-3">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Delivery location
+              </p>
+              {/* Only claimed once there is a point. A link nobody could
+                  resolve is not a verified location. */}
+              {coordinates && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-success">
+                  <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                  Verified
+                </span>
+              )}
+            </div>
+
+            {/* The customer's own link, opened rather than read: it is a URL,
+                and printing it as text asks an agent to copy it by hand. */}
+            {customerLink ? (
+              <a
+                href={customerLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex max-w-full items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+                title={customerLink}
+              >
+                <Link2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span className="truncate">Location shared by the customer</span>
+                <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />
+              </a>
+            ) : (
+              locationText && (
+                <p className="truncate text-sm font-medium" title={locationText} dir="auto">
+                  {locationText}
+                </p>
+              )
+            )}
+
+            {/* The point itself, labelled, so "24.71360" is never mistaken for
+                a reference number. */}
+            {coordinates && (
+              <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-xs text-muted-foreground">
+                <MapPin className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span>
+                  <span className="font-sans text-[11px] uppercase tracking-wide">Lat</span>{" "}
+                  {coordinates.lat}
+                </span>
+                <span>
+                  <span className="font-sans text-[11px] uppercase tracking-wide">Lng</span>{" "}
+                  {coordinates.lng}
+                </span>
+              </p>
+            )}
+          </div>
+        )}
 
         {/* The scheduled slot and how long is left. The countdown is display
             only — the dispatch is performed server-side by pg_cron and the
             worker, whether or not this page is open. */}
         {summary.scheduledFor && (
           <div className="grid grid-cols-1 gap-x-4 gap-y-3 border-t border-border/60 bg-muted/20 px-4 py-3 dark:bg-muted/10 sm:grid-cols-2">
-            <div className="min-w-0 space-y-0.5">
-              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="min-w-0 space-y-1">
+              <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                <CalendarClock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 Scheduled for
               </p>
-              <p className="text-sm font-medium text-foreground">
+              <p className="truncate text-sm font-semibold text-foreground">
                 {formatScheduledFor(summary.scheduledFor) ?? "—"}
               </p>
             </div>
-            <div className="min-w-0 space-y-0.5">
-              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="min-w-0 space-y-1">
+              <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                <Hourglass className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 {countdown.state === "waiting" ? "Dispatch begins in" : "Status"}
               </p>
-              <p className="text-sm font-medium text-foreground">
+              {/* Emphasised while it is still counting, because that figure is
+                  the one an agent came to the card for. `tabular-nums` so the
+                  digits do not jitter as the minutes tick. */}
+              <p
+                className={`truncate text-sm font-semibold tabular-nums ${
+                  countdown.state === "waiting" ? "text-primary" : "text-foreground"
+                }`}
+              >
                 {countdown.state === "waiting"
                   ? countdown.remainingLabel
                   : countdown.state === "due"
@@ -480,18 +658,14 @@ export function AlShrouqDispatchSection({
             reason, but only through `safeFailureReason`, which drops anything
             shaped like a URL, a header, a token or a stack trace. */}
         {(summary.status === "indeterminate" || summary.status === "failed") && (
-          <div className="flex items-start gap-2 border-t border-border/60 bg-destructive/5 px-4 py-3 text-[11.5px] leading-snug text-muted-foreground">
-            <AlertTriangle
-              className="mt-px h-3.5 w-3.5 shrink-0 text-destructive"
-              aria-hidden="true"
-            />
+          <Band icon={AlertTriangle} tone="danger">
             <p>
               {summary.status === "indeterminate"
                 ? "AlShrouq response could not be confirmed. The order has not been automatically retried. Check with AlShrouq before anyone sends it again."
                 : (summary.failureReason ??
                   "AlShrouq did not accept this delivery. Nothing was sent.")}
             </p>
-          </div>
+          </Band>
         )}
 
         {/* The operator's answer, once somebody has established one.
@@ -501,8 +675,7 @@ export function AlShrouqDispatchSection({
             actually happened, and this line is a person's conclusion about it.
             Attributed as such so it can never read as a courier status. */}
         {summary.resolutionOutcome && (
-          <div className="flex items-start gap-2 border-t border-border/60 bg-muted/20 px-4 py-3 text-[11.5px] leading-snug text-muted-foreground dark:bg-muted/10">
-            <ClipboardCheck className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <Band icon={ClipboardCheck} tone="muted">
             <p>
               <span className="font-medium text-foreground">
                 Resolved by operator:{" "}
@@ -512,36 +685,69 @@ export function AlShrouqDispatchSection({
               </span>
               . This is a reviewed decision, not a courier update. The order was not sent again.
             </p>
-          </div>
+          </Band>
+        )}
+
+        {/* The sentence that stops an agent believing a later edit reaches the
+            courier. It used to be the header's grey subtitle, where the one line
+            an agent must not miss was the smallest text on the card. */}
+        {submitted && (
+          <Band icon={PackageCheck} tone="muted">
+            <p>{HANDOVER_NOTICE}</p>
+          </Band>
+        )}
+
+        {/* A delivery this order had, and no longer has. Warning-toned rather
+            than alarming: nothing went wrong and nobody was contacted — but an
+            agent looking at an order that says "Ready to send" should know a
+            slot was booked for it and called off. */}
+        {!current && lastCancelled && (
+          <Band icon={CalendarX} tone="warning">
+            <p>
+              A scheduled AlShrouq delivery for this order was cancelled
+              {formatScheduledFor(lastCancelled.scheduled_for)
+                ? `, having been due ${formatScheduledFor(lastCancelled.scheduled_for)}`
+                : ""}
+              . No courier was contacted, and the order can be sent again.
+            </p>
+          </Band>
         )}
 
         {(!branch?.ok || !saved) && !summary.handedOver && (
-          <div className="flex items-start gap-2 border-t border-border/60 bg-muted/20 px-4 py-3 text-[11.5px] leading-snug text-muted-foreground dark:bg-muted/10">
-            <Info className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <Band icon={Info} tone={readiness === "draft" ? "muted" : "warning"}>
             <p>
               {!saved
-                ? "Save the order first to enable AlShrouq dispatch. Delivery fees are set by AlShrouq and are not published by the CRM, so none is shown here."
+                ? "This order has not been created yet. AlShrouq does not publish delivery fees, so none is shown here."
                 : ctxError
-                  ? "Dispatch details could not be loaded. You may not have permission to send this order."
+                  ? "Delivery options could not be loaded. You may not have permission to send this order."
                   : ctx?.optionsError
-                    ? "The CRM could not be reached, so branch coverage could not be checked."
+                    ? "AlShrouq branch coverage could not be checked just now, so this order cannot be handed over yet."
                     : (branch?.text ?? "Checking branch coverage…")}
             </p>
-          </div>
+          </Band>
         )}
 
         <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border/60 px-4 py-3">
           {summary.handedOver ? (
             <>
-              <span className="mr-auto flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-                <PackageCheck className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                {/* The reference stays visible whether or not tracking exists. */}
-                <span className="truncate">
-                  {summary.externalOrderId
-                    ? `Reference ${summary.externalOrderId}`
-                    : "No AlShrouq reference yet"}
+              {/* The reference stays visible whether or not tracking exists. It
+                  is the number an agent quotes on the phone, so it is selectable
+                  and set in the same mono face as the coordinates. */}
+              {(submitted || summary.externalOrderId) && (
+                <span className="mr-auto flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+                  <PackageCheck className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  {summary.externalOrderId ? (
+                    <span className="min-w-0 truncate">
+                      Reference{" "}
+                      <span className="font-mono font-medium text-foreground">
+                        {summary.externalOrderId}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="min-w-0 truncate">No AlShrouq reference yet</span>
+                  )}
                 </span>
-              </span>
+              )}
               {/* Rendered only when the reconciliation persisted a URL. No
                   disabled placeholder, and nothing is assembled from the
                   reference — the destination comes from AlShrouq or not at all. */}
@@ -593,11 +799,21 @@ export function AlShrouqDispatchSection({
                 </Button>
               )}
             </>
+          ) : !saved ? (
+            /* A draft has nothing to hand over, and a permanently disabled
+               button beside it invites a click that can never work. The create
+               journey's approval lives on the page's own primary action, so this
+               says where to find it rather than imitating it here. */
+            <p className="min-w-0 flex-1 text-[11.5px] leading-snug text-muted-foreground">
+              Choose <span className="font-medium text-foreground">Create order</span> at the top of
+              the page to decide between saving this order only and sending it to AlShrouq.
+            </p>
           ) : (
             /* The only send control on this page. It is absent — not disabled —
                once a dispatch exists, so there is nothing to click twice. */
             <Button
               size="sm"
+              className="w-full sm:w-auto"
               onClick={() => {
                 setResult(null);
                 dispatch.reset();

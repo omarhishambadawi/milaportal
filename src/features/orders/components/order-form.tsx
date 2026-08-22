@@ -46,6 +46,7 @@ import {
   ShieldAlert,
   StickyNote,
   Trash2,
+  Truck,
   UserCog,
   X,
 } from "lucide-react";
@@ -313,6 +314,11 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
               type={interceptsCreate ? "button" : "submit"}
               form={interceptsCreate ? undefined : FORM_ID}
               onClick={interceptsCreate ? approval.open : undefined}
+              title={
+                interceptsCreate
+                  ? "You will choose whether to send this order to AlShrouq before it is created"
+                  : undefined
+              }
               size="sm"
               disabled={busy}
               className="min-w-32"
@@ -379,7 +385,31 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 </Select>
               </Field>
 
-              <Field id="order-delivery" label="Delivery & pickup" required>
+              {/* AlShrouq is the one method that hands the order to somebody
+                  outside the portal, so choosing it changes what happens when
+                  the order is created. Saying so here — where the choice is
+                  made — is what stops the approval dialog arriving as a
+                  surprise two fields later. */}
+              <Field
+                id="order-delivery"
+                label="Delivery & pickup"
+                required
+                hint={
+                  form.delivery_type === ALSHROUQ ? (
+                    <span className="flex items-start gap-1.5">
+                      <Truck
+                        className="mt-px h-3.5 w-3.5 shrink-0 text-primary"
+                        aria-hidden="true"
+                      />
+                      <span>
+                        {mode === "create"
+                          ? "AlShrouq delivers this order. When you create it you can choose to save it only, or to hand the delivery to AlShrouq."
+                          : "AlShrouq delivers this order. The delivery panel on the right shows where it stands."}
+                      </span>
+                    </span>
+                  ) : undefined
+                }
+              >
                 <Select
                   value={form.delivery_type}
                   onValueChange={(v) => setForm((f) => ({ ...f, delivery_type: v }))}
