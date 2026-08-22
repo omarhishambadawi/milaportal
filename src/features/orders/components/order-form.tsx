@@ -13,6 +13,7 @@
  * is fetched when an Orders form is actually opened. Moved verbatim — no markup,
  * behaviour or permission check is changed.
  */
+import { useCallback } from "react";
 import { Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -62,7 +63,7 @@ import { BranchPreviewPanel } from "@/features/branches/components/branch-previe
 import { AlShrouqDispatchSection } from "@/features/alshrouq/components/dispatch-section";
 import { AlShrouqOrderRequirements } from "@/features/alshrouq/components/order-requirements-section";
 import { useAlShrouqCreateApproval } from "@/features/alshrouq/use-create-approval";
-import { useAlShrouqOrder } from "@/features/alshrouq/use-alshrouq-order";
+import { useAlShrouqOrder, type AlShrouqOrderFields } from "@/features/alshrouq/use-alshrouq-order";
 import { AlShrouqApprovalDialog } from "@/features/alshrouq/components/approval-dialog";
 import { ALSHROUQ } from "@/features/alshrouq/constants";
 import { showAlShrouqSection } from "@/features/alshrouq/dispatch-selection";
@@ -201,15 +202,39 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
    * that reports coverage, and the dialog that confirms it — so the branch this
    * screen calls covered and the one the handover is offered for cannot differ.
    *
-   * It is deliberately **not** part of `orderFormSchema` or `buildOrderPayload`:
-   * the save path stays byte-identical, and an AlShrouq requirement can never
-   * fail an ordinary order. See `order-requirements.ts`.
+   * Its four persisted values **are** part of `orderFormSchema` and
+   * `buildOrderPayload` — they are `orders.alshrouq_*` columns, and writing them
+   * is what makes an AlShrouq order reopenable. They are optional there, so an
+   * AlShrouq requirement still cannot fail an ordinary order's save: what an
+   * agent must supply before a *handover* is enforced by `alshrouqRequirements`,
+   * which gates the send and not the save. See `order-requirements.ts`.
    */
+  /**
+   * The AlShrouq half of the order, read from and written to the **form**.
+   *
+   * The hook used to own these values in its own `useState`, so they reached the
+   * dispatch request and nothing else: `buildOrderPayload` could not see them,
+   * the order's `alshrouq_*` columns stayed null, and reopening the order asked
+   * the agent for the location, the coordinates and the payment method again.
+   * They are order columns, so they are form fields — saved by the ordinary
+   * insert and rehydrated by the ordinary effect, like `notes` and `branch_no`.
+   */
+  const alshrouqPatch = useCallback(
+    (next: Partial<AlShrouqOrderFields>) => setForm((f) => ({ ...f, ...next })),
+    [setForm],
+  );
   const alshrouq = useAlShrouqOrder(
     form.delivery_type,
     form.branch_no,
     form.customer_name,
     form.customer_phone,
+    {
+      alshrouq_map_url: form.alshrouq_map_url,
+      alshrouq_lat: form.alshrouq_lat,
+      alshrouq_lng: form.alshrouq_lng,
+      alshrouq_payment_type: form.alshrouq_payment_type,
+    },
+    alshrouqPatch,
   );
 
   /**

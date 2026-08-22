@@ -2895,15 +2895,52 @@ how the customer pays. The Portal is an order *log* and collects none of it: of
 phone, and payment type has no UI at all. Requiring those on the order form would
 change the daily workflow for all 2,823 to serve the few that are dispatched —
 and conditional-required rules in `orderFormSchema` are exactly what broke order
-saving last time. So the extra data is asked for **at dispatch time**, and
-`orderFormSchema` is untouched.
+saving last time. So none of it is *required*, and what an agent must supply
+before a **handover** is enforced by `alshrouqRequirements`, which gates the send
+rather than the save.
+
+**They are still saved, and that took a correction.** The four values —
+`alshrouq_map_url`, `alshrouq_lat`, `alshrouq_lng`, `alshrouq_payment_type` — are
+`orders` columns, added by 20260820185447 and verified present and typed in the
+live database. Nothing wrote them: they lived in `useAlShrouqOrder`'s own
+`useState`, so they reached the dispatch request and nowhere else. An agent who
+filled in a location, its coordinates and a payment method, saved the order and
+reopened it found all three gone, the card offering *"Select at dispatch"*, and
+**Send to AlShrouq** reporting the details incomplete — asked again for what they
+had already given. Delivery type, branch, customer and phone survived for the
+only reason that mattered: they were already fields of the form, and so of the
+payload.
+
+They are form fields now, `optional().nullable()` in `orderFormSchema` and
+written by `buildOrderPayload` on every save, so the contract runs
+**form → payload → schema → column → rehydration** like every other field.
+Optional is what keeps the original promise intact: an ordinary order sends four
+nulls — which is what every row predating the columns holds — and no AlShrouq
+rule can fail its save. The point is written as a pair or not at all, because
+`orders_alshrouq_point_complete` is `(lat IS NULL) = (lng IS NULL)` and half a
+point would fail the insert rather than the field.
 
 `AlShrouqDispatchSection` renders **inside** the order form's contextual right
 column, **above** `BranchPreviewPanel` and by the same rule those panels follow —
 the form renders it from live state, exactly as it renders `BranchPreviewPanel`
 on `form.branch_no`. It reflects the customer, phone, branch and order value as
-they are typed, reads that state through props, takes no part in validation or
-submit, and `orderFormSchema` is untouched.
+they are typed, reads that state through props and takes no part in validation or
+submit.
+
+**What the card shows falls back to the order.** The dispatch row is the
+authority once a handover exists — it is what AlShrouq was actually told — but
+before that there is no row, and the answer is the order's own columns. Payment,
+location, coordinates and the delivery note each read `dispatch ?? order`, which
+is what stopped a fully configured order reporting "Select at dispatch" beside an
+empty location.
+
+**The safety gate still writes nothing, and is not worked around.** With
+`ALSHROUQ_LIVE_DISPATCH_ENABLED` off an immediate handover returns `prepared` and
+persists no dispatch row, deliberately — a dry run must not take the order's slot
+and block the real send. No state was invented to represent the intent. It does
+not need one: the *configuration* is now on the order, so a reopened order is a
+complete AlShrouq order reading **Ready to send**, and nothing anywhere claims a
+courier was contacted.
 
 **Whether it renders at all is decided from persisted data, not from the form.**
 `showAlShrouqSection` in `features/alshrouq/dispatch-selection.ts` is pure and

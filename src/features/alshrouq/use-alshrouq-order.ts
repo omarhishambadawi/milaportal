@@ -23,7 +23,7 @@
  * copy cannot learn that a branch stopped being served.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { alshrouqDeliveryOptions } from "@/lib/shams.functions";
@@ -65,53 +65,94 @@ export interface AlShrouqOrderState {
   input: AlShrouqOrderInput;
 }
 
+/**
+ * The order's AlShrouq columns, as the form holds them.
+ *
+ * Named for the columns rather than for the hook so there is no translation
+ * layer between what is on screen, what is validated and what is stored.
+ */
+export interface AlShrouqOrderFields {
+  alshrouq_map_url: string;
+  alshrouq_lat: string;
+  alshrouq_lng: string;
+  alshrouq_payment_type: string;
+}
+
 export function useAlShrouqOrder(
   deliveryType: string,
   branchNo: string | null,
   customerName: string,
   customerPhone: string,
+  fields: AlShrouqOrderFields,
+  patch: (next: Partial<AlShrouqOrderFields>) => void,
 ): AlShrouqOrderState {
   const active = deliveryType === ALSHROUQ;
 
-  const [mapUrl, setMapUrlRaw] = useState("");
-  const [paymentType, setPaymentType] = useState("");
-  /**
-   * Coordinates the *server* established by following a short link.
+  /*
+   * The values are the *form's*, not this hook's.
    *
-   * Kept apart from the ones read out of the URL so that editing the link can
-   * discard them without ambiguity: a resolved point belongs to the link it came
-   * from, and carrying it onto a different link is how a driver is sent to the
-   * previous customer's address.
+   * They used to be three `useState`s here — the link, the payment method and
+   * the coordinates a short-link resolution produced — and that is precisely why
+   * they did not survive a reopen: nothing outside this hook could see them, so
+   * `buildOrderPayload` never wrote them and the rehydration effect had nothing
+   * to fill. They are order columns, so they live in the order form's state and
+   * are saved and reloaded with every other field.
    */
-  const [resolved, setResolved] = useState<{ lat: number; lng: number } | null>(null);
-
-  const setMapUrl = useCallback((value: string) => {
-    setMapUrlRaw(value);
-    setResolved(null);
-  }, []);
-
-  const applyResolved = useCallback((latitude: number, longitude: number) => {
-    setResolved({ lat: latitude, lng: longitude });
-  }, []);
-
-  /** Read without asking anybody — the numbers are usually in the URL already. */
-  const parsed = useMemo(() => readLocation(mapUrl), [mapUrl]);
+  const mapUrl = fields.alshrouq_map_url;
+  const paymentType = fields.alshrouq_payment_type;
 
   /**
-   * The point, from whichever source actually produced one.
+   * Editing the link discards the point that belonged to it.
    *
-   * The link is preferred over a resolution because it is the newer answer: a
-   * resolution is only ever kept for the link it was made against, and
-   * `setMapUrl` drops it the moment the text changes.
+   * The same rule the separate `resolved` state used to enforce: a point is only
+   * ever valid for the link it came from, and carrying it onto a different link
+   * is how a driver is sent to the previous customer's address. Re-reading the
+   * new text immediately is what keeps a full Maps URL filling the coordinates
+   * in as it is pasted, with no round trip.
+   */
+  const setMapUrl = useCallback(
+    (value: string) => {
+      const reading = readLocation(value);
+      patch({
+        alshrouq_map_url: value,
+        alshrouq_lat: reading.kind === "resolved" ? String(reading.latitude) : "",
+        alshrouq_lng: reading.kind === "resolved" ? String(reading.longitude) : "",
+      });
+    },
+    [patch],
+  );
+
+  /** What the server established by following a short link. */
+  const applyResolved = useCallback(
+    (latitude: number, longitude: number) => {
+      patch({ alshrouq_lat: String(latitude), alshrouq_lng: String(longitude) });
+    },
+    [patch],
+  );
+
+  const latitude = fields.alshrouq_lat;
+  const longitude = fields.alshrouq_lng;
+
+  /**
+   * The point, and why there isn't one.
+   *
+   * A stored pair is the answer whatever the link says — it is what was saved,
+   * and on a reopened order the link may be a short one this browser cannot
+   * read. Only when there is no pair does the link get re-read, which is what
+   * still produces "this is a short link, check it" and the unsupported-link
+   * wording for an order being typed.
    */
   const location: LocationReading = useMemo(() => {
-    if (parsed.kind === "resolved") return parsed;
-    if (resolved) return { kind: "resolved", latitude: resolved.lat, longitude: resolved.lng };
-    return parsed;
-  }, [parsed, resolved]);
+    if (latitude !== "" && longitude !== "") {
+      return { kind: "resolved", latitude: Number(latitude), longitude: Number(longitude) };
+    }
+    return readLocation(mapUrl);
+  }, [latitude, longitude, mapUrl]);
 
-  const latitude = location.kind === "resolved" ? String(location.latitude) : "";
-  const longitude = location.kind === "resolved" ? String(location.longitude) : "";
+  const setPaymentType = useCallback(
+    (value: string) => patch({ alshrouq_payment_type: value }),
+    [patch],
+  );
 
   /**
    * The CRM's branch coverage and payment methods.

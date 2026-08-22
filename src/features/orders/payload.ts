@@ -46,6 +46,17 @@ export interface OrderFormState {
   status: string;
   agent_id: string;
   call_center_verified: boolean;
+  /**
+   * The AlShrouq half of the order, held as text like every other form value.
+   *
+   * These are order columns (`orders.alshrouq_*`), not dispatch state. They used
+   * to live in `useAlShrouqOrder`'s own `useState`, which is why they did not
+   * survive a reopen.
+   */
+  alshrouq_map_url: string;
+  alshrouq_lat: string;
+  alshrouq_lng: string;
+  alshrouq_payment_type: string;
 }
 
 /** The persisted row, as far as this cares about it. */
@@ -172,5 +183,41 @@ export function buildOrderPayload({
       canVerify && (form.call_center_verified || !invoices.callCentreVerified)
         ? form.call_center_verified
         : undefined,
+
+    /**
+     * The AlShrouq delivery configuration.
+     *
+     * Optional fields, so blank means blank — clearing a location is a
+     * legitimate edit and must not be undone by a fallback, exactly as for
+     * `notes` and `customer_phone`. They are sent on **every** save, AlShrouq or
+     * not: a method changed away from AlShrouq should stop carrying a delivery
+     * point, and an ordinary order sends four nulls, which is what those columns
+     * already hold for every row created before they existed.
+     *
+     * The point is written as a pair or not at all —
+     * `orders_alshrouq_point_complete` is `(lat IS NULL) = (lng IS NULL)`, and
+     * half a point would make the insert fail rather than the order save.
+     */
+    alshrouq_map_url: present(form.alshrouq_map_url),
+    ...alshrouqPoint(form.alshrouq_lat, form.alshrouq_lng),
+    alshrouq_payment_type: present(form.alshrouq_payment_type),
   };
+}
+
+/**
+ * The delivery point, as a pair or as two nulls.
+ *
+ * Never one of each: the database constraint refuses a half point, and an order
+ * that could not be saved because a link resolved only its latitude would be a
+ * save failure with no field to blame it on.
+ */
+function alshrouqPoint(
+  lat: string,
+  lng: string,
+): { alshrouq_lat: string | null; alshrouq_lng: string | null } {
+  const latitude = present(lat);
+  const longitude = present(lng);
+  return latitude !== null && longitude !== null
+    ? { alshrouq_lat: latitude, alshrouq_lng: longitude }
+    : { alshrouq_lat: null, alshrouq_lng: null };
 }

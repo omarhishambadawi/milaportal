@@ -51,6 +51,7 @@ import {
   formatPickedDate,
   scheduleInputFor,
 } from "../schedule-picker";
+import { orderFormSchema } from "@/features/orders/schema";
 import { resolveAlShrouqBranch } from "@/lib/shams-crm/alshrouq-branches";
 import type { AlShrouqBranchOption } from "@/lib/shams-crm/alshrouq-branches";
 import { scheduledCountdownAt } from "../use-scheduled-countdown";
@@ -1386,16 +1387,51 @@ describe("what AlShrouq requires of an order", () => {
     ).not.toThrow();
   });
 
-  /** And the save path is still untouched by any of it. */
-  it("leaves orderFormSchema and the payload builder alone", () => {
-    const schema = read("../../orders/schema.ts");
-    const payload = read("../../orders/payload.ts");
-    for (const source of [schema, payload]) {
-      expect(source).not.toMatch(/alshrouq/i);
-      expect(source).not.toContain("payment_type");
-    }
-    const hook = read("../../orders/hooks/use-order-form.ts");
-    expect(hook).not.toMatch(/alshrouq/i);
+  /**
+   * The save path now knows about AlShrouq, and it has to.
+   *
+   * This used to assert the opposite — that `orderFormSchema`, the payload
+   * builder and `useOrderForm` contained no mention of AlShrouq at all — and
+   * that decision is what the bug was. The four values lived in
+   * `useAlShrouqOrder`'s own `useState`, reached the dispatch request and
+   * nothing else, and an agent who saved an AlShrouq order and reopened it was
+   * asked for the location, the coordinates and the payment method again. The
+   * columns for them had existed on `orders` since 20260820185447.
+   *
+   * What the old assertion was really protecting is worth keeping, so it is
+   * asserted directly instead of through the absence of a word: **an AlShrouq
+   * requirement must never fail an ordinary order's save.** `orderFormSchema` is
+   * the thing that could, so it is exercised rather than read.
+   */
+  it("never lets an AlShrouq field fail an ordinary order", () => {
+    const ordinary = {
+      order_date: "2026-08-22",
+      team: "customer_care",
+      order_type: "Cash",
+      branch_no: "P0008",
+      delivery_type: "Store Pickup",
+      status: "Pending",
+      invoice_value: null,
+      // Exactly what `buildOrderPayload` sends for an order with no delivery
+      // point: four nulls, which is what every row predating the columns holds.
+      alshrouq_map_url: null,
+      alshrouq_lat: null,
+      alshrouq_lng: null,
+      alshrouq_payment_type: null,
+    };
+    expect(() => orderFormSchema.parse(ordinary)).not.toThrow();
+
+    // And a fully configured AlShrouq order saves just as happily.
+    expect(() =>
+      orderFormSchema.parse({
+        ...ordinary,
+        delivery_type: "AlShrouq",
+        alshrouq_map_url: "https://maps.app.goo.gl/AAA",
+        alshrouq_lat: "24.80602",
+        alshrouq_lng: "46.77523",
+        alshrouq_payment_type: "3",
+      }),
+    ).not.toThrow();
   });
 
   /** The form marks them required where the agent can see it. */

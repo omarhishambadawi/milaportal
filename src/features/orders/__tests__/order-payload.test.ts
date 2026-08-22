@@ -51,6 +51,12 @@ function form(overrides: Partial<OrderFormState> = {}): OrderFormState {
     status: "Completed",
     agent_id: "11111111-1111-4111-8111-111111111111",
     call_center_verified: false,
+    // The order's own AlShrouq columns. Blank here so every existing assertion
+    // below describes an order that simply has no delivery point.
+    alshrouq_map_url: "",
+    alshrouq_lat: "",
+    alshrouq_lng: "",
+    alshrouq_payment_type: "",
     ...overrides,
   };
 }

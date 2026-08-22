@@ -512,39 +512,60 @@ export function AlShrouqDispatchSection({
     : "Select a branch";
 
   /**
-   * The payment method, as it was approved.
+   * The payment method — as approved if it has been, as saved otherwise.
    *
-   * The row stores the CRM's own id; the label comes from the live option list,
-   * which the order form already fetched. An id the list no longer offers shows
-   * as the id rather than as a guess.
+   * The dispatch row stores the CRM's own id and is the authority once a
+   * handover exists: it is what AlShrouq was actually told. Before that there is
+   * no row, and the answer is the order's own `alshrouq_payment_type`, which the
+   * form now carries. It used to be the row or nothing, so a saved order with a
+   * payment method chosen and no dispatch yet reported **"Select at dispatch"**
+   * — asking again for something already on the order.
+   *
+   * The label comes from the live option list either way. An id the list no
+   * longer offers shows as the id rather than as a guess.
    */
   const paymentLabel = useMemo(() => {
-    const stored = shown?.payment_type;
+    const stored = shown?.payment_type ?? alshrouq.paymentType;
     if (!stored) return null;
     const match = alshrouq.options.paymentOptions.find((p) => String(p.id) === stored);
     return match?.label ?? stored;
-  }, [shown?.payment_type, alshrouq.options.paymentOptions]);
+  }, [shown?.payment_type, alshrouq.paymentType, alshrouq.options.paymentOptions]);
 
+  /**
+   * The delivery point, from the dispatch if there is one and the order if not.
+   *
+   * Same rule as the payment method, and the same bug before it: the point an
+   * agent resolved at order time is on the order, and showing nothing until a
+   * courier had been told about it made a fully-configured order look empty.
+   */
   const coordinates =
     shown?.customer_lat != null && shown?.customer_lng != null
       ? { lat: String(shown.customer_lat), lng: String(shown.customer_lng) }
-      : null;
+      : alshrouq.latitude && alshrouq.longitude
+        ? { lat: alshrouq.latitude, lng: alshrouq.longitude }
+        : null;
 
   /**
    * The stored `customer_address`, which is the customer's own map link in
    * almost every real delivery — 104 of the CRM's 126 carry an unresolved short
-   * link — but is free text in the rest.
+   * link — but is free text in the rest. Falls back to the order's own
+   * `alshrouq_map_url` for the same reason as the two above.
    *
    * Checked with the same guard the tracking link uses rather than a second
    * one: http/https and absolute only, so no stored value can reach an anchor as
    * a `javascript:` destination or be read as a Portal route. A value that fails
    * it is shown as the text it is.
    */
-  const locationText = shown?.customer_address?.trim() || null;
+  const locationText = shown?.customer_address?.trim() || alshrouq.mapUrl.trim() || null;
   const customerLink = safeExternalUrl(locationText);
 
-  /** The driver's note as it was approved. See the block that renders it. */
-  const deliveryNote = shown?.details?.trim() || null;
+  /**
+   * The driver's note — as approved, or as the order holds it.
+   *
+   * `notes` is the order's own column and the same value the handover sends as
+   * `details`, so before a dispatch exists the order is the honest source.
+   */
+  const deliveryNote = shown?.details?.trim() || notes.trim() || null;
 
   return (
     <>

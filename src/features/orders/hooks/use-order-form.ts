@@ -40,6 +40,17 @@ export interface OrderFormOptions {
   afterCreate?: (orderId: string) => Promise<void>;
 }
 
+/**
+ * A persisted column as the form holds it: text, and "" for absent.
+ *
+ * `numeric` columns come back as strings from PostgREST and `integer` ones as
+ * numbers; both are the same thing to a text input, and normalising once here is
+ * what keeps `0` from being read as empty.
+ */
+function text(value: unknown): string {
+  return value == null ? "" : String(value);
+}
+
 export function useOrderForm(mode: "create" | "edit", options: OrderFormOptions = {}) {
   const navigate = useNavigate();
   const { user, role, profile } = useAuth();
@@ -96,6 +107,21 @@ export function useOrderForm(mode: "create" | "edit", options: OrderFormOptions 
      * is the same column the Orders list toggles.
      */
     call_center_verified: false,
+    /**
+     * The AlShrouq half of the order.
+     *
+     * Held here rather than inside `useAlShrouqOrder` because these are order
+     * columns — `orders.alshrouq_map_url`, `_lat`, `_lng`, `_payment_type` —
+     * and everything in this object is saved by `buildOrderPayload` and
+     * rehydrated by the effect below. While they lived in the hook's own
+     * `useState` they were written nowhere and reloaded as nothing, so an agent
+     * who reopened an AlShrouq order was asked for the location, the
+     * coordinates and the payment method a second time.
+     */
+    alshrouq_map_url: "",
+    alshrouq_lat: "",
+    alshrouq_lng: "",
+    alshrouq_payment_type: "",
   });
   const [invoices, setInvoices] = useState<string[]>([""]);
   const [busy, setBusy] = useState(false);
@@ -188,6 +214,18 @@ export function useOrderForm(mode: "create" | "edit", options: OrderFormOptions 
       status: existing.status,
       agent_id: existing.agent_id ?? "",
       call_center_verified: !!(existing as any).call_center_verified,
+      /*
+       * The AlShrouq configuration, read back from the order's own columns.
+       *
+       * `numeric` and `integer` arrive as numbers (or as strings for `numeric`,
+       * depending on the driver), and the form holds text — so everything is
+       * stringified once, here, rather than in four places that could disagree.
+       * A null column becomes "", which is what an untouched field holds.
+       */
+      alshrouq_map_url: text((existing as any).alshrouq_map_url),
+      alshrouq_lat: text((existing as any).alshrouq_lat),
+      alshrouq_lng: text((existing as any).alshrouq_lng),
+      alshrouq_payment_type: text((existing as any).alshrouq_payment_type),
     });
     const parts = parseInvoiceNumbers(existing.invoice_no);
     setInvoices(parts.length > 0 ? parts : [""]);
