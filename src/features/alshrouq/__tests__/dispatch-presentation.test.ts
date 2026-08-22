@@ -835,17 +835,18 @@ describe("the confirmation dialog", () => {
   /**
    * And it holds no copy of what the form already knows.
    *
-   * Three pieces of state, and all three are about *when* — the choice, the
-   * date and time behind it, and whether the calendar is open. Nothing here
-   * duplicates the customer, the branch, the payment method or the note: those
-   * arrive as props and are handed straight back in the plan.
+   * Four pieces of state, and all four are about *when* — the choice, the date
+   * and time behind it, and whether each of the two pickers is open. Nothing
+   * here duplicates the customer, the branch, the payment method or the note:
+   * those arrive as props and are handed straight back in the plan.
    */
   it("keeps no state but the delivery timing", () => {
     const states = dialog.match(/useState[<(]/g) ?? [];
-    expect(states).toHaveLength(3);
+    expect(states).toHaveLength(4);
     expect(dialog).toContain("const [timing, setTiming]");
     expect(dialog).toContain("const [when, setWhen]");
     expect(dialog).toContain("const [dateOpen, setDateOpen]");
+    expect(dialog).toContain("const [timeOpen, setTimeOpen]");
     for (const owned of ["customerName", "paymentType", "mapUrl", "details"]) {
       expect(dialog).not.toContain(`useState<string>(${owned}`);
     }
@@ -909,6 +910,36 @@ describe("choosing when to deliver", () => {
     // And still not a typed date box, which is what the calendar replaced.
     expect(dialog).not.toContain('type="date"');
     expect(dialog).not.toContain("<Input");
+  });
+
+  /**
+   * Date and time cost one row, not two.
+   *
+   * Stacked, they were 118px of a phone's height and the reason the scheduled
+   * state ran past a 375×812 viewport. Both are popover triggers reading their
+   * own answer back, side by side in a flex row — not a two-column grid, which
+   * the phone-layout contract rightly forbids for a form.
+   */
+  it("puts the date and the time side by side, each behind its own trigger", () => {
+    expect(dialog).toContain('<div className="flex items-start gap-2">');
+    expect(dialog.match(/min-w-0 flex-1 space-y-1/g) ?? []).toHaveLength(2);
+    // Each trigger reads back the value it owns, in the form a person reads.
+    expect(dialog).toContain("{formatPickedDate(when.date)}");
+    expect(dialog).toContain("{formatTime12(when.hour, when.minute, when.meridiem)}");
+    // Two popovers, one per control, and both closed when the dialog reopens.
+    expect(dialog).toContain("const [timeOpen, setTimeOpen]");
+    expect(dialog).toContain("setTimeOpen(false);");
+  });
+
+  /**
+   * A `Select` portals its list to the body, which is outside the time
+   * popover's subtree — so without this guard, choosing an hour registers as a
+   * click outside and closes the popover under the agent's finger.
+   */
+  it("keeps the time popover open while a unit is being chosen", () => {
+    expect(dialog).toContain("onInteractOutside");
+    expect(dialog).toContain('target?.closest("[data-radix-popper-content-wrapper]")');
+    expect(dialog).toContain("event.preventDefault()");
   });
 
   /** Hour, minute and AM/PM — every minute, and never a 24-hour clock. */

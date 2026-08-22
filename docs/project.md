@@ -4012,17 +4012,45 @@ convert through **local** parts on both sides, because `react-day-picker`
 compares days locally and a UTC-midnight `Date` is the previous day everywhere
 west of UTC.
 
-**The confirmation fits an 800px screen.** Measured, not asserted: 517×492
-(ASAP) and 517×568 (scheduled) at 1280×800, 517×568 at 1440×900, and 326×587 at
-375×812 — no scrolling on either axis in any of those. The dialog is `max-w-[34rem]`;
-the summary is a two-column definition grid rather than seven bordered rows; the
-description is one line; the tinted outcome panel above the buttons is replaced
-by the muted sentence it contained; and on a phone the two secondary actions
-share a row through a wrapper that becomes `display: contents` from `sm` up, so
-the desktop footer is unchanged. `max-h-[85vh]`/`overflow-y-auto` remain only as
-a last resort — on a 375×812 phone with the scheduling panel open the content is
-~74px over that cap and scrolls, which is the one case that genuinely does not
-fit. Nothing is clipped, and no font was shrunk to buy the room.
+**The confirmation scrolls at no supported size.** Measured in a browser, not
+asserted from the source — content height against the element's own cap, and
+`scrollWidth === clientWidth` on both the dialog and the document:
+
+| Viewport  | ASAP    | Scheduled | Vertical scroll | Horizontal |
+| --------- | ------- | --------- | --------------- | ---------- |
+| 1280×800  | 517×492 | 517×568   | none            | none       |
+| 1440×900  | 517×492 | 517×568   | none            | none       |
+| 390×844   | 340×556 | 340×632   | none            | none       |
+| 375×812   | 326×556 | 326×632   | none            | none       |
+
+Checked in light and dark at each size. On the tightest of them the scheduled
+content is 664px against an 85vh cap of 690.
+
+What buys the height, in order of how much: **the date and the time share one
+row** rather than stacking two labels and two control rows (~64px); the three
+time units moved behind a trigger that reads the answer back — `10:47 PM` — so
+the row costs one button instead of ~200px of selects; the summary is a
+two-column definition grid rather than seven bordered rows; the description is
+one line; the tinted outcome panel above the buttons is replaced by the muted
+sentence it contained; the two secondary actions share a row through a wrapper
+that becomes `display: contents` from `sm` up, so the desktop footer is one row
+of three exactly as before; and the dialog's own gaps tighten a step below `sm`.
+
+The row is `flex`, not a two-column grid — the phone-layout contract requires
+every unprefixed column rule in this flow to be a single column, and splitting a
+*form* into two columns on a phone is what that rule exists to prevent. Two
+equal-basis flex children holding one control each are a different thing.
+
+`max-h-[85vh]`/`overflow-y-auto` stay as a last resort for a viewport shorter
+than anything above. Nothing is clipped, no height is fixed, and no font was
+shrunk to buy the room.
+
+**The time popover holds its own against a nested `Select`.** A select portals
+its list to the body, which is outside the popover's subtree, so choosing an
+hour reads as a click outside and would close the popover under the agent's
+finger. `onInteractOutside` treats anything inside a popper — this one, or a
+select's own — as not outside. Verified live: picking a minute leaves the
+popover open, updates the trigger and updates the summary's Delivery row.
 
 **The card no longer disappears when an order is reopened.**
 `useOrderAlShrouqDispatch` defines `current` as the row that is **not**

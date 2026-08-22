@@ -27,9 +27,11 @@
  * will do is a single muted sentence rather than a tinted card — the button
  * already says it.
  *
- * Nothing is achieved by clipping: `DialogContent` keeps `max-h-[85vh]` with
- * `overflow-y-auto` purely as a last resort for a genuinely short viewport, and
- * at every size this is designed for the content is shorter than that.
+ * The tightest supported viewport is a 375×812 phone with the scheduling
+ * controls open: 664px of content against an 85vh cap of 690. Nothing is
+ * achieved by clipping — `DialogContent` keeps `max-h-[85vh]` with
+ * `overflow-y-auto` purely as a last resort for a screen shorter than that, no
+ * height is fixed, and no font was shrunk to buy the room.
  *
  * ## Choosing when: a date and a time, not a list
  *
@@ -37,7 +39,11 @@
  * — which is a lot of vertical space to say very little, cannot express 7:30,
  * and offered precision by accident (a "slot" implies AlShrouq knows about it).
  * It is now **As soon as possible** or **Schedule delivery**, and scheduling
- * reveals the portal's own `Calendar` plus an hour / minute / AM-PM triple.
+ * reveals two triggers side by side: the portal's own `Calendar`, and the
+ * hour / minute / AM-PM triple behind a button reading `10:47 PM`. Side by side
+ * and behind triggers for the same reason — stacked labels and an inline row of
+ * three selects were 118px of a phone's height, which is what the scheduled
+ * state had to lose.
  *
  * The wire format did not change. `schedule-picker.ts` produces the same two
  * strings the slot list did — `"2026-08-23"` and `"07:30 PM"` — and
@@ -61,7 +67,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { CalendarClock, CalendarIcon, Loader2, Send, Zap } from "lucide-react";
+import { CalendarClock, CalendarIcon, Clock, Loader2, Send, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import {
@@ -100,6 +106,7 @@ import {
   defaultScheduleSelection,
   earliestMinutesOn,
   formatPickedDate,
+  formatTime12,
   minutesOfDay,
   scheduleInputFor,
   type Meridiem,
@@ -292,6 +299,7 @@ export function AlShrouqApprovalDialog({
   const [timing, setTiming] = useState<Timing>("asap");
   const [when, setWhen] = useState<ScheduleSelection>(() => defaultScheduleSelection(new Date()));
   const [dateOpen, setDateOpen] = useState(false);
+  const [timeOpen, setTimeOpen] = useState(false);
 
   /*
    * Reopening is a fresh approval. A time left over from the last time this was
@@ -304,6 +312,7 @@ export function AlShrouqApprovalDialog({
     setTiming("asap");
     setWhen(defaultScheduleSelection(new Date()));
     setDateOpen(false);
+    setTimeOpen(false);
   }, [open]);
 
   /**
@@ -379,7 +388,7 @@ export function AlShrouqApprovalDialog({
         overflowed its own max-width. A track that may shrink to zero constrains
         the children instead, which is what lets `break-words` below do its job.
       */}
-      <DialogContent className="max-h-[85vh] w-[calc(100vw-2rem)] max-w-[34rem] grid-cols-[minmax(0,1fr)] gap-3 overflow-y-auto">
+      <DialogContent className="max-h-[85vh] w-[calc(100vw-2rem)] max-w-[34rem] grid-cols-[minmax(0,1fr)] gap-2.5 overflow-y-auto sm:gap-3">
         <DialogHeader className="space-y-0.5">
           <DialogTitle className="text-base">
             {creating ? "Create this order" : "Send order to AlShrouq"}
@@ -400,7 +409,7 @@ export function AlShrouqApprovalDialog({
             A two-column definition grid — labels in the first track, values in
             the second — rather than six bordered rows. One box, one border.
             --------------------------------------------------------------- */}
-        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-md border border-border/60 bg-muted/20 px-3 py-2.5 dark:bg-muted/10">
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-0.5 rounded-md border border-border/60 bg-muted/20 px-3 py-2.5 dark:bg-muted/10 sm:gap-y-1">
           <Line label="Customer" muted={!customerName.trim()}>
             {customerName.trim() || "—"}
           </Line>
@@ -488,20 +497,43 @@ export function AlShrouqApprovalDialog({
               />
             </RadioGroup>
 
+            {/* ---------------------------------------------------------
+                Date and time, side by side at every width.
+
+                They used to stack — two labels and two control rows, 118px of
+                a phone's height — and stacking is what pushed the scheduled
+                state past the viewport on a 375px screen. Two triggers of
+                equal width fit that screen comfortably and read better on a
+                desktop too: the pair is one answer to one question.
+
+                `flex`, not a two-column grid, and deliberately. The phone
+                layout contract requires every unprefixed column rule in this
+                flow to be a single column, and it is right to: splitting a
+                *form* into two columns on a phone is how fields get squeezed.
+                Two equal-basis flex children that each own half a row are a
+                different thing — one control apiece, both still full-height —
+                and `min-w-0` on both is what lets the labels truncate instead
+                of widening the dialog.
+                --------------------------------------------------------- */}
             {timing === "scheduled" && (
-              <div className="grid gap-2.5 sm:grid-cols-[minmax(0,1fr)_auto]">
-                <div className="min-w-0 space-y-1">
-                  <p className="text-[11px] font-medium text-muted-foreground">Delivery date</p>
-                  {/* The portal's own calendar, through the portal's own
-                      popover — the same pair `DateRangePicker` uses. No second
-                      calendar was written for this. */}
+              <div className="flex items-start gap-2">
+                <div className="min-w-0 flex-1 space-y-1">
+                  <p className="truncate text-[11px] font-medium text-muted-foreground">
+                    Delivery date
+                  </p>
+                  {/* The portal's own calendar, through the portal's own popover
+                    — the same pair `DateRangePicker` uses. No second calendar
+                    was written for this. */}
                   <Popover open={dateOpen} onOpenChange={setDateOpen}>
                     <PopoverTrigger asChild>
                       <Button
                         variant="outline"
                         className="h-9 w-full justify-start px-2.5 text-[13px] font-normal"
                       >
-                        <CalendarIcon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                        <CalendarIcon
+                          className="mr-1.5 h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                          aria-hidden="true"
+                        />
                         <span className="truncate">{formatPickedDate(when.date)}</span>
                       </Button>
                     </PopoverTrigger>
@@ -528,40 +560,85 @@ export function AlShrouqApprovalDialog({
                   </Popover>
                 </div>
 
-                <div className="space-y-1">
-                  <p className="text-[11px] font-medium text-muted-foreground">Delivery time</p>
-                  <div className="flex items-center gap-1">
-                    <TimeUnit
-                      label="Hour"
-                      value={when.hour}
-                      options={HOUR_OPTIONS}
-                      className="w-[3.75rem]"
-                      onChange={(hour) => pick({ ...when, hour })}
-                      // The whole hour is gone only when its last minute is.
-                      isPast={(hour) => minutesOfDay(hour, "59", when.meridiem) < earliest}
-                    />
-                    <span aria-hidden className="text-sm text-muted-foreground">
-                      :
-                    </span>
-                    <TimeUnit
-                      label="Minute"
-                      value={when.minute}
-                      options={MINUTE_OPTIONS}
-                      className="w-[3.75rem]"
-                      onChange={(minute) => pick({ ...when, minute })}
-                      isPast={(minute) => minutesOfDay(when.hour, minute, when.meridiem) < earliest}
-                    />
-                    <TimeUnit
-                      label="AM or PM"
-                      value={when.meridiem}
-                      options={MERIDIEM_OPTIONS}
-                      className="w-[4.25rem]"
-                      onChange={(meridiem) => pick({ ...when, meridiem: meridiem as Meridiem })}
-                      isPast={(meridiem) =>
-                        minutesOfDay("11", "59", meridiem as Meridiem) < earliest
-                      }
-                    />
-                  </div>
+                <div className="min-w-0 flex-1 space-y-1">
+                  <p className="truncate text-[11px] font-medium text-muted-foreground">
+                    Delivery time
+                  </p>
+                  {/* The three units behind a trigger that reads back the answer.
+                    Inline they needed ~200px beside a date button that needs
+                    ~150, which no phone has; in a popover the row costs one
+                    button and the picker itself is unchanged — still hour,
+                    minute and AM/PM, still every minute, still no typing. */}
+                  <Popover open={timeOpen} onOpenChange={setTimeOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className="h-9 w-full justify-start px-2.5 text-[13px] font-normal tabular-nums"
+                      >
+                        <Clock
+                          className="mr-1.5 h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                          aria-hidden="true"
+                        />
+                        <span className="truncate">
+                          {formatTime12(when.hour, when.minute, when.meridiem)}
+                        </span>
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      className="w-auto max-w-[calc(100vw-1.5rem)] p-2.5"
+                      align="end"
+                      sideOffset={6}
+                      collisionPadding={12}
+                      /*
+                       * A `Select`'s list portals to the body, which is outside
+                       * this popover's subtree — so choosing an hour reads as a
+                       * click outside and would close the popover under the
+                       * agent's finger. Anything inside a popper (this one, or a
+                       * select's own) is not "outside".
+                       */
+                      onInteractOutside={(event) => {
+                        const target = event.target as HTMLElement | null;
+                        if (target?.closest("[data-radix-popper-content-wrapper]")) {
+                          event.preventDefault();
+                        }
+                      }}
+                    >
+                      <div className="flex items-center gap-1">
+                        <TimeUnit
+                          label="Hour"
+                          value={when.hour}
+                          options={HOUR_OPTIONS}
+                          className="w-[3.75rem]"
+                          onChange={(hour) => pick({ ...when, hour })}
+                          // The whole hour is gone only when its last minute is.
+                          isPast={(hour) => minutesOfDay(hour, "59", when.meridiem) < earliest}
+                        />
+                        <span aria-hidden className="text-sm text-muted-foreground">
+                          :
+                        </span>
+                        <TimeUnit
+                          label="Minute"
+                          value={when.minute}
+                          options={MINUTE_OPTIONS}
+                          className="w-[3.75rem]"
+                          onChange={(minute) => pick({ ...when, minute })}
+                          isPast={(minute) =>
+                            minutesOfDay(when.hour, minute, when.meridiem) < earliest
+                          }
+                        />
+                        <TimeUnit
+                          label="AM or PM"
+                          value={when.meridiem}
+                          options={MERIDIEM_OPTIONS}
+                          className="w-[4.25rem]"
+                          onChange={(meridiem) => pick({ ...when, meridiem: meridiem as Meridiem })}
+                          isPast={(meridiem) =>
+                            minutesOfDay("11", "59", meridiem as Meridiem) < earliest
+                          }
+                        />
+                      </div>
+                    </PopoverContent>
+                  </Popover>
                 </div>
               </div>
             )}
