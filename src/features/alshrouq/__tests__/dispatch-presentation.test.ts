@@ -594,7 +594,10 @@ describe("a cancelled dispatch", () => {
    */
   it("is named by the card, from the rows the query already returns", () => {
     expect(summariseAlShrouqDispatch(cancelled).label).toBe("Scheduled delivery cancelled");
-    expect(card).toContain("const shown = current ?? latest;");
+    // The fallback moved into `dispatch-selection.ts`, where it is a pure
+    // function with its own tests rather than an expression inside a component.
+    // `shownDispatch` *is* `current ?? latest` — see `dispatch-selection.test.ts`.
+    expect(card).toContain("const shown = shownDispatch(dispatchState?.rows ?? []);");
     expect(card).toContain("summariseAlShrouqDispatch(shown)");
   });
 
@@ -703,12 +706,21 @@ describe("reopening an order", () => {
   });
 
   /**
-   * The card is rendered on the delivery method, not on the dispatch — so it is
-   * present the moment an order says AlShrouq, before and after any handover.
+   * The card is present the moment an order says AlShrouq, before and after any
+   * handover — and it stays present once a dispatch exists whatever the form
+   * happens to say.
+   *
+   * This used to assert `{form.delivery_type === ALSHROUQ && (` literally, which
+   * is how it went on passing while the card disappeared on every reopen: the
+   * form's value is React state seeded by an effect, and the assertion could not
+   * tell "renders on the delivery method" from "renders on a copy of it that is
+   * empty until an effect runs". The rule is `showAlShrouqSection` now, which
+   * reads the persisted order and the persisted dispatch rows.
    */
-  it("renders on the delivery method rather than on a dispatch row", () => {
-    expect(orderForm).toContain("{form.delivery_type === ALSHROUQ && (");
+  it("renders on the order's delivery method, not on a transient copy of it", () => {
+    expect(orderForm).toContain("{showsAlShrouqSection && (");
     expect(orderForm).toContain("<AlShrouqDispatchSection");
+    expect(orderForm).toContain("showAlShrouqSection({");
   });
 });
 
@@ -762,11 +774,16 @@ describe("the confirmation dialog", () => {
    */
   it("has no order-form controls left in it", () => {
     expect(dialog).not.toContain("<Input");
-    expect(dialog).not.toContain("<Textarea");
     expect(dialog).not.toContain("<Select");
     expect(dialog).not.toContain("<SelectTrigger");
-    // The only control is the choice of when.
+    // Two controls, and only two: when the delivery starts, and the note the
+    // driver gets. The note came back deliberately — it is the one thing that
+    // belongs at the moment of handover rather than in the order above it — and
+    // it is capped here so "one small box" cannot grow back into the second form
+    // this dialog used to be.
     expect(dialog).toContain("<RadioGroup");
+    expect(dialog.match(/<Textarea/g) ?? []).toHaveLength(1);
+    expect(dialog).toContain('id="alshrouq-delivery-note"');
   });
 
   /** It fetches nothing and resolves nothing: every value arrives as a prop. */

@@ -65,6 +65,8 @@ import { useAlShrouqCreateApproval } from "@/features/alshrouq/use-create-approv
 import { useAlShrouqOrder } from "@/features/alshrouq/use-alshrouq-order";
 import { AlShrouqApprovalDialog } from "@/features/alshrouq/components/approval-dialog";
 import { ALSHROUQ } from "@/features/alshrouq/constants";
+import { showAlShrouqSection } from "@/features/alshrouq/dispatch-selection";
+import { useOrderAlShrouqDispatch } from "@/features/alshrouq/use-order-dispatch";
 
 /** The id the header's submit button reaches the form by, across the layout. */
 const FORM_ID = "order-form";
@@ -209,6 +211,29 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
     form.customer_name,
     form.customer_phone,
   );
+
+  /**
+   * Whether the AlShrouq card is on this page.
+   *
+   * Read from the *order*, not from the form. Keying it on `form.delivery_type`
+   * alone is what made the card disappear when an order was reopened: that value
+   * is React state seeded by an effect, so it is empty on the first render of
+   * every load and stays empty whenever the hydration does not run — while the
+   * activity timeline, reading the persisted dispatch rows, carried on narrating
+   * the very delivery whose card had vanished.
+   *
+   * The dispatch rows come from the shared hook the card and the timeline
+   * already read, under the same query key, so this costs no extra request and
+   * the two surfaces cannot disagree about whether a delivery exists. The rule
+   * is `showAlShrouqSection`, which is pure and tested.
+   */
+  const { data: dispatchState } = useOrderAlShrouqDispatch(id, mode === "edit" && !!id);
+  const showsAlShrouqSection = showAlShrouqSection({
+    storedDeliveryType: (existing as { delivery_type?: string | null } | null | undefined)
+      ?.delivery_type,
+    formDeliveryType: form.delivery_type,
+    hasDispatchHistory: (dispatchState?.rows.length ?? 0) > 0,
+  });
 
   if (mode === "create" && !canCreate) {
     return (
@@ -781,9 +806,12 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
               delivery integration should not be below a phone number.
 
               Appears the moment the delivery method is AlShrouq, on a draft as
-              well as a saved order. Read-only: it reflects the state above and
-              takes no part in validation or submit. */}
-          {form.delivery_type === ALSHROUQ && (
+              well as a saved order — and goes on appearing for a saved order
+              whose delivery method or dispatch history says AlShrouq, whatever
+              the form state happens to hold. See `showsAlShrouqSection`.
+              Read-only: it reflects the state above and takes no part in
+              validation or submit. */}
+          {showsAlShrouqSection && (
             <AlShrouqDispatchSection
               mode={mode}
               orderId={id}
@@ -804,6 +832,11 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
         </aside>
       </div>
 
+      {/* The delivery note the dialog collects is the order's own note: one
+          field, saved by the ordinary insert and carried to AlShrouq as the
+          payload's `details`. Writing it back into form state rather than into
+          dialog-local state is what makes "Create order only" honest — the text
+          is kept as an ordinary order note, and nothing calls it a handover. */}
       {interceptsCreate && (
         <AlShrouqApprovalDialog
           mode="create"
@@ -815,6 +848,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
           branchNo={form.branch_no}
           invoiceValue={form.invoice_value}
           details={form.notes}
+          onDetailsChange={(value) => setForm((f) => ({ ...f, notes: value }))}
           busy={busy}
           onApprove={(plan) =>
             approval.approve(plan, () =>

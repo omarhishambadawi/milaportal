@@ -44,10 +44,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Textarea } from "@/components/ui/textarea";
 import { fmtSAR } from "@/lib/branches";
 import type { AlShrouqFieldError } from "@/lib/shams-crm/alshrouq-payload";
 import type { ScheduleResult } from "@/lib/shams-crm/alshrouq-scheduler.server";
 import { describeApprovalResult, type AlShrouqApprovalPlan } from "../approval";
+import { ALSHROUQ_NOTE_MAX } from "../constants";
 import { alshrouqToneStyle, describeApprovalAction } from "../dispatch-presentation";
 import { formatCoordinate } from "../order-requirements";
 import { describeRemaining, formatScheduledFor, parseScheduleInput } from "../scheduling";
@@ -76,6 +78,21 @@ export interface AlShrouqApprovalDialogProps {
   displayNo?: string | null;
   /** The note for the driver, carried from the order's own notes. */
   details?: string;
+  /**
+   * Makes the note editable, and is what the edit writes to.
+   *
+   * Supplied by the **create** journey only, where the order has not been saved
+   * yet: the handler writes straight back into the order's `notes` field, so the
+   * text an agent types here is saved by the ordinary insert — one note, in the
+   * column the order's Notes card already reads — and is carried to AlShrouq as
+   * the payload's `details` by the approval that follows it.
+   *
+   * Omitted for an existing order, where the dialog is a confirmation and the
+   * order's Notes field is on the page behind it. Editing a saved order's note
+   * from here would put a value on the dispatch that the order itself does not
+   * hold until somebody remembers to press Save.
+   */
+  onDetailsChange?: (value: string) => void;
   /** Server-side field errors from a refused approval, shown as one line. */
   errors?: AlShrouqFieldError[];
   /** The last outcome, shown inline. The create journey reports it as a toast. */
@@ -147,6 +164,7 @@ export function AlShrouqApprovalDialog({
   invoiceValue,
   displayNo,
   details = "",
+  onDetailsChange,
   errors = [],
   result = null,
   busy,
@@ -323,6 +341,62 @@ export function AlShrouqApprovalDialog({
               ))}
             </RadioGroup>
           </div>
+        )}
+
+        {/* ---------------------------------------------------------------
+            The note for the driver.
+
+            One box, and not a second notes system: what is typed here is the
+            order's own `notes` field — the column the Notes card on the order
+            page shows, the export's "Notes" column reads, and the payload
+            builder already turns into the courier's `details`. So it survives a
+            reopen because the order was saved with it, and it reaches AlShrouq
+            because that is where the driver note has always come from.
+
+            This dialog still builds nothing and sends nothing. It collects one
+            string and hands it back in the plan, exactly as it does the chosen
+            slot.
+
+            `rows={2}` deliberately: the dialog is a confirmation and must not
+            grow into a form. `maxLength` is the limit both validators already
+            enforce, applied at the keyboard so a long note is trimmed while it
+            is being typed rather than refused after the agent commits.
+            --------------------------------------------------------------- */}
+        {onDetailsChange ? (
+          <div className="space-y-1.5">
+            <label
+              htmlFor="alshrouq-delivery-note"
+              className="flex items-baseline gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+            >
+              Delivery note
+              <span className="font-normal normal-case tracking-normal">— optional</span>
+            </label>
+            <Textarea
+              id="alshrouq-delivery-note"
+              rows={2}
+              maxLength={ALSHROUQ_NOTE_MAX}
+              value={details}
+              onChange={(e) => onDetailsChange(e.target.value)}
+              placeholder="e.g. Second floor, ring the bell twice."
+              className="resize-none text-[13px]"
+              dir="auto"
+            />
+            <p className="text-[11px] leading-snug text-muted-foreground">
+              Saved with the order. Sent to AlShrouq as the driver&rsquo;s note when the delivery is
+              handed over.
+            </p>
+          </div>
+        ) : (
+          details.trim() && (
+            <div className="space-y-1">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Delivery note
+              </p>
+              <p className="whitespace-pre-wrap break-words text-[13px] text-foreground" dir="auto">
+                {details.trim()}
+              </p>
+            </div>
+          )
         )}
 
         {/* What confirming will do, in the tone of the thing it will do. */}

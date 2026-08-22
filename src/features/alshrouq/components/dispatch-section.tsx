@@ -5,8 +5,16 @@
  * because AlShrouq is the delivery integration an agent acts on and the branch
  * panel is reference. It appears the moment the delivery method is AlShrouq, on
  * a new order as well as a saved one, and reads the form's live state through
- * props: it holds no copy of it, and changing the customer, the branch or the
- * delivery method updates or removes the card without a save or a refresh.
+ * props: it holds no copy of it, and changing the customer or the branch updates
+ * the card without a save or a refresh.
+ *
+ * **Whether it appears at all is not this component's decision**, and is not the
+ * form's live delivery method either — see `showAlShrouqSection` in
+ * `dispatch-selection.ts`. A saved order that says AlShrouq, or that has any
+ * dispatch history, keeps its card whatever the form is holding; a saved order
+ * whose method is changed to something else keeps it until the change is saved,
+ * and keeps it afterwards if a courier was ever involved. There is no state in
+ * which the order timeline reports a delivery and this card is absent.
  *
  * ## It summarises; it does not run a workflow
  *
@@ -129,6 +137,7 @@ import { coverageAllowsDispatch, describeBranchCoverage } from "../order-require
 import type { AlShrouqOrderState } from "../use-alshrouq-order";
 import { formatScheduledFor } from "../scheduling";
 import { useOrderAlShrouqDispatch } from "../use-order-dispatch";
+import { shownDispatch } from "../dispatch-selection";
 import { useScheduledDispatchCountdown } from "../use-scheduled-countdown";
 import { AlShrouqApprovalDialog } from "./approval-dialog";
 
@@ -254,11 +263,11 @@ export function AlShrouqDispatchSection({
    * `summary`, and a cancelled row correctly reports `handedOver: false`, so
    * falling back here cannot make an order look un-sendable when it is not — nor
    * the reverse, because an *un*cancelled row is always `current` anyway.
+   *
+   * The rule itself lives in `dispatch-selection.ts`, with the one that decides
+   * whether this card is rendered at all, so both are testable without a DOM.
    */
-  const latest = dispatchState?.rows?.length
-    ? (dispatchState.rows[dispatchState.rows.length - 1] ?? null)
-    : null;
-  const shown = current ?? latest;
+  const shown = shownDispatch(dispatchState?.rows ?? []);
   const summary = useMemo(() => summariseAlShrouqDispatch(shown), [shown]);
 
   /**
@@ -505,6 +514,9 @@ export function AlShrouqDispatchSection({
   const locationText = shown?.customer_address?.trim() || null;
   const customerLink = safeExternalUrl(locationText);
 
+  /** The driver's note as it was approved. See the block that renders it. */
+  const deliveryNote = shown?.details?.trim() || null;
+
   return (
     <>
       <Card className="overflow-hidden shadow-sm">
@@ -627,6 +639,27 @@ export function AlShrouqDispatchSection({
                 </span>
               </p>
             )}
+          </div>
+        )}
+
+        {/* --------------------------------------------------------------
+            The note the driver was given.
+
+            The row's own `details`, frozen at approval — not `notes` from the
+            form. The order's note can be edited afterwards and AlShrouq is
+            never told, so showing the live one here would claim a driver had
+            been given instructions nobody sent. Absent until an approval has
+            written one, which is why the whole block is conditional rather
+            than a row reading "—".
+            -------------------------------------------------------------- */}
+        {deliveryNote && (
+          <div className="space-y-1 border-t border-border/60 px-4 py-3">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Delivery note
+            </p>
+            <p className="whitespace-pre-wrap break-words text-sm text-foreground" dir="auto">
+              {deliveryNote}
+            </p>
           </div>
         )}
 

@@ -46,6 +46,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { queryKeys } from "@/lib/query-keys";
+import { currentDispatch } from "./dispatch-selection";
 import type { AlShrouqDispatchRow } from "./dispatch-timeline";
 
 /**
@@ -67,12 +68,21 @@ export interface AlShrouqOrderDispatch extends AlShrouqDispatchRow {
   customer_lng: number | null;
   branch_no: string | null;
   created_at: string | null;
+  /**
+   * The note for the driver, as it was approved.
+   *
+   * The same value the CRM payload carries as `details`, frozen on the row at
+   * approval time. Read here so the card can show the handover note an agent
+   * typed weeks ago without re-deriving it from the order — which may have been
+   * edited since, and which AlShrouq was never told about.
+   */
+  details: string | null;
 }
 
 const COLUMNS =
   "id,dispatch_status,scheduled_for,scheduled_at,last_attempt_at,dispatched_at,cancelled_at," +
   "external_order_id,tracking_url,refreshed_at,last_error,status,payment_type,value," +
-  "customer_address,customer_lat,customer_lng,branch_no,created_at," +
+  "customer_address,customer_lat,customer_lng,branch_no,created_at,details," +
   // The operator's answer, when a stuck dispatch has been settled. `resolved_by`
   // is an id and is deliberately not fetched — the card shows *that* it was
   // resolved, and the order timeline carries the attribution with a name.
@@ -96,7 +106,7 @@ export function useOrderAlShrouqDispatch(orderId: string | undefined, enabled = 
         .eq("order_id", orderId as string)
         .order("created_at", { ascending: true });
       const rows = ((data as AlShrouqOrderDispatch[] | null) ?? []).filter(Boolean);
-      return { rows, current: rows.find((r) => r.cancelled_at == null) ?? null };
+      return { rows, current: currentDispatch(rows) };
     },
   });
 }

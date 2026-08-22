@@ -2901,10 +2901,33 @@ saving last time. So the extra data is asked for **at dispatch time**, and
 `AlShrouqDispatchSection` renders **inside** the order form's contextual right
 column, **above** `BranchPreviewPanel` and by the same rule those panels follow —
 the form renders it from live state, exactly as it renders `BranchPreviewPanel`
-on `form.branch_no`. It appears whenever `form.delivery_type === "AlShrouq"`, on
-a draft as well as a saved order, and reflects the customer, phone, branch and
-order value as they are typed. It reads that state through props, takes no part
-in validation or submit, and `orderFormSchema` is untouched.
+on `form.branch_no`. It reflects the customer, phone, branch and order value as
+they are typed, reads that state through props, takes no part in validation or
+submit, and `orderFormSchema` is untouched.
+
+**Whether it renders at all is decided from persisted data, not from the form.**
+`showAlShrouqSection` in `features/alshrouq/dispatch-selection.ts` is pure and
+shows the card when *any* of three hold: the stored `orders.delivery_type` is
+`"AlShrouq"`, the order has **any** `alshrouq_dispatches` row (cancelled and
+resolved ones included), or `form.delivery_type` is `"AlShrouq"` — the last
+covering a draft, where there is nothing persisted yet.
+
+The gate used to be `form.delivery_type === ALSHROUQ` alone, and that is the
+whole of the "card disappears when the order is reopened" bug. `form` is React
+state seeded by an effect in `useOrderForm` that runs once per order id after the
+`orders` fetch resolves, so it is empty on the first render of every page load
+and stays empty whenever that hydration does not run. The order timeline sits in
+the same column reading the *persisted* dispatch rows, so it went on narrating a
+scheduled delivery beside no card at all — two surfaces describing one delivery
+from two different sources. The dispatch rows now come from
+`useOrderAlShrouqDispatch` under the query key the card and the timeline already
+share, so this costs no extra request and the two cannot disagree about whether a
+delivery exists.
+
+The same module owns `currentDispatch` (the row with `cancelled_at IS NULL` —
+the predicate of `alshrouq_dispatches_live_order_key`), `latestDispatch` and
+`shownDispatch = current ?? latest`, which were three inline expressions in three
+components and are now one tested rule.
 
 A draft has no id, so it cannot dispatch and does not pretend to: the status
 reads **Pending order creation** and the action is disabled. Statuses are limited
@@ -3744,9 +3767,48 @@ below reference material. A test pins the order.
 
 **What the card shows** is the persisted row: status, customer, phone, branch,
 payment type as approved, the approved order value, the customer's location and
-coordinates, the scheduled slot with its countdown, the external reference, and
-the tracking link when one exists. It builds no payload, knows no endpoint, and
-reaches the transport through nothing.
+coordinates, the delivery note as approved, the scheduled slot with its
+countdown, the external reference, and the tracking link when one exists. It
+builds no payload, knows no endpoint, and reaches the transport through nothing.
+
+### The delivery note
+
+The note the driver gets. Collected in the confirmation dialog on the **create**
+journey, under `DELIVERY NOTE — optional`, as one two-row box between the slot
+list and the outcome band.
+
+**It is not a second notes system, and no column was added for it.** What the box
+writes is the order's own `notes` — through `onDetailsChange`, straight into form
+state — so the ordinary insert saves it (`buildOrderPayload` has always sent
+`notes`; `orderFormSchema` has always capped it at 500), the order page's Notes
+card shows it on a reopen, `ORDER_EXPORT_COLUMNS` puts it under "Notes", and
+`alshrouqDispatchContext` hands it back as `prefill.notes`. `ALSHROUQ_NOTE_MAX`
+pins the box's `maxLength` to the 500 that `orderFormSchema` and the
+`alshrouqDispatchOrder` validator (`details: z.string().max(500)`) already
+enforce, so the three cannot drift.
+
+The courier path was already complete and is unchanged:
+`AlShrouqApprovalPlan.details` → `dispatchInputFor` → `DispatchRequest.form.details`
+→ `buildAlshrouqOrderPayload`'s `notes` → the payload's optional `details` →
+`alshrouq_dispatches.details` **and** the frozen `payload_snapshot`. The card
+reads it back from the row rather than from the form, deliberately: the order's
+note can be edited afterwards and AlShrouq is never told, so showing the live one
+would claim a driver had instructions nobody sent.
+
+**"Create order only" keeps it as an ordinary order note.** No dispatch row
+exists, so nothing presents it as a handover — the existing note semantics,
+unchanged.
+
+**Nothing about identity comes from the browser.** The input carries a string;
+`scheduled_by`, `dispatched_by`, `scheduled_at`, the order id and the dispatch id
+are all derived server-side from the verified session, exactly as before. No new
+permission: the note rides the `edit_all_orders` / `edit_orders`-on-own-order
+gate that `alshrouqDispatchOrder` already applies.
+
+On an **existing** order the dialog stays a confirmation and shows the note
+read-only. The order's Notes field is on the page behind it; editing a saved
+order's note from the dialog would put a value on the dispatch that the order
+itself does not hold until somebody presses Save.
 
 ### What the AlShrouq screens say — Phase 11
 
