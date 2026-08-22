@@ -4003,14 +4003,22 @@ backend**: the arithmetic, the rejection of the past and the two-minute immediat
 window are untouched, and `scheduled_for` still stores the instant that function
 returns.
 
-The past is refused in three agreeing places, all from `earliestMinutesOn`: the
-calendar disables days before today, the selects disable hours, minutes and a
-meridiem that have gone, and `clampSelection` pulls a stranded time forward when
-the date changes from tomorrow to today. "Today" and "past" are answered in
-Riyadh business time, never the browser's. `calendarDate`/`dateFromCalendar`
-convert through **local** parts on both sides, because `react-day-picker`
-compares days locally and a UTC-midnight `Date` is the previous day everywhere
-west of UTC.
+**Every hour, minute and meridiem is always selectable.** The picker briefly
+judged one unit at a time — at 10:15 PM the hours 01–09 went dead — which closed
+the route to *9 PM tomorrow*: an agent could not touch the hour first. An hour is
+not in the past; only a whole datetime is. `earliestMinutesOn`, `isSelectionPast`
+and `clampSelection` are gone, nothing snaps the selection forward as it is made,
+and `parseScheduleInput` — over the complete `{date, time}` pair, unchanged — is
+the only thing that decides validity. A past combination disables the primary
+action and says *"That time has already passed. Pick a later time, or another
+day."*
+
+The one thing still refused outright is the **day**: the calendar disables days
+before today, because a day that has ended cannot contain a future minute under
+any combination. "Today" is answered in Riyadh business time, never the
+browser's. `calendarDate`/`dateFromCalendar` convert through **local** parts on
+both sides, because `react-day-picker` compares days locally and a UTC-midnight
+`Date` is the previous day everywhere west of UTC.
 
 **The confirmation scrolls at no supported size.** Measured in a browser, not
 asserted from the source — content height against the element's own cap, and
@@ -4051,6 +4059,44 @@ hour reads as a click outside and would close the popover under the agent's
 finger. `onInteractOutside` treats anything inside a popper — this one, or a
 select's own — as not outside. Verified live: picking a minute leaves the
 popover open, updates the trigger and updates the summary's Delivery row.
+
+### The card judges the order, not the form
+
+A reopened AlShrouq order reported **"Not available — this order cannot be
+delivered by AlShrouq — choose a branch to check AlShrouq coverage"** beside a
+branch that was plainly filled in, on an order the agent had just created *with*
+a handover, with the send button dead. Two separate things, and only the second
+was a defect.
+
+**Nothing was persisted, and that is the gate working.** With
+`ALSHROUQ_LIVE_DISPATCH_ENABLED` off, an **immediate** handover runs the whole
+pipeline and stops at the safety gate: it returns `prepared` and writes **no
+row**, deliberately — a dry run must not take the order's dispatch slot and
+block the real send later. So in this deployment "as soon as possible" leaves the
+same persisted state as "Create order only", the create toast says so
+(*"AlShrouq dispatch is switched off, so no courier was contacted"*), and the
+reopened page has no dispatch to report. A **scheduled** handover is different
+and always was: it persists a `scheduled` row with a frozen snapshot, contacts
+nobody, and survives a reload on any deployment. `handover-persistence.test.ts`
+pins both, including that a second immediate approval still writes nothing.
+
+**The defect was what the card did with that.** With no dispatch row it falls
+back to *readiness*, and readiness read `alshrouq.coverage` — which
+`useAlShrouqOrder` short-circuits to `{ kind: "no_branch" }` the moment
+`form.delivery_type` is not AlShrouq. Transient form state was being reported as
+a fact about the order, so a saved AlShrouq order whose form had not put the
+method back described itself as uncoverable.
+
+`cardCoverage` in `dispatch-selection.ts` is the rule now: the form's answer
+while the form is the one being filled in — an agent changing the branch must
+see coverage follow — and otherwise `ctx.branch`, the same resolution
+`alshrouqDispatchContext` already makes server-side from the order's own
+`branch_no` against the same live `branch_options`. No second query, no new
+state, no new source of truth. The branch, customer and phone rows fall back the
+same way, to `ctx.prefill`, which the approval dialog already read. And
+`optionsPending` only counts while the form is active — React Query reports a
+*disabled* query as pending, so on a saved order it had the card stuck on
+"Checking…" waiting for a request nobody had made.
 
 **The card no longer disappears when an order is reopened.**
 `useOrderAlShrouqDispatch` defines `current` as the row that is **not**

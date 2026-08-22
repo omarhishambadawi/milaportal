@@ -20,11 +20,26 @@
  *
  * ## Riyadh, not the browser
  *
- * "Today" and "already past" are answered in business time, at the fixed +03:00
- * of `BUSINESS_UTC_OFFSET_MINUTES`, for the same reason `parseScheduleInput`
- * builds its instant that way: an agent in another zone arranging a Riyadh
- * delivery means Riyadh. A zone with daylight saving could not be handled by
- * adding a constant, and this one has none.
+ * "Today" is answered in business time, at the fixed +03:00 of
+ * `BUSINESS_UTC_OFFSET_MINUTES`, for the same reason `parseScheduleInput` builds
+ * its instant that way: an agent in another zone arranging a Riyadh delivery
+ * means Riyadh. A zone with daylight saving could not be handled by adding a
+ * constant, and this one has none.
+ *
+ * ## What this module does *not* decide
+ *
+ * Whether a chosen time is in the past. It used to — `earliestMinutesOn`,
+ * `isSelectionPast` and `clampSelection` judged one unit at a time, so at
+ * 10:15 PM the hours 01–09 went dead and an agent could not reach *9 PM
+ * tomorrow* by touching the hour first. An hour is not in the past; only a whole
+ * datetime is.
+ *
+ * All three are gone. `parseScheduleInput` — the one function that has always
+ * decided this, over the complete `{date, time}` pair — is now the only thing
+ * that does, and the dialog refuses the action rather than the keystroke. What
+ * is left here produces values and formats them; the only thing it still
+ * bounds is the *day*, because a day that has ended cannot contain a future
+ * minute under any combination.
  */
 
 import { BUSINESS_UTC_OFFSET_MINUTES } from "@/lib/timezone";
@@ -87,19 +102,6 @@ export const MINUTE_OPTIONS: readonly string[] = Array.from({ length: 60 }, (_, 
 
 export const MERIDIEM_OPTIONS: readonly Meridiem[] = ["AM", "PM"];
 
-/**
- * A 12-hour selection as minutes past midnight.
- *
- * 12 AM is midnight and 12 PM is noon — the two the naive formula gets wrong,
- * and the same pair `parse12Hour` singles out.
- */
-export function minutesOfDay(hour: string, minute: string, meridiem: Meridiem): number {
-  const hour12 = Number(hour);
-  const hour24 =
-    hour12 === 12 ? (meridiem === "PM" ? 12 : 0) : meridiem === "PM" ? hour12 + 12 : hour12;
-  return hour24 * 60 + Number(minute);
-}
-
 /** Minutes past midnight → the padded 12-hour parts. */
 function partsOf(minutes: number): { hour: string; minute: string; meridiem: Meridiem } {
   const wrapped = ((minutes % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
@@ -131,31 +133,6 @@ function nextDay(date: string): string {
   const t = new Date(Date.UTC(y, m - 1, d) + 24 * 60 * MINUTE_MS);
   return `${t.getUTCFullYear()}-${pad(t.getUTCMonth() + 1)}-${pad(t.getUTCDate())}`;
 }
-
-/**
- * The earliest minute-of-day still selectable on `date`.
- *
- * `0` for any future day — the whole day is open. For today it is the lead time
- * ahead of now, which is what stops the controls offering a minute that has
- * gone. A date already behind today returns `MINUTES_PER_DAY`, so nothing on it
- * is selectable at all; the calendar refuses those dates anyway, and agreeing
- * here means the two cannot contradict each other.
- */
-export function earliestMinutesOn(date: string, now: Date): number {
-  const today = businessDate(now);
-  if (date > today) return 0;
-  if (date < today) return MINUTES_PER_DAY;
-  return businessMinutes(now) + LEAD_MINUTES;
-}
-
-/** Is this selection behind the earliest the day allows? */
-export function isSelectionPast(selection: ScheduleSelection, now: Date): boolean {
-  return (
-    minutesOfDay(selection.hour, selection.minute, selection.meridiem) <
-    earliestMinutesOn(selection.date, now)
-  );
-}
-
 /**
  * Where the controls start when the agent chooses *Schedule delivery*.
  *
@@ -169,23 +146,6 @@ export function defaultScheduleSelection(now: Date): ScheduleSelection {
   const rounded = Math.ceil(target / DEFAULT_STEP_MINUTES) * DEFAULT_STEP_MINUTES;
   const date = rounded >= MINUTES_PER_DAY ? nextDay(businessDate(now)) : businessDate(now);
   return { date, ...partsOf(rounded) };
-}
-
-/**
- * Move a selection forward to the earliest the day allows, if it is behind it.
- *
- * Changing the date from tomorrow to today can strand a time that was fine and
- * no longer is. Leaving it stranded would show a selected value the controls
- * themselves mark as unavailable, so it is pulled forward instead — and a day
- * with nothing left on it rolls to the next one rather than becoming
- * unschedulable.
- */
-export function clampSelection(selection: ScheduleSelection, now: Date): ScheduleSelection {
-  const earliest = earliestMinutesOn(selection.date, now);
-  if (earliest >= MINUTES_PER_DAY) return defaultScheduleSelection(now);
-  const chosen = minutesOfDay(selection.hour, selection.minute, selection.meridiem);
-  if (chosen >= earliest) return selection;
-  return { date: selection.date, ...partsOf(earliest) };
 }
 
 /**

@@ -46,13 +46,9 @@ import {
   businessDate,
   businessMinutes,
   calendarDate,
-  clampSelection,
   dateFromCalendar,
   defaultScheduleSelection,
-  earliestMinutesOn,
   formatPickedDate,
-  isSelectionPast,
-  minutesOfDay,
   scheduleInputFor,
 } from "../schedule-picker";
 import { resolveAlShrouqBranch } from "@/lib/shams-crm/alshrouq-branches";
@@ -997,10 +993,17 @@ describe("the schedule picker", () => {
 
   /** Midnight and noon, the two the naive 12-hour formula gets wrong. */
   it("converts midnight and noon correctly", () => {
-    expect(minutesOfDay("12", "00", "AM")).toBe(0);
-    expect(minutesOfDay("12", "00", "PM")).toBe(12 * 60);
-    expect(minutesOfDay("07", "30", "PM")).toBe(19 * 60 + 30);
-    expect(minutesOfDay("01", "05", "AM")).toBe(65);
+    const asInstant = (time: string, date = "2026-08-22") =>
+      parseScheduleInput(date, time, at("2026-08-21T00:00:00.000Z"));
+    for (const [time, hourUtc] of [
+      ["12:00 AM", 21], // midnight Riyadh is 21:00 UTC the previous day
+      ["12:00 PM", 9],
+      ["07:30 PM", 16],
+    ] as const) {
+      const parsed = asInstant(time);
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) expect(new Date(parsed.iso).getUTCHours()).toBe(hourUtc);
+    }
   });
 
   /** The default is far enough out that reading the dialog cannot expire it. */
@@ -1026,34 +1029,62 @@ describe("the schedule picker", () => {
     expect(parsed.ok).toBe(true);
   });
 
-  /** A future day is wide open; today is bounded by the clock. */
-  it("bounds only the current day", () => {
-    expect(earliestMinutesOn("2026-08-23", NOON_ISH)).toBe(0);
-    expect(earliestMinutesOn("2026-08-22", NOON_ISH)).toBe(12 * 60 + 5 + 30);
-    // A day already gone has nothing on it at all — the calendar refuses it too.
-    expect(earliestMinutesOn("2026-08-21", NOON_ISH)).toBe(24 * 60);
-  });
-
-  it("knows a chosen time that has passed", () => {
-    const past = { date: "2026-08-22", hour: "09", minute: "00", meridiem: "AM" as const };
-    expect(isSelectionPast(past, NOON_ISH)).toBe(true);
-    const future = { date: "2026-08-22", hour: "09", minute: "00", meridiem: "PM" as const };
-    expect(isSelectionPast(future, NOON_ISH)).toBe(false);
+  /**
+   * **Every hour, minute and meridiem is selectable, always.**
+   *
+   * The picker used to judge one unit at a time: at 10:15 PM the hours 01–09
+   * were disabled, so an agent could not reach *9 PM tomorrow* by touching the
+   * hour first — the route to a perfectly valid answer was closed. An hour is
+   * not in the past; only a whole datetime is.
+   */
+  it("offers every unit whatever the clock says", () => {
+    expect(HOUR_OPTIONS).toHaveLength(12);
+    expect(MINUTE_OPTIONS).toHaveLength(60);
+    expect(MERIDIEM_OPTIONS).toEqual(["AM", "PM"]);
+    // The component passes no per-option predicate at all any more, so nothing
+    // can grey one out. The unit renders the list it is given.
+    expect(dialog).not.toContain("isPast");
+    expect(dialog).not.toContain("disabled={isPast");
   });
 
   /**
-   * Changing the date from tomorrow to today can strand a time that was fine.
-   * It is pulled forward rather than left selected-but-unavailable.
+   * Validity is a property of `date + hour + minute + AM/PM` together, and it is
+   * `parseScheduleInput` — unchanged — that decides it.
    */
-  it("pulls a stranded time forward instead of leaving it in the past", () => {
-    const stranded = { date: "2026-08-22", hour: "08", minute: "00", meridiem: "AM" as const };
-    const fixed = clampSelection(stranded, NOON_ISH);
-    expect(isSelectionPast(fixed, NOON_ISH)).toBe(false);
-    expect(fixed.date).toBe("2026-08-22");
+  it("judges the complete datetime, not the unit", () => {
+    // 10:15 PM Riyadh.
+    const now = at("2026-08-22T19:15:00.000Z");
+    const hour = { hour: "09", minute: "30" } as const;
 
-    // A time that is already fine is left exactly as the agent set it.
-    const fine = { date: "2026-08-22", hour: "07", minute: "30", meridiem: "PM" as const };
-    expect(clampSelection(fine, NOON_ISH)).toEqual(fine);
+    // 9:30 PM *today* has gone — refused, as it should be.
+    const today = parseScheduleInput("2026-08-22", "09:30 PM", now);
+    expect(today.ok).toBe(false);
+    if (!today.ok) expect(today.reason).toBe("past");
+
+    // The very same hour is fine on the next day…
+    const tomorrowPm = parseScheduleInput("2026-08-23", "09:30 PM", now);
+    expect(tomorrowPm.ok).toBe(true);
+    // …and so is the morning of it, which the old per-unit rule also blocked.
+    const tomorrowAm = parseScheduleInput("2026-08-23", "09:30 AM", now);
+    expect(tomorrowAm.ok).toBe(true);
+
+    // And flipping the meridiem alone rescues it on today's date.
+    const laterToday = parseScheduleInput("2026-08-22", "11:30 PM", now);
+    expect(laterToday.ok).toBe(true);
+    if (laterToday.ok) expect(laterToday.timing).toBe("scheduled");
+    void hour;
+  });
+
+  /** Nothing snaps the selection forward as it is being made. */
+  it("records the choice exactly as made", () => {
+    expect(dialog).toContain("const pick = (next: ScheduleSelection) => setWhen(next);");
+    expect(dialog).not.toContain("clampSelection");
+  });
+
+  /** A day that has ended is the one thing still refused outright. */
+  it("bounds the calendar at today, in business time", () => {
+    expect(dialog).toContain("calendarDate(businessDate(new Date()))");
+    expect(dialog).toContain("{ before: today }");
   });
 
   /** The trigger reads as a date, not as an ISO string. */

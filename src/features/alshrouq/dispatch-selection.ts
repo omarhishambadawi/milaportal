@@ -37,6 +37,8 @@
  */
 
 import { ALSHROUQ } from "./constants";
+import { branchCoverage, type BranchCoverage } from "./order-requirements";
+import type { AlShrouqBranchResolution } from "@/lib/shams-crm/alshrouq-branches";
 
 /** The columns these decisions actually read. Any dispatch row satisfies it. */
 export interface DispatchRowLike {
@@ -101,4 +103,32 @@ export function showAlShrouqSection({
   hasDispatchHistory,
 }: AlShrouqSectionInput): boolean {
   return hasDispatchHistory || storedDeliveryType === ALSHROUQ || formDeliveryType === ALSHROUQ;
+}
+
+/**
+ * Which branch-coverage answer the card reports.
+ *
+ * Two sources exist and they are not interchangeable. `useAlShrouqOrder` derives
+ * coverage from the **form**, which is right while the form is the thing being
+ * answered — an agent changing the branch watches coverage follow. But it
+ * short-circuits to `{ kind: "no_branch" }` the moment `form.delivery_type` is
+ * not AlShrouq, and that is not a fact about the order.
+ *
+ * It produced the worst screen this card has shown: a saved AlShrouq order,
+ * reopened, reporting **"Not available — choose a branch to check AlShrouq
+ * coverage"** beside a branch that was plainly filled in, on an order the agent
+ * had just created *with* a handover. Transient state read as persisted truth.
+ *
+ * `alshrouqDispatchContext` already resolves the order's own `branch_no`
+ * server-side against the same live `branch_options`, and the card already
+ * fetches it. So when the form is not answering, that is the answer — no second
+ * query, no new state, no new source of truth.
+ */
+export function cardCoverage(
+  formActive: boolean,
+  formCoverage: BranchCoverage,
+  orderBranch: AlShrouqBranchResolution | null | undefined,
+): BranchCoverage {
+  if (formActive) return formCoverage;
+  return orderBranch ? branchCoverage(orderBranch) : formCoverage;
 }

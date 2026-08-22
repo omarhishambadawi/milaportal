@@ -137,7 +137,7 @@ import { coverageAllowsDispatch, describeBranchCoverage } from "../order-require
 import type { AlShrouqOrderState } from "../use-alshrouq-order";
 import { formatScheduledFor } from "../scheduling";
 import { useOrderAlShrouqDispatch } from "../use-order-dispatch";
-import { shownDispatch } from "../dispatch-selection";
+import { cardCoverage, shownDispatch } from "../dispatch-selection";
 import { useScheduledDispatchCountdown } from "../use-scheduled-countdown";
 import { AlShrouqApprovalDialog } from "./approval-dialog";
 
@@ -393,14 +393,27 @@ export function AlShrouqDispatchSection({
 
   const errors: AlShrouqFieldError[] = result?.kind === "invalid" ? result.errors : [];
   /**
-   * Branch coverage, from the shared order state.
+   * Branch coverage — from the form while it is answering, from the order
+   * otherwise.
    *
-   * The form already asked the CRM which branches AlShrouq serves, before this
-   * order existed — so the card reads that answer rather than deriving a second
-   * one from the order-scoped context. `ctx` is still consulted for what only it
-   * knows: the order's display number, and whether this agent may act on it.
+   * The form's answer is the live one and is preferred whenever the form is
+   * actually about an AlShrouq delivery: an agent changing the branch sees
+   * coverage follow, which is the point of rendering this beside the fields.
+   *
+   * But `useAlShrouqOrder` short-circuits to `{ kind: "no_branch" }` the moment
+   * `form.delivery_type` is not AlShrouq — and that produced the worst screen
+   * this card has shown. A saved AlShrouq order whose form had not put the
+   * method back yet reported **"Not available — choose a branch to check
+   * AlShrouq coverage"** next to a branch that was plainly filled in, on an
+   * order the agent had just created *with* a handover. Transient state was
+   * being read as a fact about the order.
+   *
+   * `ctx.branch` is the same resolution made server-side from the order's own
+   * `branch_no`, against the same live `branch_options`. It is already fetched
+   * — no second query, no new state — so it is what the card falls back to.
    */
-  const covered = coverageAllowsDispatch(alshrouq.coverage);
+  const coverage = cardCoverage(alshrouq.active, alshrouq.coverage, ctx?.branch);
+  const covered = coverageAllowsDispatch(coverage);
 
   /**
    * Whether anything may still be approved.
@@ -420,7 +433,11 @@ export function AlShrouqDispatchSection({
    */
   const readiness: AlShrouqReadiness = !saved
     ? "draft"
-    : dispatchPending || ctxPending || alshrouq.optionsPending
+    : // `optionsPending` only counts while the *form* is the one answering.
+      // React Query reports a disabled query as pending, so on a saved order
+      // whose form is not currently an AlShrouq one this was true forever —
+      // and the card sat on "Checking…" waiting for a request nobody had made.
+      dispatchPending || ctxPending || (alshrouq.active && alshrouq.optionsPending)
       ? "checking"
       : ctxError
         ? "unverified"
@@ -476,10 +493,22 @@ export function AlShrouqDispatchSection({
   const submitted =
     summary.handedOver && summary.status !== "scheduled" && summary.status !== "failed";
 
-  const branchValue = branchNo
-    ? alshrouq.coverage.kind === "covered" && alshrouq.coverage.branchName
-      ? `${branchNo} · ${alshrouq.coverage.branchName}`
-      : branchNo
+  /**
+   * The order's identity, form-first and persisted-second.
+   *
+   * The form is preferred because the card sits beside it and should follow an
+   * edit. The fallback is what stops a saved order describing itself as empty
+   * when the form has not put its values back — the same reason `coverage`
+   * falls back above, and the same values the approval dialog already reads.
+   */
+  const orderBranchNo = branchNo || ctx?.branchNo || null;
+  const orderCustomerName = customerName.trim() || ctx?.prefill.customerName.trim() || "";
+  const orderCustomerPhone = customerPhone.trim() || ctx?.prefill.customerPhone.trim() || "";
+
+  const branchValue = orderBranchNo
+    ? coverage.kind === "covered" && coverage.branchName
+      ? `${orderBranchNo} · ${coverage.branchName}`
+      : orderBranchNo
     : "Select a branch";
 
   /**
@@ -552,9 +581,14 @@ export function AlShrouqDispatchSection({
             value={saved ? (ctx?.displayNo ?? "—") : "Assigned after the order is created"}
             muted={!saved}
           />
-          <Row label="Branch" value={branchValue} muted={!branchNo} />
-          <Row label="Customer" value={customerName.trim() || "—"} muted={!customerName.trim()} />
-          <Row label="Phone" value={customerPhone.trim() || "—"} muted={!customerPhone.trim()} />
+          {/* Form first, because an agent editing the order should watch these
+              follow — but the *order's* own values when the form has none, so a
+              saved order never describes itself as blank. `ctx.prefill` is the
+              persisted row, already fetched; the approval dialog below reads it
+              the same way. */}
+          <Row label="Branch" value={branchValue} muted={!orderBranchNo} />
+          <Row label="Customer" value={orderCustomerName || "—"} muted={!orderCustomerName} />
+          <Row label="Phone" value={orderCustomerPhone || "—"} muted={!orderCustomerPhone} />
           <Row
             label="Payment type"
             value={paymentLabel ?? "Select at dispatch"}
@@ -759,7 +793,7 @@ export function AlShrouqDispatchSection({
                 ? "This order has not been created yet. AlShrouq does not publish delivery fees, so none is shown here."
                 : ctxError
                   ? "Delivery options could not be loaded. You may not have permission to send this order."
-                  : describeBranchCoverage(alshrouq.coverage)}
+                  : describeBranchCoverage(coverage)}
             </p>
           </Band>
         )}

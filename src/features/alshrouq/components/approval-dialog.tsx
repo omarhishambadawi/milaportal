@@ -100,14 +100,12 @@ import {
   HOUR_OPTIONS,
   MERIDIEM_OPTIONS,
   MINUTE_OPTIONS,
+  businessDate,
   calendarDate,
-  clampSelection,
   dateFromCalendar,
   defaultScheduleSelection,
-  earliestMinutesOn,
   formatPickedDate,
   formatTime12,
-  minutesOfDay,
   scheduleInputFor,
   type Meridiem,
   type ScheduleSelection,
@@ -208,23 +206,28 @@ function ResultNotice({ result }: { result: ScheduleResult }) {
  * One unit of the time control.
  *
  * A `Select` rather than a typed box, for the reason the whole dialog exists:
- * a control that accepts "3.30pm" and rejects it afterwards is a form. Options
- * that have already passed are `disabled` rather than absent, so the list does
- * not change length as the clock moves under the agent's cursor.
+ * a control that accepts "3.30pm" and rejects it afterwards is a form.
+ *
+ * **Every option is always selectable.** Each unit used to disable the values
+ * that had "already passed", judged one unit at a time — so at 10:15 PM the
+ * hours 01–09 were dead, and an agent could not reach *9 PM tomorrow* by
+ * touching the hour first. An hour is not in the past; only a whole datetime
+ * is. So no option is disabled here, and the date, hour, minute and meridiem
+ * are judged together by `parseScheduleInput` — the one function that has
+ * always decided this — with the primary action refused while the answer is
+ * behind the clock.
  */
 function TimeUnit({
   label,
   value,
   options,
   onChange,
-  isPast,
   className,
 }: {
   label: string;
   value: string;
   options: readonly string[];
   onChange: (value: string) => void;
-  isPast: (option: string) => boolean;
   className?: string;
 }) {
   return (
@@ -234,7 +237,7 @@ function TimeUnit({
       </SelectTrigger>
       <SelectContent className="max-h-56 min-w-0">
         {options.map((option) => (
-          <SelectItem key={option} value={option} disabled={isPast(option)} className="text-[13px]">
+          <SelectItem key={option} value={option} className="text-[13px]">
             {option}
           </SelectItem>
         ))}
@@ -316,16 +319,24 @@ export function AlShrouqApprovalDialog({
   }, [open]);
 
   /**
-   * The earliest minute still selectable on the chosen day.
+   * The first day a delivery can be arranged for, in Riyadh.
    *
-   * Read once per render from the same function the calendar's `before` bound
-   * uses, so the day the calendar refuses and the times the selects refuse
-   * cannot disagree.
+   * The only thing the picker refuses outright, and it is refused because a day
+   * that has ended cannot contain a future minute — no combination of hour,
+   * minute and meridiem could rescue it. Every other value stays selectable and
+   * is judged as part of the whole datetime below.
    */
-  const earliest = earliestMinutesOn(when.date, new Date());
-  const today = calendarDate(defaultScheduleSelection(new Date()).date);
+  const today = calendarDate(businessDate(new Date()));
 
-  const pick = (next: ScheduleSelection) => setWhen(clampSelection(next, new Date()));
+  /**
+   * Record the agent's choice, exactly as made.
+   *
+   * Nothing is snapped forward. An earlier hour on today's date is a legitimate
+   * thing to select on the way to *that hour tomorrow*, and a control that
+   * jumped to the next valid minute the moment it was touched made that
+   * journey impossible. The combination is validated, not the keystroke.
+   */
+  const pick = (next: ScheduleSelection) => setWhen(next);
 
   /**
    * When the courier would be called.
@@ -610,8 +621,6 @@ export function AlShrouqApprovalDialog({
                           options={HOUR_OPTIONS}
                           className="w-[3.75rem]"
                           onChange={(hour) => pick({ ...when, hour })}
-                          // The whole hour is gone only when its last minute is.
-                          isPast={(hour) => minutesOfDay(hour, "59", when.meridiem) < earliest}
                         />
                         <span aria-hidden className="text-sm text-muted-foreground">
                           :
@@ -622,9 +631,6 @@ export function AlShrouqApprovalDialog({
                           options={MINUTE_OPTIONS}
                           className="w-[3.75rem]"
                           onChange={(minute) => pick({ ...when, minute })}
-                          isPast={(minute) =>
-                            minutesOfDay(when.hour, minute, when.meridiem) < earliest
-                          }
                         />
                         <TimeUnit
                           label="AM or PM"
@@ -632,11 +638,18 @@ export function AlShrouqApprovalDialog({
                           options={MERIDIEM_OPTIONS}
                           className="w-[4.25rem]"
                           onChange={(meridiem) => pick({ ...when, meridiem: meridiem as Meridiem })}
-                          isPast={(meridiem) =>
-                            minutesOfDay("11", "59", meridiem as Meridiem) < earliest
-                          }
                         />
                       </div>
+                      {/* The whole datetime, judged as one. This is the only
+                          place the past is refused inside the picker, and it
+                          names the fix — a later time, or another day — rather
+                          than greying out numbers the agent was reaching
+                          through. */}
+                      {schedulePast && (
+                        <p className="mt-2 max-w-[14rem] text-[11.5px] leading-snug text-destructive">
+                          That time has already passed. Pick a later time, or another day.
+                        </p>
+                      )}
                     </PopoverContent>
                   </Popover>
                 </div>
