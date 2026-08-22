@@ -334,3 +334,41 @@ describe("the picker judges a date and a time together", () => {
     expect(dialog).not.toContain("disabled={isPast");
   });
 });
+
+/* ------------------------------------------------------------------------- */
+/* A refused payload names the field it refused                              */
+/* ------------------------------------------------------------------------- */
+
+describe("an incomplete dispatch says which field", () => {
+  /**
+   * The report: an agent looking at a branch, a customer, a phone and a pin all
+   * visibly filled in was told "The AlShrouq details were incomplete", which
+   * names nothing and cannot be acted on. The per-field list was in the result
+   * the whole time and the sentence discarded it.
+   */
+  it("uses the server's own field messages", () => {
+    const { tone, message } = describeApprovalResult(
+      {
+        kind: "invalid",
+        errors: [
+          { field: "customer_phone", message: "A customer phone number is required." },
+          { field: "customer_lat", message: "The delivery location is missing coordinates." },
+        ],
+      } as never,
+      true,
+    );
+    expect(tone).toBe("error");
+    expect(message).toContain("customer phone number is required");
+    expect(message).toContain("missing coordinates");
+    // Still says nothing was sent, and still does not name a column at an agent.
+    expect(message).toContain("Nothing was sent");
+    expect(message).not.toContain("customer_phone");
+    expect(message).not.toContain("were incomplete");
+  });
+
+  /** An empty or absent list falls back rather than producing a blank sentence. */
+  it("keeps the generic sentence as the floor", () => {
+    const { message } = describeApprovalResult({ kind: "invalid", errors: [] } as never, false);
+    expect(message).toBe("The AlShrouq details were incomplete. Nothing was sent.");
+  });
+});

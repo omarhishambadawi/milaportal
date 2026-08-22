@@ -146,11 +146,32 @@ export function describeApprovalResult(
         tone: "warning",
         message: `${lead}The AlShrouq result could not be confirmed and it has NOT been sent again — check with AlShrouq before anyone resends it.`,
       };
-    case "invalid":
+    case "invalid": {
+      /*
+       * Name what is missing, rather than saying "incomplete".
+       *
+       * The result has always carried a per-field list and this sentence threw
+       * it away, so an agent looking at a form with a branch, a customer, a
+       * phone and a pin visibly filled in was told the details were incomplete
+       * and given nothing to act on. The server already knows which field it
+       * refused; the only thing missing was saying so.
+       *
+       * The field *messages* are used, not the identifiers — they are written
+       * for a person, and `customer_phone` is not.
+       */
+      const named = result.errors
+        .map((e) => e.message.trim())
+        .filter((m) => m.length > 0)
+        .join(" ");
       return {
         tone: "error",
-        message: `${lead}The AlShrouq details were incomplete. Nothing was sent.`,
+        message: named
+          ? `${lead}${named} Nothing was sent.`
+          : // No list came back. The generic sentence stays as the floor, so a
+            // shape this build does not expect still says the safe thing.
+            `${lead}The AlShrouq details were incomplete. Nothing was sent.`,
       };
+    }
     case "branch_unresolved":
       return {
         tone: "error",
