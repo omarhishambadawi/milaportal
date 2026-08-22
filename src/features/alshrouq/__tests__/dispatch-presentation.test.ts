@@ -27,6 +27,21 @@ import {
   explainAlShrouqState,
   type AlShrouqReadiness,
 } from "../dispatch-presentation";
+import {
+  alshrouqRequirements,
+  branchCoverage,
+  coverageAllowsDispatch,
+  describeBranchCoverage,
+  describeLocationReading,
+  readLocation,
+  readyForAlShrouq,
+  type AlShrouqOrderInput,
+  type BranchCoverage,
+} from "../order-requirements";
+import { SCHEDULE_OPTION_COUNT, scheduleOptionsAt } from "../schedule-options";
+import { parseScheduleInput } from "../scheduling";
+import { resolveAlShrouqBranch } from "@/lib/shams-crm/alshrouq-branches";
+import type { AlShrouqBranchOption } from "@/lib/shams-crm/alshrouq-branches";
 import { scheduledCountdownAt } from "../use-scheduled-countdown";
 
 const read = (relative: string) =>
@@ -34,6 +49,7 @@ const read = (relative: string) =>
 
 const card = read("../components/dispatch-section.tsx");
 const dialog = read("../components/approval-dialog.tsx");
+const section = read("../components/order-requirements-section.tsx");
 const timeline = read("../../orders/components/order-activity-timeline.tsx");
 const countdownHook = read("../use-scheduled-countdown.ts");
 const orderForm = read("../../orders/components/order-form.tsx");
@@ -571,31 +587,32 @@ describe("a cancelled dispatch", () => {
   });
 
   /**
-   * `current` is by definition the row that is *not* cancelled, so a cancelled
-   * dispatch reaches the card as no dispatch at all. The badge is therefore
-   * right to read "Ready to send" — and the card would otherwise be completely
-   * silent about a slot that was booked and called off, which is what this band
-   * exists to say.
+   * `current` is by definition the row that is *not* cancelled, because that is
+   * the question the send control has to answer. Reporting on it too meant an
+   * order whose only dispatch had been cancelled came back from the orders list
+   * looking as though it had never had one.
    */
-  it("is still reported, from the history the card already holds", () => {
+  it("is named by the card, from the rows the query already returns", () => {
     expect(summariseAlShrouqDispatch(cancelled).label).toBe("Scheduled delivery cancelled");
-    expect(card).toContain("const lastCancelled");
-    expect(card).toContain("(r) => r.cancelled_at != null");
-    expect(card).toContain("{!current && lastCancelled && (");
-    expect(card).toMatch(/was cancelled[\s\S]{0,240}No courier was contacted/);
+    expect(card).toContain("const shown = current ?? latest;");
+    expect(card).toContain("summariseAlShrouqDispatch(shown)");
   });
 
-  /** A persisted state still outranks the readiness fallback on the badge. */
-  it("lets a live dispatch name itself before any readiness is consulted", () => {
-    expect(card).toContain("summary.status !== null");
-    expect(card.indexOf("summary.status !== null")).toBeLessThan(
-      card.indexOf('{ label: "Ready to send"'),
+  /** The order is still sendable, because the slot really is free. */
+  it("still leaves the order sendable", () => {
+    expect(summariseAlShrouqDispatch(cancelled).handedOver).toBe(false);
+  });
+
+  /** And nothing counts down to a delivery nobody is going to make. */
+  it("drives the countdown from the live row, never the displayed one", () => {
+    expect(card).toContain(
+      "useScheduledDispatchCountdown(current?.scheduled_for, current?.dispatch_status)",
     );
   });
 
   /**
-   * And nothing tells an agent their edits will not reach a courier that was
-   * never contacted. `handedOver` covers the slot, not the submission.
+   * Nothing tells an agent their edits will not reach a courier that was never
+   * contacted. `handedOver` covers the slot, not the submission.
    */
   it("claims a completed submission only where one happened", () => {
     expect(card).toContain(
@@ -606,10 +623,92 @@ describe("a cancelled dispatch", () => {
       expect(summariseAlShrouqDispatch(row({ dispatch_status: status })).handedOver).toBe(true);
     }
   });
+});
 
-  /** The order is still sendable, because the slot really is free. */
-  it("still leaves the order sendable", () => {
-    expect(summariseAlShrouqDispatch(cancelled).handedOver).toBe(false);
+/* ------------------------------------------------------------------------- */
+/* The card survives the order being reopened                                */
+/* ------------------------------------------------------------------------- */
+
+describe("reopening an order", () => {
+  /**
+   * The regression this pins: create an AlShrouq order, leave the page, come
+   * back. Every state the order has been in must still be on the card — and the
+   * one that used to vanish is `cancelled`, because it is the only state for
+   * which `current` is null while rows is not empty.
+   *
+   * Modelled the way the hook models it, rather than by rendering: `current` is
+   * the uncancelled row, `rows` is the history, and `shown` is what the card
+   * reports on.
+   */
+  const asHook = (rows: AlShrouqDispatchRow[]) => ({
+    rows,
+    current: rows.find((r) => r.cancelled_at == null) ?? null,
+  });
+  const shownBy = (state: { rows: AlShrouqDispatchRow[]; current: AlShrouqDispatchRow | null }) =>
+    state.current ?? (state.rows.length ? state.rows[state.rows.length - 1]! : null);
+
+  it.each([
+    ["scheduled", "Scheduled"],
+    ["processing", "Sending to AlShrouq"],
+    ["accepted", "Accepted by AlShrouq"],
+    ["failed", "Dispatch failed"],
+    ["indeterminate", "Delivery status unavailable"],
+  ])("still reports %s when the order is opened again", (status, label) => {
+    const state = asHook([row({ dispatch_status: status, dispatched_at: SENT_AT })]);
+    expect(summariseAlShrouqDispatch(shownBy(state)).label).toBe(label);
+  });
+
+  /** The case that actually broke: a cancelled row leaves `current` null. */
+  it("still reports a cancelled dispatch, which has no current row at all", () => {
+    const state = asHook([
+      row({
+        dispatch_status: "cancelled",
+        scheduled_at: APPROVED_AT,
+        cancelled_at: "2026-08-21T11:00:00.000Z",
+      }),
+    ]);
+    expect(state.current).toBeNull();
+    expect(summariseAlShrouqDispatch(shownBy(state)).label).toBe("Scheduled delivery cancelled");
+    // …and the order may still be sent, because the slot is free.
+    expect(summariseAlShrouqDispatch(shownBy(state)).handedOver).toBe(false);
+  });
+
+  /** An operator's conclusion survives the round trip too. */
+  it("still reports an operator resolution", () => {
+    const state = asHook([
+      row({
+        dispatch_status: "indeterminate",
+        last_attempt_at: SENT_AT,
+        resolution_outcome: "delivered",
+        resolved_at: "2026-08-21T15:00:00.000Z",
+      }),
+    ]);
+    expect(summariseAlShrouqDispatch(shownBy(state)).resolutionOutcome).toBe("delivered");
+  });
+
+  /** A live dispatch beside an older cancelled one reports the live one. */
+  it("prefers the live dispatch over a cancelled predecessor", () => {
+    const state = asHook([
+      row({ dispatch_status: "cancelled", cancelled_at: "2026-08-21T11:00:00.000Z" }),
+      row({ dispatch_status: "accepted", dispatched_at: SENT_AT, external_order_id: "6099196" }),
+    ]);
+    expect(summariseAlShrouqDispatch(shownBy(state)).label).toBe("Accepted by AlShrouq");
+  });
+
+  /** And an order that never had one still contributes no card state at all. */
+  it("reports nothing for an order that was never dispatched", () => {
+    const state = asHook([]);
+    expect(shownBy(state)).toBeNull();
+    expect(summariseAlShrouqDispatch(shownBy(state)).status).toBeNull();
+  });
+
+  /**
+   * The card is rendered on the delivery method, not on the dispatch — so it is
+   * present the moment an order says AlShrouq, before and after any handover.
+   */
+  it("renders on the delivery method rather than on a dispatch row", () => {
+    expect(orderForm).toContain("{form.delivery_type === ALSHROUQ && (");
+    expect(orderForm).toContain("<AlShrouqDispatchSection");
   });
 });
 
@@ -645,83 +744,453 @@ describe("what confirming will do", () => {
   it("heads the explanation with the primary button's own label", () => {
     expect(dialog).toContain("const primaryLabel = creating");
     expect(dialog.match(/\{primaryLabel\}/g) ?? []).toHaveLength(2);
-    expect(dialog).toContain("What happens when you confirm");
-    expect(dialog).toContain('describeApprovalAction(mode, "order_only", null)');
+    expect(dialog).toContain("Create order only");
+    expect(dialog).toContain("Create order + AlShrouq delivery");
   });
 });
 
 /* ------------------------------------------------------------------------- */
-/* Timing is a choice, not a blank field                                     */
+/* The dialog confirms; it does not collect                                  */
+/* ------------------------------------------------------------------------- */
+
+describe("the confirmation dialog", () => {
+  /**
+   * The whole point of this pass. Pressing *Create order* used to produce a
+   * second, taller form: a payment select, a location box with its own resolve
+   * button, a driver note and a free-typed date and time — questions the agent
+   * thought they had already finished answering.
+   */
+  it("has no order-form controls left in it", () => {
+    expect(dialog).not.toContain("<Input");
+    expect(dialog).not.toContain("<Textarea");
+    expect(dialog).not.toContain("<Select");
+    expect(dialog).not.toContain("<SelectTrigger");
+    // The only control is the choice of when.
+    expect(dialog).toContain("<RadioGroup");
+  });
+
+  /** It fetches nothing and resolves nothing: every value arrives as a prop. */
+  it("owns no data of its own", () => {
+    expect(dialog).not.toContain("useQuery");
+    expect(dialog).not.toContain("useMutation");
+    expect(dialog).not.toContain("useServerFn");
+    expect(dialog).not.toContain("alshrouqResolveLocation");
+    expect(dialog).not.toContain("alshrouqDeliveryOptions");
+  });
+
+  /** And it holds no copy of what the form already knows. */
+  it("keeps no state but the chosen slot", () => {
+    const states = dialog.match(/useState[<(]/g) ?? [];
+    expect(states).toHaveLength(1);
+    expect(dialog).toContain("const [slotId, setSlotId]");
+  });
+
+  /** What it shows is a summary of the order, read-only. */
+  it("summarises the order the agent already filled in", () => {
+    for (const label of ["Customer", "Phone", "Branch", "Order value", "Payment", "Location"]) {
+      expect(dialog).toContain(`label="${label}"`);
+    }
+  });
+
+  /**
+   * A 200-character Maps URL is the one value on this screen that cannot be
+   * broken across lines by anything but a rule that says so — and printing it
+   * tells an agent nothing they can check. The coordinates are the readable part.
+   */
+  it("never prints the raw map URL", () => {
+    expect(dialog).not.toMatch(/\{mapUrl\}/);
+    expect(dialog).toContain("formatCoordinate(Number(latitude))");
+  });
+
+  /** It still assembles no request and knows no endpoint. */
+  it("hands back a plan and nothing else", () => {
+    expect(dialog).toContain("onApprove({");
+    expect(dialog).not.toContain("buildAlshrouqOrderPayload");
+    expect(dialog).not.toContain("branch_id");
+    expect(dialog).not.toMatch(/["'`]\/integrations/);
+    expect(dialog).not.toContain("ALSHROUQ_LIVE_DISPATCH_ENABLED");
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* Choosing when                                                             */
 /* ------------------------------------------------------------------------- */
 
 describe("choosing when to deliver", () => {
-  /**
-   * The rule used to be "leave the date and time blank to send now" — a rule an
-   * agent has to be told, standing between a driver leaving in a minute and a
-   * driver leaving tomorrow.
-   */
-  it("asks for immediate or scheduled outright", () => {
-    expect(dialog).toContain('useState<"now" | "later">("now")');
+  const at = (iso: string) => new Date(iso);
+
+  /** Slots, not a text box. Nothing anywhere accepts a typed time. */
+  it("offers a list and accepts no typed time", () => {
+    expect(dialog).toContain("scheduleOptionsAt(new Date())");
     expect(dialog).toContain("As soon as possible");
-    expect(dialog).toContain("At a set time");
-    expect(dialog).not.toContain("Leave both blank");
+    expect(dialog).not.toContain('type="date"');
+    expect(dialog).not.toContain('placeholder="03:30 PM"');
+    expect(dialog).not.toContain("<Input");
   });
 
-  /** The arithmetic is untouched: the same parser, on the same inputs. */
+  /** Every slot is 12-hour, and never 24. */
+  it("names every slot in 12-hour time", () => {
+    const options = scheduleOptionsAt(at("2026-08-22T09:05:00.000Z"));
+    expect(options).toHaveLength(SCHEDULE_OPTION_COUNT);
+    for (const option of options) {
+      expect(option.clock).toMatch(/^(1[0-2]|[1-9]):00 (AM|PM)$/);
+      expect(option.time).toMatch(/^(0[1-9]|1[0-2]):00 (AM|PM)$/);
+      // A 24-hour hour would show as 13:00 or later, which this cannot produce.
+      expect(option.clock).not.toMatch(/^(1[3-9]|2[0-4]):/);
+    }
+  });
+
+  /** Each one is a `{date, time}` pair the existing parser accepts, in future. */
+  it("produces slots the existing parser accepts as scheduled", () => {
+    const now = at("2026-08-22T09:05:00.000Z"); // 12:05 PM Riyadh
+    for (const option of scheduleOptionsAt(now)) {
+      const parsed = parseScheduleInput(option.date, option.time, now);
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) expect(parsed.timing).toBe("scheduled");
+    }
+  });
+
+  /** The first slot is far enough out that reading the dialog cannot expire it. */
+  it("never offers a slot that has already gone", () => {
+    // 2:58 PM Riyadh — the next whole hour is 3 PM, only two minutes away.
+    const now = at("2026-08-22T11:58:00.000Z");
+    const first = scheduleOptionsAt(now)[0]!;
+    const parsed = parseScheduleInput(first.date, first.time, now);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.timing).toBe("scheduled");
+    // Which means it skipped 3 PM and started at 4 PM.
+    expect(first.clock).toBe("4:00 PM");
+  });
+
+  /** Slots are labelled by day, and roll over midnight rather than into the past. */
+  it("rolls into tomorrow instead of offering a time that has passed", () => {
+    // 10:30 PM Riyadh: only one whole hour left today.
+    const options = scheduleOptionsAt(at("2026-08-22T19:30:00.000Z"));
+    expect(options[0]!.day).toBe("Today");
+    expect(options[0]!.clock).toBe("11:00 PM");
+    expect(options[1]!.day).toBe("Tomorrow");
+    expect(options[1]!.clock).toBe("12:00 AM");
+    expect(options[1]!.date).not.toBe(options[0]!.date);
+  });
+
+  /** Midnight and noon, the two the naive 12-hour formula gets wrong. */
+  it("names midnight and noon correctly", () => {
+    const overnight = scheduleOptionsAt(at("2026-08-22T20:10:00.000Z"));
+    expect(overnight.map((o) => o.clock)).toContain("12:00 AM");
+    const morning = scheduleOptionsAt(at("2026-08-22T08:10:00.000Z"));
+    expect(morning.map((o) => o.clock)).toContain("12:00 PM");
+  });
+
+  /** The arithmetic is untouched: the same parser, on the same shapes. */
   it("changes no scheduling logic", () => {
-    expect(dialog).toContain("parseScheduleInput(date, time)");
-    // "Now" means no instant is sent at all, exactly as two blank boxes did.
-    expect(dialog).toContain('if (timing === "now")');
-    // No clock arithmetic of its own beyond the one figure it renders.
-    expect(dialog.match(/Date\.now\(\)/g) ?? []).toHaveLength(1);
-  });
-
-  /** The date and time are only asked for when they are going to be used. */
-  it("shows the date and time only for a scheduled delivery", () => {
-    expect(dialog).toContain('{timing === "later" && (');
+    expect(dialog).toContain("parseScheduleInput(slot.date, slot.time)");
+    // "As soon as possible" sends no instant at all, as a blank pair always did.
+    expect(dialog).toContain("if (!slot) return { ok: true as const, iso: null");
+    const options = read("../schedule-options.ts");
+    expect(options).not.toContain("Date.now()");
+    expect(options).not.toMatch(/\bfetch\(|useMutation|useServerFn|supabase/);
   });
 });
 
 /* ------------------------------------------------------------------------- */
-/* The delivery location reads as verified order information                 */
+/* Google Maps links                                                         */
 /* ------------------------------------------------------------------------- */
 
-describe("the delivery location", () => {
+describe("reading a location out of a link", () => {
+  /** The ordinary desktop URL, with the dropped pin in the `/data=` blob. */
+  it("reads a place URL", () => {
+    const reading = readLocation(
+      "https://www.google.com/maps/place/Pharmacy/@24.7136,46.6753,17z/data=!3m1!4b1!4m5!3m4!1s0x0:0x0!8m2!3d24.53728!4d46.64561",
+    );
+    expect(reading).toEqual({ kind: "resolved", latitude: 24.53728, longitude: 46.64561 });
+  });
+
+  /** `?q=lat,lng` — the form the branch mapping itself uses. */
+  it("reads a ?q= URL", () => {
+    expect(readLocation("https://www.google.com/maps?q=24.537276,46.645605")).toEqual({
+      kind: "resolved",
+      latitude: 24.537276,
+      longitude: 46.645605,
+    });
+  });
+
+  /** The `@lat,lng` camera, when there is no pin to prefer. */
+  it("reads an @lat,lng URL", () => {
+    const reading = readLocation("https://www.google.com/maps/@24.8061703,46.77527122,15z");
+    expect(reading.kind).toBe("resolved");
+    if (reading.kind === "resolved") expect(reading.latitude).toBeCloseTo(24.8061703, 6);
+  });
+
+  /** A phone's own share sheet, and a pasted pair. */
+  it("reads a geo: share and a bare pair", () => {
+    expect(readLocation("geo:24.7136,46.6753").kind).toBe("resolved");
+    expect(readLocation("24.7136, 46.6753").kind).toBe("resolved");
+  });
+
   /**
-   * Different facts, kept apart: the link the customer sent, the place it
-   * resolved to, and the point a driver routes to. Merging them is how an agent
-   * ends up checking the wrong one.
+   * A short link is not a failure. It is a perfectly good location this browser
+   * cannot read, and the honest answer is to offer to ask the server.
    */
-  it("separates the customer's link from the coordinates", () => {
-    expect(card).toContain("Delivery location");
-    expect(card).toContain("Location shared by the customer");
-    expect(card).toContain(">Lat<");
-    expect(card).toContain(">Lng<");
-    expect(dialog).toContain("Location verified");
-    expect(dialog).toContain("Open the customer's link");
+  it("asks for a check rather than guessing at a short link", () => {
+    const reading = readLocation("https://maps.app.goo.gl/aBcDeFgHiJkLmNoP");
+    expect(reading.kind).toBe("needs_check");
+    expect(describeLocationReading(reading)).toMatch(/short link/i);
+    // And no coordinate is invented on the way.
+    expect(JSON.stringify(reading)).not.toMatch(/latitude|longitude/);
   });
 
-  /** Verified is claimed only where there is a resolved point to justify it. */
-  it("claims verification only when coordinates exist", () => {
-    expect(card).toMatch(/\{coordinates && \([\s\S]{0,400}Verified/);
+  /** A swapped pair lands outside the country and is refused rather than sent. */
+  it("refuses coordinates outside Saudi Arabia", () => {
+    const reading = readLocation("https://www.google.com/maps?q=46.6753,24.7136");
+    expect(reading.kind).toBe("out_of_range");
+    expect(describeLocationReading(reading)).toMatch(/outside Saudi Arabia/i);
   });
 
-  /**
-   * The stored address is upstream-influenced text that ends up behind an
-   * anchor, so it goes through the same guard the tracking link uses rather than
-   * a second, subtly different one.
-   */
-  it("opens the stored link through the existing URL guard", () => {
-    expect(card).toContain("safeTrackingUrl as safeExternalUrl");
-    expect(card).toContain("safeExternalUrl(locationText)");
-    expect(card).toMatch(/href=\{customerLink\}[\s\S]{0,200}rel="noopener noreferrer"/);
-    // Nothing is assembled: the destination is the persisted value or nothing.
-    expect(card).not.toMatch(/["'`]https?:\/\/[^"'`]*\$\{/);
+  /** A link naming a place by name only yields nothing, not a nearby guess. */
+  it("yields nothing for a link with no coordinates", () => {
+    expect(readLocation("https://www.google.com/maps/place/Some+Pharmacy").kind).toBe(
+      "unsupported",
+    );
+    expect(readLocation("https://example.com/not-maps").kind).toBe("unsupported");
+    expect(readLocation("").kind).toBe("empty");
   });
 
-  /** Latitude and longitude are read-only evidence — there is no input for them. */
+  /** The form reads links itself; only the shortener costs a request. */
+  it("spends a server call only on the link it must", () => {
+    expect(section).toContain('location.kind === "needs_check"');
+    expect(section).toContain("Check location");
+    expect(section).toContain("alshrouqResolveLocation");
+    // The button exists only for that case — no permanently disabled control.
+    expect(section).toMatch(/\{location\.kind === "needs_check" && \([\s\S]{0,900}Check location/);
+  });
+
+  /** Coordinates are shown, never typed. */
   it("offers no way to type a coordinate", () => {
-    expect(card).not.toMatch(/<Input[\s\S]{0,200}(lat|lng|latitude|longitude)/i);
+    expect(section).toContain("readOnly");
+    expect(section).toMatch(/readOnly[\s\S]{0,120}aria-readonly="true"/);
+    expect(section).not.toMatch(/onChange=\{[^}]*latitude/i);
+    expect(section).not.toMatch(/onChange=\{[^}]*longitude/i);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* Branch coverage                                                           */
+/* ------------------------------------------------------------------------- */
+
+describe("branch coverage", () => {
+  const option = (over: Partial<AlShrouqBranchOption>): AlShrouqBranchOption => ({
+    id: "9999927657121",
+    internal_code: "P0001",
+    branch_name: "Hazm RDHS",
+    label: "P0001 Hazm RDHS",
+    covered: true,
+    note: null,
+    ...over,
+  });
+
+  const coverageOf = (options: AlShrouqBranchOption[], branchNo: string | null) =>
+    branchCoverage(resolveAlShrouqBranch(options, branchNo));
+
+  it("reports a covered branch, and allows the handover", () => {
+    const coverage = coverageOf([option({})], "P0001");
+    expect(coverage.kind).toBe("covered");
+    expect(coverageAllowsDispatch(coverage)).toBe(true);
+    expect(describeBranchCoverage(coverage)).toMatch(/AlShrouq delivers from this branch/i);
+  });
+
+  /** Case and padding are the agent's, not the data's. */
+  it("matches a branch code however it was typed", () => {
+    expect(coverageOf([option({})], " p0001 ").kind).toBe("covered");
+  });
+
+  /**
+   * The warning must be unmissable and must not read as something the agent
+   * typed wrong — it is not fixable, and the only useful next step is another
+   * delivery method.
+   */
+  it("warns clearly, and blocks, on a branch AlShrouq does not serve", () => {
+    const coverage = coverageOf([option({ covered: false })], "P0001");
+    expect(coverage.kind).toBe("not_covered");
+    expect(coverageAllowsDispatch(coverage)).toBe(false);
+    const message = describeBranchCoverage(coverage);
+    expect(message).toMatch(/does not cover this branch/i);
+    expect(message).toMatch(/cannot be handed over/i);
+    expect(message).toMatch(/another delivery method/i);
+  });
+
+  /** A branch the list does not carry is somebody else's problem to fix. */
+  it("distinguishes an unlisted branch from an uncovered one", () => {
+    const unlisted = coverageOf([option({})], "P9999");
+    expect(unlisted).toEqual({ kind: "unlisted", reason: "not_in_crm" });
+    expect(describeBranchCoverage(unlisted)).toMatch(/not in AlShrouq's list/i);
+
+    const noId = coverageOf([option({ id: null })], "P0001");
+    expect(noId).toEqual({ kind: "unlisted", reason: "no_id_published" });
+    expect(describeBranchCoverage(noId)).toMatch(/no AlShrouq id/i);
+  });
+
+  /** No branch yet is not a warning. */
+  it("says nothing alarming before a branch is chosen", () => {
+    expect(coverageOf([option({})], null).kind).toBe("no_branch");
+    expect(describeBranchCoverage({ kind: "no_branch" })).toMatch(/choose a branch/i);
+  });
+
+  /**
+   * An unreachable list is never read as "covered". The server returns empty
+   * lists on failure, which resolves to `not_in_crm` and blocks — failing closed.
+   */
+  it("never assumes coverage when the list is missing", () => {
+    expect(coverageAllowsDispatch(branchCoverage(null))).toBe(false);
+    expect(coverageAllowsDispatch(coverageOf([], "P0001"))).toBe(false);
+  });
+
+  /**
+   * Coverage comes from the CRM's live `branch_options`, the only list carrying
+   * `covered`. No branch id and no copy of the workbook is written down here —
+   * a frozen list cannot learn that a branch stopped being served, which is why
+   * the reverted integration's migration was wrong to exist.
+   */
+  it("holds no branch ids of its own", () => {
+    const requirements = read("../order-requirements.ts");
+    const hook = read("../use-alshrouq-order.ts");
+    for (const source of [requirements, hook, section]) {
+      // The AlShrouq ids are 13-digit numbers beginning 99999.
+      expect(source).not.toMatch(/\b99999\d{8}\b/);
+      // A branch code as *data* — quoted or listed. Prose that names one while
+      // explaining why the mapping is not stored here is not a mapping.
+      expect(source).not.toMatch(/["\x27][Pp]0\d{3}["\x27]/);
+    }
+    expect(hook).toContain("resolveAlShrouqBranch(options.branchOptions, branchNo)");
+  });
+
+  /** And no credential from the workbook that carries the same mapping. */
+  it("carries no AlShrouq credential", () => {
+    for (const source of [
+      read("../order-requirements.ts"),
+      read("../use-alshrouq-order.ts"),
+      section,
+      dialog,
+      card,
+    ]) {
+      expect(source).not.toMatch(/alshrouqdelivery\.com/i);
+      expect(source).not.toMatch(/shams@alshrouq/i);
+      expect(source).not.toMatch(/webhook_auth_value/);
+    }
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* What AlShrouq makes required                                              */
+/* ------------------------------------------------------------------------- */
+
+describe("what AlShrouq requires of an order", () => {
+  const covered: BranchCoverage = { kind: "covered", branchName: "Hazm RDHS" };
+
+  const complete = (over: Partial<AlShrouqOrderInput> = {}): AlShrouqOrderInput => ({
+    deliveryType: "AlShrouq",
+    customerName: "Abdullah",
+    customerPhone: "0551234567",
+    mapUrl: "https://www.google.com/maps?q=24.537276,46.645605",
+    latitude: "24.537276",
+    longitude: "46.645605",
+    paymentType: "3",
+    ...over,
+  });
+
+  it("is satisfied by a complete order on a covered branch", () => {
+    expect(alshrouqRequirements(complete(), covered)).toEqual([]);
+    expect(readyForAlShrouq(complete(), covered)).toBe(true);
+  });
+
+  const missing = (over: Partial<AlShrouqOrderInput>) =>
+    alshrouqRequirements(complete(over), covered).map((r) => r.field);
+
+  it("requires the customer's name", () => {
+    expect(missing({ customerName: "  " })).toContain("customer_name");
+  });
+
+  it("requires the customer's phone", () => {
+    expect(missing({ customerPhone: "" })).toContain("customer_phone");
+  });
+
+  it("requires a payment method, and never guesses one", () => {
+    expect(missing({ paymentType: "" })).toContain("payment_type");
+    const message = alshrouqRequirements(complete({ paymentType: "" }), covered)[0]!.message;
+    expect(message).toMatch(/how the customer pays/i);
+  });
+
+  it("requires a location, and both halves of the point", () => {
+    expect(missing({ mapUrl: "" })).toContain("customer_location");
+    expect(missing({ latitude: "", longitude: "" })).toEqual(
+      expect.arrayContaining(["customer_lat", "customer_lng"]),
+    );
+    // Half a point is not a location.
+    expect(missing({ longitude: "" })).toContain("customer_lng");
+  });
+
+  it("blocks an uncovered branch", () => {
+    const fields = alshrouqRequirements(complete(), {
+      kind: "not_covered",
+      branchName: "Hazm RDHS",
+      note: null,
+    }).map((r) => r.field);
+    expect(fields).toContain("branch_coverage");
+    expect(
+      readyForAlShrouq(complete(), { kind: "not_covered", branchName: null, note: null }),
+    ).toBe(false);
+  });
+
+  /**
+   * The safety property the whole design rests on: none of this can reach an
+   * ordinary order. Every other delivery method exits before any rule runs.
+   */
+  it.each(["Store Pickup", "Azman", "Branch Scooter", ""])(
+    "says nothing at all about a %s order",
+    (deliveryType) => {
+      const empty: AlShrouqOrderInput = {
+        deliveryType,
+        customerName: "",
+        customerPhone: "",
+        mapUrl: "",
+        latitude: "",
+        longitude: "",
+        paymentType: "",
+      };
+      expect(alshrouqRequirements(empty, { kind: "no_branch" })).toEqual([]);
+      expect(readyForAlShrouq(empty, { kind: "no_branch" })).toBe(true);
+    },
+  );
+
+  /** It returns problems; it never throws one into a submit handler. */
+  it("returns issues rather than throwing", () => {
+    expect(() =>
+      alshrouqRequirements(complete({ customerName: "" }), { kind: "unknown" }),
+    ).not.toThrow();
+  });
+
+  /** And the save path is still untouched by any of it. */
+  it("leaves orderFormSchema and the payload builder alone", () => {
+    const schema = read("../../orders/schema.ts");
+    const payload = read("../../orders/payload.ts");
+    for (const source of [schema, payload]) {
+      expect(source).not.toMatch(/alshrouq/i);
+      expect(source).not.toContain("payment_type");
+    }
+    const hook = read("../../orders/hooks/use-order-form.ts");
+    expect(hook).not.toMatch(/alshrouq/i);
+  });
+
+  /** The form marks them required where the agent can see it. */
+  it("marks the customer fields required on the form", () => {
+    expect(orderForm).toContain("required={alshrouq.active}");
+    expect(orderForm).toContain("optional={!alshrouq.active}");
+    expect(orderForm).toContain("<AlShrouqOrderRequirements");
+  });
+
+  /** And the handover is refused while anything is missing. */
+  it("disables the handover until every requirement is met", () => {
+    expect(dialog).toContain("disabled={busy || !ready}");
+    expect(dialog).toContain("AlShrouq delivery is not available yet");
   });
 });
 
@@ -731,28 +1200,55 @@ describe("the delivery location", () => {
 
 describe("the layout survives a phone", () => {
   /**
-   * The card lives in a column that is full-width on a phone and roughly a third
-   * of the page on a desktop. Every grid in it therefore starts at one column
-   * and earns a second, rather than starting at two and being squeezed.
+   * Every grid starts at one column and earns a second, rather than starting at
+   * two and being squeezed into a 375px screen.
    */
   it("stacks its grids before it splits them", () => {
-    for (const source of [card, dialog]) {
+    for (const source of [card, dialog, section]) {
       for (const grid of source.match(/(?<!sm:)grid-cols-\d/g) ?? []) {
         expect(grid).toBe("grid-cols-1");
       }
-      expect(source).toContain("sm:grid-cols-2");
     }
   });
 
   /**
-   * Long values shorten instead of widening their container: an Arabic branch
-   * name or a customer's map URL must not push the page sideways.
+   * The dialog is bounded on both axes by the viewport, so it can neither be
+   * wider than the screen nor taller than it.
    */
-  it("truncates rather than overflowing", () => {
-    for (const source of [card, dialog]) {
-      expect(source).toContain("min-w-0");
-      expect(source).toContain("truncate");
-      // No fixed pixel widths, which are what actually force a sideways scroll.
+  it("bounds the dialog to the viewport", () => {
+    expect(dialog).toContain("max-h-[85vh]");
+    expect(dialog).toContain("w-[calc(100vw-2rem)]");
+    expect(dialog).toContain("max-w-xl");
+  });
+
+  /**
+   * Nothing inside it is unbreakable. A long value wraps in its own column
+   * rather than widening the dialog, and the raw URL — the one genuinely
+   * unbreakable string in the flow — is never printed at all.
+   */
+  it("lets every value in the dialog break", () => {
+    expect(dialog).toContain("break-words");
+    expect(dialog).toContain("min-w-0");
+    expect(dialog).not.toMatch(/\{mapUrl\}/);
+  });
+
+  /**
+   * The horizontal scrollbar had a cause, and this is the fix for it rather
+   * than a cover for it. `DialogContent` is a `grid` with an implicit `auto`
+   * column, so its single track was sized to the *max-content* width of its
+   * widest child: one long summary value widened the track, every sibling
+   * stretched to match, and the dialog overflowed its own `max-width`. A track
+   * that may shrink to zero constrains the children instead.
+   */
+  it("fixes the overflow at the grid rather than hiding it", () => {
+    expect(dialog).toContain("grid-cols-[minmax(0,1fr)]");
+    expect(dialog).not.toContain("overflow-x-hidden");
+    expect(dialog).not.toContain("overflow-x-clip");
+  });
+
+  /** No fixed pixel widths, which are what actually force a sideways scroll. */
+  it("uses no fixed widths anywhere in the flow", () => {
+    for (const source of [card, dialog, section]) {
       expect(source).not.toMatch(/\bw-\[\d+px\]/);
       expect(source).not.toMatch(/\bmin-w-\[\d{3,}px\]/);
     }
@@ -766,9 +1262,9 @@ describe("the layout survives a phone", () => {
     expect(dialog).toContain("flex-col-reverse gap-2 sm:flex-row sm:justify-end");
   });
 
-  /** The dialog can always be scrolled to its buttons, however tall it gets. */
-  it("keeps a tall dialog inside the viewport", () => {
-    expect(dialog).toContain("max-h-[85vh] overflow-y-auto");
+  /** The location row on the form stacks its input and its button too. */
+  it("stacks the location controls before it puts them side by side", () => {
+    expect(section).toContain("flex flex-col gap-2 sm:flex-row");
   });
 });
 
@@ -801,5 +1297,13 @@ describe("choosing AlShrouq on the order form", () => {
     expect(card).toContain("Choose <span");
     expect(card).toMatch(/Create order<\/span> at the top of/);
     expect(card).not.toMatch(/disabled[\s\S]{0,80}Pending order creation/);
+  });
+
+  /** One AlShrouq state, shared: the form fills it, the card and dialog read it. */
+  it("shares one AlShrouq state across the form, the card and the dialog", () => {
+    expect(orderForm).toContain("const alshrouq = useAlShrouqOrder(");
+    expect(orderForm).toContain("alshrouq={alshrouq}");
+    expect(orderForm.match(/alshrouq=\{alshrouq\}/g) ?? []).toHaveLength(2);
+    expect(card).toContain("alshrouq.coverage");
   });
 });

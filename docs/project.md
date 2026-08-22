@@ -3853,6 +3853,126 @@ the viewport at both widths, and the dark palette resolved to the `.dark` tokens
 on load. The harness was deleted before commit. The order form's own create
 journey could not be reached — it sits behind `/_app`, which requires a session.
 
+### The confirmation stopped being a second form — Phase 11.1
+
+Still UI only: no migration, no schema change, no scheduler, no state-machine
+change, no RLS, no new permission, no credential, and `ALSHROUQ_LIVE_DISPATCH_ENABLED`
+untouched. `orderFormSchema` and `buildOrderPayload` are byte-identical and a
+test asserts neither mentions AlShrouq at all.
+
+**The complaint was structural, not cosmetic.** Pressing **Create order** on an
+AlShrouq order produced a taller form than the one the agent had just finished:
+a payment select, a location box with its own resolve button, a driver note and
+a free-typed date and time. A dialog that collects data is not a confirmation,
+and the agent had no way to know, while taking the order, that three more
+answers were coming.
+
+**So the questions moved to where the order is taken.**
+`AlShrouqOrderRequirements` renders inside the *Order details* card the moment
+the delivery method is AlShrouq, and asks for the three things a courier needs
+that no order column holds: where the customer is, how they pay, and — read
+rather than asked — the point a driver routes to. Customer name and phone gain a
+required marker in the same moment.
+
+**The dialog is now six read-only lines and one choice.** Customer, phone,
+branch, order value, payment, location; then *when*; then **Create order only**
+or **Create order + AlShrouq delivery**. Tests assert it contains no `<Input>`,
+no `<Textarea>`, no `<Select>`, no `useQuery`, no `useMutation`, no
+`useServerFn`, and exactly one piece of state — the chosen slot.
+
+**Coordinates are read in the browser, keylessly.** `parseMapsUrl` was already
+pure and already handled every shape a shared Maps link takes — the
+`/data=…!3d…!4d…` dropped pin, `?q=`/`?ll=`/`?destination=`, the `@lat,lng`
+camera, a `geo:` share, a bare pair — and was only ever called on the server.
+There is no reason for a round trip to read numbers already in the URL bar, so
+`readLocation` calls it directly and the latitude and longitude fill in as the
+agent pastes. They are rendered `readOnly`: they are the product of the link and
+were never typed.
+
+**A short link is not a failure.** `maps.app.goo.gl` carries a redirect and
+nothing else, and the browser cannot follow it — the shortener sends no CORS
+headers. That one case, and only that case, shows **Check location**, which asks
+`alshrouqResolveLocation` (unchanged: Google-host allow-list, HTTPS, re-checked
+every hop, `Location` header only, capped length/hops/time). Nothing fabricates
+a coordinate; an unreadable link leaves the fields empty and the handover
+blocked. A resolution is discarded the moment the link text changes, because a
+point belongs to the link it came from.
+
+**Branch coverage is answered before the order exists.** It could not be:
+`alshrouqDispatchContext` needs an order id, so a *new* AlShrouq order got no
+coverage feedback until after it was saved. `alshrouqPaymentOptions` became
+`alshrouqDeliveryOptions` and now returns both lists that
+`fetchAlShrouqDispatchOptions` already computed — same endpoint, same five-minute
+cache, same single flight, same `create_orders` gate, and `webhook_auth_value`
+still never read. A covered branch gets a quiet success line; an uncovered one
+gets a warning that names the consequence — *this order cannot be handed over to
+AlShrouq from here — choose another delivery method* — because "not covered"
+alone reads as something the agent typed wrong, and it is not.
+
+**On the workbook.** `Shams-alshrouq mapping.xlsx` was read for this phase. It
+is 137 rows of `AlShrouq id · branch name · city · Maps URL` and **it carries no
+coverage column at all** — every row has an id — so it cannot be the source of
+truth for coverage that a UI needs; only the CRM's `branch_options.covered` can.
+It also carries an AlShrouq login, username, password and token in its first two
+columns, none of which is in this repository and none of which this code reads.
+Tests assert no branch id, no quoted branch code and no AlShrouq credential
+appears in any of the new modules.
+
+**Timing is a list of slots.** "Leave the date and time blank to send now" was
+replaced last phase by two radios and a date/time pair; it is now the next whole
+hours in Riyadh, in 12-hour time, generated from the clock at the moment the
+dialog opens. `scheduleOptionsAt` is pure and produces nothing but `{ date,
+time }` pairs in exactly the shape `parseScheduleInput` already takes — the
+arithmetic, the rejection of the past and the two-minute immediate window are
+untouched. The first slot is at least 30 minutes out, so reading the
+confirmation cannot make the chosen time fall behind `now()`; slots roll into
+*Tomorrow* rather than into the past; and there is no free-typed time anywhere.
+
+**The card no longer disappears when an order is reopened.**
+`useOrderAlShrouqDispatch` defines `current` as the row that is **not**
+cancelled, which is the right answer for the send control and the wrong one for
+the display: an order whose only dispatch had been cancelled came back from the
+orders list with no dispatch history on the card at all. The card now reports on
+`current ?? latest` while `handedOver` and the countdown stay bound to `current`,
+so a cancelled delivery is named and the order is still correctly sendable. No
+new row, no new column, no new query — the history was already in the same
+result.
+
+**The horizontal scrollbar had a cause.** `DialogContent` is a `grid` with an
+implicit `auto` column, so its single track was sized to the *max-content* width
+of its widest child: one long value widened the track, every sibling stretched
+to match, and the dialog overflowed its own `max-width` by 35px.
+`grid-cols-[minmax(0,1fr)]` lets the track shrink, which is what lets
+`break-words` and `min-w-0` do their job. No overflow is hidden. The raw Maps
+URL is never printed — it is a long unbreakable string that tells an agent
+nothing they can check, and the coordinates are the readable part.
+
+**Measured, not asserted.** At 1280px the dialog is 547px wide with
+`scrollWidth === clientWidth`; at 375px it is 342px inset 24px each side, again
+with no horizontal overflow, and the page's `scrollWidth` equals the viewport at
+both. Dark mode resolves to the `.dark` tokens on load. Verified through a
+temporary unauthenticated route that seeded the query cache; it was deleted
+before commit, and the real Create Order page — behind `/_app`'s session gate —
+was not reachable.
+
+**What was deliberately not done.** The AlShrouq values are not written to
+`orders`. The columns exist (`alshrouq_map_url`, `alshrouq_lat`, `alshrouq_lng`,
+`alshrouq_payment_type`, from the reverted integration's migration) and
+persisting them would mean adding fields to `orderFormSchema` and
+`buildOrderPayload` — the save path, and the exact mechanism behind the "agents
+cannot save orders" outage. They travel to the courier the way they always have:
+through `AlShrouqApprovalPlan` → `alshrouqDispatchOrder` → the frozen
+`payload_snapshot`. The consequence is that an AlShrouq order saved *without*
+being handed over does not remember its location or payment method, which is
+what the previous build did too.
+
+**And the requirements gate the handover, not the save.** Marking customer name
+required does not make an ordinary save fail, and **Create order only** stays
+available on an incomplete AlShrouq order. What the requirements disable is the
+handover: the primary button is off, and the dialog lists exactly what is
+missing. That split is the whole reason these rules live outside
+`orderFormSchema`.
+
 ### AlShrouq create transport
 
 `alshrouq-create.server.ts` owns the create POST and the read that reconciles

@@ -91,7 +91,6 @@ import {
   alshrouqDispatchContext,
   alshrouqDispatchOrder,
   alshrouqResolveDispatch,
-  type AlShrouqDispatchContext,
 } from "@/lib/shams.functions";
 import {
   ALSHROUQ_RESOLUTION_OUTCOMES,
@@ -126,6 +125,8 @@ import {
   type AlShrouqReadiness,
   type AlShrouqTone,
 } from "../dispatch-presentation";
+import { coverageAllowsDispatch, describeBranchCoverage } from "../order-requirements";
+import type { AlShrouqOrderState } from "../use-alshrouq-order";
 import { formatScheduledFor } from "../scheduling";
 import { useOrderAlShrouqDispatch } from "../use-order-dispatch";
 import { useScheduledDispatchCountdown } from "../use-scheduled-countdown";
@@ -142,15 +143,14 @@ export interface AlShrouqDispatchSectionProps {
   /** The order's own value. Deliberately not a delivery fee. */
   invoiceValue: string;
   notes: string;
-}
-
-function branchLine(ctx: AlShrouqDispatchContext): { text: string; ok: boolean } {
-  const b = ctx.branch;
-  if (b.kind === "resolved") return { text: b.branchName ?? "Covered", ok: true };
-  if (b.kind === "not_covered") return { text: "AlShrouq does not cover this branch", ok: false };
-  if (b.reason === "no_branch_on_order") return { text: "Select a branch", ok: false };
-  if (b.reason === "no_id_published") return { text: "No AlShrouq id published", ok: false };
-  return { text: "Not in the CRM's branch list", ok: false };
+  /**
+   * The AlShrouq half of the order, from the form.
+   *
+   * The same object the requirements section writes and the approval dialog
+   * confirms — one state, so the branch coverage this card reports and the one
+   * that decides whether the handover is offered cannot be two different answers.
+   */
+  alshrouq: AlShrouqOrderState;
 }
 
 /**
@@ -224,6 +224,7 @@ export function AlShrouqDispatchSection({
   branchNo,
   invoiceValue,
   notes,
+  alshrouq,
 }: AlShrouqDispatchSectionProps) {
   const saved = mode === "edit" && !!orderId;
 
@@ -236,9 +237,36 @@ export function AlShrouqDispatchSection({
     saved,
   );
   const current = dispatchState?.current ?? null;
-  const summary = useMemo(() => summariseAlShrouqDispatch(current), [current]);
 
-  /** Display only. It performs no work and cannot cause any — see the hook. */
+  /**
+   * The row the card *reports on*, which is not always the row that owns the
+   * slot.
+   *
+   * `current` is by definition the dispatch that is **not** cancelled, because
+   * that is the question the send control has to answer. Reporting on it too
+   * meant an order whose only dispatch had been cancelled came back from the
+   * orders list looking as though it had never had one — the history was in the
+   * timeline and nowhere on the card. So the card falls back to the most recent
+   * row, and every state the order has ever been in stays visible when it is
+   * reopened.
+   *
+   * The two are kept apart deliberately: `handedOver` below is derived from
+   * `summary`, and a cancelled row correctly reports `handedOver: false`, so
+   * falling back here cannot make an order look un-sendable when it is not — nor
+   * the reverse, because an *un*cancelled row is always `current` anyway.
+   */
+  const latest = dispatchState?.rows?.length
+    ? (dispatchState.rows[dispatchState.rows.length - 1] ?? null)
+    : null;
+  const shown = current ?? latest;
+  const summary = useMemo(() => summariseAlShrouqDispatch(shown), [shown]);
+
+  /**
+   * Display only. It performs no work and cannot cause any — see the hook.
+   *
+   * Driven by the row that owns the slot, not the one on display: a cancelled
+   * delivery must not count down to a time nobody is going to act on.
+   */
   const countdown = useScheduledDispatchCountdown(current?.scheduled_for, current?.dispatch_status);
 
   /**
@@ -355,7 +383,15 @@ export function AlShrouqDispatchSection({
   });
 
   const errors: AlShrouqFieldError[] = result?.kind === "invalid" ? result.errors : [];
-  const branch = useMemo(() => (ctx ? branchLine(ctx) : null), [ctx]);
+  /**
+   * Branch coverage, from the shared order state.
+   *
+   * The form already asked the CRM which branches AlShrouq serves, before this
+   * order existed — so the card reads that answer rather than deriving a second
+   * one from the order-scoped context. `ctx` is still consulted for what only it
+   * knows: the order's display number, and whether this agent may act on it.
+   */
+  const covered = coverageAllowsDispatch(alshrouq.coverage);
 
   /**
    * Whether anything may still be approved.
@@ -364,8 +400,7 @@ export function AlShrouqDispatchSection({
    * the way until the row is known, so a slow query cannot briefly offer "Send"
    * on an order that has already gone.
    */
-  const ready =
-    saved && !dispatchPending && !summary.handedOver && !!ctx && !ctx.optionsError && !!branch?.ok;
+  const ready = saved && !dispatchPending && !summary.handedOver && !!ctx && covered;
 
   /**
    * Where the agent is *before* anything has been approved.
@@ -376,11 +411,11 @@ export function AlShrouqDispatchSection({
    */
   const readiness: AlShrouqReadiness = !saved
     ? "draft"
-    : dispatchPending || ctxPending
+    : dispatchPending || ctxPending || alshrouq.optionsPending
       ? "checking"
-      : ctxError || ctx?.optionsError
+      : ctxError
         ? "unverified"
-        : branch?.ok
+        : covered
           ? "ready"
           : "unavailable";
 
@@ -389,10 +424,9 @@ export function AlShrouqDispatchSection({
    *
    * A persisted row wins outright and the readiness is the fallback, rather than
    * the other way round: a status this build does not recognise must still be
-   * reported rather than being papered over with "Ready to send". A *cancelled*
-   * row never arrives here at all — `current` is by definition the row that is
-   * not cancelled — which is why that history is said in its own band below
-   * instead of in this badge.
+   * reported rather than being papered over with "Ready to send". The row on
+   * display may be a cancelled one — see `shown` — so this badge names a
+   * cancellation instead of pretending the order never had a delivery.
    */
   const status: { label: string; tone: AlShrouqTone } =
     summary.status !== null
@@ -433,41 +467,29 @@ export function AlShrouqDispatchSection({
   const submitted =
     summary.handedOver && summary.status !== "scheduled" && summary.status !== "failed";
 
-  /**
-   * The most recent delivery that was called off.
-   *
-   * `current` is by definition the row that is *not* cancelled, so a cancelled
-   * dispatch reaches this card as no dispatch at all — correct about what may
-   * happen next, and silent about what just happened. The history is already in
-   * the same query, so the card says it rather than leaving the agent to find it
-   * on the timeline.
-   */
-  const lastCancelled = useMemo(
-    () => [...(dispatchState?.rows ?? [])].reverse().find((r) => r.cancelled_at != null) ?? null,
-    [dispatchState?.rows],
-  );
-
   const branchValue = branchNo
-    ? branch && saved && !ctxPending && !ctxError
-      ? `${branchNo} · ${branch.text}`
+    ? alshrouq.coverage.kind === "covered" && alshrouq.coverage.branchName
+      ? `${branchNo} · ${alshrouq.coverage.branchName}`
       : branchNo
     : "Select a branch";
 
   /**
    * The payment method, as it was approved.
    *
-   * The row stores the CRM's own id; the label comes from the live option list.
-   * An id the list no longer offers shows as the id rather than as a guess.
+   * The row stores the CRM's own id; the label comes from the live option list,
+   * which the order form already fetched. An id the list no longer offers shows
+   * as the id rather than as a guess.
    */
   const paymentLabel = useMemo(() => {
-    if (!current?.payment_type) return null;
-    const match = (ctx?.paymentOptions ?? []).find((p) => String(p.id) === current.payment_type);
-    return match?.label ?? current.payment_type;
-  }, [current?.payment_type, ctx?.paymentOptions]);
+    const stored = shown?.payment_type;
+    if (!stored) return null;
+    const match = alshrouq.options.paymentOptions.find((p) => String(p.id) === stored);
+    return match?.label ?? stored;
+  }, [shown?.payment_type, alshrouq.options.paymentOptions]);
 
   const coordinates =
-    current?.customer_lat != null && current?.customer_lng != null
-      ? { lat: String(current.customer_lat), lng: String(current.customer_lng) }
+    shown?.customer_lat != null && shown?.customer_lng != null
+      ? { lat: String(shown.customer_lat), lng: String(shown.customer_lng) }
       : null;
 
   /**
@@ -480,7 +502,7 @@ export function AlShrouqDispatchSection({
    * a `javascript:` destination or be read as a Portal route. A value that fails
    * it is shown as the text it is.
    */
-  const locationText = current?.customer_address?.trim() || null;
+  const locationText = shown?.customer_address?.trim() || null;
   const customerLink = safeExternalUrl(locationText);
 
   return (
@@ -531,13 +553,13 @@ export function AlShrouqDispatchSection({
             value={
               // Once handed over, the figure that was approved — not whatever
               // the order says now.
-              current?.value != null
-                ? fmtSAR(Number(current.value))
+              shown?.value != null
+                ? fmtSAR(Number(shown.value))
                 : invoiceValue.trim()
                   ? fmtSAR(Number(invoiceValue))
                   : "—"
             }
-            muted={current?.value == null && !invoiceValue.trim()}
+            muted={shown?.value == null && !invoiceValue.trim()}
           />
         </div>
 
@@ -697,32 +719,14 @@ export function AlShrouqDispatchSection({
           </Band>
         )}
 
-        {/* A delivery this order had, and no longer has. Warning-toned rather
-            than alarming: nothing went wrong and nobody was contacted — but an
-            agent looking at an order that says "Ready to send" should know a
-            slot was booked for it and called off. */}
-        {!current && lastCancelled && (
-          <Band icon={CalendarX} tone="warning">
-            <p>
-              A scheduled AlShrouq delivery for this order was cancelled
-              {formatScheduledFor(lastCancelled.scheduled_for)
-                ? `, having been due ${formatScheduledFor(lastCancelled.scheduled_for)}`
-                : ""}
-              . No courier was contacted, and the order can be sent again.
-            </p>
-          </Band>
-        )}
-
-        {(!branch?.ok || !saved) && !summary.handedOver && (
+        {(!covered || !saved) && !summary.handedOver && (
           <Band icon={Info} tone={readiness === "draft" ? "muted" : "warning"}>
             <p>
               {!saved
                 ? "This order has not been created yet. AlShrouq does not publish delivery fees, so none is shown here."
                 : ctxError
                   ? "Delivery options could not be loaded. You may not have permission to send this order."
-                  : ctx?.optionsError
-                    ? "AlShrouq branch coverage could not be checked just now, so this order cannot be handed over yet."
-                    : (branch?.text ?? "Checking branch coverage…")}
+                  : describeBranchCoverage(alshrouq.coverage)}
             </p>
           </Band>
         )}
@@ -956,14 +960,13 @@ export function AlShrouqDispatchSection({
           mode="existing"
           open={open}
           onOpenChange={setOpen}
+          alshrouq={alshrouq}
           customerName={ctx?.prefill.customerName || customerName}
           customerPhone={ctx?.prefill.customerPhone || customerPhone}
           branchNo={branchNo}
-          branchLabel={branch?.text ?? null}
           displayNo={ctx?.displayNo ?? null}
           invoiceValue={ctx?.prefill.orderValue || invoiceValue}
-          defaultDetails={ctx?.prefill.notes || notes}
-          paymentOptions={ctx?.paymentOptions}
+          details={ctx?.prefill.notes || notes}
           errors={errors}
           result={result}
           busy={dispatch.isPending}

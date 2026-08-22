@@ -38,6 +38,7 @@ import type { CatalogDiagnostics } from "@/lib/shams/diagnostics.server";
 import type { CrmSearchDiagnostics, CrmSmokeResult } from "@/lib/shams-crm/diagnostics.server";
 import type {
   AlShrouqConfigProbe,
+  AlShrouqDispatchOptions,
   AlShrouqPaymentOption,
 } from "@/lib/shams-crm/alshrouq-config.server";
 import type { AlShrouqBranchResolution } from "@/lib/shams-crm/alshrouq-branches";
@@ -931,28 +932,40 @@ export const alshrouqResolveDispatch = createServerFn({ method: "POST" })
   });
 
 /**
- * The CRM's AlShrouq payment methods.
+ * The CRM's AlShrouq branch coverage and payment methods.
  *
- * The approval dialog needs them before an order exists, so they cannot come
- * through the order-scoped dispatch context. Same source, same cache — the list
- * belongs to the CRM and there is no enum in this repository.
+ * The order form needs both **before an order exists** — an agent choosing
+ * AlShrouq on a new order has to be told straight away whether the branch is
+ * served and how the customer will pay — so neither can come through the
+ * order-scoped dispatch context, which requires an order id. Same endpoint, same
+ * five-minute cache, same single flight: `fetchAlShrouqDispatchOptions` already
+ * computed both lists, and this stops the branch half being thrown away.
  *
- * Gated on `create_orders`: choosing a payment method is part of taking an
- * order. Reads only; dispatches nothing.
+ * **Coverage is the CRM's answer, not a shipped copy.** `branch_options` is the
+ * only list carrying `covered`, the flag marking the branches AlShrouq does not
+ * serve; a frozen table in this repository could not express it, which is one of
+ * the reasons the reverted integration's copy was wrong to exist.
+ *
+ * Returns the two lists and nothing else — the config body also carries
+ * `webhook_auth_value`, which is a secret and is never read.
+ *
+ * Gated on `create_orders`: choosing a branch and a payment method is part of
+ * taking an order. Reads only; dispatches nothing.
  */
-export const alshrouqPaymentOptions = createServerFn({ method: "POST" })
+export const alshrouqDeliveryOptions = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .handler(async ({ context }): Promise<AlShrouqPaymentOption[]> => {
+  .handler(async ({ context }): Promise<AlShrouqDispatchOptions> => {
     const { supabase, userId } = context as { supabase: any; userId: string };
     await assertPermission(supabase, userId, "create_orders");
 
     const { fetchAlShrouqDispatchOptions } = await import("@/lib/shams-crm/alshrouq-config.server");
     try {
-      return (await fetchAlShrouqDispatchOptions()).paymentOptions;
+      return await fetchAlShrouqDispatchOptions();
     } catch {
-      // An unreachable CRM leaves the dialog with no methods to choose, which
-      // blocks dispatch — the correct outcome, and better than a guessed list.
-      return [];
+      // An unreachable CRM leaves the form with no methods to choose and no
+      // coverage to report, which blocks the handover — the correct outcome,
+      // and better than a guessed list or an assumed "covered".
+      return { branchOptions: [], paymentOptions: [] };
     }
   });
 

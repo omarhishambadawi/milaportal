@@ -60,7 +60,9 @@ import { CallCenterInvoiceField } from "@/features/orders/components/call-center
 import { OrderInvoicePanel, StateTag } from "@/features/orders/components/order-invoice-panel";
 import { BranchPreviewPanel } from "@/features/branches/components/branch-preview-panel";
 import { AlShrouqDispatchSection } from "@/features/alshrouq/components/dispatch-section";
+import { AlShrouqOrderRequirements } from "@/features/alshrouq/components/order-requirements-section";
 import { useAlShrouqCreateApproval } from "@/features/alshrouq/use-create-approval";
+import { useAlShrouqOrder } from "@/features/alshrouq/use-alshrouq-order";
 import { AlShrouqApprovalDialog } from "@/features/alshrouq/components/approval-dialog";
 import { ALSHROUQ } from "@/features/alshrouq/constants";
 
@@ -187,6 +189,26 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
     submit,
     del,
   } = useOrderForm(mode, { afterCreate: approval.afterCreate });
+
+  /**
+   * The AlShrouq half of the order — location, coordinates, payment, coverage.
+   *
+   * Held here rather than inside the dialog, so the fields are part of taking
+   * the order rather than three more questions after the agent has pressed
+   * *Create order*. One object, read by the form section that fills it, the card
+   * that reports coverage, and the dialog that confirms it — so the branch this
+   * screen calls covered and the one the handover is offered for cannot differ.
+   *
+   * It is deliberately **not** part of `orderFormSchema` or `buildOrderPayload`:
+   * the save path stays byte-identical, and an AlShrouq requirement can never
+   * fail an ordinary order. See `order-requirements.ts`.
+   */
+  const alshrouq = useAlShrouqOrder(
+    form.delivery_type,
+    form.branch_no,
+    form.customer_name,
+    form.customer_phone,
+  );
 
   if (mode === "create" && !canCreate) {
     return (
@@ -491,7 +513,17 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 </Popover>
               </Field>
 
-              <Field id="customer-name" label="Customer name" optional>
+              {/* Optional for every other method, required for AlShrouq: a
+                  courier has to know who to call. Marked, not enforced by the
+                  schema — an ordinary save must never be blocked by an AlShrouq
+                  rule, which is the outage the reverted integration caused. What
+                  the requirement actually gates is the handover. */}
+              <Field
+                id="customer-name"
+                label="Customer name"
+                required={alshrouq.active}
+                optional={!alshrouq.active}
+              >
                 <Input
                   id="customer-name"
                   value={form.customer_name}
@@ -500,7 +532,12 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 />
               </Field>
 
-              <Field id="customer-phone" label="Customer phone" optional>
+              <Field
+                id="customer-phone"
+                label="Customer phone"
+                required={alshrouq.active}
+                optional={!alshrouq.active}
+              >
                 <Input
                   id="customer-phone"
                   value={form.customer_phone}
@@ -510,6 +547,15 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                   inputMode="tel"
                 />
               </Field>
+
+              {/* The three things a courier needs that no order column holds.
+                  Inside this card rather than in one of its own, because they
+                  are part of the same question — who is this for and where does
+                  it go — and a fifth card would push the invoicing section below
+                  the fold on a laptop. */}
+              {alshrouq.active && (
+                <AlShrouqOrderRequirements state={alshrouq} readOnly={readOnly} />
+              )}
             </SectionCard>
 
             <SectionCard
@@ -746,6 +792,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
               branchNo={form.branch_no}
               invoiceValue={form.invoice_value}
               notes={form.notes}
+              alshrouq={alshrouq}
             />
           )}
 
@@ -762,10 +809,12 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
           mode="create"
           open={approval.isOpen}
           onOpenChange={approval.setOpen}
+          alshrouq={alshrouq}
           customerName={form.customer_name}
           customerPhone={form.customer_phone}
           branchNo={form.branch_no}
           invoiceValue={form.invoice_value}
+          details={form.notes}
           busy={busy}
           onApprove={(plan) =>
             approval.approve(plan, () =>
