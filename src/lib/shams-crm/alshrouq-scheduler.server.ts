@@ -141,6 +141,15 @@ export async function scheduleAlShrouqDispatch(
     dispatch_status: "scheduled" as const,
     scheduled_for: when,
     scheduled_by: request.userId,
+    /**
+     * Whose delivery this is, frozen beside the payload.
+     *
+     * The same principle as `payload_snapshot`: what goes out at 2am is what was
+     * approved, decided now. Kept apart from `scheduled_by` because the two
+     * answer different questions — who acted, and whose delivery it is — and a
+     * supervisor scheduling an agent's order makes them different values.
+     */
+    crm_agent_id: request.orderAgentId,
     scheduled_at: new Date().toISOString(),
     // The whole point. Read at dispatch time instead of the order.
     payload_snapshot: payload as unknown as Record<string, unknown>,
@@ -184,7 +193,7 @@ export interface RunDueSummary {
   /** Due rows left untouched because the production gate is closed. */
   skippedDisabled: number;
   /**
-   * Due rows returned to `scheduled` because the approving agent's CRM identity
+   * Due rows returned to `scheduled` because the order agent's CRM identity
    * could not be used. Counted separately from `failed`: nothing is wrong with
    * the order, and the delivery still goes out once the link is fixed.
    */
@@ -197,8 +206,10 @@ interface DueRow {
   client_order_id: string;
   payload_snapshot: AlShrouqCreatePayload | null;
   scheduled_for: string;
-  /** The agent who approved it. The identity this row is sent under. */
+  /** Who approved it. Audit only — no longer the identity it is sent under. */
   scheduled_by: string | null;
+  /** The order's assigned agent. The identity this row is sent under. */
+  crm_agent_id: string | null;
 }
 
 /**
@@ -232,9 +243,11 @@ export async function runDueAlShrouqDispatches(
 
   const { data: dueRows } = await supabase
     .from("alshrouq_dispatches")
-    // `scheduled_by` is read because it *is* the identity this row will be sent
-    // under: the agent who approved it, hours ago, is who the CRM must record.
-    .select("id,order_id,client_order_id,payload_snapshot,scheduled_for,scheduled_by")
+    // `crm_agent_id` is read because it *is* the identity this row will be sent
+    // under: the agent the order was assigned to when it was approved is who the
+    // CRM must record. `scheduled_by` comes too, as the fallback for rows
+    // written before the two were told apart.
+    .select("id,order_id,client_order_id,payload_snapshot,scheduled_for,scheduled_by,crm_agent_id")
     .eq("dispatch_status", "scheduled")
     .is("cancelled_at", null)
     .lte("scheduled_for", now.toISOString())
@@ -280,28 +293,35 @@ export async function runDueAlShrouqDispatches(
     }
 
     /*
-     * Whose delivery this is, resolved now rather than at approval time.
+     * Whose delivery this is, read from the row rather than from the order.
      *
-     * The agent approved this hours ago and is not here. `scheduled_by` is what
-     * makes the CRM record it against them anyway — the worker logs in as that
-     * agent and sends an ordinary immediate create, so from the CRM's side it is
-     * indistinguishable from that person having typed it at this moment.
+     * The order's agent was recorded in `crm_agent_id` when the dispatch was
+     * approved, and that frozen value is what the worker logs in as — an
+     * ordinary immediate create, so from the CRM's side it is indistinguishable
+     * from that agent having typed it at this moment. The order itself is never
+     * re-read here, for the same reason `payload_snapshot` exists: what goes out
+     * is what was approved, not what the row has since become.
      *
-     * If their credential is gone, the row goes **back to `scheduled`** with the
+     * `scheduled_by` is the fallback, and only for rows written before the two
+     * were distinguished — where an agent approving their own order made them
+     * the same value anyway.
+     *
+     * If the credential is gone, the row goes **back to `scheduled`** with the
      * reason recorded. It is not sent under the service account and not under
      * anybody else: a delivery attributed to the wrong person is worse than a
      * late one, and the schedule survives so it goes out once an administrator
      * fixes the link.
      */
-    const identity = row.scheduled_by ? await deps.agentPrincipal(row.scheduled_by) : null;
+    const attributedTo = row.crm_agent_id ?? row.scheduled_by;
+    const identity = attributedTo ? await deps.agentPrincipal(attributedTo) : null;
     if (!identity || !identity.ok) {
       await supabase
         .from("alshrouq_dispatches")
         .update({
           dispatch_status: "scheduled",
           last_error: identity
-            ? `Blocked: the approving agent's Shams CRM account is unavailable (${identity.problem}).`
-            : "Blocked: this dispatch has no recorded approving agent.",
+            ? `Blocked: the order agent's Shams CRM account is unavailable (${identity.problem}).`
+            : "Blocked: this dispatch has no recorded agent to send it as.",
         })
         .eq("id", row.id);
       summary.blocked += 1;

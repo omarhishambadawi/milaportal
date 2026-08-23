@@ -111,8 +111,34 @@ export interface DispatchRequest {
   orderId: string;
   displayNo: string | null;
   branchNo: string | null;
-  /** The authenticated agent, for `dispatched_by`. Never defaulted to anyone. */
+  /**
+   * Who pressed send, for `dispatched_by`. Never defaulted to anyone.
+   *
+   * The *audit* half of the answer, and only that. It records which MilaPortal
+   * account performed the action; it is not who the delivery belongs to.
+   */
   userId: string;
+  /**
+   * The agent the order is assigned to — `orders.agent_id`, and the identity the
+   * delivery is recorded under at the CRM.
+   *
+   * This is the order's owner, not its author. A supervisor may take an order
+   * down and hand it to the agent who will service it, and the delivery is that
+   * agent's; MilaPortal already separates the two (`agent_id` is the assignee,
+   * `created_by` defaults to `auth.uid()`), and this keeps the CRM's
+   * `created_by_user_id` agreeing with `agent_id` rather than with whoever
+   * happened to click.
+   *
+   * **Read from the order on the server, never from a form field.** A caller who
+   * could name the agent could dispatch under somebody else's CRM identity; a
+   * caller who has passed this order's edit check can only ever reach the agent
+   * that order is already assigned to.
+   *
+   * Nullable so a row that predates the column, or a shape this build does not
+   * expect, fails closed as `not_configured` rather than falling through to the
+   * caller.
+   */
+  orderAgentId: string | null;
   form: DispatchFormInput;
 }
 
@@ -381,14 +407,24 @@ export async function dispatchOrderToAlShrouq(
   /*                                                                         */
   /* Shams CRM stamps `created_by_user_id` from the authenticated session and */
   /* accepts no caller-supplied attribution, so the credential *is* the       */
-  /* attribution. Resolved from the verified `userId` on the request — never  */
-  /* from a form field — and if there is none the pipeline stops here.        */
+  /* attribution. It is resolved from the order's **assigned agent**, read on  */
+  /* the server from `orders.agent_id` — never from a form field — because the */
+  /* delivery belongs to the agent servicing the order, not to whoever pressed */
+  /* send. A supervisor handing an order to an agent must not put their own    */
+  /* name on that agent's delivery, and supervisors have no CRM account at all. */
+  /* `userId` still records who acted, in `dispatched_by`.                     */
   /*                                                                         */
-  /* There is deliberately no `?? SERVICE_PRINCIPAL`. Falling back would send */
-  /* the order, return success, and record it against the deployment's own    */
-  /* account instead of the agent who took it.                                */
+  /* There is deliberately no `?? SERVICE_PRINCIPAL` and no `?? userId`.      */
+  /* Either fallback would send the order, return success, and record it       */
+  /* against the wrong person — the one outcome this design exists to prevent. */
   /* ---------------------------------------------------------------------- */
-  const identity = await deps.agentPrincipal(userId);
+  if (!request.orderAgentId) {
+    // An order with no agent has nobody to attribute the delivery to. Treated
+    // as an unconfigured link rather than an error: it is the same fix — an
+    // administrator sorts out who this order belongs to — and nothing was sent.
+    return { kind: "agent_not_configured", problem: "not_configured" };
+  }
+  const identity = await deps.agentPrincipal(request.orderAgentId);
   if (!identity.ok) return { kind: "agent_not_configured", problem: identity.problem };
 
   // 4. One POST, as that agent. The transport guarantees it is never retried.

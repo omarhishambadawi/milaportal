@@ -60,10 +60,12 @@ export interface AgentCredentialDeps {
 /**
  * The agent's CRM principal, or why there isn't one.
  *
- * `userId` must be the **verified** MilaPortal id from `requireSupabaseAuth`'s
- * claims. It is never a form field: a caller who could name the agent could
- * dispatch under somebody else's CRM identity, which is precisely the thing the
- * CRM's own refusal of caller-supplied attribution is meant to make impossible.
+ * `userId` must be a MilaPortal id the **server** established: either the caller
+ * from `requireSupabaseAuth`'s claims, or `orders.agent_id` read from the order
+ * after the caller passed that order's edit check. It is never a form field — a
+ * caller who could name the agent could dispatch under somebody else's CRM
+ * identity, which is precisely the thing the CRM's own refusal of
+ * caller-supplied attribution is meant to make impossible.
  */
 export async function agentCrmPrincipal(
   userId: string,
@@ -92,20 +94,25 @@ export async function agentCrmPrincipal(
 }
 
 /**
- * What an agent is told when their CRM identity cannot be used.
+ * What the person dispatching is told when the CRM identity cannot be used.
  *
  * Says what to do about it and names no credential. "Not configured" is the
  * common case on a deployment mid-rollout and must not read as a fault of the
- * order — the order is fine; the agent's CRM link is what is missing.
+ * order — the order is fine; a CRM link is what is missing.
+ *
+ * Phrased around **the order's agent**, not "your account", because the identity
+ * is the assignee's and the reader is often not them: a supervisor handing an
+ * order to an agent was previously told to get their own account linked, which
+ * is neither the problem nor something they should do.
  */
 export function explainAgentCredentialProblem(problem: AgentCredentialProblem): string {
   switch (problem) {
     case "not_configured":
-      return "AlShrouq is not configured for your account. An administrator needs to link your Shams CRM user before you can hand orders over.";
+      return "The agent this order is assigned to has no Shams CRM account. An administrator needs to link it before the order can be handed over.";
     case "inactive":
-      return "Your Shams CRM link is switched off, so AlShrouq deliveries cannot be sent from your account. An administrator can re-verify it.";
+      return "The Shams CRM link for this order's agent is switched off, so AlShrouq deliveries cannot be sent for it. An administrator can re-verify it.";
     case "missing_secret":
-      return "Your Shams CRM link is incomplete and cannot be used. An administrator needs to re-enter your CRM credentials.";
+      return "The Shams CRM link for this order's agent is incomplete and cannot be used. An administrator needs to re-enter the CRM credentials.";
   }
 }
 

@@ -3104,23 +3104,47 @@ Verified against the live CRM on 2026-08-23: seven agents, all authenticating,
 all active, all holding `alshrouq_delivery`, CRM user ids captured from `/me`.
 Login and `/me` only — no order was created.
 
-#### The dispatch runs as the agent (Phases 2–3)
+#### The dispatch runs as the order's agent (Phases 2–3)
 
-`dispatchOrderToAlShrouq` resolves the dispatching agent's CRM identity from the
-**verified** `userId` on the request, immediately after the safety gate and
-before the POST, and passes it to `createAlshrouqOrder`. There is deliberately
-no `?? SERVICE_PRINCIPAL`: a missing identity returns the new
-`agent_not_configured` outcome and **nothing is sent**. Falling back would
-succeed, look fine, and record the delivery against the deployment's own
-account.
+`dispatchOrderToAlShrouq` resolves the CRM identity from `DispatchRequest.orderAgentId`,
+immediately after the safety gate and before the POST, and passes it to
+`createAlshrouqOrder`. There is deliberately no `?? SERVICE_PRINCIPAL` and no
+`?? userId`: a missing identity returns the `agent_not_configured` outcome and
+**nothing is sent**. Falling back would succeed, look fine, and record the
+delivery against the wrong account.
 
-The worker does the same thing later. It now selects `scheduled_by` with each
-due row and logs in as that agent, so a delivery approved at 2pm and sent at
-8pm is still recorded against the person who approved it. If their credential is
-gone the row goes **back to `scheduled`** with the reason recorded and the new
-`blocked` counter incremented — not `failed`, because nothing is wrong with the
-order and the delivery still goes out once an administrator fixes the link. A
-due row with no `scheduled_by` is blocked for the same reason.
+**`orderAgentId` is the order's assignee, not the caller.** It is
+`orders.agent_id`, read by `alshrouqDispatchOrder` from the row it has already
+fetched — never from the request body, so a caller cannot name an agent. This is
+the fix for a real failure: supervisors, administrators and the owner hold
+`edit_all_orders` and are deliberately absent from `shams_crm_agent_links`, so a
+supervisor creating an order for an agent and approving the handoff was told
+"AlShrouq is not configured for your account" for an order whose own agent was
+correctly linked. MilaPortal already separates the two ideas — `agent_id` is the
+assignee, `created_by` defaults to `auth.uid()` — and the CRM's
+`created_by_user_id` now agrees with `agent_id`. For an agent dispatching their
+own order the two ids are the same value and nothing changed. An order with no
+agent fails closed as `not_configured`.
+
+`dispatched_by` and `scheduled_by` are unchanged and still record **who acted**.
+The two questions are kept apart on the row: `crm_agent_id` (20260824160000) is
+whose delivery it is.
+
+The worker does the same thing later. It selects `crm_agent_id` with each due
+row and logs in as that agent, so a delivery approved at 2pm and sent at 8pm is
+still recorded against the agent the order was assigned to when it was approved
+— frozen at approval time for the same reason `payload_snapshot` is, so
+reassigning an order afterwards cannot move a pending delivery onto somebody
+else's name. `scheduled_by` is the fallback for rows written before the column
+existed, where an agent approving their own order made them the same value. If
+the credential is gone the row goes **back to `scheduled`** with the reason
+recorded and the `blocked` counter incremented — not `failed`, because nothing
+is wrong with the order and the delivery still goes out once an administrator
+fixes the link. A due row naming no agent at all is blocked for the same reason.
+
+The sentence an agent sees names the order's agent rather than "your account",
+since the reader is often the supervisor handing the order over and getting
+*their* account linked is neither possible nor the fix.
 
 What the CRM receives is unchanged: the ordinary create payload. Tests assert
 the outgoing body carries no `scheduled_by`, `dispatched_by`, `agent_id`,

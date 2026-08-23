@@ -118,6 +118,8 @@ function request(): DispatchRequest {
     displayNo: "#9767",
     branchNo: BRANCH_NO,
     userId: USER_ID,
+    // The agent dispatching their own order: assignee and caller are one person.
+    orderAgentId: USER_ID,
     form: {
       customerName: "Test",
       customerPhone: "0500000000",

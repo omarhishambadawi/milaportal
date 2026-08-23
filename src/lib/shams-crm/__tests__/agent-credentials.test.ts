@@ -109,8 +109,19 @@ describe("what the agent is told", () => {
     },
   );
 
-  it("does not blame the order for an unconfigured account", () => {
-    expect(explainAgentCredentialProblem("not_configured")).toMatch(/your account/i);
+  /**
+   * Points at the CRM link rather than at the order, and says *whose* link.
+   *
+   * "Your account" was wrong as often as it was right: the identity is the
+   * order's assigned agent, and the person reading the sentence is frequently a
+   * supervisor handing that order over, who has no CRM account by design and
+   * must not be sent off to get their own one linked.
+   */
+  it("names the order's agent rather than blaming the order", () => {
+    const sentence = explainAgentCredentialProblem("not_configured");
+    expect(sentence).toMatch(/agent/i);
+    expect(sentence).toMatch(/Shams CRM/);
+    expect(sentence).not.toMatch(/your account/i);
   });
 });
 

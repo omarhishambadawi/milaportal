@@ -28,6 +28,8 @@ import type { AgentCredentialResult } from "@/lib/shams-crm/agent-credentials.se
 
 const AGENT_A = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
 const AGENT_B = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb";
+/** A supervisor: full edit rights, and deliberately no Shams CRM account. */
+const SUPERVISOR = "cccccccc-3333-4333-8333-cccccccccccc";
 const BRANCH_ID = "9999927657247";
 const BRANCH_NO = "P0002";
 
@@ -128,12 +130,22 @@ function fakeSupabase(due: Record<string, unknown>[] = []) {
   };
 }
 
-function request(userId: string): DispatchRequest {
+/**
+ * One dispatch request.
+ *
+ * Two ids, because they are two different questions. `orderAgentId` is whose
+ * delivery it is — the order's assignee, and the CRM identity it goes out under.
+ * `actorId` is who pressed send, which is only ever `dispatched_by`. They are
+ * the same person for an agent dispatching their own order, which is why the
+ * caller defaults to the agent.
+ */
+function request(orderAgentId: string, actorId: string = orderAgentId): DispatchRequest {
   return {
     orderId: "11111111-2222-3333-4444-555555555555",
     displayNo: "#9767",
     branchNo: BRANCH_NO,
-    userId,
+    userId: actorId,
+    orderAgentId,
     form: {
       customerName: "Test Customer",
       customerPhone: "0500000000",
@@ -148,10 +160,10 @@ function request(userId: string): DispatchRequest {
 }
 
 /* ------------------------------------------------------------------------- */
-/* TEST A — ASAP goes out as the logged-in agent                             */
+/* TEST A — ASAP goes out as the order's agent                               */
 /* ------------------------------------------------------------------------- */
 
-describe("A: an immediate dispatch is attributed to the agent who made it", () => {
+describe("A: an immediate dispatch is attributed to the order's agent", () => {
   it("POSTs under agent A's own CRM identity", async () => {
     const supabase = fakeSupabase();
     const result = await dispatchOrderToAlShrouq(
@@ -162,8 +174,8 @@ describe("A: an immediate dispatch is attributed to the agent who made it", () =
 
     expect(result.kind).toBe("dispatched");
     expect(sentAs).toHaveLength(1);
-    // The identity is the verified MilaPortal user id from the request, which is
-    // what the CRM will stamp the order with.
+    // The identity is the order's agent, resolved server-side, which is what
+    // the CRM will stamp the order with. Here they are also the caller.
     expect(sentAs[0]!.agentId).toBe(AGENT_A);
     expect(sentAs[0]!.username).toBe(`${AGENT_A}@example.test`);
   });
@@ -180,6 +192,7 @@ describe("A: an immediate dispatch is attributed to the agent who made it", () =
       "agent_id",
       "user_id",
       "created_by",
+      "crm_agent_id",
       "milaportal_user_id",
     ]) {
       expect(Object.keys(payload)).not.toContain(forbidden);
@@ -278,10 +291,10 @@ describe("B: scheduling makes zero CRM requests", () => {
 });
 
 /* ------------------------------------------------------------------------- */
-/* TEST C & F — execution sends as scheduled_by, and looks ordinary          */
+/* TEST C & F — execution sends as the order agent, and looks ordinary       */
 /* ------------------------------------------------------------------------- */
 
-describe("C: the worker sends as the agent who approved it", () => {
+describe("C: the worker sends as the order's agent", () => {
   function dueRow(over: Record<string, unknown> = {}) {
     return {
       id: "row-1",
@@ -289,6 +302,7 @@ describe("C: the worker sends as the agent who approved it", () => {
       client_order_id: "9767",
       scheduled_for: "2026-08-21T18:00:00Z",
       scheduled_by: AGENT_A,
+      crm_agent_id: AGENT_A,
       payload_snapshot: {
         branch_id: BRANCH_ID,
         client_order_id: "9767",
@@ -301,7 +315,7 @@ describe("C: the worker sends as the agent who approved it", () => {
     };
   }
 
-  it("logs in as scheduled_by, not as the service account", async () => {
+  it("logs in as the recorded agent, not as the service account", async () => {
     const supabase = fakeSupabase([dueRow()]);
     const summary = await runDueAlShrouqDispatches(supabase as any, deps({ live: true }));
 
@@ -360,11 +374,169 @@ describe("C: the worker sends as the agent who approved it", () => {
   });
 
   /** A row with no recorded agent is blocked rather than sent by anybody. */
-  it("blocks a due row that has no scheduled_by", async () => {
-    const supabase = fakeSupabase([dueRow({ scheduled_by: null })]);
+  it("blocks a due row that names no agent at all", async () => {
+    const supabase = fakeSupabase([dueRow({ scheduled_by: null, crm_agent_id: null })]);
     const summary = await runDueAlShrouqDispatches(supabase as any, deps({ live: true }));
 
     expect(summary.blocked).toBe(1);
     expect(sentAs).toHaveLength(0);
+  });
+
+  /**
+   * The order's agent wins over the approver.
+   *
+   * A supervisor scheduled it; the delivery is still the agent's, and the worker
+   * must log in as them however many hours later it runs.
+   */
+  it("logs in as crm_agent_id, not as the supervisor who scheduled it", async () => {
+    const supabase = fakeSupabase([dueRow({ scheduled_by: SUPERVISOR, crm_agent_id: AGENT_A })]);
+    const summary = await runDueAlShrouqDispatches(supabase as any, deps({ live: true }));
+
+    expect(summary.accepted).toBe(1);
+    expect(sentAs[0]!.agentId).toBe(AGENT_A);
+    expect(sentAs[0]!.agentId).not.toBe(SUPERVISOR);
+  });
+
+  /**
+   * Rows written before `crm_agent_id` existed still go out.
+   *
+   * They were all approved by agents for their own orders, so `scheduled_by` is
+   * the same person the new column would hold — the fallback is compatibility,
+   * not a guess.
+   */
+  it("falls back to scheduled_by for a row written before crm_agent_id", async () => {
+    const supabase = fakeSupabase([dueRow({ crm_agent_id: null, scheduled_by: AGENT_B })]);
+    const summary = await runDueAlShrouqDispatches(supabase as any, deps({ live: true }));
+
+    expect(summary.accepted).toBe(1);
+    expect(sentAs[0]!.agentId).toBe(AGENT_B);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* TEST G — a handover made on an agent's behalf                             */
+/*                                                                           */
+/* The case the per-agent design originally got wrong: supervisors and       */
+/* administrators hold `edit_all_orders`, have no Shams CRM account of their  */
+/* own by design, and hand orders to the agents who service them. Attributing */
+/* those deliveries to the person who clicked was both impossible — there is  */
+/* no credential to log in with — and wrong.                                  */
+/* ------------------------------------------------------------------------- */
+
+describe("G: a dispatch made on an agent's behalf goes out as that agent", () => {
+  /** Only agents are linked. A supervisor asking for a credential gets nothing. */
+  const agentsOnly = (userId: string): AgentCredentialResult =>
+    userId === SUPERVISOR
+      ? { ok: false, problem: "not_configured" }
+      : {
+          ok: true,
+          principal: {
+            kind: "agent",
+            agentId: userId,
+            username: `${userId}@example.test`,
+            password: "test-only",
+          },
+          crmUsername: `${userId}@example.test`,
+          crmUserId: "99001",
+        };
+
+  it("POSTs under the order agent's identity, not the caller's", async () => {
+    const supabase = fakeSupabase();
+    const result = await dispatchOrderToAlShrouq(
+      request(AGENT_A, SUPERVISOR),
+      supabase as any,
+      deps({ live: true, credentialFor: agentsOnly }),
+    );
+
+    expect(result.kind).toBe("dispatched");
+    expect(sentAs).toHaveLength(1);
+    expect(sentAs[0]!.agentId).toBe(AGENT_A);
+    expect(sentAs[0]!.username).toBe(`${AGENT_A}@example.test`);
+  });
+
+  /** Who acted is still recorded — on the row, where it belongs. */
+  it("still records the supervisor as the one who dispatched it", async () => {
+    const supabase = fakeSupabase();
+    await dispatchOrderToAlShrouq(
+      request(AGENT_A, SUPERVISOR),
+      supabase as any,
+      deps({ live: true, credentialFor: agentsOnly }),
+    );
+
+    expect(supabase.inserts).toHaveLength(1);
+    expect(supabase.inserts[0]!.dispatched_by).toBe(SUPERVISOR);
+  });
+
+  /** Scheduling keeps the two apart in the row it writes. */
+  it("freezes the order agent beside the payload when scheduling", async () => {
+    const supabase = fakeSupabase();
+    const when = new Date(Date.now() + 5 * 60 * 60 * 1000);
+    const result = await scheduleAlShrouqDispatch(
+      request(AGENT_A, SUPERVISOR),
+      when,
+      supabase as any,
+      deps({ live: true, credentialFor: agentsOnly }),
+    );
+
+    expect(result.kind).toBe("scheduled");
+    const row = supabase.inserts[0]!;
+    expect(row.crm_agent_id).toBe(AGENT_A);
+    expect(row.scheduled_by).toBe(SUPERVISOR);
+  });
+
+  /**
+   * The caller's own missing link is no longer the question, so it cannot block
+   * a handover for an agent who *is* linked. This is the reported bug, pinned.
+   */
+  it("does not consult the caller's CRM link at all", async () => {
+    const asked: string[] = [];
+    const supabase = fakeSupabase();
+    const result = await dispatchOrderToAlShrouq(
+      request(AGENT_A, SUPERVISOR),
+      supabase as any,
+      deps({
+        live: true,
+        credentialFor: (userId) => {
+          asked.push(userId);
+          return agentsOnly(userId);
+        },
+      }),
+    );
+
+    expect(result.kind).toBe("dispatched");
+    expect(asked).toEqual([AGENT_A]);
+  });
+
+  /**
+   * An order with no agent has nobody to attribute the delivery to, and fails
+   * closed rather than falling back to the caller.
+   */
+  it("refuses an order that names no agent", async () => {
+    const supabase = fakeSupabase();
+    const req = { ...request(AGENT_A, SUPERVISOR), orderAgentId: null };
+    const result = await dispatchOrderToAlShrouq(
+      req,
+      supabase as any,
+      deps({ live: true, credentialFor: agentsOnly }),
+    );
+
+    expect(result.kind).toBe("agent_not_configured");
+    expect(sentAs).toHaveLength(0);
+    expect(supabase.inserts).toHaveLength(0);
+  });
+
+  /** And an unconfigured agent still blocks, however senior the caller is. */
+  it("still blocks when the order's own agent is not linked", async () => {
+    const supabase = fakeSupabase();
+    const result = await dispatchOrderToAlShrouq(
+      request(SUPERVISOR, SUPERVISOR),
+      supabase as any,
+      deps({ live: true, credentialFor: agentsOnly }),
+    );
+
+    expect(result.kind).toBe("agent_not_configured");
+    if (result.kind === "agent_not_configured") expect(result.problem).toBe("not_configured");
+    expect(sentAs).toHaveLength(0);
+    expect(supabase.inserts).toHaveLength(0);
   });
 });

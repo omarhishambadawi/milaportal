@@ -51,6 +51,8 @@ function request(over: Partial<DispatchRequest> = {}): DispatchRequest {
     displayNo: "#9540",
     branchNo: "P0127",
     userId: USER_ID,
+    // The agent dispatching their own order: assignee and caller are one person.
+    orderAgentId: USER_ID,
     form: {
       customerName: "Ahmed",
       customerPhone: "0500000000",

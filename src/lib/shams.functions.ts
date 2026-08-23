@@ -739,8 +739,26 @@ export const alshrouqDispatchOrder = createServerFn({ method: "POST" })
       orderId: order.id,
       displayNo: order.display_no ?? null,
       branchNo: order.branch_no ?? null,
-      // The authenticated caller. Never defaulted to anyone.
+      // The authenticated caller. Never defaulted to anyone. Records who acted.
       userId,
+      /*
+       * Whose delivery it is: the order's assigned agent, from the row this
+       * handler already read — never from the request body.
+       *
+       * The CRM stamps `created_by` from the session, so this is what decides
+       * the name on the delivery. It is `agent_id` and not `userId` because a
+       * supervisor or administrator may hand an order over on an agent's
+       * behalf: they hold `edit_all_orders`, they have no Shams CRM account of
+       * their own, and the delivery belongs to the agent servicing it. For an
+       * agent dispatching their own order the two are the same value, so
+       * nothing changes for the ordinary case.
+       *
+       * The caller cannot choose it. Reaching this line at all means passing the
+       * permission check above, which admits only `edit_all_orders` or ownership
+       * of this order — so the identity available to a caller is exactly the one
+       * the order is already assigned to.
+       */
+      orderAgentId: (order.agent_id as string | null) ?? null,
       form: {
         customerName: data.customerName,
         customerPhone: data.customerPhone,
