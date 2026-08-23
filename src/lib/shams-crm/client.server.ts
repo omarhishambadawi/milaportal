@@ -123,14 +123,81 @@ interface SessionState {
   expiresAt: number;
 }
 
-let session: SessionState | null = null;
-/** In-flight login, so N concurrent callers cause one login. */
-let inFlight: Promise<SessionState> | null = null;
+/**
+ * Whose session this is.
+ *
+ * The CRM derives `created_by_user_id` and `created_by_username` from the
+ * authenticated session, and refuses caller-supplied attribution — so the only
+ * way an order is recorded against the agent who made it is to log in as them.
+ * That makes "which credential" a property of the caller rather than of the
+ * deployment, and this is the type that says so.
+ *
+ * `service` is the deployment's own credential, used for the shared reads —
+ * catalog, offers, config, branch options, diagnostics — where no `created_by`
+ * is written and a per-agent login would be N logins for no attribution gain.
+ */
+export type CrmPrincipal =
+  | { kind: "service" }
+  /**
+   * One agent. `agentId` is the **verified** MilaPortal user id, from
+   * `requireSupabaseAuth`'s claims — never a value a browser supplied, because a
+   * caller who could name the key could borrow another agent's session.
+   */
+  | { kind: "agent"; agentId: string; username: string; password: string };
+
+export const SERVICE_PRINCIPAL: CrmPrincipal = { kind: "service" };
+
+/**
+ * The cache key.
+ *
+ * Agent keys are prefixed `agent:` and the service key is a bare word, so the
+ * two namespaces cannot collide however an agent id was produced.
+ */
+function principalKey(principal: CrmPrincipal): string {
+  return principal.kind === "service" ? "service" : `agent:${principal.agentId}`;
+}
+
+/**
+ * How many agent sessions an isolate keeps.
+ *
+ * A Worker isolate is long-lived and serves many people, so an unbounded map is
+ * a slow leak. The oldest entry is evicted when the cap is reached — losing one
+ * costs a login, never correctness.
+ */
+const MAX_AGENT_SESSIONS = 64;
+
+/**
+ * Sessions, keyed by principal.
+ *
+ * This was a single module-level `session`, which is the bug this replaces: one
+ * isolate serves many agents, so a shared mutable session meant agent B could
+ * issue a request under agent A's identity — and with attribution derived from
+ * the session, that is an order recorded against the wrong person. Keyed, no
+ * caller can reach a session that is not theirs, because the key is derived
+ * from verified claims and never passed in from outside.
+ */
+const sessions = new Map<string, SessionState>();
+/** In-flight logins, per principal, so N concurrent callers cause one login. */
+const inFlight = new Map<string, Promise<SessionState>>();
+
+/** Drop the oldest agent session once the cap is exceeded. Never the service one. */
+function evictIfNeeded(): void {
+  for (const key of sessions.keys()) {
+    if (sessions.size <= MAX_AGENT_SESSIONS) return;
+    if (key === principalKey(SERVICE_PRINCIPAL)) continue;
+    sessions.delete(key);
+  }
+}
 
 /** Test seam. Also lets a future diagnostics surface force a cold login. */
 export function _resetCrmSession(): void {
-  session = null;
-  inFlight = null;
+  sessions.clear();
+  inFlight.clear();
+}
+
+/** How many sessions are cached. For tests and diagnostics — never a token. */
+export function _crmSessionCount(): number {
+  return sessions.size;
 }
 
 function isFresh(state: SessionState | null): state is SessionState {
@@ -202,33 +269,60 @@ async function login(env: ShamsCrmEnv): Promise<SessionState> {
  * several against each other — which for a *user* credential also avoids
  * looking like a burst of sign-ins.
  */
-async function getSessionToken(forceRefresh = false): Promise<string> {
-  const env = readCrmEnv();
-  if (!env) {
+async function getSessionToken(
+  forceRefresh = false,
+  principal: CrmPrincipal = SERVICE_PRINCIPAL,
+): Promise<string> {
+  /*
+   * Which credential this principal logs in with.
+   *
+   * An agent carries its own; the service principal reads the deployment's.
+   * Neither is ever defaulted to the other — an agent whose credential could
+   * not be loaded must fail closed, because falling back to the service account
+   * would silently record the order against the wrong person, which is the one
+   * outcome this whole design exists to prevent.
+   */
+  const env =
+    principal.kind === "agent"
+      ? { baseUrl: BASE_URL, username: principal.username, password: principal.password }
+      : readCrmEnv();
+
+  if (!env || !env.username || !env.password) {
     throw new ShamsCrmError(
       "not_configured",
-      "The Shams CRM connection is not configured on this deployment.",
+      principal.kind === "agent"
+        ? "This agent has no Shams CRM account configured."
+        : "The Shams CRM connection is not configured on this deployment.",
     );
   }
 
-  if (forceRefresh) session = null;
-  if (isFresh(session)) return session.token;
-  if (inFlight) return (await inFlight).token;
+  const key = principalKey(principal);
+  if (forceRefresh) sessions.delete(key);
 
-  inFlight = login(env).then(
+  const cached = sessions.get(key) ?? null;
+  if (isFresh(cached)) return cached.token;
+
+  const pending = inFlight.get(key);
+  if (pending) return (await pending).token;
+
+  const attempt = login(env as ShamsCrmEnv).then(
     (next) => {
-      session = next;
+      sessions.set(key, next);
+      evictIfNeeded();
       return next;
     },
     (err) => {
-      session = null;
+      // Only this principal's session is discarded. A refusal for one agent is
+      // not evidence about anybody else's credential.
+      sessions.delete(key);
       throw err;
     },
   );
+  inFlight.set(key, attempt);
   try {
-    return (await inFlight).token;
+    return (await attempt).token;
   } finally {
-    inFlight = null;
+    inFlight.delete(key);
   }
 }
 
@@ -260,7 +354,9 @@ export async function crmFetch<T>(path: string, opts: { timeoutMs?: number } = {
     );
 
     if (status === 401) {
-      session = null;
+      // Only the shared session. `crmFetch` serves the reads, which run on the
+      // service credential; an agent's session is untouched by this.
+      sessions.delete(principalKey(SERVICE_PRINCIPAL));
       if (attempt === 0) continue;
       throw new ShamsCrmError("auth_failed", "Shams CRM rejected the portal's session.", status);
     }
@@ -292,8 +388,20 @@ export async function crmFetch<T>(path: string, opts: { timeoutMs?: number } = {
  * Exposes the token and nothing else. `readCrmEnv` stays private: it is the only
  * thing that ever holds the password, and that has not changed.
  */
-export function getCrmSessionToken(): Promise<string> {
-  return getSessionToken();
+export function getCrmSessionToken(principal: CrmPrincipal = SERVICE_PRINCIPAL): Promise<string> {
+  return getSessionToken(false, principal);
+}
+
+/**
+ * Discard one principal's session.
+ *
+ * What a caller does after its own 401: `alshrouq-create.server.ts` makes a
+ * single-attempt POST and must not re-send, so it cannot use `crmFetch`'s retry
+ * — but it still has to stop a dead token being handed to the next caller.
+ * Scoped, so one agent's refusal never invalidates another's session.
+ */
+export function invalidateCrmSession(principal: CrmPrincipal = SERVICE_PRINCIPAL): void {
+  sessions.delete(principalKey(principal));
 }
 
 /** The CRM origin, for the same callers. Not configurable, never a credential. */

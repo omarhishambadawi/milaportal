@@ -3032,6 +3032,55 @@ Duplicate protection is checked before anything is built, using the same
 `alshrouq_dispatches_live_order_key`, so the check and the constraint cannot
 disagree. A `23505` on insert is reported as "already sent", not as an error.
 
+#### Sessions are keyed by principal (Phase 2 of per-agent attribution)
+
+Shams CRM derives `created_by_user_id` and `created_by_username` from the
+authenticated session and — confirmed by their API team — accepts **no**
+caller-supplied attribution, no `X-On-Behalf-Of`, and no service-account
+impersonation. The 127 cached deliveries in the Desktop package carry seven
+distinct creators, so per-user login is the model the CRM is built around.
+
+The client therefore holds sessions **keyed by principal** rather than in one
+module-level slot. The old singleton was a real hazard, not a caching detail: a
+Worker isolate is long-lived and serves many people, so one shared mutable
+session meant a request made for agent B could go out under agent A's token, and
+with attribution derived from the session that is an order recorded against the
+wrong person.
+
+`CrmPrincipal` is either `service` — the deployment credential, still used for
+every shared read (catalog, offers, config, branch options, diagnostics), where
+no `created_by` is written — or `agent`, carrying the **verified** MilaPortal
+user id from `requireSupabaseAuth` claims. There is deliberately no way to pass a
+key in from outside: a caller who could name the key could borrow a session.
+
+Properties the tests pin: one login per principal, single-flight per principal
+rather than globally, `invalidateCrmSession` scoped to one principal, a failed
+login for one agent leaving every other session intact, and a cap of 64 agent
+sessions so a long-lived isolate cannot leak — the service session is never the
+one evicted.
+
+**A missing agent credential fails closed.** It raises `not_configured` naming
+the *agent* rather than the deployment, and never falls back to the service
+account, because sending under the wrong identity is the one outcome this design
+exists to prevent.
+
+Phase 2 changes no dispatch behaviour: every existing caller still runs on the
+service principal. Phases 1 (Vault-backed agent credential mapping) and 3
+(switching the create POST to the agent principal) are not built.
+
+#### Scheduling is MilaPortal's alone
+
+A scheduled order contacts nobody at creation time. It writes one local row with
+`dispatch_status='scheduled'`, the MilaPortal instant in `scheduled_for`, and the
+frozen CRM payload in `payload_snapshot` — and the CRM is told nothing until the
+row is due, when it receives an ordinary immediate create.
+
+The tests assert both halves: zero POSTs before the due time, and no scheduling
+key (`scheduled_for`, `scheduled_at`, `dispatch_status`, `payload_snapshot`, …)
+anywhere inside the frozen payload or in the `AlShrouqCreatePayload` contract
+itself. The snapshot is checked field-by-field against what the immediate path
+would have sent, so the two journeys differ only in *when* the POST happens.
+
 #### The gate is reported to the UI, one way
 
 The gate is read in `alshrouq-dispatch.server.ts` and nowhere else, and it is

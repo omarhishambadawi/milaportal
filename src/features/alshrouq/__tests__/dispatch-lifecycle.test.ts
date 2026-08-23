@@ -350,3 +350,104 @@ describe("no courier is contacted while the gate is shut", () => {
     expect(supabase.inserts).toHaveLength(0);
   });
 });
+
+/* ------------------------------------------------------------------------ */
+/* Shams CRM never learns that an order was scheduled                       */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Scheduling is MilaPortal's, and only MilaPortal's.
+ *
+ * The CRM has no concept of a future delivery in this integration and must not
+ * be given one: a scheduled order is stored locally, contacts nobody, and is
+ * sent at its due time as an ordinary immediate create. These tests are the
+ * proof of both halves — nothing early, and nothing *about* scheduling ever.
+ */
+describe("no scheduling metadata reaches Shams CRM", () => {
+  /** Every key MilaPortal uses for scheduling. None may appear on the wire. */
+  const FORBIDDEN = [
+    "scheduled_for",
+    "scheduled_at",
+    "scheduled_by",
+    "scheduled",
+    "schedule",
+    "dispatch_time",
+    "mila_schedule",
+    "future_delivery",
+    "dispatch_status",
+    "payload_snapshot",
+  ];
+
+  it("sends zero requests when the order is scheduled", async () => {
+    const supabase = fakeSupabase();
+    const when = new Date(Date.now() + 6 * 60 * 60 * 1000);
+    await scheduleAlShrouqDispatch(request(), when, supabase as any, deps());
+    // The whole point: the CRM is not contacted at creation time at all.
+    expect(posts()).toBe(0);
+  });
+
+  /**
+   * The frozen snapshot is the *CRM payload*, not a MilaPortal record. The
+   * scheduling instant lives in the row's own `scheduled_for` column beside it,
+   * which is MilaPortal's bookkeeping and never sent.
+   */
+  it("freezes only the CRM payload, with no scheduling keys inside it", async () => {
+    const supabase = fakeSupabase();
+    const when = new Date(Date.now() + 6 * 60 * 60 * 1000);
+    await scheduleAlShrouqDispatch(request(), when, supabase as any, deps());
+
+    const row = supabase.inserts[0]!;
+    const snapshot = row.payload_snapshot as Record<string, unknown>;
+    for (const key of FORBIDDEN) {
+      expect(Object.keys(snapshot)).not.toContain(key);
+    }
+    // The instant is MilaPortal's, on the row, outside the payload.
+    expect(row.scheduled_for).toBe(when.toISOString());
+  });
+
+  /**
+   * The strongest statement available offline: what a scheduled order will send
+   * is *the same object* an immediate one would have sent. The only difference
+   * between the two paths is when the POST happens.
+   */
+  it("freezes exactly the payload the immediate path would have sent", async () => {
+    const scheduledDb = fakeSupabase();
+    await scheduleAlShrouqDispatch(
+      request(),
+      new Date(Date.now() + 6 * 60 * 60 * 1000),
+      scheduledDb as any,
+      deps(),
+    );
+    const snapshot = scheduledDb.inserts[0]!.payload_snapshot as Record<string, unknown>;
+
+    // The immediate path stops at the gate and reports the summary it built.
+    const immediateDb = fakeSupabase();
+    const immediate = await dispatchOrderToAlShrouq(request(), immediateDb as any, deps());
+    expect(immediate.kind).toBe("prepared");
+    if (immediate.kind !== "prepared") return;
+
+    // Same branch, same client order id, same payment, same value — one payload
+    // shape, built by one builder, for both journeys.
+    expect(snapshot.branch_id).toBe(immediate.payload.branchId);
+    expect(snapshot.client_order_id).toBe(immediate.payload.clientOrderId);
+    expect(snapshot.payment_type).toBe(immediate.payload.paymentType);
+    expect(snapshot.order_value).toBe(immediate.payload.orderValue);
+  });
+
+  /** And the payload type itself has no scheduling field to populate. */
+  it("has no scheduling field in the payload contract at all", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const contract = readFileSync(
+      fileURLToPath(new URL("../../../lib/shams-crm/alshrouq-payload.ts", import.meta.url)),
+      "utf8",
+    );
+    const iface = contract.slice(
+      contract.indexOf("export interface AlShrouqCreatePayload"),
+      contract.indexOf("export interface AlShrouqOrderSource"),
+    );
+    for (const key of FORBIDDEN) {
+      expect(iface).not.toContain(key);
+    }
+  });
+});
