@@ -2899,6 +2899,33 @@ and each is pinned by a test:
 - **`customer_address` is a Maps link passed through verbatim** — 104 of 126 are
   unresolved `maps.app.goo.gl` short links, so nothing resolves them.
 
+**A prepaid order collects nothing.** `order_value` is the figure the driver is
+told to collect at the door, not what the pharmacy invoiced, and on a method
+whose CRM label is `Paid` those are two different numbers — sending the invoice
+is how a customer is asked to pay for one order twice. So a paid method fixes
+`order_value` at `0`, and a blank invoice stops being an error there: there is
+nothing to collect, which is a complete answer rather than a missing one. Every
+other method is untouched, blank invoice included.
+
+The method is recognised **by its published label, never by an id**, keeping the
+"no payment enum in this repository" rule the module already followed for
+`paymentOptionIds`. `paidPaymentTypeIds(options)` reads the live
+`payment_options` and `buildAlshrouqOrderPayload` takes the result as
+`context.paidPaymentTypeIds`; omitting it means "nothing is known to be prepaid"
+and leaves the value exactly as before. The label pattern is anchored — `Paid`
+matches, `AlshrouqPay` deliberately does not, because that method's courier
+collects through AlShrouq's own wallet and zeroing it would tell a driver to hand
+over goods and take nothing.
+
+The rule is applied in the builder, which is the only place the wire value is
+constructed, so a request that did not come from the Portal's screens obeys it
+too. `useAlShrouqOrder` exposes the same answer as `paidPayment` (off until the
+option list has loaded — an unknown method fails towards collecting money that is
+owed, never towards waiving money that is not), and the approval dialog and the
+dispatch card both render through `alshrouqOrderValue(invoiceValue, paidPayment)`
+so the card, the confirmation and the payload cannot disagree. `orders.invoice_value`
+is never rewritten: it is still the invoice, for everything else that reads it.
+
 ### AlShrouq branch resolution and the dispatch dialog
 
 `alshrouq-branches.ts` is pure and holds **no branch ids**. It takes the CRM's
@@ -4192,17 +4219,43 @@ pure and already handled every shape a shared Maps link takes — the
 camera, a `geo:` share, a bare pair — and was only ever called on the server.
 There is no reason for a round trip to read numbers already in the URL bar, so
 `readLocation` calls it directly and the latitude and longitude fill in as the
-agent pastes. They are rendered `readOnly`: they are the product of the link and
-were never typed.
+agent pastes. The link is the authority: whenever it parses, it overwrites.
 
 **A short link is not a failure.** `maps.app.goo.gl` carries a redirect and
 nothing else, and the browser cannot follow it — the shortener sends no CORS
 headers. That one case, and only that case, shows **Check location**, which asks
 `alshrouqResolveLocation` (unchanged: Google-host allow-list, HTTPS, re-checked
 every hop, `Location` header only, capped length/hops/time). Nothing fabricates
-a coordinate; an unreadable link leaves the fields empty and the handover
-blocked. A resolution is discarded the moment the link text changes, because a
-point belongs to the link it came from.
+a coordinate. A resolution is discarded the moment the link text changes, because
+a point belongs to the link it came from.
+
+**A link that cannot be read now says so, and can be worked around.** The two
+boxes were `readOnly` on the principle that a coordinate is evidence rather than
+an opinion — which holds right up until no link parses, at which point it left an
+agent with a delivery they could not hand over and no control to fix it, the
+failure showing as grey helper text beside two empty boxes. Three things changed,
+and nothing about the principle was given up:
+
+- **The failure is stated.** A non-empty link that yields no point renders as a
+  warning naming the way out, not as muted helper text. `needs_check` is excluded
+  — a short link has not failed, and there is a button beside it — so the
+  commonest pasted link does not cry wolf.
+- **The boxes accept a typed pair**, held to exactly the bounds a parsed one is:
+  the `location` reading goes through `readCoordinates`, which delegates to the
+  same `parseCoordinatePair` `parseMapsUrl` uses. A swapped pair still reads
+  `out_of_range`, half a pair and unparseable text read `invalid_pair` (a new
+  `LocationReading` kind, because "that link carries no location" and "those
+  numbers are not a location" are two different mistakes), and nothing typed can
+  render as **Verified location**.
+- **A typed pair survives a later failed parse.** `useAlShrouqOrder` keeps one
+  piece of genuinely local state — `manualCoordinates`, provenance only, never an
+  order column — so editing the link box no longer discards coordinates a person
+  entered on purpose. The discard rule still applies in full to a pair that came
+  from a link, which is the safety rule it was written for; and a link that
+  parses, or a successful **Check location**, overwrites and clears the mark.
+
+The resolver's own failure sentences (`describeLocationResult`) gained the same
+fallback clause, so no outcome ends on "could not" with nothing to do next.
 
 **Branch coverage is answered before the order exists.** It could not be:
 `alshrouqDispatchContext` needs an order id, so a *new* AlShrouq order got no

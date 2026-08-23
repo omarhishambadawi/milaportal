@@ -13,6 +13,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildAlshrouqOrderPayload,
+  isPaidPaymentType,
+  paidPaymentTypeIds,
   type AlShrouqBuildContext,
   type AlShrouqOrderSource,
 } from "@/lib/shams-crm/alshrouq-payload";
@@ -78,6 +80,113 @@ describe("buildAlshrouqOrderPayload", () => {
   it("accepts a zero order value arriving as the string Supabase returns", () => {
     const result = buildAlshrouqOrderPayload(order({ invoice_value: "0.00" }), context());
     expect(payloadOf(result).order_value).toBe(0);
+  });
+
+  /* ------------------------------------------------------------------------ */
+  /* A paid order collects nothing                                            */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * `order_value` is the figure the driver is told to collect at the door, not
+   * what the pharmacy invoiced. On a prepaid method those are different numbers
+   * and sending the invoice is how somebody is asked to pay for one order twice.
+   *
+   * The order's own `invoice_value` is untouched — it is still the invoice, and
+   * everything else that reads it still reads the same number.
+   */
+  it("collects nothing when the payment method says the customer already paid", () => {
+    const result = buildAlshrouqOrderPayload(
+      order({ alshrouq_payment_type: 3, invoice_value: 105.02 }),
+      context({ paidPaymentTypeIds: [3] }),
+    );
+    expect(payloadOf(result).order_value).toBe(0);
+    // The method itself still goes on the wire unchanged.
+    expect(payloadOf(result).payment_type).toBe(3);
+  });
+
+  /** A blank invoice stops being missing information: there is nothing to collect. */
+  it("does not require an order value on a paid method", () => {
+    const result = buildAlshrouqOrderPayload(
+      order({ alshrouq_payment_type: 3, invoice_value: null }),
+      context({ paidPaymentTypeIds: [3] }),
+    );
+    expect(payloadOf(result).order_value).toBe(0);
+  });
+
+  /** Every other method is untouched, blank invoice included. */
+  it("still requires and sends the value on a collecting method", () => {
+    expect(
+      payloadOf(
+        buildAlshrouqOrderPayload(
+          order({ alshrouq_payment_type: 1, invoice_value: 105.02 }),
+          context({ paidPaymentTypeIds: [3] }),
+        ),
+      ).order_value,
+    ).toBe(105.02);
+
+    expect(
+      errorFields(
+        buildAlshrouqOrderPayload(
+          order({ alshrouq_payment_type: 1, invoice_value: null }),
+          context({ paidPaymentTypeIds: [3] }),
+        ),
+      ),
+    ).toContain("order_value");
+  });
+
+  /**
+   * Omitted means "nothing is known to be prepaid".
+   *
+   * The rule can only ever be applied from live config, so a caller that has no
+   * list behaves exactly as this builder did before the rule existed.
+   */
+  it("changes nothing when no paid ids are supplied", () => {
+    const result = buildAlshrouqOrderPayload(order({ alshrouq_payment_type: 3 }), context());
+    expect(payloadOf(result).order_value).toBe(105.02);
+  });
+
+  describe("recognising the paid method", () => {
+    /** Exactly what `GET /integrations/alshrouq/config` publishes. */
+    const OPTIONS = [
+      { id: 1, label: "COD" },
+      { id: 2, label: "SPAN Machine" },
+      { id: 3, label: "Paid" },
+      { id: 4, label: "AlshrouqPay" },
+    ];
+
+    /**
+     * The one that would be a real incident.
+     *
+     * `AlshrouqPay` sits beside `Paid` in the same list and shares four of its
+     * letters, but the courier collects through AlShrouq's wallet — zeroing it
+     * would tell a driver to hand over goods and take nothing.
+     */
+    it("matches Paid and never AlshrouqPay", () => {
+      expect(paidPaymentTypeIds(OPTIONS)).toEqual([3]);
+      expect(isPaidPaymentType(3, OPTIONS)).toBe(true);
+      expect(isPaidPaymentType("3", OPTIONS)).toBe(true);
+      expect(isPaidPaymentType(4, OPTIONS)).toBe(false);
+      expect(isPaidPaymentType(1, OPTIONS)).toBe(false);
+    });
+
+    /** The label is the CRM's, so its own casing and padding must not matter. */
+    it("reads the label as the CRM writes it", () => {
+      expect(paidPaymentTypeIds([{ id: 7, label: " PAID " }])).toEqual([7]);
+    });
+
+    /** No id is written down here, so a renumbered deployment needs no edit. */
+    it("follows the id the label carries, whatever it is", () => {
+      expect(paidPaymentTypeIds([{ id: 42, label: "Paid" }])).toEqual([42]);
+    });
+
+    /** Nothing chosen, and no list, are both simply not paid. */
+    it("treats an unknown method as one the driver collects for", () => {
+      expect(isPaidPaymentType("", OPTIONS)).toBe(false);
+      expect(isPaidPaymentType(null, OPTIONS)).toBe(false);
+      expect(isPaidPaymentType(3, null)).toBe(false);
+      expect(isPaidPaymentType(3, [])).toBe(false);
+      expect(paidPaymentTypeIds(undefined)).toEqual([]);
+    });
   });
 
   it("keeps client_order_id a string and never parses it as a number", () => {

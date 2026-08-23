@@ -172,7 +172,9 @@ describe("dispatchOrderToAlShrouq — validation", () => {
     ["customer name", { customerName: "  " }, "customer_name"],
     ["customer phone", { customerPhone: "" }, "customer_phone"],
     ["payment type", { paymentType: "" }, "payment_type"],
-    ["order value", { orderValue: "" }, "order_value"],
+    // COD, deliberately: the fixture's own method is "Paid", where a blank
+    // value is no longer missing information — it is zero to collect.
+    ["order value", { paymentType: "1", orderValue: "" }, "order_value"],
   ])("refuses a missing %s without sending", async (_label, patch, field) => {
     const r = await dispatchOrderToAlShrouq(
       request({ form: form(patch) }),
@@ -193,6 +195,61 @@ describe("dispatchOrderToAlShrouq — validation", () => {
     );
     expect(r.kind).toBe("invalid");
     expect(posts()).toBe(0);
+  });
+
+  /* ---------------------------------------------------------------------- */
+  /* A paid order collects nothing                                            */
+  /* ---------------------------------------------------------------------- */
+
+  /**
+   * `order_value` is what the driver is told to collect at the door, not what
+   * the pharmacy invoiced. On a method whose label is "Paid" those are two
+   * different numbers, and sending the invoice is how a customer is asked to
+   * pay for the same order twice.
+   */
+  it("sends nothing to collect when the customer has already paid", async () => {
+    const r = await dispatchOrderToAlShrouq(
+      request({ form: form({ paymentType: "3", orderValue: "250.75" }) }),
+      fakeSupabase() as any,
+      deps(),
+    );
+    expect(r.kind).toBe("prepared");
+    if (r.kind !== "prepared") throw new Error("unreachable");
+    expect(r.payload.orderValue).toBe(0);
+  });
+
+  /** And a blank invoice stops being a problem: there is nothing to collect. */
+  it("does not require an order value on a paid method", async () => {
+    const r = await dispatchOrderToAlShrouq(
+      request({ form: form({ paymentType: "3", orderValue: "" }) }),
+      fakeSupabase() as any,
+      deps(),
+    );
+    expect(r.kind).toBe("prepared");
+    if (r.kind !== "prepared") throw new Error("unreachable");
+    expect(r.payload.orderValue).toBe(0);
+  });
+
+  /**
+   * The one that would be a real incident.
+   *
+   * `AlshrouqPay` contains the letters of "Pay" and sits beside "Paid" in the
+   * same list, but the courier collects through AlShrouq's own wallet — zeroing
+   * it would tell a driver to hand over goods and take nothing.
+   */
+  it.each([
+    ["COD", "1"],
+    ["SPAN Machine", "2"],
+    ["AlshrouqPay", "4"],
+  ])("still collects the full value on %s", async (_label, id) => {
+    const r = await dispatchOrderToAlShrouq(
+      request({ form: form({ paymentType: id, orderValue: "250.75" }) }),
+      fakeSupabase() as any,
+      deps(),
+    );
+    expect(r.kind).toBe("prepared");
+    if (r.kind !== "prepared") throw new Error("unreachable");
+    expect(r.payload.orderValue).toBe(250.75);
   });
 
   it("accepts an order value of zero", async () => {

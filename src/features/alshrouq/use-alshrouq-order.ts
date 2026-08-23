@@ -23,16 +23,18 @@
  * copy cannot learn that a branch stopped being served.
  */
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { alshrouqDeliveryOptions } from "@/lib/shams.functions";
 import type { AlShrouqOrderFormOptions } from "@/lib/shams.functions";
 import { resolveAlShrouqBranch } from "@/lib/shams-crm/alshrouq-branches";
+import { isPaidPaymentType } from "@/lib/shams-crm/alshrouq-payload";
 import { ALSHROUQ } from "./constants";
 import {
   alshrouqRequirements,
   branchCoverage,
+  readCoordinates,
   readLocation,
   type AlShrouqOrderInput,
   type AlShrouqRequirement,
@@ -46,15 +48,37 @@ export interface AlShrouqOrderState {
   /** The link exactly as the customer sent it. */
   mapUrl: string;
   setMapUrl: (value: string) => void;
-  /** Read out of the link, never typed. Empty until one is readable. */
+  /**
+   * Read out of the link when one can be read, typed when it cannot.
+   *
+   * The link remains the preferred source — it is the customer's own — but a
+   * link that carries no point used to leave an agent with a blocked order and
+   * no control to unblock it. Typing is the escape hatch, not the happy path.
+   */
   latitude: string;
   longitude: string;
+  setLatitude: (value: string) => void;
+  setLongitude: (value: string) => void;
   /** Set by the server after following a short link. Clears when the link changes. */
   applyResolved: (latitude: number, longitude: number) => void;
+  /**
+   * True while the pair on screen was typed rather than read from a link.
+   *
+   * Provenance, not validity — it is what stops a later unreadable link from
+   * discarding coordinates the agent entered on purpose.
+   */
+  manualCoordinates: boolean;
   location: LocationReading;
   paymentType: string;
   setPaymentType: (value: string) => void;
   paymentLabel: string | null;
+  /**
+   * The chosen method means the customer has already paid.
+   *
+   * Read from the CRM's live `payment_options` labels, never from an id written
+   * down here. Drives the order value the courier is told to collect.
+   */
+  paidPayment: boolean;
   coverage: BranchCoverage;
   options: AlShrouqOrderFormOptions;
   optionsPending: boolean;
@@ -114,30 +138,83 @@ export function useAlShrouqOrder(
   const paymentType = fields.alshrouq_payment_type;
 
   /**
-   * Editing the link discards the point that belonged to it.
+   * Where the pair on screen came from.
    *
-   * The same rule the separate `resolved` state used to enforce: a point is only
-   * ever valid for the link it came from, and carrying it onto a different link
-   * is how a driver is sent to the previous customer's address. Re-reading the
-   * new text immediately is what keeps a full Maps URL filling the coordinates
-   * in as it is pasted, with no round trip.
+   * The one piece of genuinely local state, and deliberately so: it is not an
+   * order column. Nothing about the *values* is kept here — they stay the form's,
+   * for the reason above — only the answer to "did a person type these?", which
+   * is a fact about this editing session and has no meaning once the order is
+   * reopened. A reopened order starts `false`: its coordinates came from
+   * whatever produced them originally, and the link is still the authority.
+   */
+  const [manualCoordinates, setManualCoordinates] = useState(false);
+
+  /**
+   * Editing the link discards the point that belonged to it — unless a person
+   * put that point there.
+   *
+   * The discard rule is the original one and it is a safety rule: a point is
+   * only ever valid for the link it came from, and carrying it onto a different
+   * link is how a driver is sent to the previous customer's address. Re-reading
+   * the new text immediately is what keeps a full Maps URL filling the
+   * coordinates in as it is pasted, with no round trip.
+   *
+   * The exception is narrow and it is the whole point of manual entry. A typed
+   * pair was not derived from the old link, so the argument for discarding it
+   * does not apply; and an agent who typed coordinates precisely *because* no
+   * link would parse would otherwise watch them vanish the moment they tidied
+   * the link box. A link that does parse still wins outright — the customer's
+   * own pin beats a typed one, and accepting it clears the manual mark.
    */
   const setMapUrl = useCallback(
     (value: string) => {
       const reading = readLocation(value);
-      patch({
-        alshrouq_map_url: value,
-        alshrouq_lat: reading.kind === "resolved" ? String(reading.latitude) : "",
-        alshrouq_lng: reading.kind === "resolved" ? String(reading.longitude) : "",
-      });
+      if (reading.kind === "resolved") {
+        setManualCoordinates(false);
+        patch({
+          alshrouq_map_url: value,
+          alshrouq_lat: String(reading.latitude),
+          alshrouq_lng: String(reading.longitude),
+        });
+        return;
+      }
+      if (manualCoordinates) {
+        patch({ alshrouq_map_url: value });
+        return;
+      }
+      patch({ alshrouq_map_url: value, alshrouq_lat: "", alshrouq_lng: "" });
+    },
+    [patch, manualCoordinates],
+  );
+
+  /**
+   * What the server established by following a short link.
+   *
+   * A read point, so it clears the manual mark and overwrites — this is the
+   * "Check location" button succeeding, which is the authoritative answer for
+   * the link currently in the box.
+   */
+  const applyResolved = useCallback(
+    (latitude: number, longitude: number) => {
+      setManualCoordinates(false);
+      patch({ alshrouq_lat: String(latitude), alshrouq_lng: String(longitude) });
     },
     [patch],
   );
 
-  /** What the server established by following a short link. */
-  const applyResolved = useCallback(
-    (latitude: number, longitude: number) => {
-      patch({ alshrouq_lat: String(latitude), alshrouq_lng: String(longitude) });
+  /** A coordinate the agent typed. Marked as theirs, so no later parse drops it. */
+  const setLatitude = useCallback(
+    (value: string) => {
+      setManualCoordinates(true);
+      patch({ alshrouq_lat: value });
+    },
+    [patch],
+  );
+
+  const setLongitude = useCallback(
+    (value: string) => {
+      setManualCoordinates(true);
+      patch({ alshrouq_lng: value });
     },
     [patch],
   );
@@ -153,11 +230,15 @@ export function useAlShrouqOrder(
    * read. Only when there is no pair does the link get re-read, which is what
    * still produces "this is a short link, check it" and the unsupported-link
    * wording for an order being typed.
+   *
+   * The pair goes through `readCoordinates` rather than straight into a
+   * `resolved` reading. It used to be trusted as-is, which was safe while the
+   * boxes were read-only and the only writer was a parser; now that a person can
+   * type in them, `Number("")`-style nonsense would otherwise read back as a
+   * *verified* location. The bounds are the same ones a pasted link is held to.
    */
   const location: LocationReading = useMemo(() => {
-    if (latitude !== "" && longitude !== "") {
-      return { kind: "resolved", latitude: Number(latitude), longitude: Number(longitude) };
-    }
+    if (latitude !== "" || longitude !== "") return readCoordinates(latitude, longitude);
     return readLocation(mapUrl);
   }, [latitude, longitude, mapUrl]);
 
@@ -193,6 +274,19 @@ export function useAlShrouqOrder(
     return hit?.label ?? paymentType;
   }, [paymentType, options?.paymentOptions]);
 
+  /**
+   * Whether the customer has already paid.
+   *
+   * Off until the option list has arrived, which is the safe way round: an
+   * unknown method is treated as one the driver collects for, so a list that has
+   * not loaded can only ever fail towards asking for money that is owed rather
+   * than towards waiving money that is not.
+   */
+  const paidPayment = useMemo(
+    () => isPaidPaymentType(paymentType, options?.paymentOptions),
+    [paymentType, options?.paymentOptions],
+  );
+
   const input = useMemo<AlShrouqOrderInput>(
     () => ({
       deliveryType,
@@ -214,11 +308,15 @@ export function useAlShrouqOrder(
     setMapUrl,
     latitude,
     longitude,
+    setLatitude,
+    setLongitude,
     applyResolved,
+    manualCoordinates,
     location,
     paymentType,
     setPaymentType,
     paymentLabel,
+    paidPayment,
     coverage,
     options: options ?? { branchOptions: [], paymentOptions: [], dispatchAvailable: true },
     optionsPending,

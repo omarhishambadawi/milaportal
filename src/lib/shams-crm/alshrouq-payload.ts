@@ -85,6 +85,45 @@ export interface AlShrouqOrderSource {
   notes?: string | null;
 }
 
+/** Enough of a payment option to recognise one. Structural, so nothing server-only is imported. */
+export interface AlShrouqPaymentOptionLike {
+  id: number;
+  label: string;
+}
+
+/**
+ * The CRM's already-paid method, recognised by its published label.
+ *
+ * Anchored and whole-word: `AlshrouqPay` is a *different* method — the courier
+ * collects through AlShrouq's own wallet — and matching it here would tell a
+ * driver to collect nothing on a job where they must. No id is written down;
+ * the label is what the CRM publishes and what an agent reads in the picker, so
+ * the two cannot drift.
+ */
+const PAID_PAYMENT_LABEL = /^\s*paid\s*$/i;
+
+/** The live ids whose label means the customer has already paid. */
+export function paidPaymentTypeIds(
+  options: readonly AlShrouqPaymentOptionLike[] | null | undefined,
+): number[] {
+  if (!options) return [];
+  return options.filter((option) => PAID_PAYMENT_LABEL.test(option.label)).map((o) => o.id);
+}
+
+/**
+ * Whether the chosen method is one of them.
+ *
+ * Takes the id as the form holds it — text — because that is what every caller
+ * has. An unparseable or unchosen value is simply not paid.
+ */
+export function isPaidPaymentType(
+  paymentType: number | string | null | undefined,
+  options: readonly AlShrouqPaymentOptionLike[] | null | undefined,
+): boolean {
+  const id = numeric(paymentType);
+  return id !== null && paidPaymentTypeIds(options).includes(id);
+}
+
 export interface AlShrouqBuildContext {
   /**
    * The branch's AlShrouq id, already resolved against the CRM's
@@ -95,6 +134,16 @@ export interface AlShrouqBuildContext {
   alshrouqBranchId: string | null | undefined;
   /** The CRM's live payment ids. No enum is kept in this repository. */
   paymentOptionIds: readonly number[];
+  /**
+   * Which of those ids mean the customer has already paid.
+   *
+   * Supplied by the caller from the same live `payment_options`, via
+   * {@link paidPaymentTypeIds} — so this file still writes down no id and no
+   * label, and a deployment that renames or renumbers the method needs no edit
+   * here. Omitted means "nothing is known to be prepaid", which leaves
+   * `order_value` exactly as it was.
+   */
+  paidPaymentTypeIds?: readonly number[];
   /** Minutes, when the caller has a value. Omitted from the payload otherwise. */
   preparationTime?: number | null;
 }
@@ -188,8 +237,20 @@ export function buildAlshrouqOrderPayload(
    * number, so the key is not optional on the wire, and defaulting a blank to 0
    * would invent a "collect nothing" instruction for a COD job. An explicit 0 is
    * a statement and is honoured.
+   *
+   * **Unless the method says the customer already paid.** `order_value` is what
+   * the driver is told to collect at the door, not what the pharmacy invoiced —
+   * the invoice stays on the order untouched. Sending the invoice figure on a
+   * prepaid job is how somebody is asked to pay twice, so a paid method fixes it
+   * at 0 and a blank invoice stops being a problem: there is nothing to collect,
+   * which is a complete answer rather than a missing one.
+   *
+   * Decided here rather than in the two screens above it, because this is the
+   * only place the wire value is built and a rule enforced anywhere else could
+   * be bypassed by a request that did not come from those screens.
    */
-  const orderValue = numeric(order.invoice_value);
+  const paid = paymentType !== null && (context.paidPaymentTypeIds ?? []).includes(paymentType);
+  const orderValue = paid ? 0 : numeric(order.invoice_value);
   if (orderValue === null) fail("order_value", "The order value is required.");
 
   /**

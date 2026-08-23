@@ -133,7 +133,11 @@ import {
   type AlShrouqReadiness,
   type AlShrouqTone,
 } from "../dispatch-presentation";
-import { coverageAllowsDispatch, describeBranchCoverage } from "../order-requirements";
+import {
+  alshrouqOrderValue,
+  coverageAllowsDispatch,
+  describeBranchCoverage,
+} from "../order-requirements";
 import type { AlShrouqOrderState } from "../use-alshrouq-order";
 import { formatScheduledFor } from "../scheduling";
 import { useOrderAlShrouqDispatch } from "../use-order-dispatch";
@@ -592,6 +596,16 @@ export function AlShrouqDispatchSection({
    */
   const deliveryNote = shown?.details?.trim() || notes.trim() || null;
 
+  /**
+   * What the card says the order is worth *before* a handover exists.
+   *
+   * Zero on a prepaid method, for the same reason the payload sends zero: this
+   * figure is what a driver would be told to collect, and the card is where an
+   * agent checks it before approving. Once `shown.value` exists it wins — that
+   * is what AlShrouq was actually told, and the card must not restate it.
+   */
+  const cardOrderValue = alshrouqOrderValue(invoiceValue, alshrouq.paidPayment);
+
   return (
     <>
       <Card className="overflow-hidden shadow-sm">
@@ -647,11 +661,11 @@ export function AlShrouqDispatchSection({
               // the order says now.
               shown?.value != null
                 ? fmtSAR(Number(shown.value))
-                : invoiceValue.trim()
-                  ? fmtSAR(Number(invoiceValue))
+                : cardOrderValue.trim()
+                  ? fmtSAR(Number(cardOrderValue))
                   : "—"
             }
-            muted={shown?.value == null && !invoiceValue.trim()}
+            muted={shown?.value == null && !cardOrderValue.trim()}
           />
         </div>
 

@@ -33,6 +33,7 @@ import {
   coverageAllowsDispatch,
   describeBranchCoverage,
   describeLocationReading,
+  readCoordinates,
   readLocation,
   readyForAlShrouq,
   type AlShrouqOrderInput,
@@ -1188,12 +1189,63 @@ describe("reading a location out of a link", () => {
     expect(section).toMatch(/\{location\.kind === "needs_check" && \([\s\S]{0,900}Check location/);
   });
 
-  /** Coordinates are shown, never typed. */
-  it("offers no way to type a coordinate", () => {
-    expect(section).toContain("readOnly");
-    expect(section).toMatch(/readOnly[\s\S]{0,120}aria-readonly="true"/);
-    expect(section).not.toMatch(/onChange=\{[^}]*latitude/i);
-    expect(section).not.toMatch(/onChange=\{[^}]*longitude/i);
+  /**
+   * Coordinates are read first and typed only as a fallback.
+   *
+   * They used to be read-only outright, which stated the principle honestly and
+   * left an agent whose link would not parse with a delivery they could not hand
+   * over and no control to fix it. The boxes now accept a pair — but nothing
+   * about "the link is the authority" was given up: a link that parses still
+   * overwrites, and the section still says the link is where these come from.
+   */
+  it("lets an agent type a coordinate when the link will not give one", () => {
+    expect(section).toContain('id="alshrouq-lat"');
+    expect(section).toContain('id="alshrouq-lng"');
+    expect(section).toContain("onChange={setLatitude}");
+    expect(section).toContain("onChange={setLongitude}");
+    // Still read-only wherever the form as a whole is.
+    expect(section).toContain("readOnly={readOnly}");
+  });
+
+  /**
+   * A link that carries no point must say so, not sit there grey.
+   *
+   * The failure used to render as muted helper text beside two empty boxes,
+   * which read as an explanation rather than as something to act on.
+   */
+  it("warns rather than failing silently when a link yields no point", () => {
+    expect(section).toContain("const unread =");
+    expect(section).toMatch(/unread &&[\s\S]{0,200}AlertTriangle/);
+    // A short link has not failed — it has a button beside it — so it is not
+    // part of the warning, or the commonest pasted link would cry wolf.
+    expect(section).not.toMatch(/const unread =[\s\S]{0,400}"needs_check"/);
+  });
+
+  /** The wording an agent reads when nothing could be parsed. */
+  it("names manual entry as the way out of an unreadable link", () => {
+    expect(describeLocationReading({ kind: "unsupported" })).toMatch(
+      /could not be read[\s\S]*latitude and longitude/i,
+    );
+    expect(describeLocationReading({ kind: "invalid_pair" })).toMatch(/latitude and longitude/i);
+  });
+
+  /**
+   * A typed pair is held to exactly the bounds a parsed one is, so manual entry
+   * cannot reach a courier through a gap the link path would have closed.
+   */
+  it("judges a typed pair exactly as it judges a parsed one", () => {
+    expect(readCoordinates("24.7136", "46.6753")).toEqual({
+      kind: "resolved",
+      latitude: 24.7136,
+      longitude: 46.6753,
+    });
+    // Swapped: outside Saudi Arabia, and refused rather than sent.
+    expect(readCoordinates("46.6753", "24.7136").kind).toBe("out_of_range");
+    // Half a point is not a location — the rule `orders` enforces too.
+    expect(readCoordinates("24.7136", "").kind).toBe("invalid_pair");
+    expect(readCoordinates("", "").kind).toBe("empty");
+    // And nothing typed reads back as a verified location.
+    expect(readCoordinates("abc", "def").kind).toBe("invalid_pair");
   });
 });
 

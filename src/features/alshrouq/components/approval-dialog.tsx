@@ -94,7 +94,7 @@ import type { ScheduleResult } from "@/lib/shams-crm/alshrouq-scheduler.server";
 import { describeApprovalResult, type AlShrouqApprovalPlan } from "../approval";
 import { ALSHROUQ_NOTE_MAX } from "../constants";
 import { describeApprovalAction } from "../dispatch-presentation";
-import { formatCoordinate } from "../order-requirements";
+import { alshrouqOrderValue, formatCoordinate } from "../order-requirements";
 import { formatScheduledFor, parseScheduleInput } from "../scheduling";
 import {
   HOUR_OPTIONS,
@@ -370,6 +370,15 @@ export function AlShrouqApprovalDialog({
   const { ready, requirements, paymentLabel, mapUrl, latitude, longitude } = alshrouq;
   const creating = mode === "create";
 
+  /**
+   * What the driver is asked to collect — nothing on a prepaid order.
+   *
+   * The confirmation shows the same figure it sends, which is the point of
+   * deriving both from one call. Showing the invoice here and sending 0 would
+   * make the dialog lie about the one number an agent is confirming.
+   */
+  const orderValue = alshrouqOrderValue(invoiceValue, alshrouq.paidPayment);
+
   const approve = (intent: AlShrouqApprovalPlan["intent"]) => {
     onApprove({
       intent,
@@ -381,7 +390,7 @@ export function AlShrouqApprovalDialog({
       lng: longitude,
       customerName,
       customerPhone,
-      orderValue: invoiceValue,
+      orderValue,
       details,
     });
   };
@@ -450,8 +459,13 @@ export function AlShrouqApprovalDialog({
           <Line label="Branch" muted={!branchNo}>
             {branchNo ?? "—"}
           </Line>
-          <Line label="Order value" muted={!invoiceValue.trim()}>
-            {invoiceValue.trim() ? fmtSAR(Number(invoiceValue)) : "—"}
+          <Line label="Order value" muted={!orderValue.trim()}>
+            {orderValue.trim() ? fmtSAR(Number(orderValue)) : "—"}
+            {alshrouq.paidPayment && (
+              <span className="ms-1.5 text-muted-foreground">
+                · already paid, nothing to collect
+              </span>
+            )}
           </Line>
           <Line label="Payment" muted={!paymentLabel}>
             {paymentLabel ?? "—"}

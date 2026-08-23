@@ -88,6 +88,20 @@ export function formatCoordinates(location: AlShrouqLocation): string {
 }
 
 /**
+ * The way out of every unresolved outcome.
+ *
+ * Appended rather than replacing each sentence, because the first half still
+ * names the specific thing that went wrong and the agent may well be able to
+ * fix *that* — a better link is a better delivery than a typed pair. This only
+ * makes sure the screen never ends on "could not", which is what left an agent
+ * with a blocked order and nothing to do about it.
+ *
+ * Deliberately not added to `out_of_range`: those coordinates were read fine,
+ * and the fix is to correct them rather than to enter them again.
+ */
+const MANUAL_FALLBACK = " If it still cannot be read, enter the latitude and longitude by hand.";
+
+/**
  * What to tell the agent, per outcome.
  *
  * Each names the thing they can actually do about it. "Unsupported" is a
@@ -100,19 +114,21 @@ export function describeLocationResult(result: AlShrouqLocationResult): string |
     case "resolved":
       return null;
     case "no_coordinates":
-      return "That link opens a place but carries no coordinates. Drop a pin on the exact spot and share that link instead.";
+      return `That link opens a place but carries no coordinates. Drop a pin on the exact spot and share that link instead.${MANUAL_FALLBACK}`;
     case "out_of_range":
       return "Those coordinates fall outside Saudi Arabia. Check the link points at the delivery address.";
     case "unsupported":
-      return "Paste a Google Maps link — that is what this accepts.";
+      return `Paste a Google Maps link — that is what this accepts.${MANUAL_FALLBACK}`;
     case "failed":
-      return result.errorKind === "timeout"
-        ? "Google Maps took too long to answer. Try again."
-        : result.errorKind === "redirect_loop"
-          ? "That link redirects back to itself."
-          : result.errorKind === "too_many_hops"
-            ? "That link redirects too many times."
-            : "Could not reach Google Maps to check that link.";
+      return (
+        (result.errorKind === "timeout"
+          ? "Google Maps took too long to answer. Try again."
+          : result.errorKind === "redirect_loop"
+            ? "That link redirects back to itself."
+            : result.errorKind === "too_many_hops"
+              ? "That link redirects too many times."
+              : "Could not reach Google Maps to check that link.") + MANUAL_FALLBACK
+      );
   }
 }
 

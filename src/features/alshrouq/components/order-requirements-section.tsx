@@ -14,14 +14,22 @@
  * while the customer is still on the phone, and the dialog can go back to being
  * a confirmation.
  *
- * ## The coordinates are never typed
+ * ## The coordinates are read first, and typed only as a fallback
  *
  * They are read out of the pasted link by `parseMapsUrl`, which is pure and
  * keyless — no Places call, no API key, no round trip for numbers already in the
  * URL. A short `maps.app.goo.gl` link carries none, and the browser cannot
  * follow it (the shortener sends no CORS headers), so that one case offers
- * **Check location**, which asks the server. Nothing here invents a coordinate:
- * a link that cannot be read leaves the fields empty and the handover blocked.
+ * **Check location**, which asks the server.
+ *
+ * Nothing here invents a coordinate. What changed is what happens when nothing
+ * can be read: the fields used to be left empty and read-only, which stated the
+ * principle honestly and left the agent with a delivery they could not hand over
+ * and no control to fix it. So a link that will not parse now says so — as a
+ * warning, not as grey helper text — and the two boxes accept a typed pair, held
+ * to the same KSA bounds `parseCoordinatePair` holds a parsed one to. A typed
+ * pair survives further edits to the link box; a link that *does* parse still
+ * wins outright, because the customer's own pin beats a typed one.
  */
 
 import { useMutation } from "@tanstack/react-query";
@@ -44,24 +52,74 @@ import {
   describeBranchCoverage,
   describeLocationReading,
   formatCoordinate,
+  type LocationReading,
 } from "../order-requirements";
 import type { AlShrouqOrderState } from "../use-alshrouq-order";
 
-/** One read-only coordinate, labelled so a number is never read as a reference. */
-function Coordinate({ label, value }: { label: string; value: string }) {
+/**
+ * One coordinate — read from the link when it could be read, typed when it
+ * could not.
+ *
+ * It was read-only, on the principle that a coordinate is evidence rather than
+ * an opinion. That holds right up until no link will parse, at which point the
+ * principle leaves an agent with a delivery they cannot hand over and nothing
+ * to do about it. So the box accepts a number, and the *hint* below carries the
+ * principle instead: the link is what should fill this in, and typing is the
+ * fallback. `readOnly` still applies wherever the form as a whole is read-only.
+ *
+ * `inputMode="decimal"` so a phone offers the minus sign and the point, and a
+ * monospace face so two pasted numbers line up and a transposed digit shows.
+ */
+function Coordinate({
+  id,
+  label,
+  value,
+  onChange,
+  readOnly,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  readOnly?: boolean;
+}) {
   return (
     <div className="min-w-0 space-y-1">
-      <Label className="text-[11px] font-medium text-muted-foreground">{label}</Label>
+      <Label htmlFor={id} className="text-[11px] font-medium text-muted-foreground">
+        {label}
+      </Label>
       <Input
-        readOnly
-        tabIndex={-1}
-        aria-readonly="true"
+        id={id}
+        inputMode="decimal"
+        autoComplete="off"
         value={value}
+        onChange={(e) => onChange(e.target.value)}
+        readOnly={readOnly}
+        aria-readonly={readOnly ? "true" : undefined}
         placeholder="—"
-        className="h-8 cursor-default bg-muted/40 font-mono text-xs"
+        className={`h-8 font-mono text-xs ${readOnly ? "cursor-default bg-muted/40" : ""}`}
       />
     </div>
   );
+}
+
+/**
+ * What goes in the box.
+ *
+ * The stored text, except once the pair reads as a real point — then the tidy
+ * five-place form, which is what a link produced before these boxes could be
+ * typed in and is still what an agent should see back. Formatting mid-keystroke
+ * is what this avoids: `Number("24.")` is 24, and rewriting the box to
+ * "24.00000" while somebody is still typing the decimals makes entry
+ * impossible.
+ */
+function coordinateText(
+  raw: string,
+  location: LocationReading,
+  axis: "latitude" | "longitude",
+): string {
+  if (location.kind !== "resolved") return raw;
+  return formatCoordinate(location[axis]);
 }
 
 export function AlShrouqOrderRequirements({
@@ -76,6 +134,8 @@ export function AlShrouqOrderRequirements({
     setMapUrl,
     latitude,
     longitude,
+    setLatitude,
+    setLongitude,
     applyResolved,
     location,
     paymentType,
@@ -112,6 +172,21 @@ export function AlShrouqOrderRequirements({
   const covered = coverageAllowsDispatch(coverage);
   const locationNote = describeLocationReading(location);
   const canCheck = location.kind === "needs_check" && !resolve.isPending && !readOnly;
+
+  /**
+   * A link is present and it did not yield a point.
+   *
+   * `needs_check` is excluded on purpose: a short link has not failed, it simply
+   * has to be asked about, and there is a button beside it for exactly that.
+   * Warning about it would be crying wolf on the most common link an agent
+   * pastes. `empty` is excluded because nothing has been attempted yet.
+   */
+  const unread =
+    mapUrl.trim() !== "" &&
+    (location.kind === "unsupported" ||
+      location.kind === "out_of_range" ||
+      location.kind === "invalid_pair" ||
+      resolveError !== null);
 
   return (
     <div className="space-y-3.5 sm:col-span-2">
@@ -187,10 +262,25 @@ export function AlShrouqOrderRequirements({
         </div>
 
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <Coordinate label="Latitude" value={latitude ? formatCoordinate(Number(latitude)) : ""} />
+          {/*
+            Shown as typed while a person is typing, and tidied to five places
+            once it reads as a point. Reformatting every keystroke would fight
+            the agent — "24." becomes "24.00000" before they reach the digits —
+            and the tidy form is only meaningful for a value that parsed.
+          */}
           <Coordinate
+            id="alshrouq-lat"
+            label="Latitude"
+            value={coordinateText(latitude, location, "latitude")}
+            onChange={setLatitude}
+            readOnly={readOnly}
+          />
+          <Coordinate
+            id="alshrouq-lng"
             label="Longitude"
-            value={longitude ? formatCoordinate(Number(longitude)) : ""}
+            value={coordinateText(longitude, location, "longitude")}
+            onChange={setLongitude}
+            readOnly={readOnly}
           />
         </div>
 
@@ -200,10 +290,26 @@ export function AlShrouqOrderRequirements({
             Verified location
           </p>
         ) : (
-          <p className="text-[11px] leading-snug text-muted-foreground">
-            {resolveError ??
-              locationNote ??
-              "Coordinates are read from the link. They are never typed."}
+          /*
+            The one case that must never pass silently: a link is present and no
+            point came out of it. That used to render as grey helper text
+            alongside the standing "coordinates are never typed" line, which read
+            as an explanation rather than as something to act on — so the agent
+            saw two empty boxes, no way to fill them, and no statement that
+            anything had failed. It is now a warning, and it names the way out.
+          */
+          <p
+            className={`flex items-start gap-1.5 text-[11px] leading-snug ${
+              unread ? "font-medium text-warning" : "text-muted-foreground"
+            }`}
+            role={unread ? "status" : undefined}
+          >
+            {unread && <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />}
+            <span>
+              {resolveError ??
+                locationNote ??
+                "Coordinates are read from the link. Type them only when it cannot be read."}
+            </span>
           </p>
         )}
       </div>

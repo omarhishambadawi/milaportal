@@ -63,6 +63,7 @@
 
 import {
   buildAlshrouqOrderPayload,
+  paidPaymentTypeIds,
   type AlShrouqCreatePayload,
   type AlShrouqFieldError,
 } from "./alshrouq-payload";
@@ -319,9 +320,13 @@ export async function prepareAlShrouqDispatch(
   // 2. The branch, from the CRM's live list.
   let branch: AlShrouqBranchResolution;
   let paymentOptionIds: number[];
+  let paidIds: number[];
   try {
     const options = await deps.fetchOptions();
     paymentOptionIds = options.paymentOptions.map((p) => p.id);
+    // Read off the same live list, so no payment id is written down in this
+    // repository — the CRM's own label is what decides.
+    paidIds = paidPaymentTypeIds(options.paymentOptions);
     branch = resolveAlShrouqBranch(options.branchOptions, branchNo);
   } catch (err) {
     return {
@@ -344,7 +349,7 @@ export async function prepareAlShrouqDispatch(
       invoice_value: form.orderValue || null,
       notes: form.details || null,
     },
-    { alshrouqBranchId: branch.branchId, paymentOptionIds },
+    { alshrouqBranchId: branch.branchId, paymentOptionIds, paidPaymentTypeIds: paidIds },
   );
 
   if (!built.ok) {

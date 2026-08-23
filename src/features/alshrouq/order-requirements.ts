@@ -26,6 +26,7 @@
  * payment method and a resolvable location — and the branch's coverage.
  */
 
+import { parseCoordinatePair } from "@/lib/geo/coordinates";
 import { parseMapsUrl } from "@/lib/geo/maps-url";
 import type { AlShrouqBranchResolution } from "@/lib/shams-crm/alshrouq-branches";
 import { ALSHROUQ } from "./constants";
@@ -53,6 +54,15 @@ export type LocationReading =
    */
   | { kind: "needs_check"; url: string }
   | { kind: "out_of_range" }
+  /**
+   * Something is in the two coordinate boxes, and it is not a point.
+   *
+   * Distinct from `unsupported`, which is about a *link*. Once the boxes accept
+   * typing, "that link carries no location" and "those numbers are not a
+   * location" are two different mistakes with two different fixes, and one
+   * sentence covering both would name neither.
+   */
+  | { kind: "invalid_pair" }
   | { kind: "unsupported" };
 
 /**
@@ -81,6 +91,29 @@ export function readLocation(raw: string | null | undefined): LocationReading {
   return { kind: "unsupported" };
 }
 
+/**
+ * Read the pair the agent typed, held to exactly the bounds a pasted link is.
+ *
+ * `parseCoordinatePair` is the same function `parseMapsUrl` delegates its range
+ * check to, so a typed point and a parsed one are judged identically — a hand-
+ * entered pair cannot reach a courier through a gap the link path would close.
+ * Half a pair is not a location, which is the rule `orders` enforces with
+ * `CHECK ((alshrouq_lat IS NULL) = (alshrouq_lng IS NULL))`.
+ */
+export function readCoordinates(
+  latitude: string | null | undefined,
+  longitude: string | null | undefined,
+): LocationReading {
+  const lat = latitude?.trim() ?? "";
+  const lng = longitude?.trim() ?? "";
+  if (lat === "" && lng === "") return { kind: "empty" };
+  if (lat === "" || lng === "") return { kind: "invalid_pair" };
+
+  const { point, outOfRange } = parseCoordinatePair(lat, lng);
+  if (point) return { kind: "resolved", latitude: point.lat, longitude: point.lng };
+  return outOfRange ? { kind: "out_of_range" } : { kind: "invalid_pair" };
+}
+
 /** What to tell the agent about a reading. `null` when nothing needs saying. */
 export function describeLocationReading(reading: LocationReading): string | null {
   switch (reading.kind) {
@@ -90,10 +123,29 @@ export function describeLocationReading(reading: LocationReading): string | null
     case "needs_check":
       return "This is a shortened Google Maps link. Check the location to read its coordinates.";
     case "out_of_range":
-      return "Those coordinates fall outside Saudi Arabia. Check the link points at the delivery address.";
+      return "Those coordinates fall outside Saudi Arabia. Check the link points at the delivery address, or correct the latitude and longitude below.";
+    case "invalid_pair":
+      return "Those are not a usable latitude and longitude. Enter both, as decimal degrees — for example 24.71360 and 46.67530.";
     case "unsupported":
-      return "This link does not carry an exact location. Ask the customer to drop a pin on the delivery spot and share that Google Maps link.";
+      return "The coordinates could not be read from this link. Ask the customer to drop a pin on the delivery spot and share that Google Maps link, or enter the latitude and longitude below by hand.";
   }
+}
+
+/**
+ * What AlShrouq is told the order is worth.
+ *
+ * `order_value` is the figure the driver is asked to collect at the door, not
+ * what the pharmacy invoiced. On a method that means the customer has already
+ * paid, those two are different numbers and sending the invoice would have
+ * somebody pay twice — so it is nothing, and the order's own `invoice_value` is
+ * left exactly as it is for every other purpose that reads it.
+ *
+ * The screens use this so the card, the confirmation and the payload cannot
+ * disagree; the payload builder applies the same rule again on the server,
+ * because that is the only copy a request bypassing these screens must obey.
+ */
+export function alshrouqOrderValue(invoiceValue: string, paidPayment: boolean): string {
+  return paidPayment ? "0" : invoiceValue;
 }
 
 /** `24.53728` — five places is roughly a metre, and it fits a narrow column. */
