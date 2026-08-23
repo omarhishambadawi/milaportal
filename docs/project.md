@@ -4247,6 +4247,20 @@ and nothing about the principle was given up:
   `LocationReading` kind, because "that link carries no location" and "those
   numbers are not a location" are two different mistakes), and nothing typed can
   render as **Verified location**.
+- **One reader answers for every consumer.** `parseCoordinatePair` tolerates the
+  stray characters a pasted coordinate arrives with — a trailing comma from
+  splitting `24.53738, 46.64555`, a direction letter, the invisible bidi mark a
+  WhatsApp copy carries — while the confirmation summary,
+  `validateAlShrouqOrderFields` and the dispatch payload all re-read the raw text
+  with a bare `Number()`, which is NaN for every one of them. The two disagreed:
+  the box showed a valid `24.53738` (it was rendering the *parsed* value) while
+  the confirmation read **NaN, 46.64555** and the validator reported the latitude
+  missing. `canonicalCoordinate` closes it — consumers read the value the
+  location system already parsed, and the boxes bind to `latitudeText`/
+  `longitudeText`, the stored text verbatim, so what is displayed is what is
+  held. It is conservative by construction: text that already parses is returned
+  byte-for-byte, so a link-supplied coordinate still reaches the courier exactly
+  as `parseMapsUrl` read it.
 - **A typed pair survives a later failed parse.** `useAlShrouqOrder` keeps one
   piece of genuinely local state — `manualCoordinates`, provenance only, never an
   order column — so editing the link box no longer discards coordinates a person

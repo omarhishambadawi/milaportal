@@ -30,6 +30,7 @@ import {
 import {
   alshrouqRequirements,
   branchCoverage,
+  canonicalCoordinate,
   coverageAllowsDispatch,
   describeBranchCoverage,
   describeLocationReading,
@@ -39,6 +40,8 @@ import {
   type AlShrouqOrderInput,
   type BranchCoverage,
 } from "../order-requirements";
+import { ALSHROUQ } from "../constants";
+import { validateAlShrouqOrderFields } from "../order-fields";
 import { parseScheduleInput } from "../scheduling";
 import {
   HOUR_OPTIONS,
@@ -1246,6 +1249,55 @@ describe("reading a location out of a link", () => {
     expect(readCoordinates("", "").kind).toBe("empty");
     // And nothing typed reads back as a verified location.
     expect(readCoordinates("abc", "def").kind).toBe("invalid_pair");
+  });
+
+  /**
+   * The regression: one field, two readers, and they disagreed.
+   *
+   * A pasted latitude carrying a stray character reads fine to the geo module —
+   * it strips degree marks, direction letters and the rest — and reads as NaN to
+   * the bare `Number()` every consumer used. So the box showed "24.53738", the
+   * confirmation showed "NaN, 46.64555", and the validator said the latitude was
+   * missing. Whatever `readCoordinates` accepts must survive a `Number()`.
+   */
+  it("hands downstream a coordinate that survives Number()", () => {
+    for (const raw of ["24.53738,", "24.53738 N", "‎24.53738", " 24.53738 "]) {
+      const location = readCoordinates(raw, "46.64555");
+      expect(location.kind).toBe("resolved");
+
+      const lat = canonicalCoordinate(raw, location, "latitude");
+      expect(Number.isNaN(Number(lat))).toBe(false);
+      expect(Number(lat)).toBeCloseTo(24.53738, 5);
+
+      // And the validator agrees, which is the sentence the agent was shown.
+      expect(
+        validateAlShrouqOrderFields({
+          deliveryType: ALSHROUQ,
+          customerName: "Test Customer",
+          customerPhone: "0500798930",
+          customerLocation: "https://maps.app.goo.gl/abc123",
+          latitude: lat,
+          longitude: canonicalCoordinate("46.64555", location, "longitude"),
+        }),
+      ).toEqual([]);
+    }
+  });
+
+  /**
+   * Conservative by construction: it repairs only what would have been NaN.
+   *
+   * A value that already parses is returned byte-for-byte, so a link-supplied
+   * coordinate reaches the courier exactly as `parseMapsUrl` read it — no
+   * rounding, no reformatting, nothing about the working path touched.
+   */
+  it("returns text that already parses completely untouched", () => {
+    const location = readCoordinates("21.5558662", "39.2905617");
+    expect(canonicalCoordinate("21.5558662", location, "latitude")).toBe("21.5558662");
+    expect(canonicalCoordinate("39.2905617", location, "longitude")).toBe("39.2905617");
+    // A half-typed decimal point is left alone rather than reformatted.
+    expect(canonicalCoordinate("24.", readCoordinates("24.", "46.6"), "latitude")).toBe("24.");
+    // And with no point to fall back on, the raw text stands as it is.
+    expect(canonicalCoordinate("abc", { kind: "invalid_pair" }, "latitude")).toBe("abc");
   });
 });
 

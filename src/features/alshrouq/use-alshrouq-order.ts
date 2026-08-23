@@ -34,6 +34,7 @@ import { ALSHROUQ } from "./constants";
 import {
   alshrouqRequirements,
   branchCoverage,
+  canonicalCoordinate,
   readCoordinates,
   readLocation,
   type AlShrouqOrderInput,
@@ -57,6 +58,15 @@ export interface AlShrouqOrderState {
    */
   latitude: string;
   longitude: string;
+  /**
+   * The same two values exactly as the boxes hold them.
+   *
+   * Only the two inputs should bind to these. `latitude`/`longitude` above are
+   * what a consumer about to parse the value wants; these are what a person is
+   * currently typing, half-finished decimal point and all.
+   */
+  latitudeText: string;
+  longitudeText: string;
   setLatitude: (value: string) => void;
   setLongitude: (value: string) => void;
   /** Set by the server after following a short link. Clears when the link changes. */
@@ -219,8 +229,9 @@ export function useAlShrouqOrder(
     [patch],
   );
 
-  const latitude = fields.alshrouq_lat;
-  const longitude = fields.alshrouq_lng;
+  /** Exactly what is in the two boxes. Only the boxes themselves should read it. */
+  const latitudeText = fields.alshrouq_lat;
+  const longitudeText = fields.alshrouq_lng;
 
   /**
    * The point, and why there isn't one.
@@ -238,9 +249,33 @@ export function useAlShrouqOrder(
    * *verified* location. The bounds are the same ones a pasted link is held to.
    */
   const location: LocationReading = useMemo(() => {
-    if (latitude !== "" || longitude !== "") return readCoordinates(latitude, longitude);
+    if (latitudeText !== "" || longitudeText !== "") {
+      return readCoordinates(latitudeText, longitudeText);
+    }
     return readLocation(mapUrl);
-  }, [latitude, longitude, mapUrl]);
+  }, [latitudeText, longitudeText, mapUrl]);
+
+  /**
+   * The pair as everything except the two boxes should read it.
+   *
+   * `readCoordinates` above delegates to the geo module's own reader, which
+   * tolerates the stray characters a pasted coordinate arrives with: a trailing
+   * comma left by splitting "24.53738, 46.64555", a direction letter, the
+   * invisible bidi mark a WhatsApp copy carries. Every consumer downstream —
+   * the confirmation's summary line, `validateAlShrouqOrderFields`, the dispatch
+   * payload — re-read the raw text with a bare `Number()`, which is NaN for all
+   * three. So the box displayed a perfectly good latitude (it was showing the
+   * *parsed* value) while the confirmation read **NaN, 46.64555** and the
+   * validator reported the latitude missing. Two readers, one field.
+   *
+   * There is one reader now. The raw text is kept whenever it already parses on
+   * its own, so nothing that works today changes by so much as a rounded digit —
+   * a link-supplied coordinate is still passed through exactly as parsed. Only
+   * the case that was broken is repaired, by substituting the value the rest of
+   * the location system had already read successfully.
+   */
+  const latitude = canonicalCoordinate(latitudeText, location, "latitude");
+  const longitude = canonicalCoordinate(longitudeText, location, "longitude");
 
   const setPaymentType = useCallback(
     (value: string) => patch({ alshrouq_payment_type: value }),
@@ -308,6 +343,8 @@ export function useAlShrouqOrder(
     setMapUrl,
     latitude,
     longitude,
+    latitudeText,
+    longitudeText,
     setLatitude,
     setLongitude,
     applyResolved,

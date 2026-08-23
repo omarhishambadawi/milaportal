@@ -114,6 +114,33 @@ export function readCoordinates(
   return outOfRange ? { kind: "out_of_range" } : { kind: "invalid_pair" };
 }
 
+/**
+ * One coordinate, as a consumer that is about to `Number()` it should receive.
+ *
+ * `readCoordinates` above delegates to the geo module's reader, which tolerates
+ * the stray characters a pasted coordinate arrives with — a trailing comma left
+ * by splitting "24.53738, 46.64555", a direction letter, the invisible bidi mark
+ * a WhatsApp copy carries. Everything downstream re-read the raw text with a
+ * bare `Number()`, which is NaN for all three, so the form showed a good
+ * latitude while the confirmation read **NaN, 46.64555** and
+ * `validateAlShrouqOrderFields` reported the latitude missing. Two readers
+ * disagreeing about one field.
+ *
+ * Deliberately conservative: text that already parses on its own is returned
+ * untouched, so this can only ever repair a value that would have become NaN and
+ * can never alter one that would not have. A link-supplied coordinate is passed
+ * through exactly as it was parsed, down to the last digit.
+ */
+export function canonicalCoordinate(
+  raw: string,
+  location: LocationReading,
+  axis: "latitude" | "longitude",
+): string {
+  const text = raw.trim();
+  if (text === "" || Number.isFinite(Number(text))) return raw;
+  return location.kind === "resolved" ? String(location[axis]) : raw;
+}
+
 /** What to tell the agent about a reading. `null` when nothing needs saying. */
 export function describeLocationReading(reading: LocationReading): string | null {
   switch (reading.kind) {

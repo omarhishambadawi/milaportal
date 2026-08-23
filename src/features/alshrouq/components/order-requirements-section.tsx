@@ -103,25 +103,6 @@ function Coordinate({
   );
 }
 
-/**
- * What goes in the box.
- *
- * The stored text, except once the pair reads as a real point — then the tidy
- * five-place form, which is what a link produced before these boxes could be
- * typed in and is still what an agent should see back. Formatting mid-keystroke
- * is what this avoids: `Number("24.")` is 24, and rewriting the box to
- * "24.00000" while somebody is still typing the decimals makes entry
- * impossible.
- */
-function coordinateText(
-  raw: string,
-  location: LocationReading,
-  axis: "latitude" | "longitude",
-): string {
-  if (location.kind !== "resolved") return raw;
-  return formatCoordinate(location[axis]);
-}
-
 export function AlShrouqOrderRequirements({
   state,
   readOnly,
@@ -132,8 +113,8 @@ export function AlShrouqOrderRequirements({
   const {
     mapUrl,
     setMapUrl,
-    latitude,
-    longitude,
+    latitudeText,
+    longitudeText,
     setLatitude,
     setLongitude,
     applyResolved,
@@ -263,22 +244,24 @@ export function AlShrouqOrderRequirements({
 
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {/*
-            Shown as typed while a person is typing, and tidied to five places
-            once it reads as a point. Reformatting every keystroke would fight
-            the agent — "24." becomes "24.00000" before they reach the digits —
-            and the tidy form is only meaningful for a value that parsed.
+            The stored text, verbatim. It used to show the *parsed* value
+            instead, which is what let the box read a valid "24.53738" while the
+            field behind it held something `Number()` could not read — the form
+            looked right and the confirmation said NaN. A box that shows what it
+            holds cannot disagree with anything downstream, and it also stops
+            reformatting under a person mid-keystroke.
           */}
           <Coordinate
             id="alshrouq-lat"
             label="Latitude"
-            value={coordinateText(latitude, location, "latitude")}
+            value={latitudeText}
             onChange={setLatitude}
             readOnly={readOnly}
           />
           <Coordinate
             id="alshrouq-lng"
             label="Longitude"
-            value={coordinateText(longitude, location, "longitude")}
+            value={longitudeText}
             onChange={setLongitude}
             readOnly={readOnly}
           />
