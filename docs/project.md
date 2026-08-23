@@ -3068,6 +3068,42 @@ Phase 2 changes no dispatch behaviour: every existing caller still runs on the
 service principal. Phases 1 (Vault-backed agent credential mapping) and 3
 (switching the create POST to the agent principal) are not built.
 
+#### Agent CRM identities (Phase 1)
+
+`shams_crm_agent_links` (20260824090000) maps one MilaPortal agent to one Shams
+CRM user. **The password is not in it.** There is no `crm_password` column and no
+encrypted-blob column either — a column that can hold a secret is one somebody
+eventually selects into a log, an export or a browser. The password lives in
+Vault under `shams_crm_agent_<user_id>`, and the table stores only that name in
+`vault_key`.
+
+Three `SECURITY DEFINER` functions are the only way to it —
+`shams_crm_store_agent_secret` (returns the *name*, never the value),
+`shams_crm_agent_secret` (returns NULL for an absent or inactive link rather
+than raising, so "no CRM account" is distinguishable from "the database failed")
+and `shams_crm_forget_agent_secret`. All three are revoked from `anon` and
+`authenticated`: a client must not be able to ask the database for a password.
+
+Unlike `alshrouq_dispatches`, which grants SELECT to `authenticated` because an
+agent may see their own order's delivery, this table has **no policy for any
+client role**. A CRM username is half of another person's credential.
+
+Two constraints carry the safety: `UNIQUE (crm_username)` so two agents cannot
+share one CRM account and make attribution ambiguous, and a CHECK that an
+`active` link must have both `verified_at` and `vault_key` — a half-configured
+row cannot be dispatchable.
+
+`agentCrmPrincipal()` turns a verified MilaPortal user id into a `CrmPrincipal`,
+or returns `not_configured` / `inactive` / `missing_secret`. **It never falls
+back to the service principal.** Dispatching under the deployment's own account
+would succeed, look fine, and record the delivery against the wrong person —
+which is the failure the whole design exists to prevent, so it is a returned
+outcome rather than an exception someone might catch.
+
+Verified against the live CRM on 2026-08-23: seven agents, all authenticating,
+all active, all holding `alshrouq_delivery`, CRM user ids captured from `/me`.
+Login and `/me` only — no order was created.
+
 #### Scheduling is MilaPortal's alone
 
 A scheduled order contacts nobody at creation time. It writes one local row with
