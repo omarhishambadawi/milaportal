@@ -1557,7 +1557,17 @@ describe("choosing AlShrouq on the order form", () => {
    * two fields later.
    */
   it("explains the choice where the choice is made", () => {
-    expect(orderForm).toContain("form.delivery_type === ALSHROUQ ? (");
+    /*
+     * Keyed on the *resolved* delivery type, not on `form.delivery_type`.
+     *
+     * The form's copy is blank whenever hydration does not run, so keying the
+     * hint on it alone hid the explanation on exactly the orders it describes —
+     * the same failure that showed "Select a method…" on a dispatched AlShrouq
+     * order. `deliveryType` falls back to the stored column, and a typed value
+     * still wins outright.
+     */
+    expect(orderForm).toContain("deliveryType === ALSHROUQ ? (");
+    expect(orderForm).toContain("const deliveryType = requiredFieldValue(");
     expect(orderForm).toMatch(/AlShrouq delivers this order/);
     expect(orderForm).toMatch(/save it only, or to hand the delivery to AlShrouq/);
   });

@@ -54,6 +54,7 @@ import {
 import { ORDER_TYPES, DELIVERY_TYPES, CURRENCY, formatOrderNo } from "@/lib/branches";
 import { cn } from "@/lib/utils";
 import { useOrderForm } from "@/features/orders/hooks/use-order-form";
+import { requiredFieldValue } from "@/features/orders/payload";
 import { invoiceKey } from "@/features/orders/invoice-verification";
 import { OrderActivityTimeline } from "@/features/orders/components/order-activity-timeline";
 import { OrderAssignment } from "@/features/orders/components/order-assignment";
@@ -223,8 +224,34 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
     (next: Partial<AlShrouqOrderFields>) => setForm((f) => ({ ...f, ...next })),
     [setForm],
   );
-  const alshrouq = useAlShrouqOrder(
+
+  /**
+   * The order's delivery method — the form's copy, or the order's own when the
+   * form has not got one.
+   *
+   * `requiredFieldValue` is the rule `buildOrderPayload` already applies when
+   * this field is *saved*; this is the same rule applied when it is *shown*, and
+   * the two now come from one function so they cannot disagree.
+   *
+   * It is used instead of `form.delivery_type` everywhere the *order's* method
+   * is the question. The stored column survives every reload; the form's copy is
+   * state seeded by an effect that runs once per order id, so it is blank on the
+   * first render of every load and stays blank whenever hydration does not run.
+   * That is why an AlShrouq order reopened for editing showed "Select a
+   * method…" — and, because the same blank reached `useAlShrouqOrder`, why it
+   * would have taken the order's whole AlShrouq half down with it.
+   *
+   * Editing still works exactly as before: the moment an agent picks a method,
+   * `form.delivery_type` is non-blank and wins outright. A new order has no
+   * stored value, so it starts blank and must be answered, as it always has.
+   */
+  const deliveryType = requiredFieldValue(
     form.delivery_type,
+    (existing as { delivery_type?: string | null } | null | undefined)?.delivery_type,
+  );
+
+  const alshrouq = useAlShrouqOrder(
+    deliveryType,
     form.branch_no,
     form.customer_name,
     form.customer_phone,
@@ -256,7 +283,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
   const showsAlShrouqSection = showAlShrouqSection({
     storedDeliveryType: (existing as { delivery_type?: string | null } | null | undefined)
       ?.delivery_type,
-    formDeliveryType: form.delivery_type,
+    formDeliveryType: deliveryType,
     hasDispatchHistory: (dispatchState?.rows.length ?? 0) > 0,
   });
 
@@ -467,7 +494,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 label="Delivery & pickup"
                 required
                 hint={
-                  form.delivery_type === ALSHROUQ ? (
+                  deliveryType === ALSHROUQ ? (
                     <span className="flex items-start gap-1.5">
                       <Truck
                         className="mt-px h-3.5 w-3.5 shrink-0 text-primary"
@@ -483,7 +510,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 }
               >
                 <Select
-                  value={form.delivery_type}
+                  value={deliveryType}
                   onValueChange={(v) => setForm((f) => ({ ...f, delivery_type: v }))}
                   disabled={readOnly}
                 >

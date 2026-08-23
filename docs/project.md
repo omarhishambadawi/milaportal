@@ -1810,6 +1810,33 @@ hands back a new one per refetch, so a verification landing mid-edit used to
 rebuild the form under the agent), and every `setForm` in the route is a
 functional update. `call_center_verified` is re-applied on its own, raise-only.
 
+#### The same rule governs what the form *shows*
+
+The fallback above covered the **write** and left the **screen** alone, and that
+gap was its own reported bug: an AlShrouq order reopened for editing showed
+"Delivery & pickup — *Select a method…*" even though the column held `AlShrouq`
+(byte-exact, `len 8`, matching `DELIVERY_TYPES[0]`) and the delivery had already
+been accepted by the courier. Nothing was wrong with the data — every save had
+been falling back correctly — so the order never lost its method; only the
+control looked empty.
+
+The cause is the one `features/alshrouq/dispatch-selection.ts` already names.
+`form.delivery_type` is state seeded by an effect that runs once per order id, so
+it is blank on the first render of every load and **stays blank whenever the
+hydration does not run** — a detail query still in flight, a re-used route
+component whose `hydratedFor` ref already names the id, or an SSR pass where
+effects never run. That is why the AlShrouq card's visibility is decided from
+persisted facts rather than from this value.
+
+`requiredFieldValue(formValue, persistedValue)` is now that rule as a shared
+function: `buildOrderPayload` applies it on save and `OrderForm` applies it to
+`deliveryType`, which feeds the `Select`, the AlShrouq hint, `useAlShrouqOrder`
+and `showAlShrouqSection`. Feeding it to `useAlShrouqOrder` matters as much as
+the `Select` — the same blank was reaching the hook, so the order's whole
+AlShrouq half went inactive with the label. A typed value always wins outright,
+so editing the method is unchanged, and a new order still has nothing to fall
+back to and must answer for itself.
+
 The last two schema fields are optional so they can be **omitted rather than sent as a default**:
 an absent column keeps whatever the row holds. `call_center_verified` is sent
 only when the caller may verify *and* is not about to write `false` over a flag a

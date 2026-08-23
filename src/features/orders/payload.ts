@@ -105,6 +105,32 @@ function present(value: unknown): string | null {
 }
 
 /**
+ * A required field's value: what the form holds, or the stored one when the
+ * form's copy is blank.
+ *
+ * The rule described at the top of this file, as a function, because it is
+ * needed in two places rather than one. `buildOrderPayload` applies it when an
+ * order is **saved**; the form applies it when a required `Select` is
+ * **displayed**, and that second use is not a nicety.
+ *
+ * The form's copy is React state seeded by an effect that runs once per order
+ * id, so it is blank on the first render of every load and stays blank whenever
+ * the hydration does not run — a detail query still in flight, a re-used route
+ * component whose `hydratedFor` ref already names the id, an SSR pass where
+ * effects never run at all (see `features/alshrouq/dispatch-selection.ts`). The
+ * saved order was never wrong in any of those cases, because this rule already
+ * covered the write. Only the screen was, which is how "Delivery & pickup"
+ * came to read *Select a method…* on an order that has had one since it was
+ * created.
+ *
+ * Returns `""` when neither side has anything — a new order has nothing to fall
+ * back to, and it must still fail validation rather than acquire a value.
+ */
+export function requiredFieldValue(formValue: unknown, persistedValue: unknown): string {
+  return present(formValue) ?? present(persistedValue) ?? "";
+}
+
+/**
  * Build the object handed to `orderFormSchema.parse`.
  *
  * Every field the order has is present in the result — dropping one while
@@ -120,14 +146,16 @@ export function buildOrderPayload({
   canAssign,
   canVerify,
 }: BuildOrderPayloadArgs): Record<string, unknown> {
-  /** Form value, or the stored one when the form's is blank and one exists. */
-  const required = (field: (typeof REQUIRED_FROM_ROW)[number]): string => {
-    const typed = present(form[field as keyof OrderFormState]);
-    if (typed !== null) return typed;
-    // Only an existing order has anything to fall back to. A new one keeps the
-    // blank and fails validation, which is the correct answer there.
-    return present(persisted?.[field]) ?? "";
-  };
+  /**
+   * Form value, or the stored one when the form's is blank and one exists.
+   *
+   * The shared rule, so the value that is *saved* and the value the form
+   * *shows* cannot come apart. Only an existing order has anything to fall back
+   * to — a new one keeps the blank and fails validation, which is the correct
+   * answer there.
+   */
+  const required = (field: (typeof REQUIRED_FROM_ROW)[number]): string =>
+    requiredFieldValue(form[field as keyof OrderFormState], persisted?.[field]);
 
   return {
     order_date: required("order_date"),

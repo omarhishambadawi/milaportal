@@ -16,7 +16,12 @@
 
 import { describe, expect, it } from "vitest";
 import { orderFormSchema } from "../schema";
-import { buildOrderPayload, type OrderFormState, type PersistedOrder } from "../payload";
+import {
+  buildOrderPayload,
+  requiredFieldValue,
+  type OrderFormState,
+  type PersistedOrder,
+} from "../payload";
 import { summarizeInvoices, type OrderInvoice } from "../invoice-verification";
 
 const NOTHING_VERIFIED = summarizeInvoices([]);
@@ -300,5 +305,65 @@ describe("order value in the payload", () => {
 
   it("leaves an untouched empty value null rather than zero", () => {
     expect(build({ form: form({ invoice_value: "" }) }).invoice_value).toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The same rule, applied to what the form SHOWS                              */
+/*                                                                            */
+/* `buildOrderPayload` has always fallen back to the stored row for a required */
+/* field the form arrived blank with, so the order kept its delivery method    */
+/* through every save. The *screen* had no such rule, which is why reopening   */
+/* an AlShrouq order for editing showed "Select a method…" beside a delivery   */
+/* that had already been handed to a courier. One function now serves both, so */
+/* the value saved and the value shown cannot come apart again.                */
+/* -------------------------------------------------------------------------- */
+
+describe("requiredFieldValue", () => {
+  it("prefers what the agent has in the form", () => {
+    expect(requiredFieldValue("Store Pickup", "AlShrouq")).toBe("Store Pickup");
+  });
+
+  it("falls back to the stored value when the form's copy never arrived", () => {
+    // The reported bug: hydration did not run, so the form holds "" while the
+    // order has had a method since it was created.
+    expect(requiredFieldValue("", "AlShrouq")).toBe("AlShrouq");
+  });
+
+  it.each(["", "   ", "\t", null, undefined])(
+    "treats %p in the form as absent rather than as a choice",
+    (blank) => {
+      expect(requiredFieldValue(blank, "Branch Scooter")).toBe("Branch Scooter");
+    },
+  );
+
+  it("returns blank when neither side has a value, so a new order still fails validation", () => {
+    expect(requiredFieldValue("", null)).toBe("");
+    expect(requiredFieldValue(undefined, undefined)).toBe("");
+  });
+
+  it("does not invent a value for an order that has none stored", () => {
+    // A create has nothing to fall back to, and must not acquire a method.
+    expect(requiredFieldValue("", undefined)).toBe("");
+  });
+
+  it("ignores a blank stored value the same way", () => {
+    expect(requiredFieldValue("", "   ")).toBe("");
+  });
+
+  /**
+   * The value the form shows is the value the payload sends.
+   *
+   * Pinned together rather than separately: the whole point of sharing the
+   * function is that a screen showing "AlShrouq" cannot save something else.
+   */
+  it("agrees with what buildOrderPayload would send for the same inputs", () => {
+    const shown = requiredFieldValue("", "AlShrouq");
+    const sent = build({
+      form: form({ delivery_type: "" }),
+      persisted: persisted({ delivery_type: "AlShrouq" }),
+    }).delivery_type;
+    expect(shown).toBe("AlShrouq");
+    expect(sent).toBe(shown);
   });
 });
