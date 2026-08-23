@@ -15,6 +15,7 @@
  */
 
 import { formatScheduledFor } from "./scheduling";
+import { explainAgentCredentialProblem } from "@/lib/shams-crm/agent-credentials.server";
 import type {
   CancelScheduledResult,
   ScheduleResult,
@@ -181,6 +182,20 @@ export function describeApprovalResult(
       return {
         tone: "error",
         message: `${lead}AlShrouq could not be reached. Nothing was sent.`,
+      };
+    case "agent_not_configured":
+      /*
+       * The agent's own CRM link is missing, so the order was not sent.
+       *
+       * Deliberately not phrased as a failure of the order or of AlShrouq: both
+       * are fine. The CRM records a delivery against whichever account created
+       * it, so without this agent's own account there is no honest way to send
+       * it — and sending it under the deployment's account would put somebody
+       * else's name on it, which is why nothing was sent instead.
+       */
+      return {
+        tone: "error",
+        message: `${lead}${explainAgentCredentialProblem(result.problem)} Nothing was sent.`,
       };
   }
 }

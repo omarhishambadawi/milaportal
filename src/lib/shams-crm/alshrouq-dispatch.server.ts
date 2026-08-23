@@ -76,6 +76,7 @@ import {
 } from "./alshrouq-create.server";
 import { ShamsCrmError } from "./client.server";
 import type { AlShrouqDispatchStatus } from "./alshrouq-dispatch-state";
+import type { AgentCredentialProblem, AgentCredentialResult } from "./agent-credentials.server";
 
 /**
  * The production boundary.
@@ -157,6 +158,16 @@ export type AlShrouqDispatchResult =
    * made**. This is the only outcome reachable in the current deployment.
    */
   | { kind: "prepared"; payload: DispatchPayloadSummary; liveDispatchEnabled: false }
+  /**
+   * The agent has no usable Shams CRM identity, so **nothing was sent**.
+   *
+   * A distinct outcome rather than a failure, because the order is fine and so
+   * is the branch — it is the *agent's* CRM link that is missing, and the fix is
+   * an administrator's. Crucially this is where the pipeline stops: it never
+   * continues under the service credential, because that would succeed and
+   * record the delivery against the wrong person.
+   */
+  | { kind: "agent_not_configured"; problem: AgentCredentialProblem }
   /** Live only: the CRM accepted it and the GET confirmed what it is called. */
   | { kind: "dispatched"; dispatch: DispatchView }
   /** Live only: the CRM refused it (a 4xx). Nothing was created. */
@@ -196,6 +207,14 @@ export interface DispatchDeps {
   reconcile: typeof findAlshrouqOrderByClientOrderId;
   newOperationId: typeof newAlshrouqOperationId;
   liveEnabled: () => boolean;
+  /**
+   * The dispatching agent's CRM identity.
+   *
+   * Returns a *reason* rather than throwing when there is none, and never a
+   * service principal — see `agent-credentials.server.ts`. Injected so tests can
+   * exercise both halves without a database.
+   */
+  agentPrincipal: (userId: string) => Promise<AgentCredentialResult>;
 }
 
 const defaultDeps: DispatchDeps = {
@@ -204,6 +223,12 @@ const defaultDeps: DispatchDeps = {
   reconcile: findAlshrouqOrderByClientOrderId,
   newOperationId: newAlshrouqOperationId,
   liveEnabled: isAlShrouqLiveDispatchEnabled,
+  agentPrincipal: async (userId) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { agentCrmPrincipal, supabaseAgentCredentialDeps } =
+      await import("./agent-credentials.server");
+    return agentCrmPrincipal(userId, supabaseAgentCredentialDeps(supabaseAdmin as never));
+  },
 };
 
 /** Postgres unique violation — the active-dispatch index did its job. */
@@ -351,9 +376,24 @@ export async function dispatchOrderToAlShrouq(
     return { kind: "prepared", payload: summary, liveDispatchEnabled: false };
   }
 
-  // 4. One POST. The transport guarantees it is never retried.
+  /* ---------------------------------------------------------------------- */
+  /* WHOSE ORDER THIS IS                                                     */
+  /*                                                                         */
+  /* Shams CRM stamps `created_by_user_id` from the authenticated session and */
+  /* accepts no caller-supplied attribution, so the credential *is* the       */
+  /* attribution. Resolved from the verified `userId` on the request — never  */
+  /* from a form field — and if there is none the pipeline stops here.        */
+  /*                                                                         */
+  /* There is deliberately no `?? SERVICE_PRINCIPAL`. Falling back would send */
+  /* the order, return success, and record it against the deployment's own    */
+  /* account instead of the agent who took it.                                */
+  /* ---------------------------------------------------------------------- */
+  const identity = await deps.agentPrincipal(userId);
+  if (!identity.ok) return { kind: "agent_not_configured", problem: identity.problem };
+
+  // 4. One POST, as that agent. The transport guarantees it is never retried.
   const operationId = deps.newOperationId();
-  const sent = await deps.createOrder(payload, operationId);
+  const sent = await deps.createOrder(payload, operationId, identity.principal);
 
   if (sent.kind === "rejected") {
     return {

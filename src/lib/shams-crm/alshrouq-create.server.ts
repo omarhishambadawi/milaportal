@@ -46,6 +46,8 @@
 import {
   crmBaseUrl,
   crmFetch,
+  SERVICE_PRINCIPAL,
+  type CrmPrincipal,
   getCrmSessionToken,
   isCrmConfigured,
   ShamsCrmError,
@@ -163,8 +165,23 @@ async function readBody(res: Response): Promise<{ ok: boolean; body: JsonValue |
 export async function createAlshrouqOrder(
   payload: AlShrouqCreatePayload,
   operationId: string,
+  /**
+   * Whose CRM identity creates this delivery.
+   *
+   * The CRM stamps `created_by_user_id` from the authenticated session, so this
+   * is what decides whose name ends up on the order. It is not defaulted at the
+   * call sites that matter: `dispatchOrderToAlShrouq` resolves the agent and
+   * fails closed if it cannot, because a default here would silently become a
+   * service-account attribution.
+   *
+   * The parameter default exists only so the shared reads and existing tests
+   * keep their behaviour; nothing on the dispatch path relies on it.
+   */
+  principal: CrmPrincipal = SERVICE_PRINCIPAL,
 ): Promise<AlShrouqCreateResult> {
-  if (!isCrmConfigured()) {
+  // Only the deployment credential comes from the environment. An agent brings
+  // its own, so the "is this deployment configured" question does not apply.
+  if (principal.kind === "service" && !isCrmConfigured()) {
     throw new ShamsCrmError(
       "not_configured",
       "The Shams CRM connection is not configured on this deployment.",
@@ -173,7 +190,7 @@ export async function createAlshrouqOrder(
 
   // Pre-transmission. A failure here throws, which is the caller's signal that
   // no delivery can possibly exist.
-  const token = await getCrmSessionToken();
+  const token = await getCrmSessionToken(principal);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), CREATE_TIMEOUT_MS);

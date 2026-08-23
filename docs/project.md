@@ -3104,6 +3104,29 @@ Verified against the live CRM on 2026-08-23: seven agents, all authenticating,
 all active, all holding `alshrouq_delivery`, CRM user ids captured from `/me`.
 Login and `/me` only — no order was created.
 
+#### The dispatch runs as the agent (Phases 2–3)
+
+`dispatchOrderToAlShrouq` resolves the dispatching agent's CRM identity from the
+**verified** `userId` on the request, immediately after the safety gate and
+before the POST, and passes it to `createAlshrouqOrder`. There is deliberately
+no `?? SERVICE_PRINCIPAL`: a missing identity returns the new
+`agent_not_configured` outcome and **nothing is sent**. Falling back would
+succeed, look fine, and record the delivery against the deployment's own
+account.
+
+The worker does the same thing later. It now selects `scheduled_by` with each
+due row and logs in as that agent, so a delivery approved at 2pm and sent at
+8pm is still recorded against the person who approved it. If their credential is
+gone the row goes **back to `scheduled`** with the reason recorded and the new
+`blocked` counter incremented — not `failed`, because nothing is wrong with the
+order and the delivery still goes out once an administrator fixes the link. A
+due row with no `scheduled_by` is blocked for the same reason.
+
+What the CRM receives is unchanged: the ordinary create payload. Tests assert
+the outgoing body carries no `scheduled_by`, `dispatched_by`, `agent_id`,
+`user_id` or `created_by` — attribution travels in the session, never in the
+body — and that the scheduled payload equals the snapshot exactly.
+
 #### Scheduling is MilaPortal's alone
 
 A scheduled order contacts nobody at creation time. It writes one local row with

@@ -81,6 +81,12 @@ const defaultDeps: DispatchDeps = {
   reconcile: findAlshrouqOrderByClientOrderId,
   newOperationId: newAlshrouqOperationId,
   liveEnabled: isAlShrouqLiveDispatchEnabled,
+  agentPrincipal: async (userId) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { agentCrmPrincipal, supabaseAgentCredentialDeps } =
+      await import("./agent-credentials.server");
+    return agentCrmPrincipal(userId, supabaseAgentCredentialDeps(supabaseAdmin as never));
+  },
 };
 
 const UNIQUE_VIOLATION = "23505";
@@ -177,6 +183,12 @@ export interface RunDueSummary {
   indeterminate: number;
   /** Due rows left untouched because the production gate is closed. */
   skippedDisabled: number;
+  /**
+   * Due rows returned to `scheduled` because the approving agent's CRM identity
+   * could not be used. Counted separately from `failed`: nothing is wrong with
+   * the order, and the delivery still goes out once the link is fixed.
+   */
+  blocked: number;
 }
 
 interface DueRow {
@@ -185,6 +197,8 @@ interface DueRow {
   client_order_id: string;
   payload_snapshot: AlShrouqCreatePayload | null;
   scheduled_for: string;
+  /** The agent who approved it. The identity this row is sent under. */
+  scheduled_by: string | null;
 }
 
 /**
@@ -213,11 +227,14 @@ export async function runDueAlShrouqDispatches(
     failed: 0,
     indeterminate: 0,
     skippedDisabled: 0,
+    blocked: 0,
   };
 
   const { data: dueRows } = await supabase
     .from("alshrouq_dispatches")
-    .select("id,order_id,client_order_id,payload_snapshot,scheduled_for")
+    // `scheduled_by` is read because it *is* the identity this row will be sent
+    // under: the agent who approved it, hours ago, is who the CRM must record.
+    .select("id,order_id,client_order_id,payload_snapshot,scheduled_for,scheduled_by")
     .eq("dispatch_status", "scheduled")
     .is("cancelled_at", null)
     .lte("scheduled_for", now.toISOString())
@@ -262,8 +279,37 @@ export async function runDueAlShrouqDispatches(
       continue;
     }
 
+    /*
+     * Whose delivery this is, resolved now rather than at approval time.
+     *
+     * The agent approved this hours ago and is not here. `scheduled_by` is what
+     * makes the CRM record it against them anyway — the worker logs in as that
+     * agent and sends an ordinary immediate create, so from the CRM's side it is
+     * indistinguishable from that person having typed it at this moment.
+     *
+     * If their credential is gone, the row goes **back to `scheduled`** with the
+     * reason recorded. It is not sent under the service account and not under
+     * anybody else: a delivery attributed to the wrong person is worse than a
+     * late one, and the schedule survives so it goes out once an administrator
+     * fixes the link.
+     */
+    const identity = row.scheduled_by ? await deps.agentPrincipal(row.scheduled_by) : null;
+    if (!identity || !identity.ok) {
+      await supabase
+        .from("alshrouq_dispatches")
+        .update({
+          dispatch_status: "scheduled",
+          last_error: identity
+            ? `Blocked: the approving agent's Shams CRM account is unavailable (${identity.problem}).`
+            : "Blocked: this dispatch has no recorded approving agent.",
+        })
+        .eq("id", row.id);
+      summary.blocked += 1;
+      continue;
+    }
+
     const operationId = deps.newOperationId();
-    const sent = await deps.createOrder(payload, operationId);
+    const sent = await deps.createOrder(payload, operationId, identity.principal);
 
     if (sent.kind === "rejected") {
       await supabase

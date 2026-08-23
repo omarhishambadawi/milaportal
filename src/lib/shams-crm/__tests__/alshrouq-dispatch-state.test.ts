@@ -264,6 +264,20 @@ function deps(
         isCancelled: false,
       }) as any,
     newOperationId: () => "op-1",
+    // Every live dispatch now runs under the approving agent's CRM identity.
+    // Stubbed here so these tests keep exercising the transport rather than the
+    // credential lookup, which has its own suite.
+    agentPrincipal: async (userId: string) => ({
+      ok: true as const,
+      principal: {
+        kind: "agent" as const,
+        agentId: userId,
+        username: "agent@example.test",
+        password: "test-only",
+      },
+      crmUsername: "agent@example.test",
+      crmUserId: "99001",
+    }),
     liveEnabled: () => live,
   };
 }

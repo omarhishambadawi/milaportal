@@ -135,6 +135,7 @@ function scheduledRow() {
     dispatch_status: "scheduled",
     cancelled_at: null,
     scheduled_for: "2026-08-21T12:30:00.000Z",
+    scheduled_by: "99999999-8888-7777-6666-555555555555",
     payload_snapshot: {
       branch_id: "9999927657247",
       client_order_id: "9540",
@@ -160,6 +161,20 @@ function deps(live: boolean, createOrder: any): Partial<DispatchDeps> {
       }) as any,
     newOperationId: () => "op-1",
     liveEnabled: () => live,
+    // The worker sends under the approving agent's CRM identity. Stubbed so
+    // these tests exercise claiming, racing and retry rather than the
+    // credential lookup, which has its own suite.
+    agentPrincipal: async (userId: string) => ({
+      ok: true as const,
+      principal: {
+        kind: "agent" as const,
+        agentId: userId,
+        username: "agent@example.test",
+        password: "test-only",
+      },
+      crmUsername: "agent@example.test",
+      crmUserId: "99001",
+    }),
     fetchOptions: async () => ({ branchOptions: [], paymentOptions: [] }),
   };
 }
@@ -415,7 +430,18 @@ describe("the scheduler cannot fail silently", () => {
     const summary = await runDueAlShrouqDispatches(db as any, deps(true, createOrder));
 
     expect(Object.keys(summary).sort()).toEqual(
-      ["accepted", "claimed", "due", "failed", "indeterminate", "skippedDisabled"].sort(),
+      // `blocked` counts due rows returned to `scheduled` because the approving
+      // agent's CRM identity was unusable. An integer like the rest — the point
+      // of this assertion is that the summary carries counts and nothing else.
+      [
+        "accepted",
+        "blocked",
+        "claimed",
+        "due",
+        "failed",
+        "indeterminate",
+        "skippedDisabled",
+      ].sort(),
     );
     for (const value of Object.values(summary)) expect(typeof value).toBe("number");
 

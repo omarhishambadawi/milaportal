@@ -152,6 +152,20 @@ function deps(over: Partial<DispatchDeps> & { live?: boolean } = {}): Partial<Di
         isCancelled: false,
       }) as any,
     newOperationId: () => "op-1",
+    // Every live dispatch now runs under the approving agent's CRM identity.
+    // Stubbed here so these tests keep exercising the transport rather than the
+    // credential lookup, which has its own suite.
+    agentPrincipal: async (userId: string) => ({
+      ok: true as const,
+      principal: {
+        kind: "agent" as const,
+        agentId: userId,
+        username: "agent@example.test",
+        password: "test-only",
+      },
+      crmUsername: "agent@example.test",
+      crmUserId: "99001",
+    }),
     liveEnabled: () => live === true,
     ...rest,
   };
@@ -164,6 +178,9 @@ function dueRow(over: Record<string, unknown> = {}) {
     client_order_id: "9540",
     payload_snapshot: SNAPSHOT,
     scheduled_for: "2026-08-21T18:00:00Z",
+    // The approving agent. The worker sends under *their* CRM identity, so a
+    // due row without one is blocked rather than sent by somebody else.
+    scheduled_by: "99999999-8888-7777-6666-555555555555",
     ...over,
   };
 }
