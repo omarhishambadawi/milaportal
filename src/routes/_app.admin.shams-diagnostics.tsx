@@ -23,6 +23,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { isAdministrator, useAuth } from "@/lib/auth";
 import {
   shamsAlshrouqConfigProbe,
+  shamsCrmSetupAgentLinks,
   shamsCatalogDiagnostics,
   shamsCrmSearchDiagnostic,
   shamsCrmSmokeTest,
@@ -80,6 +81,10 @@ function ShamsDiagnosticsPage() {
   const crmSearch = useMutation({ mutationFn: () => runCrmSearch({ data: undefined }) });
   const runAlshrouq = useServerFn(shamsAlshrouqConfigProbe);
   const alshrouq = useMutation({ mutationFn: () => runAlshrouq({ data: undefined }) });
+  const runAgentSetup = useServerFn(shamsCrmSetupAgentLinks);
+  const agentSetup = useMutation({
+    mutationFn: (dryRun: boolean) => runAgentSetup({ data: { dryRun } }),
+  });
 
   if (!isAdministrator(role)) {
     return (
@@ -134,6 +139,58 @@ function ShamsDiagnosticsPage() {
               <td className={TD}>{crm.data.errorKind ?? "—"}</td>
             </tr>
           </Table>
+        )}
+      </Section>
+
+      {/*
+        The one place the agent workbook is read.
+        Verify proves every mapping and writes nothing; Store moves each
+        verified password into Vault. Neither shows a credential — the summary
+        has no field that could carry one — and neither dispatches anything.
+      */}
+      <Section
+        title="AlShrouq — agent CRM credentials"
+        hint="Verifies each agent in the mapping workbook against Shams CRM, then stores their password in Vault. No courier is contacted."
+      >
+        <div className="flex flex-wrap gap-2">
+          <Button
+            onClick={() => agentSetup.mutate(true)}
+            disabled={agentSetup.isPending}
+            variant="secondary"
+          >
+            {agentSetup.isPending && (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+            )}
+            Verify only (dry run)
+          </Button>
+          <Button onClick={() => agentSetup.mutate(false)} disabled={agentSetup.isPending}>
+            Verify and store in Vault
+          </Button>
+        </div>
+
+        {agentSetup.isError && (
+          <p className="text-sm text-destructive">
+            The setup call failed. You may not have permission to manage users.
+          </p>
+        )}
+
+        {agentSetup.data && (
+          <>
+            <p className="text-sm text-muted-foreground">
+              Verified {agentSetup.data.verified} · Stored {agentSetup.data.stored} · Failed{" "}
+              {agentSetup.data.failed}
+            </p>
+            <Table head={["Agent", "Status", "Reason", "CRM user ID"]}>
+              {agentSetup.data.rows.map((r) => (
+                <tr key={`${r.agent}-${r.status}`} className="border-t">
+                  <td className={TD}>{r.agent}</td>
+                  <td className={TD}>{r.status}</td>
+                  <td className={TD}>{r.reason}</td>
+                  <td className={TD}>{r.crmUserId ?? "—"}</td>
+                </tr>
+              ))}
+            </Table>
+          </>
         )}
       </Section>
 

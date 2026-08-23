@@ -15,6 +15,15 @@ import { fileURLToPath } from "node:url";
  * plugin that can fail for reasons unrelated to the tests).
  */
 export default defineConfig({
+  /*
+   * The agent workbook is a bundled asset, not JavaScript.
+   *
+   * `agent-workbook.server.ts` imports it with `?inline`; without this the test
+   * loader tries to parse the spreadsheet as a module. Mirrors the same
+   * declaration in `vite.config.ts` — the two configs are deliberately
+   * standalone, so the one thing they share has to be stated twice.
+   */
+  assetsInclude: ["**/*.xlsx"],
   test: {
     // Node, not jsdom: every unit under test is a pure function over roles,
     // permissions and timestamps. Nothing renders, so a DOM would only add

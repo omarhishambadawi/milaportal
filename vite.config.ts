@@ -114,6 +114,17 @@ export default defineConfig({
     server: { entry: "server" },
   },
   vite: {
+    /*
+     * The AlShrouq agent workbook is bundled, not read from disk.
+     *
+     * The deployment target is `cloudflare-module`, which has no filesystem, so
+     * the one-time credential setup cannot `readFileSync` its source. Declaring
+     * the extension lets `?inline` turn it into a base64 data URI inside the
+     * **server** chunk — it is imported only from `agent-workbook.server.ts`,
+     * which nothing in the browser graph reaches, and a build-output scan
+     * asserts it never appears in `.output/public`.
+     */
+    assetsInclude: ["**/*.xlsx"],
     resolve: {
       alias: {
         // React Email's htmlparser2 path needs entities v4.5.0 (v5+ dropped

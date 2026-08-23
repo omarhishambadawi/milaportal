@@ -49,6 +49,7 @@ import type {
 } from "@/lib/shams-crm/alshrouq-scheduler.server";
 import type { ResolveDispatchResult } from "@/lib/shams-crm/alshrouq-resolve.server";
 import type { AlShrouqLocationResult } from "@/features/alshrouq/location";
+import type { AgentSetupSummary } from "@/lib/shams-crm/agent-setup.server";
 import type { ShamsCrmOffer, ShamsOfferScope } from "@/lib/shams-crm/types";
 import type { ShamsCrmHistory } from "@/lib/shams/types";
 
@@ -1201,6 +1202,87 @@ export const alshrouqDispatchContext = createServerFn({ method: "POST" })
         notes: order.notes ?? "",
       },
     };
+  });
+
+/**
+ * Populate the per-agent Shams CRM credential store, once.
+ *
+ * The one caller of the workbook. It verifies every row against the CRM and
+ * moves the passwords that pass into Vault; nothing else in the system reads
+ * that file, and everything downstream reads Vault.
+ *
+ * Gated on `manage_users` — the same key that governs creating accounts and
+ * resetting passwords, which is what this is: administering other people's
+ * credentials. Deliberately not a new permission, which would be a migration, a
+ * `has_permission()` change and a parity update for a ceiling that already
+ * exists at exactly the right height.
+ *
+ * Returns counts, agent names and CRM ids. There is no field on
+ * `AgentSetupSummary` that could carry a password, so this cannot leak one even
+ * if a future caller logs the whole response.
+ */
+export const shamsCrmSetupAgentLinks = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => z.object({ dryRun: z.boolean().optional() }).parse(d ?? {}))
+  .handler(async ({ context, data }): Promise<AgentSetupSummary> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertPermission(supabase, userId, "manage_users");
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { setUpAgentCrmLinks, verifyAgentAgainstCrm } =
+      await import("@/lib/shams-crm/agent-setup.server");
+
+    return setUpAgentCrmLinks(
+      {
+        async loadPortalAgents() {
+          // Paginated for the same reason `listAuthEmails` is: one large page
+          // silently returns only the first.
+          const byEmail = new Map<string, any>();
+          for (let page = 1; ; page++) {
+            const { data: list, error } = await supabaseAdmin.auth.admin.listUsers({
+              page,
+              perPage: 200,
+            });
+            if (error) throw new Error("Could not list MilaPortal users");
+            const users = list?.users ?? [];
+            for (const u of users) if (u.email) byEmail.set(u.email.toLowerCase(), { id: u.id });
+            if (users.length < 200) break;
+          }
+          const { data: profiles } = await supabaseAdmin
+            .from("profiles" as any)
+            .select("id,full_name,agent_code");
+          const byId = new Map((profiles ?? []).map((p: any) => [p.id, p]));
+          for (const entry of byEmail.values()) Object.assign(entry, byId.get(entry.id) ?? {});
+          return byEmail;
+        },
+        verifyCrm: verifyAgentAgainstCrm,
+        async storeSecret(agentId, password) {
+          // The function postdates the generated types, which Lovable re-emits
+          // — so it is reached through the cast this codebase already uses for
+          // such objects, never by hand-editing `types.ts`.
+          const { data: key, error } = await (supabaseAdmin as any).rpc(
+            "shams_crm_store_agent_secret",
+            { _user_id: agentId, _password: password },
+          );
+          return error || typeof key !== "string" ? null : key;
+        },
+        async upsertLink(row) {
+          const { error } = await supabaseAdmin.from("shams_crm_agent_links" as any).upsert(
+            {
+              ...row,
+              active: true,
+              verified_at: new Date().toISOString(),
+              last_error: null,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "user_id" },
+          );
+          if (!error) return { ok: true as const };
+          return { ok: false as const, duplicate: String((error as any).code) === "23505" };
+        },
+      },
+      { dryRun: data.dryRun === true },
+    );
   });
 
 export interface ShamsProductOffersResult {
