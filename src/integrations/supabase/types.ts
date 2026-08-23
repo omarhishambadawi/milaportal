@@ -41,6 +41,141 @@ export type Database = {
         }
         Relationships: []
       }
+      alshrouq_dispatches: {
+        Row: {
+          alshrouq_branch_id: string
+          attempt_count: number
+          branch_no: string | null
+          cancelled_at: string | null
+          cancelled_by: string | null
+          client_order_id: string
+          created_at: string
+          customer_address: string | null
+          customer_lat: number | null
+          customer_lng: number | null
+          details: string | null
+          dispatch_status: string
+          dispatched_at: string
+          dispatched_by: string | null
+          external_order_id: string | null
+          id: string
+          last_attempt_at: string | null
+          last_error: string | null
+          last_response: Json
+          local_id: string | null
+          order_id: string
+          payload_snapshot: Json | null
+          payment_type: number | null
+          preparation_time: number | null
+          refreshed_at: string | null
+          resolution_note: string | null
+          resolution_outcome: string | null
+          resolved_at: string | null
+          resolved_by: string | null
+          scheduled_at: string | null
+          scheduled_by: string | null
+          scheduled_for: string | null
+          status: string | null
+          status_detail: string | null
+          tracking_url: string | null
+          updated_at: string
+          value: number | null
+        }
+        Insert: {
+          alshrouq_branch_id: string
+          attempt_count?: number
+          branch_no?: string | null
+          cancelled_at?: string | null
+          cancelled_by?: string | null
+          client_order_id: string
+          created_at?: string
+          customer_address?: string | null
+          customer_lat?: number | null
+          customer_lng?: number | null
+          details?: string | null
+          dispatch_status?: string
+          dispatched_at?: string
+          dispatched_by?: string | null
+          external_order_id?: string | null
+          id?: string
+          last_attempt_at?: string | null
+          last_error?: string | null
+          last_response?: Json
+          local_id?: string | null
+          order_id: string
+          payload_snapshot?: Json | null
+          payment_type?: number | null
+          preparation_time?: number | null
+          refreshed_at?: string | null
+          resolution_note?: string | null
+          resolution_outcome?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          scheduled_at?: string | null
+          scheduled_by?: string | null
+          scheduled_for?: string | null
+          status?: string | null
+          status_detail?: string | null
+          tracking_url?: string | null
+          updated_at?: string
+          value?: number | null
+        }
+        Update: {
+          alshrouq_branch_id?: string
+          attempt_count?: number
+          branch_no?: string | null
+          cancelled_at?: string | null
+          cancelled_by?: string | null
+          client_order_id?: string
+          created_at?: string
+          customer_address?: string | null
+          customer_lat?: number | null
+          customer_lng?: number | null
+          details?: string | null
+          dispatch_status?: string
+          dispatched_at?: string
+          dispatched_by?: string | null
+          external_order_id?: string | null
+          id?: string
+          last_attempt_at?: string | null
+          last_error?: string | null
+          last_response?: Json
+          local_id?: string | null
+          order_id?: string
+          payload_snapshot?: Json | null
+          payment_type?: number | null
+          preparation_time?: number | null
+          refreshed_at?: string | null
+          resolution_note?: string | null
+          resolution_outcome?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          scheduled_at?: string | null
+          scheduled_by?: string | null
+          scheduled_for?: string | null
+          status?: string | null
+          status_detail?: string | null
+          tracking_url?: string | null
+          updated_at?: string
+          value?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "alshrouq_dispatches_branch_no_fkey"
+            columns: ["branch_no"]
+            isOneToOne: false
+            referencedRelation: "branches"
+            referencedColumns: ["branch_no"]
+          },
+          {
+            foreignKeyName: "alshrouq_dispatches_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       branch_imports: {
         Row: {
           actor_role: string | null
@@ -583,6 +718,10 @@ export type Database = {
       orders: {
         Row: {
           agent_id: string
+          alshrouq_lat: number | null
+          alshrouq_lng: number | null
+          alshrouq_map_url: string | null
+          alshrouq_payment_type: number | null
           branch_no: string | null
           call_center_verified: boolean
           created_at: string
@@ -604,6 +743,10 @@ export type Database = {
         }
         Insert: {
           agent_id: string
+          alshrouq_lat?: number | null
+          alshrouq_lng?: number | null
+          alshrouq_map_url?: string | null
+          alshrouq_payment_type?: number | null
           branch_no?: string | null
           call_center_verified?: boolean
           created_at?: string
@@ -625,6 +768,10 @@ export type Database = {
         }
         Update: {
           agent_id?: string
+          alshrouq_lat?: number | null
+          alshrouq_lng?: number | null
+          alshrouq_map_url?: string | null
+          alshrouq_payment_type?: number | null
           branch_no?: string | null
           call_center_verified?: boolean
           created_at?: string
@@ -793,6 +940,45 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      shams_crm_agent_links: {
+        Row: {
+          active: boolean
+          created_at: string
+          crm_user_id: string | null
+          crm_username: string
+          last_error: string | null
+          team: string | null
+          updated_at: string
+          user_id: string
+          vault_key: string | null
+          verified_at: string | null
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          crm_user_id?: string | null
+          crm_username: string
+          last_error?: string | null
+          team?: string | null
+          updated_at?: string
+          user_id: string
+          vault_key?: string | null
+          verified_at?: string | null
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          crm_user_id?: string | null
+          crm_username?: string
+          last_error?: string | null
+          team?: string | null
+          updated_at?: string
+          user_id?: string
+          vault_key?: string | null
+          verified_at?: string | null
+        }
+        Relationships: []
       }
       spatial_ref_sys: {
         Row: {
@@ -1099,6 +1285,7 @@ export type Database = {
             }
             Returns: string
           }
+      alshrouq_dispatch_due: { Args: never; Returns: number }
       branches_nearby: {
         Args: {
           _lat: number
@@ -1449,6 +1636,10 @@ export type Database = {
         }
         Returns: {
           agent_id: string
+          alshrouq_lat: number | null
+          alshrouq_lng: number | null
+          alshrouq_map_url: string | null
+          alshrouq_payment_type: number | null
           branch_no: string | null
           call_center_verified: boolean
           created_at: string
@@ -1623,6 +1814,15 @@ export type Database = {
       record_invoice_verification: {
         Args: { _entries: Json; _order_id: string }
         Returns: Json
+      }
+      shams_crm_agent_secret: { Args: { _user_id: string }; Returns: string }
+      shams_crm_forget_agent_secret: {
+        Args: { _user_id: string }
+        Returns: undefined
+      }
+      shams_crm_store_agent_secret: {
+        Args: { _password: string; _user_id: string }
+        Returns: string
       }
       st_3dclosestpoint: {
         Args: { geom1: unknown; geom2: unknown }
