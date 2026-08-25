@@ -345,6 +345,23 @@ export interface AlShrouqDispatchSummary {
   scheduledFor: string | null;
   /** The persisted failure text, sanitised. Null unless the dispatch failed. */
   failureReason: string | null;
+  /**
+   * Why a delivery that is still waiting has not gone out, when something is
+   * known. Null in the ordinary case, where it is simply not its time yet.
+   *
+   * A separate field from `failureReason` because it is a separate claim.
+   * Nothing has failed: the dispatch is intact and will still happen. What this
+   * reports is that the machinery meant to perform it said it could not — the
+   * order agent's CRM link is missing, or the scheduler itself is not connected
+   * on this deployment.
+   *
+   * It exists because the column it reads was already being written and had
+   * nowhere to appear. A dispatch parked past its time showed a countdown that
+   * had reached zero and nothing else, whatever the row said about why — which
+   * is exactly how a scheduler that had never once run looked identical to one
+   * about to run in the next minute.
+   */
+  waitingProblem: string | null;
   /** The operator's answer, when one has been recorded. */
   resolutionOutcome: string | null;
   /** True while the dispatch is stuck and nobody has settled it yet. */
@@ -376,6 +393,7 @@ export function summariseAlShrouqDispatch(
     trackingUrl: null,
     scheduledFor: null,
     failureReason: null,
+    waitingProblem: null,
     courierStatus: null,
     resolutionOutcome: null,
     awaitingResolution: false,
@@ -391,6 +409,10 @@ export function summariseAlShrouqDispatch(
     // Only meaningful for a failure; carried on every state so the card reads
     // one shape rather than branching on which fields exist.
     failureReason: status === "failed" ? safeFailureReason(row.last_error) : null,
+    // The same column, read for the other state that writes it. Both are passed
+    // through `safeFailureReason` for the same reason: it is the one gate any
+    // persisted diagnostic crosses before it reaches an operations screen.
+    waitingProblem: status === WAITING ? safeFailureReason(row.last_error) : null,
     courierStatus: row.status?.trim() || null,
     resolutionOutcome: row.resolution_outcome?.trim() || null,
     // The operator's worklist condition, asked through the state contract so the

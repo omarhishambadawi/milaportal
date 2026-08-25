@@ -796,6 +796,26 @@ export function AlShrouqDispatchSection({
                       summary.label}
               </p>
             </div>
+
+            {/* Why a delivery that is past its time still has not gone out.
+                Rendered only when the row says something — the ordinary wait
+                says nothing and shows nothing.
+
+                This is the case the card used to have no answer for: an agent
+                looking at a countdown that had reached zero saw "Awaiting
+                dispatch" for two days, with the reason sitting unread in the
+                row all along. */}
+            {summary.waitingProblem && (
+              <div className="min-w-0 space-y-1 sm:col-span-2">
+                <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-amber-700 dark:text-amber-500">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  Not sent yet
+                </p>
+                <p className="text-sm text-amber-800 dark:text-amber-400">
+                  {summary.waitingProblem}
+                </p>
+              </div>
+            )}
           </div>
         )}
 

@@ -63,6 +63,8 @@ function fakeDb(initial: Record<string, unknown>) {
     from() {
       const eq: Record<string, unknown> = {};
       const isNull: string[] = [];
+      // Strictly-before predicates, which only the stale-claim sweep uses.
+      const before: [string, unknown][] = [];
       let pending: Record<string, unknown> | null = null;
       let limited = false;
 
@@ -71,6 +73,10 @@ function fakeDb(initial: Record<string, unknown>) {
         if (!row) return false;
         for (const [k, v] of Object.entries(eq)) if (row[k] !== v) return false;
         for (const c of isNull) if (row[c] != null) return false;
+        for (const [c, v] of before) {
+          const at = Date.parse(String(row[c] ?? ""));
+          if (Number.isNaN(at) || at >= Date.parse(String(v))) return false;
+        }
         return true;
       };
 
@@ -78,6 +84,10 @@ function fakeDb(initial: Record<string, unknown>) {
         select: () => chain,
         order: () => chain,
         lte: () => chain,
+        lt: (c: string, v: unknown) => {
+          before.push([c, v]);
+          return chain;
+        },
         limit: () => {
           limited = true;
           return chain;
@@ -433,6 +443,9 @@ describe("the scheduler cannot fail silently", () => {
       // `blocked` counts due rows returned to `scheduled` because the approving
       // agent's CRM identity was unusable. An integer like the rest — the point
       // of this assertion is that the summary carries counts and nothing else.
+      // `reaped` counts abandoned `processing` claims settled as indeterminate.
+      // Also an integer, and also a fact about this service rather than about
+      // any order.
       [
         "accepted",
         "blocked",
@@ -440,6 +453,7 @@ describe("the scheduler cannot fail silently", () => {
         "due",
         "failed",
         "indeterminate",
+        "reaped",
         "skippedDisabled",
       ].sort(),
     );
@@ -592,10 +606,14 @@ describe("no automatic retry, anywhere", () => {
     }));
     const db = fakeDb(scheduledRow());
 
-    await runDueAlShrouqDispatches(db as any, deps(true, createOrder));
+    // Nothing on the CRM's side, so the refusal is a real refusal rather than
+    // the CRM declining a repeat of a delivery it already holds.
+    const refused = { ...deps(true, createOrder), reconcile: async () => null };
+
+    await runDueAlShrouqDispatches(db as any, refused);
     expect(db.state.row!.dispatch_status).toBe("failed");
 
-    const again = await runDueAlShrouqDispatches(db as any, deps(true, createOrder));
+    const again = await runDueAlShrouqDispatches(db as any, refused);
     expect(again.due).toBe(0);
     expect(createOrder).toHaveBeenCalledTimes(1);
   });

@@ -184,13 +184,19 @@ function fakeSupabase(existing?: Record<string, unknown> | null) {
       const matches = () => {
         if (!state.row) return false;
         for (const [key, value] of Object.entries(filters)) {
-          if (key === "__null") continue;
+          if (key === "__null" || key === "__before") continue;
           if (state.row[key] !== value) return false;
         }
         // `.is(col, null)` is recorded as a null-valued filter.
         const nulls = (filters.__null as string[]) ?? [];
         for (const col of nulls) {
           if (state.row[col] != null) return false;
+        }
+        // `.lt(col, when)` — the stale-claim sweep's predicate.
+        const before = (filters.__before as [string, unknown][]) ?? [];
+        for (const [col, when] of before) {
+          const at = Date.parse(String(state.row[col] ?? ""));
+          if (Number.isNaN(at) || at >= Date.parse(String(when))) return false;
         }
         return true;
       };
@@ -200,6 +206,10 @@ function fakeSupabase(existing?: Record<string, unknown> | null) {
         order: () => chain,
         limit: () => chain,
         lte: () => chain,
+        lt: (col: string, value: unknown) => {
+          filters.__before = [...((filters.__before as [string, unknown][]) ?? []), [col, value]];
+          return chain;
+        },
         eq: (col: string, value: unknown) => {
           filters[col] = value;
           return chain;

@@ -130,6 +130,40 @@ describe("scheduled", () => {
     // Already spoken for: a scheduled order must not offer a second send.
     expect(s.handedOver).toBe(true);
     expect(s.scheduledFor).toBe(DUE_AT);
+    // Nothing is wrong, so nothing is claimed to be.
+    expect(s.waitingProblem).toBeNull();
+  });
+
+  /**
+   * The gap that let a dead scheduler look like a live one.
+   *
+   * A delivery past its time showed a countdown reading zero and nothing else,
+   * for as long as it took anyone to notice — while the row said, in a column
+   * no screen read, exactly why nothing had happened.
+   */
+  it("reports why a waiting delivery has not gone out, when the row says", () => {
+    const s = summariseAlShrouqDispatch(
+      row({
+        dispatch_status: "scheduled",
+        scheduled_for: DUE_AT,
+        last_error:
+          "The delivery scheduler is not connected on this deployment, so " +
+          "nothing has been sent yet. An administrator needs to complete the setup.",
+      }),
+    );
+    expect(s.waitingProblem).toMatch(/not connected on this deployment/);
+    // Still scheduled, and still not a failure: the dispatch is intact.
+    expect(s.label).toBe("Scheduled");
+    expect(s.failureReason).toBeNull();
+  });
+
+  /** A finished dispatch's own failure text never leaks into the waiting slot. */
+  it("keeps a failure reason out of the waiting slot", () => {
+    const s = summariseAlShrouqDispatch(
+      row({ dispatch_status: "failed", last_error: "AlShrouq refused the order (422)." }),
+    );
+    expect(s.waitingProblem).toBeNull();
+    expect(s.failureReason).toBe("AlShrouq refused the order (422).");
   });
 });
 

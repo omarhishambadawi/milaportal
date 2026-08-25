@@ -74,7 +74,14 @@ function request(over: Partial<DispatchRequest> = {}): DispatchRequest {
  * worker never consults `orders`.
  */
 function fakeSupabase(
-  opts: { due?: any[]; existing?: any; insertError?: any; claimFails?: boolean } = {},
+  opts: {
+    due?: any[];
+    existing?: any;
+    insertError?: any;
+    claimFails?: boolean;
+    /** Rows the reap sweep finds still claimed past the stale cutoff. */
+    stale?: any[];
+  } = {},
 ) {
   const inserts: any[] = [];
   const updates: { id: string; patch: any }[] = [];
@@ -96,6 +103,22 @@ function fakeSupabase(
         },
         is: () => chain,
         lte: () => chain,
+        /**
+         * Only the reap sweep filters on `<`, so this is what identifies it.
+         *
+         * It is answered with `opts.stale` rather than with the due list: the
+         * sweep and the due query look at disjoint states, and a fake that let
+         * one answer for the other would let a broken reap look like a working
+         * one.
+         */
+        lt: () => {
+          chain.then = (res: any) => {
+            const rows = opts.stale ?? [];
+            for (const row of rows) updates.push({ id: row.id, patch: state.patch });
+            return Promise.resolve({ data: rows, error: null }).then(res);
+          };
+          return chain;
+        },
         limit: async () => ({ data: opts.due ?? [], error: null }),
         maybeSingle: async () => {
           if (state.patch) {
@@ -365,11 +388,86 @@ describe("runDueAlShrouqDispatches", () => {
     const s = await runDueAlShrouqDispatches(supabase as any, {
       ...deps({ live: true }),
       createOrder: createOrder as any,
+      // A refusal with nothing on the CRM's side is a real refusal.
+      reconcile: async () => null,
     });
 
     expect(s.failed).toBe(1);
     expect(createOrder).toHaveBeenCalledTimes(1);
     expect(supabase.updates.at(-1)!.patch.dispatch_status).toBe("failed");
+  });
+
+  /**
+   * The "already booked" case — the one an idempotent scheduler must not get
+   * wrong. A repeat of a create is refused because the reference already
+   * exists, and the delivery it names is this row's own.
+   */
+  it("a 4xx whose delivery already exists is recorded as accepted, not failed", async () => {
+    const createOrder = vi.fn(async () => ({
+      kind: "rejected" as const,
+      operationId: "op-1",
+      status: 409,
+      body: null,
+    }));
+    const supabase = fakeSupabase({ due: [dueRow()] });
+    const s = await runDueAlShrouqDispatches(supabase as any, {
+      ...deps({ live: true }),
+      createOrder: createOrder as any,
+    });
+
+    expect(s.failed).toBe(0);
+    expect(s.accepted).toBe(1);
+    // Still exactly one POST. The evidence came from a GET.
+    expect(createOrder).toHaveBeenCalledTimes(1);
+    const patch = supabase.updates.at(-1)!.patch;
+    expect(patch.dispatch_status).toBe("accepted");
+    expect(patch.external_order_id).toBe("6099196");
+  });
+
+  /**
+   * A claim that outlived the run that made it.
+   *
+   * `processing` had no exit: the due query looks only for `scheduled` and
+   * cancellation refuses everything but `scheduled`, so a row left claimed by a
+   * killed run was stuck and invisible forever.
+   */
+  it("settles an abandoned claim as indeterminate rather than resending it", async () => {
+    const supabase = fakeSupabase({ stale: [{ id: "stuck-1" }] });
+    const s = await runDueAlShrouqDispatches(supabase as any, deps({ live: true }));
+
+    expect(s.reaped).toBe(1);
+    // Never re-sent. `indeterminate` is the whole point: it may already have
+    // reached a courier, so a second POST is exactly what must not happen.
+    expect(posts()).toBe(0);
+    const patch = supabase.updates.find((u) => u.id === "stuck-1")!.patch;
+    expect(patch.dispatch_status).toBe("indeterminate");
+    expect(patch.last_error).toMatch(/NOT been sent again/);
+  });
+
+  /**
+   * Reaping is not dispatching, so the safety gate has no say in it. A
+   * deployment with live dispatch switched off must still not accumulate rows
+   * stuck in a claim nothing can clear.
+   */
+  it("settles abandoned claims even while live dispatch is switched off", async () => {
+    const supabase = fakeSupabase({ stale: [{ id: "stuck-2" }] });
+    const s = await runDueAlShrouqDispatches(supabase as any, deps({ live: false }));
+
+    expect(s.reaped).toBe(1);
+    expect(posts()).toBe(0);
+  });
+
+  /**
+   * The poll writes onto a row it could not act on — "the scheduler is not
+   * connected" — so the agent is told why a finished countdown produced
+   * nothing. Once a worker has the row that sentence is false.
+   */
+  it("clears the poll's stall note when it claims a row", async () => {
+    const supabase = fakeSupabase({ due: [dueRow()] });
+    await runDueAlShrouqDispatches(supabase as any, deps({ live: true }));
+
+    const claim = supabase.updates.find((u) => u.patch.dispatch_status === "processing")!;
+    expect(claim.patch.last_error).toBeNull();
   });
 
   /** The rule that stops a second driver when nobody is watching. */

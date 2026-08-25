@@ -110,6 +110,18 @@ function fakeSupabase(due: Record<string, unknown>[] = []) {
         eq: () => chain,
         is: () => chain,
         lte: () => chain,
+        /**
+         * The stale-claim sweep, and the only caller that filters on `<`.
+         *
+         * This fake holds no rows in `processing`, so the sweep matches nothing
+         * — and its patch, recorded optimistically by `update` above, is taken
+         * back off the list so it is not counted as a write these tests are
+         * about.
+         */
+        lt: () => {
+          updates.pop();
+          return chain;
+        },
         limit: async () => ({ data: due, error: null }),
         maybeSingle: async () => ({ data: chain.__claim ?? null, error: null }),
         // Chainable: `persist` does `.insert(row).select(...).maybeSingle()`.

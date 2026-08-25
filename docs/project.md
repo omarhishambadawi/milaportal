@@ -3455,6 +3455,95 @@ status; rows stay `scheduled` and are picked up whenever it opens.
 `alshrouq_scheduler_url` / `alshrouq_scheduler_secret` are absent, so applying
 the migration to an unconfigured environment does nothing.
 
+#### The three-part configuration, and the failure it caused
+
+Scheduling has **three** pieces of configuration, and any one of them missing
+stops every scheduled delivery:
+
+| Piece                                       | Lives in            |
+| ------------------------------------------- | ------------------- |
+| `ALSHROUQ_SCHEDULER_SECRET`                 | the deployment      |
+| vault `alshrouq_scheduler_url`              | Supabase Vault      |
+| vault `alshrouq_scheduler_secret` (matching)| Supabase Vault      |
+
+Only the first was ever set. Verified against the live database on 2026-08-26:
+`cron.job` held `alshrouq-dispatch-due` on `* * * * *`, active, with **5,769
+consecutive `succeeded` runs** since 2026-08-21 — and `vault.secrets` contained
+neither scheduler entry. Every one of those runs reached
+`IF endpoint IS NULL OR secret IS NULL THEN RETURN 0` and stopped. `pg_net` had
+never been called; one real dispatch (`client_order_id` 9867) had been sitting
+in `scheduled` since 2026-08-23 18:45Z with `attempt_count = 0`,
+`last_attempt_at` null and `last_error` null.
+
+Everything upstream of that line was working: the picker, the Riyadh→UTC
+conversion, the row, the snapshot, the card. The scheduler was not broken —
+**it had never been connected**, and nothing anywhere could say so, because the
+"cannot act" branch returned the same `0` the "nothing to do" branch returns.
+
+`20260826100000` makes that distinguishable, and it is the actual fix for why
+this went unnoticed:
+
+- **`public.alshrouq_scheduler_state`** — one row, `id = 1`, the shape of
+  `email_send_state`. `last_poll_at` (every tick, so staleness means pg_cron
+  itself is dead), `last_outcome` (`idle` | `unconfigured` | `poked`),
+  `last_request_id` and `last_error`. `SELECT` for `authenticated`; no policy
+  grants writes. Holds no payload, customer or credential.
+- **The previous poke's reply is read on the next tick.** `pg_net` answers
+  asynchronously, so a 401 — the exact shape of the deployment secret and the
+  vault entry drifting apart — is only observable one minute later. Without
+  this the job would fire into a rejecting endpoint forever and keep reporting
+  success.
+- **A `WARNING` in the Postgres log**, for both the unconfigured case and a
+  failed poke.
+- **The waiting deliveries are stamped.** `last_error` on the due rows carries
+  the reason, written only where it differs, so a delivery waiting a week is
+  updated once. `summariseAlShrouqDispatch` surfaces it as `waitingProblem` and
+  the dispatch card renders it under **Not sent yet** — the caption the agent
+  staring at a finished countdown never had. The worker clears it the moment it
+  claims the row.
+- **`RETURN -1`** for "could not act", distinct from `0` for "nothing to do".
+
+To check the scheduler from the database:
+
+```sql
+SELECT last_poll_at, last_outcome, last_error
+  FROM public.alshrouq_scheduler_state;
+```
+
+#### Abandoned claims
+
+`processing` had no exit. The due query looks only for `scheduled` and
+`cancelScheduledAlShrouqDispatch` refuses every state but `scheduled`, so a row
+left claimed by a run that died — a deploy mid-flight, a serverless timeout —
+was stuck and invisible permanently.
+
+`reapStaleClaims` settles a claim older than **15 minutes** as `indeterminate`,
+never back to `scheduled`: a claim says nothing about whether the POST went out,
+and re-queueing it is how a second driver reaches a customer. It runs **before
+the safety gate**, because reaping contacts nobody and a deployment with
+dispatch switched off must still not accumulate stuck rows. The poll counts
+stale claims as work, so the worker is woken to do it.
+
+`BATCH_SIZE` is **5**, down from 25. One create may take `CREATE_TIMEOUT_MS`
+(120 s), so a full batch of 25 asked for fifty minutes of wall clock inside a
+serverless function — it would be killed part-way and leave every row it had
+claimed stuck. Five bounds a run to ten minutes, comfortably inside the reap
+threshold, and the poll runs every minute.
+
+Every terminal write goes through `finishClaim`, guarded on
+`dispatch_status = 'processing'`, so a reaped run waking up late cannot
+overwrite an `indeterminate` a person has already resolved.
+
+#### "Already booked"
+
+The reconciliation GET now runs for a **4xx** as well. The commonest reason the
+CRM refuses a repeat of a create is that the `client_order_id` already exists —
+which means the delivery is real and on its way. Recording that as `failed`
+would show an agent a failure beside a driver already en route. So the outcome
+is settled by evidence: if `findAlshrouqOrderByClientOrderId` returns the
+delivery, the row is `accepted`; if it returns nothing, the refusal was real and
+the row is `failed`. Still exactly one POST — the evidence comes from a GET.
+
 ### The dispatch state model, and the order timeline
 
 One dispatch row per order is the whole state model. `dispatch_status` is the
@@ -3468,7 +3557,12 @@ cancelled` — and the timestamps beside it are the history:
 | `last_attempt_at` | the worker's compare-and-swap       | a worker claimed the row       |
 | `dispatched_at`   | the insert / the accepted update    | the send completed             |
 | `cancelled_at`    | a cancellation                      | the delivery was called off    |
-| `last_error`      | the failed / indeterminate update   | a fixed, safe sentence         |
+| `last_error`      | the failed / indeterminate update, the blocked update, and `alshrouq_dispatch_due()` | a fixed, safe sentence |
+
+`last_error` is read back two ways, because it is written in two situations.
+`failureReason` is it on a `failed` row — the dispatch is over. `waitingProblem`
+is it on a `scheduled` one — the dispatch is intact and has still not gone out,
+and this says why (the agent's CRM link, or the scheduler not being connected).
 
 **The timeline is derived from those columns, not from a second event log.**
 `features/alshrouq/dispatch-timeline.ts` is pure — no React, no network, no
