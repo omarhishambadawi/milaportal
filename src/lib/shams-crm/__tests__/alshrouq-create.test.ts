@@ -154,7 +154,7 @@ describe("createAlshrouqOrder — the request", () => {
 
     expect(createCall().init.body).toBe(JSON.stringify(payload));
     // And the builder's rules survive the trip: zero stays zero.
-    expect(JSON.parse(String(createCall().init.body)).order_value).toBe(0);
+    expect(JSON.parse(String(createCall().init.body)).value).toBe(0);
   });
 
   it("does not mutate the payload", async () => {

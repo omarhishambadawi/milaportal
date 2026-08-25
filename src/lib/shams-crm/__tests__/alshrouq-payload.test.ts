@@ -61,7 +61,7 @@ describe("buildAlshrouqOrderPayload", () => {
       customer_name: "Test Customer",
       customer_phone: "0500798930",
       payment_type: 3,
-      order_value: 105.02,
+      value: 105.02,
       customer_address: "https://maps.app.goo.gl/abc123",
       customer_lat: 21.5558662,
       customer_lng: 39.2905617,
@@ -74,12 +74,12 @@ describe("buildAlshrouqOrderPayload", () => {
    */
   it("accepts an order value of zero", () => {
     const result = buildAlshrouqOrderPayload(order({ invoice_value: 0 }), context());
-    expect(payloadOf(result).order_value).toBe(0);
+    expect(payloadOf(result).value).toBe(0);
   });
 
   it("accepts a zero order value arriving as the string Supabase returns", () => {
     const result = buildAlshrouqOrderPayload(order({ invoice_value: "0.00" }), context());
-    expect(payloadOf(result).order_value).toBe(0);
+    expect(payloadOf(result).value).toBe(0);
   });
 
   /* ------------------------------------------------------------------------ */
@@ -99,7 +99,7 @@ describe("buildAlshrouqOrderPayload", () => {
       order({ alshrouq_payment_type: 3, invoice_value: 105.02 }),
       context({ paidPaymentTypeIds: [3] }),
     );
-    expect(payloadOf(result).order_value).toBe(0);
+    expect(payloadOf(result).value).toBe(0);
     // The method itself still goes on the wire unchanged.
     expect(payloadOf(result).payment_type).toBe(3);
   });
@@ -110,7 +110,7 @@ describe("buildAlshrouqOrderPayload", () => {
       order({ alshrouq_payment_type: 3, invoice_value: null }),
       context({ paidPaymentTypeIds: [3] }),
     );
-    expect(payloadOf(result).order_value).toBe(0);
+    expect(payloadOf(result).value).toBe(0);
   });
 
   /** Every other method is untouched, blank invoice included. */
@@ -121,7 +121,7 @@ describe("buildAlshrouqOrderPayload", () => {
           order({ alshrouq_payment_type: 1, invoice_value: 105.02 }),
           context({ paidPaymentTypeIds: [3] }),
         ),
-      ).order_value,
+      ).value,
     ).toBe(105.02);
 
     expect(
@@ -142,7 +142,66 @@ describe("buildAlshrouqOrderPayload", () => {
    */
   it("changes nothing when no paid ids are supplied", () => {
     const result = buildAlshrouqOrderPayload(order({ alshrouq_payment_type: 3 }), context());
-    expect(payloadOf(result).order_value).toBe(105.02);
+    expect(payloadOf(result).value).toBe(105.02);
+  });
+
+  /* ------------------------------------------------------------------------ */
+  /* The wire key: `value`, not `order_value`                                 */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * The create contract and the read model disagree, and this pins the create
+   * side.
+   *
+   * `POST /integrations/alshrouq/orders` takes the collect amount as **`value`**
+   * — the key the Desktop's `_collect_alshrouq_payload` builds. The GET returns
+   * the same figure as `order_value`, and this builder was originally written
+   * from that GET. The endpoint ignores the unrecognised key instead of refusing
+   * it, so every Portal order was created with a collect amount of 0 while the
+   * request returned 2xx: #10023 (COD, 95) and #9918 (COD, 89.35) both landed as
+   * 0 at AlShrouq.
+   *
+   * Asserting the *absence* of `order_value` is the half that matters. A future
+   * reader looking at a GET response would "fix" this back, and the failure is
+   * silent — no rejection, no error, just a driver told to collect nothing.
+   */
+  describe("the collect amount goes out as `value`", () => {
+    /** COD, the method the production regression was found on. */
+    it("sends a COD amount under `value` and never `order_value`", () => {
+      const payload = payloadOf(
+        buildAlshrouqOrderPayload(
+          order({ alshrouq_payment_type: 1, invoice_value: 105.02 }),
+          context({ paidPaymentTypeIds: [3] }),
+        ),
+      );
+      expect(payload.value).toBe(105.02);
+      expect(payload).not.toHaveProperty("order_value");
+      expect(JSON.parse(JSON.stringify(payload)).value).toBe(105.02);
+    });
+
+    /** Span Machine — the other collecting method, same rule. */
+    it("sends a Span Machine amount under `value`", () => {
+      const payload = payloadOf(
+        buildAlshrouqOrderPayload(
+          order({ alshrouq_payment_type: 2, invoice_value: 102.4 }),
+          context({ paidPaymentTypeIds: [3] }),
+        ),
+      );
+      expect(payload.value).toBe(102.4);
+      expect(payload).not.toHaveProperty("order_value");
+    });
+
+    /** Paid still collects nothing, and still says so under the same key. */
+    it("sends 0 under `value` on a paid method", () => {
+      const payload = payloadOf(
+        buildAlshrouqOrderPayload(
+          order({ alshrouq_payment_type: 3, invoice_value: 102.4 }),
+          context({ paidPaymentTypeIds: [3] }),
+        ),
+      );
+      expect(payload.value).toBe(0);
+      expect(payload).not.toHaveProperty("order_value");
+    });
   });
 
   describe("recognising the paid method", () => {
@@ -304,9 +363,9 @@ describe("buildAlshrouqOrderPayload", () => {
       "customer_name",
       "customer_phone",
       "details",
-      "order_value",
       "payment_type",
       "preparation_time",
+      "value",
     ]);
   });
 

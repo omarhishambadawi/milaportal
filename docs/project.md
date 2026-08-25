@@ -2886,10 +2886,23 @@ is a later phase, and `src/features/orders` neither imports nor calls it.
 outcome because "AlShrouq does not cover this branch" is not something an agent
 can fix by typing.
 
+**The collect amount goes on the wire as `value`, not `order_value`.** The create
+contract and the read model disagree about this one key. `POST
+/integrations/alshrouq/orders` takes `value` — the key the Desktop's
+`_collect_alshrouq_payload` builds, disassembled from the PharmacyCRM Desktop
+build — while `GET /integrations/alshrouq/orders` *returns* the same figure as
+`order_value`. This builder was originally written from the GET's 127 stored
+deliveries and so sent `order_value`, a key the create endpoint does not
+recognise. It is ignored rather than refused: the request returns 2xx and the
+order is created with a collect amount of 0. Orders #10023 (COD, 95) and #9918
+(COD, 89.35) both reached AlShrouq as 0 that way. Do not "correct" `value` back
+to `order_value` on the strength of a GET response — the failure is silent, and
+it tells a driver to collect nothing.
+
 Three rules come from the CRM's own 127 stored deliveries rather than intuition,
 and each is pinned by a test:
 
-- **`order_value: 0` is valid** — 107 of 127 real records carry it, COD and SPAN
+- **A collect amount of `0` is valid** — 107 of 127 real records carry it, COD and SPAN
   included. There is no `> 0` rule. Absent is still an error, because every real
   record has a number and defaulting a blank to 0 would invent a "collect
   nothing" instruction.

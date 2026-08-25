@@ -433,7 +433,7 @@ describe("no scheduling metadata reaches Shams CRM", () => {
     expect(snapshot.branch_id).toBe(immediate.payload.branchId);
     expect(snapshot.client_order_id).toBe(immediate.payload.clientOrderId);
     expect(snapshot.payment_type).toBe(immediate.payload.paymentType);
-    expect(snapshot.order_value).toBe(immediate.payload.orderValue);
+    expect(snapshot.value).toBe(immediate.payload.orderValue);
   });
 
   /** And the payload type itself has no scheduling field to populate. */

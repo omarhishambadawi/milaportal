@@ -132,7 +132,7 @@ export async function scheduleAlShrouqDispatch(
     alshrouq_branch_id: payload.branch_id,
     branch_no: request.branchNo,
     payment_type: payload.payment_type,
-    value: payload.order_value,
+    value: payload.value,
     details: payload.details ?? null,
     customer_address: payload.customer_address ?? null,
     customer_lat: payload.customer_lat ?? null,

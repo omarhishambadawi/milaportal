@@ -8,12 +8,18 @@
  *
  * ## Where the field list comes from
  *
- * The eleven keys below are the ones the CRM's own stored AlShrouq orders carry,
- * read from the PharmacyCRM Desktop package's cached
- * `GET /integrations/alshrouq/orders` response (127 real deliveries). No field is
- * invented, and none is added "for completeness" — an unrecognised key is a
- * request the CRM may reject outright, which is how the previous attempt failed
- * when it sent `value` instead of `order_value`.
+ * The eleven keys below are the ones the Desktop's `_collect_alshrouq_payload`
+ * builds and posts to `POST /integrations/alshrouq/orders`, disassembled from
+ * the PharmacyCRM Desktop build. No field is invented, and none is added "for
+ * completeness".
+ *
+ * **The create contract and the read model disagree about one key, and it
+ * matters.** The GET returns the collect amount as `order_value`; the POST takes
+ * it as `value`. This file was originally written from the GET's 127 stored
+ * deliveries and therefore sent `order_value` — a key the create endpoint does
+ * not recognise. It is ignored rather than refused, so the request returns 2xx
+ * and the order is created with a collect amount of 0. Do not "correct" `value`
+ * back to `order_value` on the strength of a GET response; see the field itself.
  *
  * ## The rules that come from real data, not intuition
  *
@@ -61,7 +67,24 @@ export interface AlShrouqCreatePayload {
   customer_name: string;
   customer_phone: string;
   payment_type: number;
-  order_value: number;
+  /**
+   * The amount the driver collects, under the key the **create** endpoint takes.
+   *
+   * `value`, not `order_value`. Read off the Desktop's own
+   * `_collect_alshrouq_payload`, whose payload dict is built from
+   * `('branch_id', 'client_order_id', 'customer_name', 'customer_phone',
+   * 'customer_address', 'payment_type', 'details')` and then extended with
+   * `customer_lat`, `customer_lng`, **`value`** and `preparation_time` — and
+   * posted verbatim to `POST /integrations/alshrouq/orders`.
+   *
+   * The CRM's *read* model is the one that says `order_value`: the GET returns
+   * it under that name, and this file previously took that read shape for the
+   * write contract. The endpoint ignores the unrecognised key rather than
+   * refusing it, so every order created from the Portal was stored with a
+   * collect amount of 0 — #10023 (COD, 95) and #9918 (COD, 89.35) both landed
+   * as 0 while returning 2xx. Sending `order_value` is silent data loss.
+   */
+  value: number;
   customer_address?: string;
   customer_lat?: number;
   customer_lng?: number;
@@ -272,7 +295,7 @@ export function buildAlshrouqOrderPayload(
     customer_name: customerName as string,
     customer_phone: customerPhone as string,
     payment_type: paymentType as number,
-    order_value: orderValue as number,
+    value: orderValue as number,
   };
 
   // Optional keys are added only when there is something to say.
