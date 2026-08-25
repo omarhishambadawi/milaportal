@@ -846,15 +846,31 @@ describe("the confirmation dialog", () => {
    * here duplicates the customer, the branch, the payment method or the note:
    * those arrive as props and are handed straight back in the plan.
    */
-  it("keeps no state but the delivery timing", () => {
+  it("keeps no state but the delivery timing and the delivery's own note", () => {
     const states = dialog.match(/useState[<(]/g) ?? [];
-    expect(states).toHaveLength(4);
+    expect(states).toHaveLength(5);
     expect(dialog).toContain("const [timing, setTiming]");
     expect(dialog).toContain("const [when, setWhen]");
     expect(dialog).toContain("const [dateOpen, setDateOpen]");
     expect(dialog).toContain("const [timeOpen, setTimeOpen]");
-    for (const owned of ["customerName", "paymentType", "mapUrl", "details"]) {
+    /*
+     * The fifth, and the one exception the rule is worth stating for.
+     *
+     * The delivery note is not an order field, so there is no order field for
+     * the dialog to be shadowing. It belongs to the delivery — it is persisted
+     * on the dispatch row and goes to the courier as `details` — and the moment
+     * of approval is the only moment it can be written. It used to be handed
+     * back into `orders.notes`, which is why it could not be typed at all on the
+     * journey a delivery is normally arranged from.
+     */
+    expect(dialog).toContain("const [note, setNote]");
+
+    // The rule itself is unchanged: every value the *order* owns is read from
+    // props and never copied into state here, so the dialog cannot confirm one
+    // thing while the form holds another.
+    for (const owned of ["customerName", "paymentType", "mapUrl", "invoiceValue"]) {
       expect(dialog).not.toContain(`useState<string>(${owned}`);
+      expect(dialog).not.toContain(`useState(${owned}`);
     }
   });
 

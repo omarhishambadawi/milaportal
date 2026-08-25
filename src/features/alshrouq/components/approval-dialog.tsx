@@ -132,23 +132,14 @@ export interface AlShrouqApprovalDialogProps {
   invoiceValue: string;
   /** Existing orders only: what to call the order. */
   displayNo?: string | null;
-  /** The note for the driver, carried from the order's own notes. */
-  details?: string;
   /**
-   * Makes the note editable, and is what the edit writes to.
+   * The note already attached to this order's delivery, if it has one.
    *
-   * Supplied by the **create** journey only, where the order has not been saved
-   * yet: the handler writes straight back into the order's `notes` field, so the
-   * text an agent types here is saved by the ordinary insert — one note, in the
-   * column the order's Notes card already reads — and is carried to AlShrouq as
-   * the payload's `details` by the approval that follows it.
-   *
-   * Omitted for an existing order, where the dialog is a confirmation and the
-   * order's Notes field is on the page behind it. Editing a saved order's note
-   * from here would put a value on the dispatch that the order itself does not
-   * hold until somebody remembers to press Save.
+   * Read from `alshrouq_dispatches.details` — what a courier was actually told —
+   * so a card reopened on a dispatched order shows the note that went out. Never
+   * the order's `notes` column: see below.
    */
-  onDetailsChange?: (value: string) => void;
+  details?: string;
   /**
    * Whether this deployment can reach a courier.
    *
@@ -301,7 +292,6 @@ export function AlShrouqApprovalDialog({
   invoiceValue,
   displayNo,
   details = "",
-  onDetailsChange,
   dispatchAvailable = true,
   errors = [],
   result = null,
@@ -312,6 +302,37 @@ export function AlShrouqApprovalDialog({
   const [when, setWhen] = useState<ScheduleSelection>(() => defaultScheduleSelection(new Date()));
   const [dateOpen, setDateOpen] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);
+
+  /**
+   * The delivery note, which belongs to the delivery and to nothing else.
+   *
+   * ## Why it is state here rather than a handler into the order form
+   *
+   * It used to write into `orders.notes` — the order's own Notes card, the one
+   * the export prints under "Notes" — on the argument that one column is simpler
+   * than two. It is simpler, and it is wrong, because the two are different
+   * facts with different audiences. `orders.notes` is what the next person
+   * opening this order should know; this is an instruction handed to a driver
+   * standing at a door. Merging them puts internal remarks in front of a
+   * courier, and it means editing an internal remark silently rewrites what
+   * looks like a delivery instruction.
+   *
+   * It also did not work on the journey the user actually dispatches from. The
+   * box was rendered only when a change handler was supplied, and only the
+   * create journey supplied one — so on an existing order the confirmation
+   * showed the note read-only, and a note typed into the page's Notes card
+   * behind it reached AlShrouq only if the agent remembered to save the order
+   * first. Notes typed at dispatch time reached nobody.
+   *
+   * ## Where it persists
+   *
+   * `alshrouq_dispatches.details`, which is the delivery's own row and has
+   * carried this value all along — and, beside it, the frozen approval snapshot,
+   * so an order edited after approval still hands the courier the note that was
+   * approved. Nothing new is stored and no column is added: the note is written
+   * where the delivery is, because that is what it is about.
+   */
+  const [note, setNote] = useState("");
 
   /*
    * Reopening is a fresh approval. A time left over from the last time this was
@@ -325,7 +346,11 @@ export function AlShrouqApprovalDialog({
     setWhen(defaultScheduleSelection(new Date()));
     setDateOpen(false);
     setTimeOpen(false);
-  }, [open]);
+    // The note the delivery already carries, so a reopened confirmation shows
+    // what a courier was told rather than an empty box. Blank when there is no
+    // delivery yet, which is every first approval.
+    setNote(details);
+  }, [open, details]);
 
   /**
    * The first day a delivery can be arranged for, in Riyadh.
@@ -391,7 +416,9 @@ export function AlShrouqApprovalDialog({
       customerName,
       customerPhone,
       orderValue,
-      details,
+      // The box on this dialog, not the order's Notes card. The server's
+      // payload builder is what puts this on the wire, under `details`.
+      details: note,
     });
   };
 
@@ -695,12 +722,18 @@ export function AlShrouqApprovalDialog({
         {/* ---------------------------------------------------------------
             The note for the driver.
 
-            One box, and not a second notes system: what is typed here is the
-            order's own `notes` field — the column the Notes card on the order
-            page shows, the export's "Notes" column reads, and the payload
-            builder already turns into the courier's `details`. So it survives a
-            reopen because the order was saved with it, and it reaches AlShrouq
-            because that is where the driver note has always come from.
+            Editable on **both** journeys. It used to be editable only while
+            creating an order, and read-only when dispatching an existing one —
+            which is the journey a delivery is normally arranged from, so in
+            practice the note could not be typed at the moment it was needed.
+
+            What is typed here reaches AlShrouq under the create endpoint's
+            `details` key — the one the PharmacyCRM Desktop's own payload builder
+            posts the driver note as. This dialog does not build that payload and
+            must not: it hands back a string, and the server assembles the
+            request. It is **not** the order's `notes` column either; that one is
+            internal and stays on the order page, where whoever wrote it meant it
+            to be.
 
             This dialog still builds nothing and sends nothing. It collects one
             string and hands it back in the plan, exactly as it does the time.
@@ -710,38 +743,27 @@ export function AlShrouqApprovalDialog({
             enforce, applied at the keyboard so a long note is trimmed while it
             is being typed rather than refused after the agent commits.
             --------------------------------------------------------------- */}
-        {onDetailsChange ? (
-          <div className="space-y-1">
-            <label
-              htmlFor="alshrouq-delivery-note"
-              className="flex items-baseline gap-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground"
-            >
-              Delivery note
-              <span className="font-normal normal-case tracking-normal">— optional</span>
-            </label>
-            <Textarea
-              id="alshrouq-delivery-note"
-              rows={2}
-              maxLength={ALSHROUQ_NOTE_MAX}
-              value={details}
-              onChange={(e) => onDetailsChange(e.target.value)}
-              placeholder="e.g. Second floor, ring the bell twice."
-              className="resize-none text-[13px]"
-              dir="auto"
-            />
-          </div>
-        ) : (
-          details.trim() && (
-            <div className="space-y-0.5">
-              <p className="text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Delivery note
-              </p>
-              <p className="whitespace-pre-wrap break-words text-[13px] text-foreground" dir="auto">
-                {details.trim()}
-              </p>
-            </div>
-          )
-        )}
+        <div className="space-y-1">
+          <label
+            htmlFor="alshrouq-delivery-note"
+            className="flex items-baseline gap-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            Delivery note
+            <span className="font-normal normal-case tracking-normal">
+              — optional, sent to the driver
+            </span>
+          </label>
+          <Textarea
+            id="alshrouq-delivery-note"
+            rows={2}
+            maxLength={ALSHROUQ_NOTE_MAX}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="e.g. Second floor, ring the bell twice."
+            className="resize-none text-[13px]"
+            dir="auto"
+          />
+        </div>
 
         {/* What confirming will do — one muted sentence, not a tinted panel.
             The button says it too; this is the part the button has no room for,

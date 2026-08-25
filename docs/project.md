@@ -4557,6 +4557,84 @@ handover: the primary button is off, and the dialog lists exactly what is
 missing. That split is the whole reason these rules live outside
 `orderFormSchema`.
 
+### The order page: header, payment grouping, and the two notes
+
+Four changes to `OrderForm` and the AlShrouq components, none of which alters a
+route, a permission, a schema or a wire contract.
+
+**A sticky order bar.** The page header is split in two. The breadcrumb and the
+page's own sentence scroll away; the order's identity — number, status,
+verification, AlShrouq state, type, delivery method, branch, customer, date — its
+value, and the Delete/Cancel/Update actions are in a bar that is
+`sticky top-16 z-20`, clearing `AppHeader`'s `sticky top-0 z-30 h-16`. It depends
+on the document being the scrollport, which `_app.tsx` is deliberately careful to
+preserve.
+
+The **right-hand column is not sticky**, and that is a decision rather than an
+omission. It runs from the invoice panel through the AlShrouq card to the
+activity timeline and is routinely taller than the viewport, so pinning it would
+fix its top on screen and put its bottom permanently out of reach. Giving it its
+own `overflow-y` is the alternative, and that is the second scrollbar that column
+already records having removed. The summary follows the reader instead.
+
+**Payment and collection are one panel.** The method picker and the money were
+separated by the width of the page — the picker in the AlShrouq requirements, the
+figure two cards below in *Invoicing*. They are one decision: the method is what
+decides whether the figure is collected at all. `AlShrouqOrderRequirements` now
+takes `invoiceValue` and renders the picker beside two readouts, **Order value**
+and **Collected by AlShrouq**, the second from `alshrouqOrderValue` — the same
+call the confirmation dialog and the dispatch card make, so no screen can promise
+a collection the payload does not send.
+
+**Payment methods are named, in one place.** `features/alshrouq/payment-methods.ts`
+is the only module that turns a payment id into words. Every screen used to do it
+inline and end `?? stored`, so with no live CRM option list — first render,
+unreachable CRM, no credentials — an operations screen printed **3**.
+`alshrouqPaymentLabel` prefers the live list, falls back to the CRM's own
+published names, and names an unknown id (`Payment method 7`) rather than
+printing an integer. The fallback table is the PharmacyCRM Desktop's
+`_load_local_alshrouq_mapping`, read off the disassembled build:
+`1 Cash on Delivery (COD)`, `2 Span Machine`, `3 Paid`, `4 AlshrouqPay`.
+`alshrouqPaymentOptions` gives the picker a list that always contains the stored
+value, because a Radix `Select` whose value matches no item renders its
+placeholder — which is how a reopened order read *"How does the customer pay?"*.
+
+This is presentation only. The payload still sends the CRM's integer, and
+`isPaidPaymentType` still decides the collect amount from the live labels.
+
+**A reopened order keeps its payment method.** `resolveAlShrouqPaymentType` reads
+three sources in order: the form, then `orders.alshrouq_payment_type`, then the
+live dispatch row's `payment_type`. The third is the repair. Handing an order to
+AlShrouq writes `payment_type` onto the dispatch row and does **not** write the
+order column — that is only written by pressing *Update order*, which nobody does
+after arranging a delivery. Production bears this out: dispatched AlShrouq orders
+overwhelmingly carry `payment_type = 3` on the delivery and `NULL` on the order.
+`OrderForm` feeds the resolved value to `useAlShrouqOrder` and writes it back
+into form state **only while the form's copy is blank**, so the next ordinary
+save records it and no newer choice is ever overruled.
+
+**The delivery note is not the order note.** These were one column. `orders.notes`
+is internal — the Notes card, the export's "Notes" — and the delivery note is an
+instruction handed to a driver. Merging them put internal remarks in front of a
+courier, and it did not work on the journey deliveries are arranged from: the
+dialog's note box was rendered only when an `onDetailsChange` prop was supplied,
+and only the *create* journey supplied one, so on an existing order the note
+showed read-only and a note typed at dispatch time reached nobody.
+
+`AlShrouqApprovalDialog` now owns the note as its own state, editable on both
+journeys, and hands it back in the plan. It persists on `alshrouq_dispatches.details`
+and the frozen approval snapshot — the delivery's own row, which has carried the
+value all along. No new column, no new table, no schema change. The dispatch card
+shows `shown?.details` only, with no fallback to `orders.notes`, so nothing is
+ever labelled *Delivery note* that a courier was not given.
+
+The wire key is **`details`**, and it is not inferred from the GET — which
+disagrees with the POST about names, as `value` vs `order_value` established. It
+is read off the Desktop's `_collect_alshrouq_payload`, whose payload dict is
+built from `('branch_id', 'client_order_id', 'customer_name', 'customer_phone',
+'customer_address', 'payment_type', 'details')` before being extended with
+`customer_lat`, `customer_lng`, `value` and `preparation_time`.
+
 ### AlShrouq create transport
 
 `alshrouq-create.server.ts` owns the create POST and the read that reconciles

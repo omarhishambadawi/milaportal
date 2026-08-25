@@ -139,6 +139,7 @@ import {
   describeBranchCoverage,
 } from "../order-requirements";
 import type { AlShrouqOrderState } from "../use-alshrouq-order";
+import { alshrouqPaymentLabel } from "../payment-methods";
 import { formatScheduledFor } from "../scheduling";
 import { useOrderAlShrouqDispatch } from "../use-order-dispatch";
 import { cardCoverage, shownDispatch } from "../dispatch-selection";
@@ -155,7 +156,6 @@ export interface AlShrouqDispatchSectionProps {
   branchNo: string | null;
   /** The order's own value. Deliberately not a delivery fee. */
   invoiceValue: string;
-  notes: string;
   /**
    * The AlShrouq half of the order, from the form.
    *
@@ -236,7 +236,6 @@ export function AlShrouqDispatchSection({
   customerPhone,
   branchNo,
   invoiceValue,
-  notes,
   alshrouq,
 }: AlShrouqDispatchSectionProps) {
   const saved = mode === "edit" && !!orderId;
@@ -550,15 +549,21 @@ export function AlShrouqDispatchSection({
    * payment method chosen and no dispatch yet reported **"Select at dispatch"**
    * — asking again for something already on the order.
    *
-   * The label comes from the live option list either way. An id the list no
-   * longer offers shows as the id rather than as a guess.
+   * The label comes from the live option list when there is one. It used to end
+   * `?? stored`, which is how this card came to tell an agent their delivery's
+   * payment type was **3**: the option list is fetched, so it is empty on first
+   * render and empty for good whenever the CRM cannot be reached, and the
+   * fallback printed the raw CRM id. `alshrouqPaymentLabel` names the method
+   * instead, from the CRM's own published names.
    */
-  const paymentLabel = useMemo(() => {
-    const stored = shown?.payment_type ?? alshrouq.paymentType;
-    if (!stored) return null;
-    const match = alshrouq.options.paymentOptions.find((p) => String(p.id) === stored);
-    return match?.label ?? stored;
-  }, [shown?.payment_type, alshrouq.paymentType, alshrouq.options.paymentOptions]);
+  const paymentLabel = useMemo(
+    () =>
+      alshrouqPaymentLabel(
+        shown?.payment_type ?? alshrouq.paymentType,
+        alshrouq.options.paymentOptions,
+      ),
+    [shown?.payment_type, alshrouq.paymentType, alshrouq.options.paymentOptions],
+  );
 
   /**
    * The delivery point, from the dispatch if there is one and the order if not.
@@ -589,12 +594,16 @@ export function AlShrouqDispatchSection({
   const customerLink = safeExternalUrl(locationText);
 
   /**
-   * The driver's note — as approved, or as the order holds it.
+   * The driver's note — the delivery's own, and only that.
    *
-   * `notes` is the order's own column and the same value the handover sends as
-   * `details`, so before a dispatch exists the order is the honest source.
+   * It used to fall back to the order's `notes` column, on the belief that the
+   * two were one field. They are not, and the fallback was a claim this card had
+   * no evidence for: an internal remark typed on the order page would appear
+   * here as **Delivery note**, describing instructions no courier was ever
+   * given. The row's `details` is what AlShrouq was actually told; absent means
+   * absent, and the block below simply does not render.
    */
-  const deliveryNote = shown?.details?.trim() || notes.trim() || null;
+  const deliveryNote = shown?.details?.trim() || null;
 
   /**
    * What the card says the order is worth *before* a handover exists.
@@ -1113,7 +1122,10 @@ export function AlShrouqDispatchSection({
           branchNo={branchNo}
           displayNo={ctx?.displayNo ?? null}
           invoiceValue={ctx?.prefill.orderValue || invoiceValue}
-          details={ctx?.prefill.notes || notes}
+          // The delivery's own note, if this order already has a delivery —
+          // never the order's `notes` column. The dialog collects a fresh one
+          // otherwise; see `AlShrouqApprovalDialog`.
+          details={shown?.details ?? ""}
           dispatchAvailable={canContactCourier}
           errors={errors}
           result={result}

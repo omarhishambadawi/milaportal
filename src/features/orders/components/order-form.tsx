@@ -13,7 +13,7 @@
  * is fetched when an Orders form is actually opened. Moved verbatim — no markup,
  * behaviour or permission check is changed.
  */
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,6 +38,8 @@ import {
 } from "@/components/ui/command";
 import {
   BadgeCheck,
+  Building2,
+  CalendarDays,
   Check,
   ChevronRight,
   ChevronsUpDown,
@@ -48,16 +50,19 @@ import {
   StickyNote,
   Trash2,
   Truck,
+  User,
   UserCog,
+  Wallet,
   X,
 } from "lucide-react";
-import { ORDER_TYPES, DELIVERY_TYPES, CURRENCY, formatOrderNo } from "@/lib/branches";
+import { ORDER_TYPES, DELIVERY_TYPES, CURRENCY, fmtSAR, formatOrderNo } from "@/lib/branches";
 import { cn } from "@/lib/utils";
 import { useOrderForm } from "@/features/orders/hooks/use-order-form";
 import { requiredFieldValue } from "@/features/orders/payload";
 import { invoiceKey } from "@/features/orders/invoice-verification";
 import { OrderActivityTimeline } from "@/features/orders/components/order-activity-timeline";
 import { OrderAssignment } from "@/features/orders/components/order-assignment";
+import { StatusBadge } from "@/features/orders/components/status-badge";
 import { CallCenterInvoiceField } from "@/features/orders/components/call-center-invoice-field";
 import { OrderInvoicePanel, StateTag } from "@/features/orders/components/order-invoice-panel";
 import { BranchPreviewPanel } from "@/features/branches/components/branch-preview-panel";
@@ -65,9 +70,12 @@ import { AlShrouqDispatchSection } from "@/features/alshrouq/components/dispatch
 import { AlShrouqOrderRequirements } from "@/features/alshrouq/components/order-requirements-section";
 import { useAlShrouqCreateApproval } from "@/features/alshrouq/use-create-approval";
 import { useAlShrouqOrder, type AlShrouqOrderFields } from "@/features/alshrouq/use-alshrouq-order";
+import { resolveAlShrouqPaymentType } from "@/features/alshrouq/payment-methods";
 import { AlShrouqApprovalDialog } from "@/features/alshrouq/components/approval-dialog";
 import { ALSHROUQ } from "@/features/alshrouq/constants";
 import { showAlShrouqSection } from "@/features/alshrouq/dispatch-selection";
+import { summariseAlShrouqDispatch } from "@/features/alshrouq/dispatch-timeline";
+import { alshrouqToneStyle } from "@/features/alshrouq/dispatch-presentation";
 import { useOrderAlShrouqDispatch } from "@/features/alshrouq/use-order-dispatch";
 
 /** The id the header's submit button reaches the form by, across the layout. */
@@ -250,6 +258,56 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
     (existing as { delivery_type?: string | null } | null | undefined)?.delivery_type,
   );
 
+  /**
+   * This order's AlShrouq dispatch rows.
+   *
+   * Read before the hook rather than after it, because the payment method below
+   * needs them. Same query key as the card and the timeline, so it is still one
+   * request for the page.
+   */
+  const { data: dispatchState } = useOrderAlShrouqDispatch(id, mode === "edit" && !!id);
+
+  /**
+   * The order's AlShrouq payment method — the form's, the order's, or the one
+   * the delivery was actually created with.
+   *
+   * The same shape as `deliveryType` above and for a related reason, but this
+   * one has a third source and it is the one that matters. Handing an order to
+   * AlShrouq writes `payment_type` onto the dispatch row without writing
+   * `orders.alshrouq_payment_type` — that column is only written by **Update
+   * order**, which nobody presses after arranging a delivery — so production
+   * carries dispatched orders whose delivery says `3` and whose order column
+   * says nothing. Reopening one showed an empty Payment Method for exactly that
+   * reason. See `resolveAlShrouqPaymentType`.
+   */
+  const alshrouqPaymentType = resolveAlShrouqPaymentType(
+    form.alshrouq_payment_type,
+    (existing as { alshrouq_payment_type?: number | string | null } | null | undefined)
+      ?.alshrouq_payment_type,
+    dispatchState?.current?.payment_type,
+  );
+
+  /**
+   * Put that answer back into the form, once, so the order can keep it.
+   *
+   * Reading the dispatch row fixes what the agent *sees*; this is what makes the
+   * order stop losing it. `buildOrderPayload` writes `alshrouq_payment_type`
+   * from form state, so an order whose column is null would save null again on
+   * every subsequent edit — the screen repaired and the row still wrong. With
+   * the value in form state, the next ordinary save records it.
+   *
+   * Narrow on purpose, and it cannot overwrite a choice: it fires only while the
+   * form's copy is blank, so the moment anything is on screen — hydrated or just
+   * picked — this stops having an opinion. There is no path from a chosen method
+   * back to blank, because the picker has no empty option.
+   */
+  useEffect(() => {
+    if (!alshrouqPaymentType) return;
+    setForm((f) =>
+      f.alshrouq_payment_type.trim() ? f : { ...f, alshrouq_payment_type: alshrouqPaymentType },
+    );
+  }, [alshrouqPaymentType, setForm]);
+
   const alshrouq = useAlShrouqOrder(
     deliveryType,
     form.branch_no,
@@ -259,7 +317,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
       alshrouq_map_url: form.alshrouq_map_url,
       alshrouq_lat: form.alshrouq_lat,
       alshrouq_lng: form.alshrouq_lng,
-      alshrouq_payment_type: form.alshrouq_payment_type,
+      alshrouq_payment_type: alshrouqPaymentType,
     },
     alshrouqPatch,
   );
@@ -279,7 +337,6 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
    * the two surfaces cannot disagree about whether a delivery exists. The rule
    * is `showAlShrouqSection`, which is pure and tested.
    */
-  const { data: dispatchState } = useOrderAlShrouqDispatch(id, mode === "edit" && !!id);
   const showsAlShrouqSection = showAlShrouqSection({
     storedDeliveryType: (existing as { delivery_type?: string | null } | null | undefined)
       ?.delivery_type,
@@ -342,38 +399,161 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
   const heading =
     mode === "create" ? "New order" : `${readOnly ? "View" : "Edit"} order ${orderNo}`;
 
+  /**
+   * Where the delivery stands, for the header's badge.
+   *
+   * The same summary the AlShrouq card renders, from the same query — so the
+   * chip at the top of the page and the card in the column cannot claim two
+   * different things about one delivery. Null when there is no delivery, which
+   * is when the header says nothing about one.
+   */
+  const dispatchSummary = dispatchState?.current
+    ? summariseAlShrouqDispatch(dispatchState.current)
+    : null;
+
+  /**
+   * The facts an order is identified by, as one line under the title.
+   *
+   * The page used to open with a heading and a sentence of instructions, and
+   * everything that actually identifies the order — its type, how it ships,
+   * which branch, who for, when — was somewhere down the form in a field the
+   * reader had to go and find. These are read far more often than they are
+   * edited, so they are stated once, up here, and the fields below stay the
+   * place they are changed.
+   *
+   * Blank entries are dropped rather than rendered as "—": a meta line of
+   * placeholders is noise, and every one of these has a field of its own that
+   * says it is missing.
+   */
+  const headerFacts: { icon: typeof ClipboardList; text: string }[] =
+    mode === "create"
+      ? []
+      : [
+          form.order_type ? { icon: ClipboardList, text: form.order_type } : null,
+          deliveryType ? { icon: Truck, text: deliveryType } : null,
+          form.branch_no
+            ? { icon: Building2, text: `${form.branch_no} ${cityFor(form.branch_no)}`.trim() }
+            : null,
+          form.customer_name ? { icon: User, text: form.customer_name } : null,
+          form.order_date ? { icon: CalendarDays, text: form.order_date } : null,
+        ].filter((f): f is { icon: typeof ClipboardList; text: string } => f !== null);
+
+  /** The order's value, formatted, or null when it has none yet. */
+  const headerTotal = form.invoice_value.trim() !== "" ? Number(form.invoice_value) : null;
+
   return (
     // Wide enough for two real columns and no wider. The workflow column holds
     // the fields, the verification column holds what the portal found; below
     // `xl` there is not enough width for both and they stack, workflow first.
     <div className="mx-auto max-w-[1360px] space-y-4">
-      {/* Page header. Breadcrumb, what this page is, and the two actions —
-          out here rather than inside the card, where the title competed with
-          the section headings for the same job and the buttons sat at the end
-          of a scroll. */}
-      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+      {/* Breadcrumb and the page's own sentence. Deliberately *outside* the
+          bar below and free to scroll away: it says what this screen is, which
+          is worth reading once and never again. */}
+      <div className="min-w-0">
+        <nav
+          aria-label="Breadcrumb"
+          className="flex items-center gap-1 text-xs text-muted-foreground"
+        >
+          <Link to="/orders" className="font-medium transition-colors hover:text-foreground">
+            Orders
+          </Link>
+          <ChevronRight className="h-3 w-3" aria-hidden="true" />
+          <span className="text-foreground">{mode === "create" ? "New order" : orderNo}</span>
+        </nav>
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          {readOnly
+            ? "This order is read-only for your role."
+            : mode === "create"
+              ? "Create a new order and link invoices automatically."
+              : "Invoices are looked up and verified automatically; fields marked * are required."}
+        </p>
+      </div>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* The order bar — who this order is, what it is worth, and the actions */}
+      {/* ------------------------------------------------------------------ */}
+      {/* Sticky, and this is the one thing on the page that is.
+
+          The form is long. An agent halfway down it, reconciling an invoice
+          against a delivery, previously had no way to see which order they were
+          in or what it was worth without scrolling back, and no way to save
+          without scrolling back either — the primary action was at the top and
+          nothing followed it down.
+
+          `top-16` clears `AppHeader`, which is `sticky top-0 z-30 h-16`; `z-20`
+          keeps this under it rather than through it. It sticks to the document,
+          which is the scrollport — `_app.tsx` is careful to keep it that way,
+          and this bar depends on that being true.
+
+          **The right-hand column is deliberately not sticky.** It was the
+          obvious place to put this, and it does not work: that column runs from
+          the invoice panel through the AlShrouq card to the activity timeline
+          and is routinely taller than the viewport, so pinning it would fix its
+          top on screen and put its bottom permanently out of reach — the
+          timeline would become unscrollable. Making it its own scroll box is
+          the other way, and gives the page a second scrollbar a few pixels from
+          the first, which is exactly what that column's own comment records
+          having removed. So the *summary* follows the reader instead, and the
+          column keeps the page's single scroll. */}
+      <div className="sticky top-16 z-20 flex flex-wrap items-center justify-between gap-x-6 gap-y-3 rounded-lg border border-border/60 bg-background/85 px-3 py-2.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/70 sm:px-4">
         <div className="min-w-0">
-          <nav
-            aria-label="Breadcrumb"
-            className="flex items-center gap-1 text-xs text-muted-foreground"
-          >
-            <Link to="/orders" className="font-medium transition-colors hover:text-foreground">
-              Orders
-            </Link>
-            <ChevronRight className="h-3 w-3" aria-hidden="true" />
-            <span className="text-foreground">{mode === "create" ? "New order" : orderNo}</span>
-          </nav>
-          <h1 className="mt-1.5 text-xl font-semibold tracking-tight sm:text-2xl">{heading}</h1>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {readOnly
-              ? "This order is read-only for your role."
-              : mode === "create"
-                ? "Create a new order and link invoices automatically."
-                : "Invoices are looked up and verified automatically; fields marked * are required."}
-          </p>
+          {/* Title and state on one wrapping line. The badges answer, without
+              a click or a scroll, the two questions every operations screen is
+              opened to ask: has this order been verified, and has the delivery
+              actually gone. */}
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+            <h1 className="text-lg font-semibold tracking-tight sm:text-xl">{heading}</h1>
+            {mode === "edit" && existing?.status && <StatusBadge s={existing.status} />}
+            {valueIsVerified && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-semibold text-success">
+                <BadgeCheck className="h-3 w-3" aria-hidden="true" />
+                Verified
+              </span>
+            )}
+            {dispatchSummary && (
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                  alshrouqToneStyle(dispatchSummary.tone).badge,
+                )}
+              >
+                <Truck className="h-3 w-3" aria-hidden="true" />
+                AlShrouq &middot; {dispatchSummary.label}
+              </span>
+            )}
+          </div>
+
+          {/* The order's identity, stated rather than searched for. */}
+          {headerFacts.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              {headerFacts.map((fact) => (
+                <span key={fact.text} className="inline-flex min-w-0 items-center gap-1.5">
+                  <fact.icon className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" />
+                  <span className="truncate" dir="auto" title={fact.text}>
+                    {fact.text}
+                  </span>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          {/* The order's value, at the size the most consequential number on
+              the page deserves. It sat in a form field two cards down, in the
+              same 14px as the branch code — so the one figure a supervisor
+              scans for was the one they had to hunt for. Still just a readout:
+              the field below remains where it is edited. */}
+          {mode === "edit" && headerTotal !== null && Number.isFinite(headerTotal) && (
+            <div className="text-right leading-none">
+              <p className="text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
+                Order value
+              </p>
+              <p className="mt-1 text-xl font-semibold tabular-nums tracking-tight sm:text-2xl">
+                {fmtSAR(headerTotal)}
+              </p>
+            </div>
+          )}
           {mode === "edit" && canDelete && (
             <Button
               variant="outline"
@@ -631,7 +811,11 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                   it go — and a fifth card would push the invoicing section below
                   the fold on a laptop. */}
               {alshrouq.active && (
-                <AlShrouqOrderRequirements state={alshrouq} readOnly={readOnly} />
+                <AlShrouqOrderRequirements
+                  state={alshrouq}
+                  invoiceValue={form.invoice_value}
+                  readOnly={readOnly}
+                />
               )}
             </SectionCard>
 
@@ -871,7 +1055,6 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
               customerPhone={form.customer_phone}
               branchNo={form.branch_no}
               invoiceValue={form.invoice_value}
-              notes={form.notes}
               alshrouq={alshrouq}
             />
           )}
@@ -884,11 +1067,13 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
         </aside>
       </div>
 
-      {/* The delivery note the dialog collects is the order's own note: one
-          field, saved by the ordinary insert and carried to AlShrouq as the
-          payload's `details`. Writing it back into form state rather than into
-          dialog-local state is what makes "Create order only" honest — the text
-          is kept as an ordinary order note, and nothing calls it a handover. */}
+      {/* The dialog collects its own delivery note and this form knows nothing
+          about it. The two are separate facts: the Notes card above is internal,
+          for whoever opens this order next, while the dialog's note is an
+          instruction handed to a driver and belongs to the delivery — it is
+          persisted on the dispatch row as `details`, which is the key AlShrouq's
+          create endpoint reads. Pressing **Create order only** therefore leaves
+          no delivery note anywhere, which is correct: there is no delivery. */}
       {interceptsCreate && (
         <AlShrouqApprovalDialog
           mode="create"
@@ -899,8 +1084,6 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
           customerPhone={form.customer_phone}
           branchNo={form.branch_no}
           invoiceValue={form.invoice_value}
-          details={form.notes}
-          onDetailsChange={(value) => setForm((f) => ({ ...f, notes: value }))}
           dispatchAvailable={alshrouq.dispatchAvailable}
           busy={busy}
           onApprove={(plan) =>

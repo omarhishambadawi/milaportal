@@ -31,6 +31,7 @@ import type { AlShrouqOrderFormOptions } from "@/lib/shams.functions";
 import { resolveAlShrouqBranch } from "@/lib/shams-crm/alshrouq-branches";
 import { isPaidPaymentType } from "@/lib/shams-crm/alshrouq-payload";
 import { ALSHROUQ } from "./constants";
+import { alshrouqPaymentLabel } from "./payment-methods";
 import {
   alshrouqRequirements,
   branchCoverage,
@@ -303,11 +304,19 @@ export function useAlShrouqOrder(
     return branchCoverage(resolveAlShrouqBranch(options.branchOptions, branchNo));
   }, [active, options, branchNo]);
 
-  const paymentLabel = useMemo(() => {
-    if (!paymentType) return null;
-    const hit = (options?.paymentOptions ?? []).find((p) => String(p.id) === paymentType);
-    return hit?.label ?? paymentType;
-  }, [paymentType, options?.paymentOptions]);
+  /**
+   * The method's name. Never its id.
+   *
+   * This used to end `?? paymentType`, which put a bare `3` on screen for the
+   * whole of any session the CRM config did not arrive in — including the first
+   * render of every page, before it has been asked for. `alshrouqPaymentLabel`
+   * still prefers the live list and only falls back to the CRM's own published
+   * names when there is no list to consult.
+   */
+  const paymentLabel = useMemo(
+    () => alshrouqPaymentLabel(paymentType, options?.paymentOptions),
+    [paymentType, options?.paymentOptions],
+  );
 
   /**
    * Whether the customer has already paid.
