@@ -49,7 +49,7 @@ import type {
 } from "@/lib/shams-crm/alshrouq-scheduler.server";
 import type { ResolveDispatchResult } from "@/lib/shams-crm/alshrouq-resolve.server";
 import type { AlShrouqLocationResult } from "@/features/alshrouq/location";
-import type { AgentSetupSummary } from "@/lib/shams-crm/agent-setup.server";
+import type { AgentSetupSummary, ExistingAgentLink } from "@/lib/shams-crm/agent-setup.server";
 import type { ShamsCrmOffer, ShamsOfferScope } from "@/lib/shams-crm/types";
 import type { ShamsCrmHistory } from "@/lib/shams/types";
 
@@ -1241,7 +1241,9 @@ export const alshrouqDispatchContext = createServerFn({ method: "POST" })
  */
 export const shamsCrmSetupAgentLinks = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d) => z.object({ dryRun: z.boolean().optional() }).parse(d ?? {}))
+  .inputValidator((d) =>
+    z.object({ dryRun: z.boolean().optional(), force: z.boolean().optional() }).parse(d ?? {}),
+  )
   .handler(async ({ context, data }): Promise<AgentSetupSummary> => {
     const { supabase, userId } = context as { supabase: any; userId: string };
     await assertPermission(supabase, userId, "manage_users");
@@ -1273,6 +1275,16 @@ export const shamsCrmSetupAgentLinks = createServerFn({ method: "POST" })
           for (const entry of byEmail.values()) Object.assign(entry, byId.get(entry.id) ?? {});
           return byEmail;
         },
+        async loadExistingLinks() {
+          // Metadata only, and no `vault_key` *value* leaves this scope — the
+          // column is read because an active link must carry one to be usable,
+          // which is the same condition `agentCrmPrincipal` applies.
+          const { data } = await supabaseAdmin
+            .from("shams_crm_agent_links")
+            .select("user_id,crm_username,crm_user_id,active,vault_key,verified_at");
+          const rows = (data ?? []) as (ExistingAgentLink & { user_id: string })[];
+          return new Map(rows.map((r) => [r.user_id, r]));
+        },
         verifyCrm: verifyAgentAgainstCrm,
         async storeSecret(agentId, password) {
           // The function postdates the generated types, which Lovable re-emits
@@ -1299,7 +1311,7 @@ export const shamsCrmSetupAgentLinks = createServerFn({ method: "POST" })
           return { ok: false as const, duplicate: String((error as any).code) === "23505" };
         },
       },
-      { dryRun: data.dryRun === true },
+      { dryRun: data.dryRun === true, force: data.force === true },
     );
   });
 

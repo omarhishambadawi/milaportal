@@ -28,6 +28,24 @@
  * per agent however many times this runs. A row that fails is reported and left
  * **exactly as it was**: there is no write on the failure path, so a CRM outage
  * cannot deactivate a set of working agents.
+ *
+ * ## And cheap to run again
+ *
+ * An agent who already holds a usable link to the *same* CRM account is skipped
+ * before the CRM is contacted at all, so re-running after a one-row change to
+ * the workbook verifies that one row rather than the whole sheet.
+ *
+ * That is a safety property and not merely an efficiency one. Verifying a row
+ * means attempting a login, and a login attempted with a credential the workbook
+ * no longer holds — a scrubbed column, a rotated password nobody copied back —
+ * is a *failed* login against a working agent's real CRM account. Repeated over
+ * a sheet on every run, the accounts being knocked on are precisely the ones
+ * that still work. Skipping them leaves them alone.
+ *
+ * The skip is deliberately blind to the password: nothing here can read the
+ * stored one back to compare against, so a rotated password in the workbook is
+ * invisible to it. `force` exists for exactly that case and is the only way to
+ * push a changed credential through.
  */
 
 import { readAgentWorkbook, normaliseTeam, type AgentWorkbookRow } from "./agent-workbook.server";
@@ -61,7 +79,13 @@ export type AgentSetupFailure =
 export interface AgentSetupRow {
   /** The agent's name, or the sheet row when there is not one. */
   agent: string;
-  status: "stored" | "verified" | "failed";
+  /**
+   * `skipped` means this agent already holds a usable link to this same CRM
+   * account, so nothing was verified and nothing was written. It is a success
+   * rather than a milder `failed`: the mapping the row describes is already in
+   * force, which is the state the run was trying to reach.
+   */
+  status: "stored" | "verified" | "failed" | "skipped";
   /** `verified` on success, otherwise the classification. */
   reason: string;
   /** From `/me`. An identifier the CRM already publishes, never a secret. */
@@ -72,7 +96,24 @@ export interface AgentSetupSummary {
   verified: number;
   stored: number;
   failed: number;
+  /** Rows left untouched because the link they describe is already in force. */
+  skipped: number;
   rows: AgentSetupRow[];
+}
+
+/**
+ * A link as it stands before this run, for deciding whether to leave it alone.
+ *
+ * Metadata only. There is no password here and no way to reach one: the point of
+ * the comparison is which CRM *account* an agent is attached to, which is public
+ * within the deployment, not whether the credential still matches.
+ */
+export interface ExistingAgentLink {
+  crm_username: string | null;
+  crm_user_id: string | null;
+  active: boolean | null;
+  vault_key: string | null;
+  verified_at: string | null;
 }
 
 /** The Supabase surface used. Service-role; RLS denies every client role. */
@@ -81,6 +122,14 @@ export interface AgentSetupDeps {
   loadPortalAgents: () => Promise<
     Map<string, { id: string; full_name?: string | null; agent_code?: string | null }>
   >;
+  /**
+   * `user_id` → the link that agent already holds, for every linked agent.
+   *
+   * Read once for the whole run rather than per row: the sheet is small, but a
+   * query per row would make the cost of a re-run scale with the thing this
+   * change exists to stop scaling.
+   */
+  loadExistingLinks: () => Promise<Map<string, ExistingAgentLink>>;
   /** `/login` then `/me`. Returns a classification and the CRM id, never a token. */
   verifyCrm: (
     username: string,
@@ -162,29 +211,69 @@ export async function verifyAgentAgainstCrm(
 }
 
 /**
+ * Is this link one the dispatch path could actually use right now?
+ *
+ * The same three conditions `agentCrmPrincipal` applies, in the same order, and
+ * for the same reason: a link that fails any of them is not a working mapping,
+ * so re-verifying it is repair rather than redundant work. Kept deliberately in
+ * step with that module — a link this says to leave alone must be one dispatch
+ * can use, or a run would "skip" an agent who cannot send anything.
+ */
+function isUsableLink(link: ExistingAgentLink | undefined): link is ExistingAgentLink {
+  return (
+    !!link && !!link.crm_username && link.active === true && !!link.vault_key && !!link.verified_at
+  );
+}
+
+/**
+ * The same CRM account, ignoring case.
+ *
+ * The CRM itself treats usernames case-insensitively — `verifyAgentAgainstCrm`
+ * compares `/me` against the workbook lowercased — so `Ahmed` and `ahmed` are
+ * one account, and re-verifying because somebody changed a capital letter in a
+ * spreadsheet would defeat the point. A genuinely different username is a
+ * different account and is verified in full.
+ */
+function sameCrmAccount(stored: string | null, fromWorkbook: string): boolean {
+  if (!stored || !fromWorkbook) return false;
+  return stored.trim().toLowerCase() === fromWorkbook.trim().toLowerCase();
+}
+
+/**
  * Verify every workbook row and store the ones that pass.
  *
  * `dryRun` proves the whole mapping — resolution, cross-checks, CRM login — and
  * writes nothing, so the setup can be confirmed before anything is committed to
  * Vault.
+ *
+ * `force` re-verifies rows that would otherwise be skipped. It is what a
+ * credential rotation needs: a new password under an unchanged username is
+ * indistinguishable from no change at all to anything this function can read.
  */
 export async function setUpAgentCrmLinks(
   deps: AgentSetupDeps,
-  options: { dryRun?: boolean } = {},
+  options: { dryRun?: boolean; force?: boolean } = {},
 ): Promise<AgentSetupSummary> {
   const rows = (deps.readWorkbook ?? readAgentWorkbook)();
   const portal = await deps.loadPortalAgents();
+  const links = await deps.loadExistingLinks();
 
   const results: AgentSetupRow[] = [];
   let verified = 0;
   let stored = 0;
+  let skipped = 0;
 
   for (const row of rows) {
     const agent = row.name || `row ${row.rowNumber}`;
     const fail = (reason: AgentSetupFailure) =>
       results.push({ agent, status: "failed" as const, reason, crmUserId: null });
 
-    if (!row.email || !row.crmUsername || !row.crmPassword) {
+    // An email is what resolves the row to a person, so it is checked before
+    // anything can be looked up. The username and password are checked *after*
+    // the skip below: an agent whose link already works must not be reported as
+    // unconfigured merely because the sheet's credential columns have since been
+    // scrubbed — that row is fine, and nothing is being asked of it.
+    if (!row.email) {
       fail("not_configured");
       continue;
     }
@@ -192,6 +281,40 @@ export async function setUpAgentCrmLinks(
     const profile = portal.get(row.email.toLowerCase());
     if (!profile?.id) {
       fail("unmapped");
+      continue;
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* ALREADY IN FORCE                                                        */
+    /*                                                                         */
+    /* Before the CRM is touched, because touching it is the cost being        */
+    /* avoided: a login attempted on behalf of an already-linked agent can      */
+    /* only either confirm what is already known or fail against that agent's   */
+    /* real account. Neither is worth a request.                                */
+    /*                                                                         */
+    /* The cross-checks below are skipped along with it, and that is correct:   */
+    /* they exist to stop a credential being attached to the wrong person, and  */
+    /* nothing is being attached. The person→account pair is unchanged from the */
+    /* one that was verified when this link was written.                        */
+    /* ---------------------------------------------------------------------- */
+    const existing = links.get(profile.id);
+    if (
+      !options.force &&
+      isUsableLink(existing) &&
+      sameCrmAccount(existing.crm_username, row.crmUsername)
+    ) {
+      skipped += 1;
+      results.push({
+        agent,
+        status: "skipped",
+        reason: "already linked and verified",
+        crmUserId: existing.crm_user_id ?? null,
+      });
+      continue;
+    }
+
+    if (!row.crmUsername || !row.crmPassword) {
+      fail("not_configured");
       continue;
     }
 
@@ -256,6 +379,7 @@ export async function setUpAgentCrmLinks(
     verified,
     stored,
     failed: results.filter((r) => r.status === "failed").length,
+    skipped,
     rows: results,
   };
 }

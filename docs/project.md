@@ -3171,6 +3171,34 @@ Verified against the live CRM on 2026-08-23: seven agents, all authenticating,
 all active, all holding `alshrouq_delivery`, CRM user ids captured from `/me`.
 Login and `/me` only — no order was created.
 
+**A re-run only verifies what changed.** `setUpAgentCrmLinks` reads
+`shams_crm_agent_links` up front and skips any agent who already holds a usable
+link — active, `verified_at` and `vault_key` set, same `crm_username` ignoring
+case — before the CRM is contacted for that row. The outcome is `skipped`, which
+is a success and not a milder failure: the mapping the row describes is already
+in force.
+
+The reason is not economy. Verifying a row *is* attempting a login, so a run that
+re-verifies everyone spends a **failed** login on every agent whose password the
+workbook no longer carries — against the real CRM accounts of the agents who
+currently work, and repeated on every run. The seven rows above are exactly that
+case: their `crm_password` column was scrubbed before the file was committed, so
+re-verification could only refuse. Adding an eighth agent (`547b7af`) must not
+knock on the seven's accounts to do it.
+
+Because of the skip, the username and password columns are checked *after* it,
+not before: an agent whose link already works is not reported `not_configured`
+merely because the sheet's credential columns have since been emptied. The
+cross-checks against `full_name` and `agent_code` are skipped along with it,
+which is safe — they exist to stop a credential being attached to the wrong
+person, and a skipped row attaches nothing; the person→account pair is unchanged
+from the one that was verified when the link was written.
+
+The skip cannot see a **rotated password** — nothing can read the stored one back
+to compare against — so a new password under an unchanged username looks like no
+change at all. `force` (the "Re-verify agents that are already linked" checkbox
+on the diagnostics page, off by default) is the only way to push one through.
+
 #### The dispatch runs as the order's agent (Phases 2–3)
 
 `dispatchOrderToAlShrouq` resolves the CRM identity from `DispatchRequest.orderAgentId`,

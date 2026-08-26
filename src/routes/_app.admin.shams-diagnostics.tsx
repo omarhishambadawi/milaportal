@@ -14,6 +14,7 @@
  * refusal rather than a thrown error.
  */
 
+import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
@@ -82,8 +83,16 @@ function ShamsDiagnosticsPage() {
   const runAlshrouq = useServerFn(shamsAlshrouqConfigProbe);
   const alshrouq = useMutation({ mutationFn: () => runAlshrouq({ data: undefined }) });
   const runAgentSetup = useServerFn(shamsCrmSetupAgentLinks);
+  /*
+   * Off by default, and deliberately so: with it off a run contacts the CRM only
+   * for agents whose mapping is new or changed, which is the ordinary case after
+   * a workbook edit. Turning it on logs in as every mapped agent again — worth
+   * it for a credential rotation, wasted refusals against working accounts
+   * otherwise.
+   */
+  const [force, setForce] = useState(false);
   const agentSetup = useMutation({
-    mutationFn: (dryRun: boolean) => runAgentSetup({ data: { dryRun } }),
+    mutationFn: (dryRun: boolean) => runAgentSetup({ data: { dryRun, force } }),
   });
 
   if (!isAdministrator(role)) {
@@ -150,7 +159,7 @@ function ShamsDiagnosticsPage() {
       */}
       <Section
         title="AlShrouq — agent CRM credentials"
-        hint="Verifies each agent in the mapping workbook against Shams CRM, then stores their password in Vault. No courier is contacted."
+        hint="Verifies each agent in the mapping workbook against Shams CRM, then stores their password in Vault. Agents already linked to the same CRM account are left alone. No courier is contacted."
       >
         <div className="flex flex-wrap gap-2">
           <Button
@@ -168,6 +177,24 @@ function ShamsDiagnosticsPage() {
           </Button>
         </div>
 
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={force}
+            onChange={(e) => setForce(e.target.checked)}
+            disabled={agentSetup.isPending}
+          />
+          <span>
+            Re-verify agents that are already linked
+            <span className="block text-muted-foreground">
+              Needed after a password changes in the workbook — a new password under an unchanged
+              username looks like no change at all. Otherwise it only spends a failed login on every
+              agent whose account already works.
+            </span>
+          </span>
+        </label>
+
         {agentSetup.isError && (
           <p className="text-sm text-destructive">
             The setup call failed. You may not have permission to manage users.
@@ -177,8 +204,8 @@ function ShamsDiagnosticsPage() {
         {agentSetup.data && (
           <>
             <p className="text-sm text-muted-foreground">
-              Verified {agentSetup.data.verified} · Stored {agentSetup.data.stored} · Failed{" "}
-              {agentSetup.data.failed}
+              Verified {agentSetup.data.verified} · Stored {agentSetup.data.stored} · Skipped{" "}
+              {agentSetup.data.skipped} · Failed {agentSetup.data.failed}
             </p>
             <Table head={["Agent", "Status", "Reason", "CRM user ID"]}>
               {agentSetup.data.rows.map((r) => (

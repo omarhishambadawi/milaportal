@@ -33,6 +33,18 @@ function row(over: Record<string, unknown> = {}) {
   };
 }
 
+/** A link in the state the dispatch path can actually use. */
+function link(over: Record<string, unknown> = {}) {
+  return {
+    crm_username: "crm-agent@example.test",
+    crm_user_id: "99001",
+    active: true,
+    vault_key: `shams_crm_agent_${AGENT_ID}`,
+    verified_at: "2026-08-23T00:00:00.000Z",
+    ...over,
+  };
+}
+
 function deps(over: Partial<AgentSetupDeps> = {}, rows = [row()]): AgentSetupDeps {
   return {
     readWorkbook: () => rows as never,
@@ -40,6 +52,9 @@ function deps(over: Partial<AgentSetupDeps> = {}, rows = [row()]): AgentSetupDep
       new Map([
         ["agent@example.test", { id: AGENT_ID, full_name: "Test Agent", agent_code: "4001" }],
       ]),
+    // Nothing linked yet, so by default every row is a new mapping and takes the
+    // full verification path — which is what the pre-existing cases assert.
+    loadExistingLinks: async () => new Map(),
     verifyCrm: async () => ({ ok: true, crmUserId: "99001" }),
     storeSecret: async () => `shams_crm_agent_${AGENT_ID}`,
     upsertLink: async () => ({ ok: true }),
@@ -196,6 +211,195 @@ describe("a credential is never attached to the wrong person", () => {
     );
     expect(summary.rows[0]!.reason).toBe("crm_username_already_linked");
     expect(summary.stored).toBe(0);
+  });
+});
+
+/**
+ * Re-running after a workbook change.
+ *
+ * The property that matters is not speed: verifying a row means attempting a
+ * login, so a run that re-verifies everyone spends a *failed* login on every
+ * agent whose password the workbook no longer carries — against the real CRM
+ * accounts of the agents who currently work. These pin that such an agent is not
+ * touched, while a new or changed mapping still goes through in full.
+ */
+describe("a re-run leaves working links alone", () => {
+  it("skips an agent already linked to the same CRM account, without contacting the CRM", async () => {
+    const verify = vi.fn<AgentSetupDeps["verifyCrm"]>(async () => ({
+      ok: true as const,
+      crmUserId: "99001",
+    }));
+    const store = vi.fn(async () => "key");
+    const upsert = vi.fn(async () => ({ ok: true as const }));
+
+    const summary = await setUpAgentCrmLinks(
+      deps({
+        loadExistingLinks: async () => new Map([[AGENT_ID, link()]]),
+        verifyCrm: verify,
+        storeSecret: store,
+        upsertLink: upsert,
+      }),
+    );
+
+    expect(summary).toMatchObject({ verified: 0, stored: 0, failed: 0, skipped: 1 });
+    expect(summary.rows[0]).toMatchObject({
+      agent: "Test Agent",
+      status: "skipped",
+      crmUserId: "99001",
+    });
+    // The decisive part: no login was attempted, and nothing was written.
+    expect(verify).not.toHaveBeenCalled();
+    expect(store).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The live shape of the problem: the seven pre-existing rows in the workbook
+   * carry a scrubbed password. Re-verifying them would refuse seven times over
+   * against accounts that are working perfectly well.
+   */
+  it("skips a linked agent whose workbook credential has since been scrubbed", async () => {
+    const verify = vi.fn<AgentSetupDeps["verifyCrm"]>(async () => ({
+      ok: false as const,
+      reason: "auth_failed" as const,
+    }));
+
+    const summary = await setUpAgentCrmLinks(
+      deps({ loadExistingLinks: async () => new Map([[AGENT_ID, link()]]), verifyCrm: verify }, [
+        row({ crmPassword: "0" }),
+      ]),
+    );
+
+    expect(summary).toMatchObject({ skipped: 1, failed: 0 });
+    expect(verify).not.toHaveBeenCalled();
+  });
+
+  /** A new agent in the sheet is exactly what a re-run is for. */
+  it("still stores an agent who has no link yet, alongside skipped ones", async () => {
+    const NEW_ID = "22222222-2222-4222-8222-222222222222";
+    const rows = [
+      row({ email: "linked@example.test", name: "Linked Agent" }),
+      row({
+        email: "new@example.test",
+        name: "New Agent",
+        agentCode: "4007",
+        crmUsername: "new-crm-account",
+      }),
+    ];
+    const verify = vi.fn<AgentSetupDeps["verifyCrm"]>(async () => ({
+      ok: true as const,
+      crmUserId: "99002",
+    }));
+    const upsert = vi.fn<AgentSetupDeps["upsertLink"]>(async () => ({ ok: true as const }));
+
+    const summary = await setUpAgentCrmLinks(
+      deps(
+        {
+          loadPortalAgents: async () =>
+            new Map([
+              [
+                "linked@example.test",
+                { id: AGENT_ID, full_name: "Linked Agent", agent_code: "4001" },
+              ],
+              ["new@example.test", { id: NEW_ID, full_name: "New Agent", agent_code: "4007" }],
+            ]),
+          loadExistingLinks: async () => new Map([[AGENT_ID, link()]]),
+          verifyCrm: verify,
+          upsertLink: upsert,
+        },
+        rows,
+      ),
+    );
+
+    expect(summary).toMatchObject({ verified: 1, stored: 1, skipped: 1, failed: 0 });
+    expect(summary.rows.map((r) => r.status)).toEqual(["skipped", "stored"]);
+    // Only the unlinked agent was logged in as.
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(verify.mock.calls[0]![0]).toBe("new-crm-account");
+    expect((upsert.mock.calls[0]![0] as unknown as Record<string, unknown>).user_id).toBe(NEW_ID);
+  });
+
+  /** Case is not a different account — the CRM compares usernames case-blind. */
+  it("treats a username differing only in case as the same account", async () => {
+    const verify = vi.fn<AgentSetupDeps["verifyCrm"]>(async () => ({
+      ok: true as const,
+      crmUserId: "99001",
+    }));
+    const summary = await setUpAgentCrmLinks(
+      deps({
+        loadExistingLinks: async () =>
+          new Map([[AGENT_ID, link({ crm_username: "CRM-Agent@Example.Test" })]]),
+        verifyCrm: verify,
+      }),
+    );
+    expect(summary.skipped).toBe(1);
+    expect(verify).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A link the dispatch path could not use is not a working mapping, so it is
+   * repaired rather than skipped. These are the same three conditions
+   * `agentCrmPrincipal` applies before it will hand out a principal.
+   */
+  it.each([
+    ["a different CRM account", link({ crm_username: "someone-else@example.test" })],
+    ["the link is switched off", link({ active: false })],
+    ["Vault holds nothing for it", link({ vault_key: null })],
+    ["it was never verified", link({ verified_at: null })],
+  ])("re-verifies when %s", async (_label, existing) => {
+    const verify = vi.fn<AgentSetupDeps["verifyCrm"]>(async () => ({
+      ok: true as const,
+      crmUserId: "99001",
+    }));
+    const summary = await setUpAgentCrmLinks(
+      deps({ loadExistingLinks: async () => new Map([[AGENT_ID, existing]]), verifyCrm: verify }),
+    );
+
+    expect(summary).toMatchObject({ verified: 1, stored: 1, skipped: 0 });
+    expect(verify).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * A rotated password is invisible — nothing here can read the stored one back
+   * — so `force` is the only way to push one through.
+   */
+  it("re-verifies everything under force", async () => {
+    const verify = vi.fn<AgentSetupDeps["verifyCrm"]>(async () => ({
+      ok: true as const,
+      crmUserId: "99001",
+    }));
+    const summary = await setUpAgentCrmLinks(
+      deps({ loadExistingLinks: async () => new Map([[AGENT_ID, link()]]), verifyCrm: verify }),
+      { force: true },
+    );
+
+    expect(summary).toMatchObject({ verified: 1, stored: 1, skipped: 0 });
+    expect(verify).toHaveBeenCalledTimes(1);
+  });
+
+  /** A skip is not a write, so a dry run and a real run agree about it. */
+  it("skips identically on a dry run", async () => {
+    const summary = await setUpAgentCrmLinks(
+      deps({ loadExistingLinks: async () => new Map([[AGENT_ID, link()]]) }),
+      { dryRun: true },
+    );
+    expect(summary).toMatchObject({ skipped: 1, verified: 0, stored: 0 });
+  });
+
+  /** Skipping happens per agent, so an unrelated link cannot cause one. */
+  it("does not skip an agent on the strength of somebody else's link", async () => {
+    const verify = vi.fn<AgentSetupDeps["verifyCrm"]>(async () => ({
+      ok: true as const,
+      crmUserId: "99001",
+    }));
+    const summary = await setUpAgentCrmLinks(
+      deps({
+        loadExistingLinks: async () => new Map([["99999999-9999-4999-8999-999999999999", link()]]),
+        verifyCrm: verify,
+      }),
+    );
+    expect(summary).toMatchObject({ stored: 1, skipped: 0 });
+    expect(verify).toHaveBeenCalledTimes(1);
   });
 });
 
