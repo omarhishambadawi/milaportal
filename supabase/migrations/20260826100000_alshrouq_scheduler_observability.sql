@@ -173,8 +173,12 @@ BEGIN
 
   SELECT decrypted_secret INTO endpoint
     FROM vault.decrypted_secrets WHERE name = 'alshrouq_scheduler_url';
+  -- The platform's own service role key, the same entry `email_queue_dispatch()`
+  -- reads. Not a credential anyone maintains by hand, which is the point: the
+  -- endpoint compares it against the `SUPABASE_SERVICE_ROLE_KEY` the same
+  -- platform put in the runtime, so the two halves cannot drift apart.
   SELECT decrypted_secret INTO secret
-    FROM vault.decrypted_secrets WHERE name = 'alshrouq_scheduler_secret';
+    FROM vault.decrypted_secrets WHERE name = 'email_queue_service_role_key';
 
   IF endpoint IS NULL OR secret IS NULL THEN
     /*
@@ -190,7 +194,7 @@ BEGIN
      */
     RAISE WARNING
       'alshrouq_dispatch_due: % item(s) need the scheduler but it is not configured '
-      '(vault entries alshrouq_scheduler_url / alshrouq_scheduler_secret are absent)',
+      '(vault entries alshrouq_scheduler_url / email_queue_service_role_key are absent)',
       due_count + stale_count;
 
     note := 'The delivery scheduler is not connected on this deployment, so '
@@ -228,7 +232,7 @@ BEGIN
     url     := endpoint,
     headers := jsonb_build_object(
                  'content-type', 'application/json',
-                 'x-alshrouq-scheduler-secret', secret
+                 'Authorization', 'Bearer ' || secret
                ),
     body    := jsonb_build_object('due', due_count, 'stale', stale_count),
     timeout_milliseconds := 30000
@@ -252,7 +256,7 @@ COMMENT ON FUNCTION public.alshrouq_dispatch_due() IS
   'pg_cron entry point for scheduled AlShrouq dispatch. Pokes the application '
   'endpoint when work is due; dispatches nothing itself. Returns the number of '
   'items poked for, 0 when idle, and -1 when it could not act because the vault '
-  'entries alshrouq_scheduler_url / alshrouq_scheduler_secret are absent -- which '
+  'entries alshrouq_scheduler_url / email_queue_service_role_key are absent -- which '
   'it also warns about and records in public.alshrouq_scheduler_state.';
 
 -- The index the stale-claim count uses. Partial, for the same reason the due

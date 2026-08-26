@@ -396,13 +396,43 @@ describe("the scheduler endpoint", () => {
   });
 
   /**
-   * Both methods are behind the same secret, so a health check cannot be used to
+   * Both methods are behind the same gate, so a health check cannot be used to
    * enumerate scheduled work either.
+   *
+   * Asserted through `isScheduler` rather than by looking for a header name in
+   * each handler. That is the stronger claim: it is what makes the two
+   * *identical* rather than merely similar, and it survives a second accepted
+   * credential being added without either handler being told about it.
    */
   it("authenticates the health check as strictly as the run", () => {
     const get = route.slice(route.indexOf("GET:"), route.indexOf("POST:"));
-    expect(get).toContain("x-alshrouq-scheduler-secret");
+    const post = route.slice(route.indexOf("POST:"));
+    expect(get).toContain("if (!isScheduler(request))");
+    expect(post).toContain("if (!isScheduler(request))");
     expect(get).toContain('json({ error: "unauthorized" }, 401)');
+    expect(post).toContain('json({ error: "unauthorized" }, 401)');
+  });
+
+  /**
+   * The two credentials the poll may present, and the rule that neither is
+   * compared with `!==`.
+   *
+   * The bearer is the service role key, which the platform provisions on both
+   * sides — that is the whole point of accepting it, since the hand-copied
+   * header secret is the half that was never created and left every scheduled
+   * delivery unsent.
+   */
+  it("accepts the platform's service role bearer, in constant time", () => {
+    const fn = route.slice(
+      route.indexOf("function isScheduler"),
+      route.indexOf("function serviceClient"),
+    );
+    expect(fn).toContain("x-alshrouq-scheduler-secret");
+    expect(fn).toContain('auth.startsWith("Bearer ")');
+    expect(fn).toContain("process.env.SUPABASE_SERVICE_ROLE_KEY");
+    // Every comparison goes through the constant-time helper. A `!==` here
+    // would leak the key's prefix through timing.
+    expect(fn).not.toMatch(/[!=]==/);
   });
 });
 

@@ -3455,10 +3455,35 @@ status; rows stay `scheduled` and are picked up whenever it opens.
 `alshrouq_scheduler_url` / `alshrouq_scheduler_secret` are absent, so applying
 the migration to an unconfigured environment does nothing.
 
-#### The three-part configuration, and the failure it caused
+#### How the poll authenticates
 
-Scheduling has **three** pieces of configuration, and any one of them missing
-stops every scheduled delivery:
+`alshrouq_dispatch_due()` presents the **platform-managed service role key** as
+`Authorization: Bearer …`, read live from the vault entry
+`email_queue_service_role_key`, and `/api/alshrouq-run-scheduled` compares it
+against `SUPABASE_SERVICE_ROLE_KEY` through `isScheduler()`.
+
+This is not a bespoke scheme. It is exactly what `public.email_queue_dispatch()`
+and `/lovable/email/queue/process` already do — the platform's own generated
+comment states the contract, *"the pg_cron job sends the service role key as a
+Bearer token"* — and that path returns 200 in production.
+
+**Both halves are issued and rotated by the same system, so they cannot drift.**
+That is the entire reason for the change: the previous credential was one string
+held twice, kept equal by somebody remembering to, and nobody did.
+
+`isScheduler()` still accepts `x-alshrouq-scheduler-secret` against
+`ALSHROUQ_SCHEDULER_SECRET` for external callers, in constant time. It grants no
+new authority — anyone holding the service role key can already write
+`alshrouq_dispatches` directly. The `ALSHROUQ_LIVE_DISPATCH_ENABLED` gate is
+untouched and still decides alone whether a courier is contacted.
+
+Only `alshrouq_scheduler_url` remains as scheduler-specific configuration. The
+`alshrouq_scheduler_secret` vault entry is dropped by `20260826170000`.
+
+#### The configuration failure it replaced
+
+Scheduling used to have **three** pieces of configuration, and any one missing
+stopped every scheduled delivery:
 
 | Piece                                       | Lives in            |
 | ------------------------------------------- | ------------------- |
