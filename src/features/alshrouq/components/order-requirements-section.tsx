@@ -34,7 +34,7 @@
 
 import { useMutation } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { AlertTriangle, CheckCircle2, Info, Loader2, MapPin, Wallet } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Info, Loader2, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -322,34 +322,25 @@ export function AlShrouqOrderRequirements({
       </div>
 
       {/* ---------------------------------------------------------------
-          Payment & collection — one panel, because they are one decision.
+          Payment & collection.
 
-          The method and the money were separated by the whole width of the
-          page: the picker sat here and the figure two cards below, in the
-          Invoicing section. They are not two facts. The method is what decides
-          whether the figure is collected at all — a prepaid order sends a
-          driver to collect nothing — so an agent choosing one has to be able to
-          see the other change, and a supervisor checking an order should not
-          have to hold a number in their head while they scroll to the method it
-          depends on.
+          Two ordinary fields on the form's own grid, under a rule — not a
+          panel. It was a bordered, tinted box for one revision, which put a
+          card inside the Order details card and made the least-edited part of
+          this section the heaviest thing in it. The grouping it was reaching
+          for is done by adjacency and a separator instead, which is what the
+          rest of the form uses.
 
-          The three amounts are named apart rather than shown as one, because
-          they genuinely differ and conflating them is how somebody is asked to
-          pay twice: the invoice total is what the pharmacy billed, the order
-          value is what this order is worth, and the collection amount is the
-          only one of the three that is an instruction to a driver.
-
-          Prominent, because sending a driver to collect cash from somebody who
-          has already paid is the failure a blank prevents — so the method is
-          never guessed from the order type.
+          The two amounts stay named apart, because they genuinely differ and
+          conflating them is how somebody is asked to pay twice: the order value
+          is what this order is worth, and the collection amount is the only one
+          of the two that is an instruction to a driver. The collection figure
+          comes from `alshrouqOrderValue` — the same call the confirmation
+          dialog and the dispatch card make — so no screen can promise a
+          collection the payload does not send.
           --------------------------------------------------------------- */}
-      <div className="space-y-3 rounded-md border border-border/60 bg-muted/20 p-3 dark:bg-muted/10">
-        <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          <Wallet className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          Payment &amp; collection
-        </p>
-
-        <div className="space-y-1.5">
+      <div className="grid grid-cols-1 gap-x-4 gap-y-3.5 border-t border-border/60 pt-3.5 sm:grid-cols-2">
+        <div className="min-w-0 space-y-1.5">
           <Label
             htmlFor="alshrouq-payment"
             className="flex items-center gap-1.5 text-xs font-medium"
@@ -364,13 +355,13 @@ export function AlShrouqOrderRequirements({
               <SelectValue placeholder="How does the customer pay?" />
             </SelectTrigger>
             {/* The live list when the CRM has answered, its published names when
-              it has not.
+                it has not.
 
-              A Radix `Select` whose value matches none of its items renders the
-              *placeholder*, so a reopened order carrying payment method 3 read
-              "How does the customer pay?" — an answered field presenting itself
-              as unanswered — until the config request landed, and permanently
-              wherever it does not. See `alshrouqPaymentOptions`. */}
+                A Radix `Select` whose value matches none of its items renders
+                the *placeholder*, so a reopened order carrying payment method 3
+                read "How does the customer pay?" — an answered field presenting
+                itself as unanswered — until the config request landed, and
+                permanently wherever it does not. See `alshrouqPaymentOptions`. */}
             <SelectContent>
               {alshrouqPaymentOptions(options.paymentOptions).map((p) => (
                 <SelectItem key={p.id} value={String(p.id)}>
@@ -379,44 +370,35 @@ export function AlShrouqOrderRequirements({
               ))}
             </SelectContent>
           </Select>
-          <p className="text-[11px] leading-snug text-muted-foreground">
+          <p className="text-[11px] leading-tight text-muted-foreground">
             The driver is told this. It is never assumed from the order type.
           </p>
         </div>
 
-        {/* What the order is worth, and what that means at the door. The
-            collection figure comes from `alshrouqOrderValue` — the same call the
-            confirmation dialog and the card make — so the three surfaces cannot
-            state three different amounts, and none of them can disagree with the
-            payload. */}
-        <dl className="grid grid-cols-1 gap-x-4 gap-y-2 border-t border-border/60 pt-2.5 sm:grid-cols-2">
-          <div className="min-w-0">
-            <dt className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Order value
-            </dt>
-            <dd className="mt-0.5 truncate text-sm font-semibold tabular-nums">
+        <div className="min-w-0 space-y-1.5">
+          <p className="text-xs font-medium">Collection</p>
+          <dl className="flex items-baseline justify-between gap-3 rounded-md border border-border/60 px-3 py-2 text-sm">
+            <dt className="truncate text-muted-foreground">Order value</dt>
+            <dd className="shrink-0 tabular-nums">
               {orderValueText ? fmtSAR(Number(orderValueText)) : "—"}
             </dd>
-          </div>
-          <div className="min-w-0">
-            <dt className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Collected by AlShrouq
-            </dt>
+          </dl>
+          <dl className="flex items-baseline justify-between gap-3 rounded-md border border-border/60 px-3 py-2 text-sm">
+            <dt className="truncate text-muted-foreground">Collected by AlShrouq</dt>
             <dd
-              className={`mt-0.5 truncate text-sm font-semibold tabular-nums ${
+              className={`shrink-0 font-semibold tabular-nums ${
                 collectsNothing ? "text-success" : "text-foreground"
               }`}
             >
               {collectionText ? fmtSAR(Number(collectionText)) : "—"}
             </dd>
-          </div>
-        </dl>
-
-        <p className="text-[11px] leading-snug text-muted-foreground">
-          {collectsNothing
-            ? "This method says the customer has already paid, so the driver collects nothing."
-            : "The driver collects this amount at the door."}
-        </p>
+          </dl>
+          <p className="text-[11px] leading-tight text-muted-foreground">
+            {collectsNothing
+              ? "Already paid — the driver collects nothing."
+              : "The driver collects this amount at the door."}
+          </p>
+        </div>
       </div>
     </div>
   );

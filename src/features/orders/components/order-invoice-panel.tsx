@@ -389,22 +389,22 @@ function ItemLines({ items }: { items: ItemAvailability[] }) {
   const priced = items.some((i) => i.lineTotal !== null || i.unitRate !== null);
 
   return (
-    // A framed table rather than four bare rows of text. The lines are the
-    // document — this is the part of the page a pharmacist actually reads — and
-    // a header band plus a rule under each line is what makes a column of
-    // figures scan as an invoice instead of as a paragraph. Structure only: no
-    // column, value or formatter changes.
-    <div className="mt-3 overflow-hidden rounded-md border border-border/60">
+    // No frame and no filled header band. It had both for one revision, which
+    // put a bordered box inside a bordered invoice block inside a card — three
+    // nested surfaces to present four rows. A rule under the column headings and
+    // one between the lines does the same job with none of the weight, which is
+    // how the rest of this panel is built.
+    <div className="mt-3">
       <table className="w-full table-fixed border-collapse text-left">
         <caption className="sr-only">Invoice items, prices and branch stock</caption>
-        <thead className="bg-muted/40 dark:bg-muted/15">
+        <thead>
           <tr className="border-b border-border/60 text-[10px] uppercase tracking-wide text-muted-foreground">
             {/* No width on the product column: `table-fixed` gives it whatever
                 the fixed ones leave, which is the largest share and the point. */}
-            <th scope="col" className="py-1.5 pl-2 pr-2 font-medium">
+            <th scope="col" className="pb-1 pr-2 font-medium">
               Product
             </th>
-            <th scope="col" className="w-10 py-1.5 pr-2 text-right font-medium">
+            <th scope="col" className="w-10 pb-1 pr-2 text-right font-medium">
               Qty
             </th>
             {priced && (
@@ -419,19 +419,19 @@ function ItemLines({ items }: { items: ItemAvailability[] }) {
                     beside it. */}
                 <th
                   scope="col"
-                  className="hidden w-[3.75rem] py-1.5 pr-2 text-right font-medium sm:table-cell"
+                  className="hidden w-[3.75rem] pb-1 pr-2 text-right font-medium sm:table-cell"
                 >
                   Unit <span className="font-normal">({CURRENCY})</span>
                 </th>
                 <th
                   scope="col"
-                  className="hidden w-[4.25rem] py-1.5 pr-2 text-right font-medium sm:table-cell"
+                  className="hidden w-[4.25rem] pb-1 pr-2 text-right font-medium sm:table-cell"
                 >
                   Total <span className="font-normal">({CURRENCY})</span>
                 </th>
               </>
             )}
-            <th scope="col" className="w-24 py-1.5 pr-2 text-right font-medium">
+            <th scope="col" className="w-24 pb-1 text-right font-medium">
               Stock
             </th>
           </tr>
@@ -439,7 +439,7 @@ function ItemLines({ items }: { items: ItemAvailability[] }) {
         <tbody className="divide-y divide-border/40">
           {items.map((item, i) => (
             <tr key={`${item.itemCode}-${i}`} className="align-top">
-              <td className="py-1.5 pl-2 pr-2">
+              <td className="py-1.5 pr-2">
                 {/* Wrapping, not truncating — see above. `break-words` so a long
                     unbroken code cannot widen the column either. */}
                 <span
@@ -485,7 +485,7 @@ function ItemLines({ items }: { items: ItemAvailability[] }) {
                   </td>
                 </>
               )}
-              <td className="py-1.5 pr-2 text-right">
+              <td className="py-1.5 text-right">
                 {item.state === "in_stock" ? (
                   <span className="whitespace-nowrap text-[11px] text-muted-foreground">
                     <span className="font-semibold tabular-nums text-foreground">

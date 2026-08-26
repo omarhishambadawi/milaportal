@@ -430,7 +430,9 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
       ? []
       : [
           form.order_type ? { icon: ClipboardList, text: form.order_type } : null,
-          deliveryType ? { icon: Truck, text: deliveryType } : null,
+          // Omitted while the AlShrouq badge is showing, which already names the
+          // method — and says more about it than this would.
+          deliveryType && !dispatchSummary ? { icon: Truck, text: deliveryType } : null,
           form.branch_no
             ? { icon: Building2, text: `${form.branch_no} ${cityFor(form.branch_no)}`.trim() }
             : null,
@@ -446,10 +448,21 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
     // the fields, the verification column holds what the portal found; below
     // `xl` there is not enough width for both and they stack, workflow first.
     <div className="mx-auto max-w-[1360px] space-y-4">
-      {/* Breadcrumb and the page's own sentence. Deliberately *outside* the
-          bar below and free to scroll away: it says what this screen is, which
-          is worth reading once and never again. */}
-      <div className="min-w-0">
+      {/* ------------------------------------------------------------------ */}
+      {/* Page header                                                         */}
+      {/* ------------------------------------------------------------------ */}
+      {/* Breadcrumb, then the order and its actions on one line, then the
+          order's identity as a quiet line of facts.
+
+          Plain page furniture, deliberately: no card, no border, no shadow, no
+          backdrop and **not sticky**. It was all of those for one revision, and
+          a bar with its own surface and elevation reads as a component sitting
+          on top of the page rather than as the page's own heading — it competed
+          with the four cards below it instead of introducing them, and pinning
+          it cost a strip of the viewport on every scroll for information that
+          does not change while you read. The hierarchy here comes from type
+          size and colour, which is what the rest of the app uses. */}
+      <div className="space-y-2">
         <nav
           aria-label="Breadcrumb"
           className="flex items-center gap-1 text-xs text-muted-foreground"
@@ -460,49 +473,13 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
           <ChevronRight className="h-3 w-3" aria-hidden="true" />
           <span className="text-foreground">{mode === "create" ? "New order" : orderNo}</span>
         </nav>
-        <p className="mt-1.5 text-xs text-muted-foreground">
-          {readOnly
-            ? "This order is read-only for your role."
-            : mode === "create"
-              ? "Create a new order and link invoices automatically."
-              : "Invoices are looked up and verified automatically; fields marked * are required."}
-        </p>
-      </div>
 
-      {/* ------------------------------------------------------------------ */}
-      {/* The order bar — who this order is, what it is worth, and the actions */}
-      {/* ------------------------------------------------------------------ */}
-      {/* Sticky, and this is the one thing on the page that is.
-
-          The form is long. An agent halfway down it, reconciling an invoice
-          against a delivery, previously had no way to see which order they were
-          in or what it was worth without scrolling back, and no way to save
-          without scrolling back either — the primary action was at the top and
-          nothing followed it down.
-
-          `top-16` clears `AppHeader`, which is `sticky top-0 z-30 h-16`; `z-20`
-          keeps this under it rather than through it. It sticks to the document,
-          which is the scrollport — `_app.tsx` is careful to keep it that way,
-          and this bar depends on that being true.
-
-          **The right-hand column is deliberately not sticky.** It was the
-          obvious place to put this, and it does not work: that column runs from
-          the invoice panel through the AlShrouq card to the activity timeline
-          and is routinely taller than the viewport, so pinning it would fix its
-          top on screen and put its bottom permanently out of reach — the
-          timeline would become unscrollable. Making it its own scroll box is
-          the other way, and gives the page a second scrollbar a few pixels from
-          the first, which is exactly what that column's own comment records
-          having removed. So the *summary* follows the reader instead, and the
-          column keeps the page's single scroll. */}
-      <div className="sticky top-16 z-20 flex flex-wrap items-center justify-between gap-x-6 gap-y-3 rounded-lg border border-border/60 bg-background/85 px-3 py-2.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/70 sm:px-4">
-        <div className="min-w-0">
-          {/* Title and state on one wrapping line. The badges answer, without
-              a click or a scroll, the two questions every operations screen is
-              opened to ask: has this order been verified, and has the delivery
-              actually gone. */}
-          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
-            <h1 className="text-lg font-semibold tracking-tight sm:text-xl">{heading}</h1>
+        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+          {/* Title and state on one wrapping line. The badges answer, without a
+              click or a scroll, the two questions this screen is opened to ask:
+              has the order been verified, and has the delivery gone. */}
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
+            <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">{heading}</h1>
             {mode === "edit" && existing?.status && <StatusBadge s={existing.status} />}
             {valueIsVerified && (
               <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-semibold text-success">
@@ -523,89 +500,94 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
             )}
           </div>
 
-          {/* The order's identity, stated rather than searched for. */}
-          {headerFacts.length > 0 && (
-            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-              {headerFacts.map((fact) => (
-                <span key={fact.text} className="inline-flex min-w-0 items-center gap-1.5">
-                  <fact.icon className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" />
-                  <span className="truncate" dir="auto" title={fact.text}>
-                    {fact.text}
-                  </span>
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          {/* The order's value, at the size the most consequential number on
-              the page deserves. It sat in a form field two cards down, in the
-              same 14px as the branch code — so the one figure a supervisor
-              scans for was the one they had to hunt for. Still just a readout:
-              the field below remains where it is edited. */}
-          {mode === "edit" && headerTotal !== null && Number.isFinite(headerTotal) && (
-            <div className="text-right leading-none">
-              <p className="text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
-                Order value
-              </p>
-              <p className="mt-1 text-xl font-semibold tabular-nums tracking-tight sm:text-2xl">
-                {fmtSAR(headerTotal)}
-              </p>
-            </div>
-          )}
-          {mode === "edit" && canDelete && (
+          <div className="flex flex-wrap items-center gap-2">
+            {mode === "edit" && canDelete && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={del}
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete
+              </Button>
+            )}
             <Button
+              type="button"
               variant="outline"
               size="sm"
-              onClick={del}
-              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              // `resetScroll: false` for the same reason as the save path: backing
+              // out of an order must return the agent to the row they opened, not
+              // to the top of the list.
+              onClick={() => navigate({ to: "/orders", resetScroll: false })}
             >
-              <Trash2 className="mr-2 h-4 w-4" />
-              Delete
+              {readOnly ? "Close" : "Cancel"}
             </Button>
-          )}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            // `resetScroll: false` for the same reason as the save path: backing
-            // out of an order must return the agent to the row they opened, not
-            // to the top of the list.
-            onClick={() => navigate({ to: "/orders", resetScroll: false })}
-          >
-            {readOnly ? "Close" : "Cancel"}
-          </Button>
-          {!readOnly && (
-            // Outside the `form` element, so it reaches it by id. Keeping the
-            // primary action in the header is what lets the form itself end
-            // with a field rather than with a band of buttons.
-            <Button
-              /*
-               * One primary action, two behaviours.
-               *
-               * A new AlShrouq order opens the approval dialog instead of
-               * submitting, because "create" and "hand this to a courier" are
-               * two different decisions and the agent has not made the second
-               * one yet. Everything else submits exactly as it always has —
-               * same button, same form, same handler.
-               */
-              type={interceptsCreate ? "button" : "submit"}
-              form={interceptsCreate ? undefined : FORM_ID}
-              onClick={interceptsCreate ? approval.open : undefined}
-              title={
-                interceptsCreate
-                  ? "You will choose whether to send this order to AlShrouq before it is created"
-                  : undefined
-              }
-              size="sm"
-              disabled={busy}
-              className="min-w-32"
-            >
-              {busy ? "Saving…" : mode === "create" ? "Create order" : "Update order"}
-            </Button>
-          )}
+            {!readOnly && (
+              // Outside the `form` element, so it reaches it by id. Keeping the
+              // primary action in the header is what lets the form itself end
+              // with a field rather than with a band of buttons.
+              <Button
+                /*
+                 * One primary action, two behaviours.
+                 *
+                 * A new AlShrouq order opens the approval dialog instead of
+                 * submitting, because "create" and "hand this to a courier" are
+                 * two different decisions and the agent has not made the second
+                 * one yet. Everything else submits exactly as it always has —
+                 * same button, same form, same handler.
+                 */
+                type={interceptsCreate ? "button" : "submit"}
+                form={interceptsCreate ? undefined : FORM_ID}
+                onClick={interceptsCreate ? approval.open : undefined}
+                title={
+                  interceptsCreate
+                    ? "You will choose whether to send this order to AlShrouq before it is created"
+                    : undefined
+                }
+                size="sm"
+                disabled={busy}
+                className="min-w-32"
+              >
+                {busy ? "Saving…" : mode === "create" ? "Create order" : "Update order"}
+              </Button>
+            )}
+          </div>
         </div>
+
+        {/* The order's identity, and its value at the end of the same line.
+
+            One quiet row of facts rather than a panel: these are read far more
+            often than they are edited, and each already has a field of its own
+            below that says so if it is missing. The value is the only entry
+            given the foreground colour — enough to find at a glance, without
+            becoming a display figure the page has to be built around. */}
+        {headerFacts.length > 0 && (
+          <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1 text-xs text-muted-foreground">
+            {headerFacts.map((fact) => (
+              <span key={fact.text} className="inline-flex min-w-0 items-center gap-1.5">
+                <fact.icon className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" />
+                <span className="truncate" dir="auto" title={fact.text}>
+                  {fact.text}
+                </span>
+              </span>
+            ))}
+            {mode === "edit" && headerTotal !== null && Number.isFinite(headerTotal) && (
+              <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
+                <Wallet className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" />
+                <span className="tabular-nums">{fmtSAR(headerTotal)}</span>
+              </span>
+            )}
+          </div>
+        )}
+
+        <p className="text-xs text-muted-foreground">
+          {readOnly
+            ? "This order is read-only for your role."
+            : mode === "create"
+              ? "Create a new order and link invoices automatically."
+              : "Invoices are looked up and verified automatically; fields marked * are required."}
+        </p>
       </div>
 
       {/* 60/40, as fractions rather than a fixed right-hand width.
