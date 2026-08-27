@@ -104,6 +104,19 @@ export function dispatchInputFor(
  * not been retried, because an agent who reads it as a failure will send it
  * again and put a second driver at the customer's door.
  */
+/**
+ * A fragment from an API, ended so it can sit inside a sentence.
+ *
+ * The CRM's refusal reasons arrive both ways — `"invalid phone number"` and
+ * `"Invalid phone number."` — and the sentence that quotes one continues after
+ * it. Without this, half of them read as "…invalid phone number No courier was
+ * sent."
+ */
+function endSentence(text: string): string {
+  const trimmed = text.trim();
+  return /[.!?:;]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
 export function describeApprovalResult(
   result: ScheduleResult,
   created = false,
@@ -138,9 +151,24 @@ export function describeApprovalResult(
         message: `${lead}AlShrouq dispatch is switched off, so no courier was contacted.`,
       };
     case "rejected":
+      /*
+       * Say why, when the CRM said why.
+       *
+       * This used to be a fixed sentence, and it is the sentence the incident
+       * was reported through: an agent saw "AlShrouq refused the delivery" and
+       * had nothing to act on, because the CRM's own explanation had been
+       * discarded on the server. `result.message` now carries it — the status
+       * and, when the refusal body offered one, the reason.
+       *
+       * "No courier was sent" is kept and kept last. It is the fact an agent
+       * must not have to infer, and a reason appearing before it must not push
+       * it out of the sentence.
+       */
       return {
         tone: "error",
-        message: `${lead}AlShrouq refused the delivery. No courier was sent.`,
+        message: result.reason
+          ? `${lead}AlShrouq refused the delivery (${result.status}): ${endSentence(result.reason)} No courier was sent.`
+          : `${lead}AlShrouq refused the delivery (${result.status}). No courier was sent.`,
       };
     case "indeterminate":
       return {

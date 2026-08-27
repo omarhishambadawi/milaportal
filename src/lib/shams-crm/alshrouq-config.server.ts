@@ -270,6 +270,33 @@ export async function fetchAlShrouqDispatchOptions(): Promise<AlShrouqDispatchOp
         branchOptions: toBranchOptions(raw.branch_options),
         paymentOptions: toPaymentOptions(raw.payment_options),
       };
+      /*
+       * A config with no branches is a malformed config, not a CRM that serves
+       * no branches.
+       *
+       * `toBranchOptions` returns `[]` for a missing key, a non-array, and a
+       * list of entries none of which are objects — every way the response can
+       * be unusable. Handing that empty list onward makes
+       * `resolveAlShrouqBranch` answer `not_in_crm` for every branch there is,
+       * and both screens then tell the agent **"This branch is not in
+       * AlShrouq's list… Report it to whoever maintains the branch list"** —
+       * a confident, false statement about their branch, derived from a
+       * response nobody could read.
+       *
+       * Raised as `malformed` so it travels the path that already exists for an
+       * unreadable CRM: both callers catch `ShamsCrmError` and report
+       * `optionsError`, so the screens say coverage could not be checked. The
+       * live config carries 136 branches; zero is never a real answer.
+       *
+       * Thrown before the cache is written, so a bad read is never remembered
+       * for five minutes.
+       */
+      if (value.branchOptions.length === 0) {
+        throw new ShamsCrmError(
+          "malformed",
+          "Shams CRM returned no AlShrouq branches, so coverage cannot be determined.",
+        );
+      }
       cached = { at: Date.now(), value };
       return value;
     })

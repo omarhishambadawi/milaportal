@@ -982,6 +982,20 @@ export const alshrouqResolveDispatch = createServerFn({ method: "POST" })
 export interface AlShrouqOrderFormOptions extends AlShrouqDispatchOptions {
   /** Read-only, one-way. Nothing a client sends can set it. */
   dispatchAvailable: boolean;
+  /**
+   * Set when the CRM could not be reached, so the form can say so.
+   *
+   * The same field, for the same reason, that `AlShrouqDispatchContext` already
+   * carries — and its absence here is half of the reported incident. Without
+   * it, an unreachable CRM returned empty lists that were indistinguishable
+   * from a successful read of a CRM that does not cover the branch, so the form
+   * told agents *"This branch is not in AlShrouq's list"* during an outage.
+   *
+   * A `ShamsCrmError.kind` (`timeout`, `unavailable`, `auth_failed`, …) or
+   * `"unknown"`. An identifier only: never a message from the CRM, never a
+   * credential, never a response body.
+   */
+  optionsError: string | null;
 }
 
 export const alshrouqDeliveryOptions = createServerFn({ method: "POST" })
@@ -1000,12 +1014,26 @@ export const alshrouqDeliveryOptions = createServerFn({ method: "POST" })
     const dispatchAvailable = isAlShrouqLiveDispatchEnabled();
 
     try {
-      return { ...(await fetchAlShrouqDispatchOptions()), dispatchAvailable };
-    } catch {
-      // An unreachable CRM leaves the form with no methods to choose and no
-      // coverage to report, which blocks the handover — the correct outcome,
-      // and better than a guessed list or an assumed "covered".
-      return { branchOptions: [], paymentOptions: [], dispatchAvailable };
+      return { ...(await fetchAlShrouqDispatchOptions()), dispatchAvailable, optionsError: null };
+    } catch (err) {
+      /*
+       * An unreachable CRM still blocks the handover — that part was always
+       * right — but it must not do so *anonymously*.
+       *
+       * Returning bare empty lists made a failed read look exactly like a
+       * successful one, and the form drew the only conclusion those lists
+       * support: the branch is not in AlShrouq's list. That sentence sent
+       * agents to the branch-list maintainer during a CRM outage. The error
+       * kind travels with the empty lists now, so the form can report what
+       * actually happened.
+       */
+      const { ShamsCrmError } = await import("@/lib/shams-crm/client.server");
+      return {
+        branchOptions: [],
+        paymentOptions: [],
+        dispatchAvailable,
+        optionsError: err instanceof ShamsCrmError ? err.kind : "unknown",
+      };
     }
   });
 

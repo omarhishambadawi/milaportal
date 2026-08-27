@@ -193,6 +193,27 @@ export type BranchCoverage =
   | { kind: "no_branch" }
   /** Something to raise with whoever maintains the branch list. */
   | { kind: "unlisted"; reason: "not_in_crm" | "no_id_published" }
+  /**
+   * The coverage check could not be completed — the CRM could not be reached,
+   * or the request for the list failed.
+   *
+   * **Terminal, and distinct from `unknown` on purpose.** `unknown` means "the
+   * answer has not arrived yet" and is a state the screen may sit in while a
+   * request is in flight. This means "the answer is not coming", and it is the
+   * state whose absence caused the incident: a failed options request was
+   * indistinguishable from a pending one, so the form said *"Checking AlShrouq
+   * coverage for this branch…"* indefinitely and never reached a final answer.
+   *
+   * It is also what stops a CRM outage being reported as a branch-list problem.
+   * Resolving a branch against a list that failed to load yields `not_in_crm`,
+   * and that was shown to agents as *"This branch is not in AlShrouq's list…
+   * Report it to whoever maintains the branch list"* — a false statement about
+   * the branch, and an errand for somebody who cannot fix it.
+   *
+   * `errorKind` is the `ShamsCrmError.kind` when there is one. An identifier,
+   * never a message from the CRM and never a credential.
+   */
+  | { kind: "unavailable"; errorKind: string | null }
   /** The list has not arrived, so coverage is not yet known. */
   | { kind: "unknown" };
 
@@ -243,6 +264,12 @@ export function describeBranchCoverage(coverage: BranchCoverage): string {
       return coverage.reason === "no_id_published"
         ? "This branch has no AlShrouq id, so it cannot be handed over. Report it to whoever maintains the branch list."
         : "This branch is not in AlShrouq's list, so it cannot be handed over. Report it to whoever maintains the branch list.";
+    case "unavailable":
+      // The same sentence `explainAlShrouqReadiness("unverified")` gives on the
+      // order page, so both journeys say one thing about one situation. It
+      // blames nobody: the branch may well be covered, and the only honest
+      // report is that we could not find out.
+      return "Branch coverage could not be checked, so this order cannot be handed over yet. Create the order and hand it over from the order page once the connection is back.";
     case "unknown":
       return "Checking AlShrouq coverage for this branch…";
   }

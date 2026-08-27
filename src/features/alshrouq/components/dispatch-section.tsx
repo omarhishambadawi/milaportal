@@ -445,7 +445,7 @@ export function AlShrouqDispatchSection({
    * `branch_no`, against the same live `branch_options`. It is already fetched
    * — no second query, no new state — so it is what the card falls back to.
    */
-  const coverage = cardCoverage(alshrouq.active, alshrouq.coverage, ctx?.branch);
+  const coverage = cardCoverage(alshrouq.active, alshrouq.coverage, ctx?.branch, ctx?.optionsError);
   const covered = coverageAllowsDispatch(coverage);
 
   /**
@@ -487,7 +487,13 @@ export function AlShrouqDispatchSection({
       // and the card sat on "Checking…" waiting for a request nobody had made.
       dispatchPending || ctxPending || (alshrouq.active && alshrouq.optionsPending)
       ? "checking"
-      : ctxError
+      : // A CRM read that failed inside the server function is as unverified as
+        // one that failed on the way to it. `ctxError` only catches the second:
+        // the handler catches `ShamsCrmError` itself and reports it in
+        // `optionsError`, so the query resolves and `ctxError` stays false.
+        // Reading only `ctxError` is why an outage reached the card as a
+        // confident, and wrong, answer about the branch.
+        ctxError || ctx?.optionsError || coverage.kind === "unavailable"
         ? "unverified"
         : covered
           ? // Coverage is about the branch and the gate is about the deployment.

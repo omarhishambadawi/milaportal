@@ -54,6 +54,7 @@ import {
   type AlShrouqReconciledOrder,
 } from "./alshrouq-create.server";
 import { fetchAlShrouqDispatchOptions } from "./alshrouq-config.server";
+import { readAlshrouqRejectionReason } from "./alshrouq-rejection";
 import type { AlShrouqCreatePayload } from "./alshrouq-payload";
 import {
   canCancelDispatch,
@@ -497,9 +498,29 @@ export async function runDueAlShrouqDispatches(
       .catch((): AlShrouqReconciledOrder | null => null);
 
     if (sent.kind === "rejected" && !found) {
+      /*
+       * The refusal reason is stored, not just its status code.
+       *
+       * `last_error` is what the order page shows an agent and what an operator
+       * reads when asking why a scheduled delivery never happened. A bare
+       * "(400)" told them nothing actionable; the CRM's own sanitized
+       * explanation tells them which field to fix.
+       */
+      const reason = readAlshrouqRejectionReason(sent.body);
+      console.warn("[alshrouq] scheduled dispatch rejected", {
+        at: new Date().toISOString(),
+        dispatchId: row.id,
+        orderId: row.order_id,
+        clientOrderId: payload.client_order_id,
+        alshrouqBranchId: payload.branch_id,
+        httpStatus: sent.status,
+        reason,
+      });
       await finishClaim(supabase, row.id, {
         dispatch_status: "failed",
-        last_error: `AlShrouq refused the order (${sent.status}).`,
+        last_error: reason
+          ? `AlShrouq refused the order (${sent.status}): ${reason}`
+          : `AlShrouq refused the order (${sent.status}).`,
         attempt_count: 1,
       });
       summary.failed += 1;

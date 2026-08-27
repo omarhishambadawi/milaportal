@@ -393,6 +393,21 @@ export function AlShrouqApprovalDialog({
   const schedulePast = !schedule.ok;
 
   const { ready, requirements, paymentLabel, mapUrl, latitude, longitude } = alshrouq;
+
+  /**
+   * Whether the coverage check is genuinely still running.
+   *
+   * `unknown` now means only that — a request is in flight — because every way
+   * the check can *fail* lands on `unavailable` instead. That is what makes this
+   * safe to render as progress rather than as a verdict.
+   *
+   * It exists because the two were reported together in the incident: the panel
+   * headed **"AlShrouq delivery is not available yet"** with **"Checking
+   * AlShrouq coverage for this branch…"** underneath it. The heading is a
+   * conclusion and the line under it says no conclusion has been reached. While
+   * the check is running the honest heading is the second one.
+   */
+  const checkingCoverage = alshrouq.coverage.kind === "unknown";
   const creating = mode === "create";
 
   /**
@@ -520,18 +535,35 @@ export function AlShrouqApprovalDialog({
 
         {/* Anything still missing, named. The primary action is disabled while
             this is showing, so the list is the reason rather than a hint. */}
-        {!ready && (
-          <div className="rounded-md border border-warning/30 bg-warning/5 px-3 py-2">
-            <p className="text-[12.5px] font-medium text-foreground">
-              AlShrouq delivery is not available yet
-            </p>
-            <ul className="mt-1 list-inside list-disc text-[11.5px] leading-snug text-muted-foreground">
-              {requirements.map((r) => (
-                <li key={r.field}>{r.message}</li>
-              ))}
-            </ul>
-          </div>
-        )}
+        {!ready &&
+          (checkingCoverage ? (
+            /* Still asking. A verdict has not been reached, so none is given —
+               and the list is suppressed, because "not available yet" over
+               "Checking…" was the contradiction agents actually reported. */
+            <div
+              className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2 dark:bg-muted/10"
+              aria-live="polite"
+            >
+              <Loader2
+                className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground"
+                aria-hidden="true"
+              />
+              <p className="text-[12.5px] font-medium text-foreground">
+                Checking AlShrouq coverage for this branch…
+              </p>
+            </div>
+          ) : (
+            <div className="rounded-md border border-warning/30 bg-warning/5 px-3 py-2">
+              <p className="text-[12.5px] font-medium text-foreground">
+                AlShrouq delivery is not available yet
+              </p>
+              <ul className="mt-1 list-inside list-disc text-[11.5px] leading-snug text-muted-foreground">
+                {requirements.map((r) => (
+                  <li key={r.field}>{r.message}</li>
+                ))}
+              </ul>
+            </div>
+          ))}
 
         {/* ---------------------------------------------------------------
             When. Two choices, and the date and time only once the second is

@@ -76,6 +76,11 @@ import {
   type AlShrouqReconciledOrder,
 } from "./alshrouq-create.server";
 import { ShamsCrmError } from "./client.server";
+import {
+  describeAlshrouqRejection,
+  readAlshrouqRejectionCode,
+  readAlshrouqRejectionReason,
+} from "./alshrouq-rejection";
 import type { AlShrouqDispatchStatus } from "./alshrouq-dispatch-state";
 import type { AgentCredentialProblem, AgentCredentialResult } from "./agent-credentials.server";
 
@@ -197,8 +202,16 @@ export type AlShrouqDispatchResult =
   | { kind: "agent_not_configured"; problem: AgentCredentialProblem }
   /** Live only: the CRM accepted it and the GET confirmed what it is called. */
   | { kind: "dispatched"; dispatch: DispatchView }
-  /** Live only: the CRM refused it (a 4xx). Nothing was created. */
-  | { kind: "rejected"; status: number; message: string }
+  /**
+   * Live only: the CRM refused it (a 4xx). Nothing was created.
+   *
+   * `message` now carries the CRM's own explanation when it gave one. It used
+   * to be a fixed sentence, which meant the single most important fact about a
+   * production refusal — *why* — was discarded by the function that received
+   * it. `reason` is the same explanation on its own, for a caller that wants to
+   * store or log it without the surrounding wording.
+   */
+  | { kind: "rejected"; status: number; message: string; reason: string | null }
   /**
    * Live only: the request was sent and the outcome is unknown. Reconciliation
    * has already been attempted; `reconciled` is null when it found nothing.
@@ -260,6 +273,52 @@ const defaultDeps: DispatchDeps = {
 
 /** Postgres unique violation — the active-dispatch index did its job. */
 const UNIQUE_VIOLATION = "23505";
+
+/**
+ * What a dispatch attempt did, in the server log.
+ *
+ * The integration previously wrote nothing at all on the two outcomes that most
+ * need explaining after the fact, so "AlShrouq refused the delivery" arrived at
+ * an operator with no status, no reason and no way to correlate it with a CRM
+ * record. This is that missing line.
+ *
+ * **What it deliberately never carries**: the customer's name, phone, address,
+ * coordinates or delivery note; the payload itself; any credential, session
+ * token or header. Only the identifiers needed to find this attempt again — the
+ * order, its number, the branch it went to — plus the outcome and the CRM's own
+ * sanitized explanation. `reason` has already been through
+ * `sanitizeResponseBody`, which redacts credential-shaped and identity-shaped
+ * keys before this ever sees them.
+ *
+ * `console` is the transport because it is the one this codebase already uses
+ * for exactly this purpose (`alshrouq-scheduler.server.ts` logs its reaped
+ * claims the same way) and it is what the deployment's log drain collects.
+ */
+function logDispatchEvent(
+  outcome: "rejected" | "indeterminate",
+  request: DispatchRequest,
+  payload: AlShrouqCreatePayload,
+  extra: {
+    operationId: string;
+    httpStatus?: number | null;
+    errorKind?: string | null;
+    reason?: string | null;
+    code?: string | null;
+    reconciled?: boolean;
+  },
+): void {
+  console.warn(`[alshrouq] dispatch ${outcome}`, {
+    at: new Date().toISOString(),
+    outcome,
+    orderId: request.orderId,
+    clientOrderId: payload.client_order_id,
+    branchNo: request.branchNo,
+    alshrouqBranchId: payload.branch_id,
+    paymentType: payload.payment_type,
+    dispatchedBy: request.userId,
+    ...extra,
+  });
+}
 
 function toView(row: Record<string, unknown> | null | undefined): DispatchView | null {
   if (!row) return null;
@@ -437,10 +496,34 @@ export async function dispatchOrderToAlShrouq(
   const sent = await deps.createOrder(payload, operationId, identity.principal);
 
   if (sent.kind === "rejected") {
+    /*
+     * The refusal is read, reported and logged — not summarised away.
+     *
+     * `sent.body` is the CRM's own 4xx body, already stripped of credentials
+     * and customer identity by `sanitizeResponseBody`. It was previously
+     * dropped here in favour of a fixed sentence, which is why a production
+     * refusal could not be diagnosed without reproducing it.
+     *
+     * No row is written. A 4xx is the one outcome where the transport
+     * guarantees nothing was created, so the order must stay sendable: an agent
+     * who fixes the phone number the CRM objected to has to be able to try
+     * again. Persisting a `failed` row here would take the order's slot in
+     * `alshrouq_dispatches_live_order_key` and lock a fixable order out of
+     * dispatch forever. (The *scheduler* does persist `failed`, correctly — its
+     * row already exists and already owns the slot.)
+     */
+    const reason = readAlshrouqRejectionReason(sent.body);
+    logDispatchEvent("rejected", request, payload, {
+      operationId,
+      httpStatus: sent.status,
+      reason,
+      code: readAlshrouqRejectionCode(sent.body),
+    });
     return {
       kind: "rejected",
       status: sent.status,
-      message: "AlShrouq refused this order. Nothing was dispatched.",
+      message: describeAlshrouqRejection(sent.status, sent.body),
+      reason,
     };
   }
 
@@ -451,6 +534,15 @@ export async function dispatchOrderToAlShrouq(
     .catch((): AlShrouqReconciledOrder | null => null);
 
   if (sent.kind === "indeterminate") {
+    // Logged whichever way the reconciliation went: "we could not tell, and
+    // then the GET settled it" is as worth recording as "we still cannot tell",
+    // and the pair is what tells an operator the reconciliation is working.
+    logDispatchEvent("indeterminate", request, payload, {
+      operationId,
+      errorKind: sent.errorKind,
+      reason: sent.message,
+      reconciled: found !== null,
+    });
     if (!found) {
       /*
        * Transmitted, and nobody can say what happened.

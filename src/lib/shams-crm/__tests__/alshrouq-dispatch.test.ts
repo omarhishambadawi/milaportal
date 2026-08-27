@@ -506,3 +506,110 @@ describe("dispatchOrderToAlShrouq — live path (mocked transport)", () => {
     expect(createOrder).toHaveBeenCalledTimes(1);
   });
 });
+
+/* ------------------------------------------------------------------------- */
+/* A refusal keeps its reason                                                */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * The second half of the reported incident.
+ *
+ * An order was saved, sent, and refused, and the agent was told:
+ *
+ *     AlShrouq refused the delivery. No courier was sent.
+ *
+ * The CRM had answered with a 4xx **and a body**. `createAlshrouqOrder`
+ * received it, sanitized it, and returned it on the result; this service then
+ * replaced it with a constant string, logged nothing and persisted nothing. The
+ * reason existed for the length of one function call and was then unrecoverable.
+ *
+ * These tests pin the reason all the way to the caller, and pin the two rules a
+ * refusal must not break: no row is written, and no second POST is sent.
+ */
+describe("a 4xx refusal is reported with its reason", () => {
+  const rejectionWith = (body: unknown, status = 422) =>
+    vi.fn(async () => ({ kind: "rejected" as const, operationId: "op-1", status, body }));
+
+  it("carries the CRM's explanation to the caller", async () => {
+    const createOrder = rejectionWith({
+      detail: [{ loc: ["body", "customer_phone"], msg: "invalid phone number" }],
+    });
+    const r = await dispatchOrderToAlShrouq(request(), fakeSupabase() as any, {
+      ...deps({ live: true }),
+      createOrder: createOrder as any,
+    });
+
+    expect(r.kind).toBe("rejected");
+    if (r.kind !== "rejected") throw new Error("unreachable");
+    expect(r.reason).toBe("customer_phone: invalid phone number");
+    expect(r.status).toBe(422);
+    // The message an agent reads names the field and the status.
+    expect(r.message).toContain("customer_phone");
+    expect(r.message).toContain("422");
+  });
+
+  /** A refusal with nothing in it is still a refusal, and still says so. */
+  it("falls back to the generic sentence when the body carries no reason", async () => {
+    const r = await dispatchOrderToAlShrouq(request(), fakeSupabase() as any, {
+      ...deps({ live: true }),
+      createOrder: rejectionWith(null, 400) as any,
+    });
+    expect(r.kind).toBe("rejected");
+    if (r.kind !== "rejected") throw new Error("unreachable");
+    expect(r.reason).toBeNull();
+    expect(r.message).toContain("400");
+    expect(r.message).toContain("Nothing was dispatched.");
+  });
+
+  /**
+   * A 4xx is the one outcome where the transport guarantees nothing was
+   * created, so the order must stay sendable: an agent who corrects the field
+   * the CRM objected to has to be able to try again. A `failed` row here would
+   * take the order's slot in `alshrouq_dispatches_live_order_key` and lock a
+   * fixable order out of dispatch permanently.
+   */
+  it("writes no row, so a corrected order can still be sent", async () => {
+    const supabase = fakeSupabase();
+    const createOrder = rejectionWith({ detail: "bad branch" });
+    await dispatchOrderToAlShrouq(request(), supabase as any, {
+      ...deps({ live: true }),
+      createOrder: createOrder as any,
+    });
+    expect(supabase.inserts).toHaveLength(0);
+    expect(createOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs the refusal without the customer's identity", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await dispatchOrderToAlShrouq(request(), fakeSupabase() as any, {
+      ...deps({ live: true }),
+      createOrder: rejectionWith({ detail: "branch closed" }) as any,
+    });
+
+    expect(warn).toHaveBeenCalled();
+    const [label, payload] = warn.mock.calls[0]!;
+    expect(String(label)).toContain("[alshrouq]");
+    const logged = JSON.stringify(payload);
+    // Enough to find the attempt again.
+    expect(logged).toContain(ORDER_ID);
+    expect(logged).toContain("9540");
+    expect(logged).toContain("branch closed");
+    expect(logged).toContain("422");
+    // Never the person.
+    expect(logged).not.toContain("Test Customer");
+    expect(logged).not.toContain("0500798930");
+    expect(logged).not.toContain("maps.app.goo.gl");
+  });
+
+  /** An unrecognised refusal shape must not throw and lose the outcome. */
+  it("survives a refusal body it cannot read", async () => {
+    const r = await dispatchOrderToAlShrouq(request(), fakeSupabase() as any, {
+      ...deps({ live: true }),
+      createOrder: rejectionWith({ something: { unexpected: [1, 2, 3] } }, 409) as any,
+    });
+    expect(r.kind).toBe("rejected");
+    if (r.kind !== "rejected") throw new Error("unreachable");
+    expect(r.reason).toBeNull();
+    expect(r.message).toContain("409");
+  });
+});

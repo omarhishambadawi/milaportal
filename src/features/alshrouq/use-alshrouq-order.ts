@@ -290,19 +290,58 @@ export function useAlShrouqOrder(
    * query key, so a page holding the form and the dispatch card fetches once.
    */
   const load = useServerFn(alshrouqDeliveryOptions);
-  const { data: options, isPending: optionsPending } = useQuery<AlShrouqOrderFormOptions>({
+  const {
+    data: options,
+    isPending: optionsPending,
+    isError: optionsFailed,
+  } = useQuery<AlShrouqOrderFormOptions>({
     queryKey: ["alshrouq", "delivery-options"],
     enabled: active,
     staleTime: 5 * 60_000,
-    retry: false,
+    /*
+     * Two attempts, not none.
+     *
+     * `retry: false` meant a single transient failure — a dropped connection, a
+     * session refreshing underneath the request — was permanent for the life of
+     * the query. The agent had no control that would ask again, so the form sat
+     * in its unresolved state until the page was reloaded. A bounded retry lets
+     * a blip heal itself; it stays bounded because this is a read on the order
+     * form's critical path and an unbounded retry would hold the coverage line
+     * in "checking" for as long as the CRM stayed down, which is the very state
+     * this change exists to make unreachable.
+     *
+     * Safe to repeat at all because it is a GET: `alshrouqDeliveryOptions`
+     * reads `GET /integrations/alshrouq/config` and dispatches nothing.
+     */
+    retry: 2,
     queryFn: () => load({ data: undefined }),
   });
 
+  /**
+   * Coverage, with a final answer guaranteed.
+   *
+   * The order of these checks is the fix. `unknown` — the state that renders as
+   * *"Checking AlShrouq coverage for this branch…"* — is now reachable **only
+   * while a request is genuinely in flight**. Every way the check can end
+   * lands on a terminal state:
+   *
+   *   * the query rejected (`optionsFailed`) — the server function itself could
+   *     not be reached or refused;
+   *   * it resolved but the CRM could not be read (`options.optionsError`);
+   *   * it resolved with a list, and the branch is covered, uncovered or absent.
+   *
+   * Before this, both failures fell through to `!options` or to a lookup
+   * against an empty list. The first left the form reporting "Checking…"
+   * forever with no request outstanding — the reported incident — and the
+   * second reported a CRM outage as a missing branch.
+   */
   const coverage = useMemo<BranchCoverage>(() => {
     if (!active) return { kind: "no_branch" };
+    if (optionsFailed) return { kind: "unavailable", errorKind: null };
     if (!options) return { kind: "unknown" };
+    if (options.optionsError) return { kind: "unavailable", errorKind: options.optionsError };
     return branchCoverage(resolveAlShrouqBranch(options.branchOptions, branchNo));
-  }, [active, options, branchNo]);
+  }, [active, options, optionsFailed, branchNo]);
 
   /**
    * The method's name. Never its id.
@@ -364,7 +403,12 @@ export function useAlShrouqOrder(
     paymentLabel,
     paidPayment,
     coverage,
-    options: options ?? { branchOptions: [], paymentOptions: [], dispatchAvailable: true },
+    options: options ?? {
+      branchOptions: [],
+      paymentOptions: [],
+      dispatchAvailable: true,
+      optionsError: null,
+    },
     optionsPending,
     dispatchAvailable: options?.dispatchAvailable !== false,
     requirements,

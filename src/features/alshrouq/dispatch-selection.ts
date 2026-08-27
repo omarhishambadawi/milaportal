@@ -128,7 +128,30 @@ export function cardCoverage(
   formActive: boolean,
   formCoverage: BranchCoverage,
   orderBranch: AlShrouqBranchResolution | null | undefined,
+  /**
+   * `AlShrouqDispatchContext.optionsError` — set when the CRM could not be read.
+   *
+   * **This was produced and never consumed.** The server function catches a CRM
+   * failure, records the error kind here, and falls back to
+   * `{ kind: "unknown", reason: "not_in_crm" }` for the branch. That fallback is
+   * indistinguishable from a real answer, so the card reported an outage as
+   * *"This branch is not in AlShrouq's list… Report it to whoever maintains the
+   * branch list"* — a false claim about the branch, and an errand for someone
+   * who cannot fix it. The field existed precisely to prevent that; it simply
+   * was never read.
+   *
+   * Checked before the branch resolution for that reason: when the list never
+   * arrived, nothing derived from it is evidence about this branch.
+   *
+   * It does **not** override the form, which keeps the existing rule that the
+   * form's answer is the live one while the form is the thing being answered.
+   * `useAlShrouqOrder` reports its own failure as `unavailable` now, so the
+   * form's coverage is already terminal on its own account and does not need
+   * this one's help.
+   */
+  optionsError?: string | null,
 ): BranchCoverage {
   if (formActive) return formCoverage;
+  if (optionsError) return { kind: "unavailable", errorKind: optionsError };
   return orderBranch ? branchCoverage(orderBranch) : formCoverage;
 }

@@ -4972,6 +4972,91 @@ built from `('branch_id', 'client_order_id', 'customer_name', 'customer_phone',
 'customer_address', 'payment_type', 'details')` before being extended with
 `customer_lat`, `customer_lng`, `value` and `preparation_time`.
 
+### The coverage check always reaches a final answer
+
+Reported from production: on the **Create order** confirmation the panel read
+**"AlShrouq delivery is not available yet"** with **"Checking AlShrouq coverage
+for this branch…"** underneath it, and the check never resolved — while
+**Create order + AlShrouq delivery** was still on offer below. Separately, a
+saved order sent to AlShrouq came back as *"AlShrouq refused the delivery. No
+courier was sent."* with nothing to act on.
+
+**Two independent causes, both about a state that did not exist.**
+
+`useAlShrouqOrder` derived coverage from one fact — whether `options` had
+arrived — so `{ kind: "unknown" }`, which renders as *"Checking…"*, meant both
+"the answer has not arrived yet" and "the answer is never arriving". With
+`retry: false`, one transient failure (a dropped connection, a session
+refreshing under the query, a refused permission check) was permanent for the
+life of the query, and no control on the screen would ask again. `BranchCoverage`
+gains `unavailable`, and `unknown` is now reachable only while a request is
+genuinely in flight. The query retries twice — bounded, because it is on the
+order form's critical path, and safe because it is a GET.
+
+The quieter half: `alshrouqDeliveryOptions` caught an unreachable CRM and
+returned **empty lists with no error marker**, which is indistinguishable from a
+successful read. Resolving any branch against an empty list yields `not_in_crm`,
+so during a CRM outage every agent was told *"This branch is not in AlShrouq's
+list… Report it to whoever maintains the branch list"* — false about the branch,
+and an errand for somebody who cannot fix it. `AlShrouqOrderFormOptions` now
+carries `optionsError`, the same field `AlShrouqDispatchContext` already had.
+
+**That field was being produced and read by nothing.** The order page's
+`alshrouqDispatchContext` set `optionsError` on every CRM failure and fell back
+to `{ kind: "unknown", reason: "not_in_crm" }` for the branch — so the card drew
+the same false conclusion, and `ctxError` never fired because the handler caught
+the error itself. `cardCoverage` takes `optionsError` now, and readiness reads it
+alongside `ctxError`.
+
+Closed at the source as well: `fetchAlShrouqDispatchOptions` raises `malformed`
+when the config carries **no branches**, rather than passing an empty list on.
+The live config has 136; zero is never a real answer, and concluding "your branch
+is not in the list" from an unreadable response is the same misdiagnosis by
+another route. Thrown before the cache is written, so a bad read is not
+remembered for five minutes.
+
+The confirmation dialog no longer heads a check in progress with a verdict: while
+coverage is genuinely being checked it shows the spinner and that sentence alone,
+and *"AlShrouq delivery is not available yet"* appears only once the answer is in.
+`coverageAllowsDispatch` is unchanged — still `covered` only — so every one of
+these states fails closed, and **Create order only** is untouched throughout.
+
+### A refusal keeps its reason
+
+`dispatchOrderToAlShrouq` classified a 4xx as `rejected` and then replaced the
+CRM's own answer with a constant sentence. `createAlshrouqOrder` had already
+received the body and sanitized it — `sanitizeResponseBody` strips
+credential-shaped and identity-shaped keys — and that was the only copy. Nothing
+was logged and nothing persisted, so *"AlShrouq refused the delivery"* could not
+be diagnosed after the fact by any means short of reproducing it.
+
+`alshrouq-rejection.ts` reads the reason back out: FastAPI's `detail` in both its
+string and `[{loc, msg}]` forms first (the CRM presents as FastAPI), then
+`message`/`error`/`errors`, returning `null` for anything it does not recognise —
+so an unrecognised shape is exactly as informative as before, never worse, and no
+reason is ever invented. **The create endpoint's error shape has never been
+captured from the real endpoint**; these are the shapes an HTTP JSON API uses, and
+that is stated rather than implied.
+
+The reason reaches the agent (*"AlShrouq refused the delivery (422):
+customer_phone: invalid phone number. No courier was sent."*), the scheduler's
+`last_error`, and a `[alshrouq] dispatch rejected` log line carrying the order id,
+`client_order_id`, branch, payment type, HTTP status and operation id — and never
+the customer's name, phone, address, coordinates or note, never the payload, never
+a credential. The indeterminate path logs the same way, including whether
+reconciliation settled it.
+
+**A rejection still writes no row**, deliberately: a 4xx is the one outcome where
+the transport guarantees nothing was created, so an agent who corrects the field
+the CRM objected to must be able to try again. A `failed` row would take the
+order's slot in `alshrouq_dispatches_live_order_key` and lock a fixable order out
+of dispatch permanently. The scheduler does persist `failed` — correctly, since
+its row already owns the slot.
+
+**Untouched by all of this**: the safety gate, the one-POST-per-dispatch rule, the
+no-retry-on-indeterminate rule, the payload contract, and the unique index. No
+payload field was changed on a guess.
+
 ### AlShrouq create transport
 
 `alshrouq-create.server.ts` owns the create POST and the read that reconciles
