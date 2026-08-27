@@ -28,10 +28,13 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   describeAlshrouqRejection,
   readAlshrouqRejectionCode,
   readAlshrouqRejectionReason,
+  rejectionBodyShape,
 } from "@/lib/shams-crm/alshrouq-rejection";
 
 describe("readAlshrouqRejectionReason", () => {
@@ -176,5 +179,66 @@ describe("describeAlshrouqRejection", () => {
 
   it("falls back to a code when that is all the body carries", () => {
     expect(describeAlshrouqRejection(409, { code: "DUPLICATE" })).toContain("DUPLICATE");
+  });
+});
+
+describe("rejectionBodyShape", () => {
+  /**
+   * The last blind spot. If the CRM answers in a shape the reader above does
+   * not recognise, the reason is `null` and the body would otherwise be
+   * discarded — leaving the next incident exactly as undiagnosable as the one
+   * that prompted all of this. Key names are enough to learn the shape from.
+   */
+  it("names the top-level keys of a shape it could not read", () => {
+    expect(rejectionBodyShape({ status: "NOK", failures: ["x"], ref: 9 })).toEqual([
+      "status",
+      "failures",
+      "ref",
+    ]);
+  });
+
+  /** Names, never values — a key cannot be a phone number; a value can. */
+  it("returns names only", () => {
+    const shape = rejectionBodyShape({ customer_phone: "+966505628028", token: "abc" });
+    expect(shape).toEqual(["customer_phone", "token"]);
+    expect(shape.join(" ")).not.toContain("966505628028");
+    expect(shape.join(" ")).not.toContain("abc");
+  });
+
+  it("describes a non-object body without inspecting it", () => {
+    expect(rejectionBodyShape([1, 2, 3])).toEqual(["[array:3]"]);
+    expect(rejectionBodyShape("boom")).toEqual(["[string]"]);
+    expect(rejectionBodyShape(null)).toEqual([]);
+  });
+
+  it("caps a pathological body", () => {
+    const wide: Record<string, number> = {};
+    for (let i = 0; i < 50; i++) wide[`k${i}`] = i;
+    expect(rejectionBodyShape(wide)).toHaveLength(12);
+  });
+});
+
+describe("the order timeline surfaces a refusal", () => {
+  const timeline = readFileSync(
+    fileURLToPath(
+      new URL("../../../features/orders/components/order-activity-timeline.tsx", import.meta.url),
+    ),
+    "utf8",
+  );
+
+  /**
+   * A refusal that is written and not rendered is the same blindness with an
+   * extra row in it, so the timeline is pinned to the constant rather than to a
+   * repeated string literal.
+   */
+  it("renders the action and its reason", () => {
+    expect(timeline).toContain("REJECTION_ACTIVITY_ACTION");
+    expect(timeline).toContain("AlShrouq refused the delivery");
+    expect(timeline).toContain("No reason given");
+  });
+
+  /** It reports a failure, so it must not read as an ordinary edit. */
+  it("marks it as a failure on the rail", () => {
+    expect(timeline).toContain('e.action === REJECTION_ACTIVITY_ACTION ? "danger"');
   });
 });

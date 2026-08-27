@@ -17,6 +17,7 @@ import {
   describeResolutionOutcome,
   isResolutionOutcome,
 } from "@/lib/shams-crm/alshrouq-resolution";
+import { REJECTION_ACTIVITY_ACTION } from "@/lib/shams-crm/alshrouq-rejection";
 import { useScheduledDispatchCountdown } from "@/features/alshrouq/use-scheduled-countdown";
 import { compactTimelineCount } from "../activity-fold";
 
@@ -70,6 +71,19 @@ function describe(e: OrderActivityEvent, nameOf: (id: unknown) => string): strin
    * because that is what it is.
    */
   if (e.action === RESOLUTION_ACTIVITY_ACTION) return "AlShrouq dispatch resolved by operator";
+  /*
+   * AlShrouq's own refusal, kept where it can be read later.
+   *
+   * A refused dispatch writes no row in `alshrouq_dispatches` — a 4xx created
+   * nothing, and the order has to stay sendable once its data is corrected — so
+   * without this entry the refusal survived only as a toast the agent navigated
+   * away from. That is why the reported production refusal could not be
+   * explained after the fact.
+   *
+   * Worded as AlShrouq's answer, not as a Portal failure, because that is whose
+   * decision it was.
+   */
+  if (e.action === REJECTION_ACTIVITY_ACTION) return "AlShrouq refused the delivery";
   if (e.action === "edited") {
     const keys = Object.keys(d);
     if (keys.length === 0) return "Edited the order";
@@ -153,6 +167,22 @@ function detailLine(e: OrderActivityEvent): string | null {
       : "Outcome recorded";
     const note = typeof d.note === "string" && d.note.trim() !== "" ? d.note.trim() : null;
     return note ? `${outcome} · ${note}` : outcome;
+  }
+  if (e.action === REJECTION_ACTIVITY_ACTION) {
+    /*
+     * The reason first, because it is the only part anyone acts on. The status
+     * follows it so an operator has the number to quote when chasing the CRM.
+     *
+     * When AlShrouq gave no reason this says so rather than showing an empty
+     * line — "refused, and said nothing" is itself the finding, and hiding it
+     * would put the reader back where this incident started.
+     */
+    const status = typeof d.http_status === "number" ? ` (${d.http_status})` : "";
+    const reason = typeof d.reason === "string" && d.reason.trim() !== "" ? d.reason.trim() : null;
+    const code = typeof d.code === "string" && d.code.trim() !== "" ? d.code.trim() : null;
+    if (reason) return `${reason}${status}`;
+    if (code) return `Code ${code}${status}`;
+    return `No reason given${status}`;
   }
   if (e.action === "assigned" && d.to_team) return `Team: ${String(d.to_team).replace("_", " ")}`;
   return null;
@@ -241,7 +271,9 @@ function fromActivity(e: OrderActivityEvent): TimelineEntry {
     title: describe(e, (id) => actorName(e.names, id)),
     detail: detailLine(e),
     subtitle: invoiceSubtitle(e),
-    tone: automated ? "automated" : "default",
+    // A refusal is the one `order_activity` row that reports a failure, and it
+    // must not read as an ordinary edit on a rail of blue marks.
+    tone: e.action === REJECTION_ACTIVITY_ACTION ? "danger" : automated ? "automated" : "default",
     actor: automated
       ? // Named rather than attributed to whoever happened to have the order
         // open: the portal did this, and history should not read as though an

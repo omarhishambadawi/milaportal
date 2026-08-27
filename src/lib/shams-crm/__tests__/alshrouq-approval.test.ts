@@ -56,9 +56,26 @@ function request(over: Partial<DispatchRequest["form"]> = {}): DispatchRequest {
 
 function fakeSupabase(opts: { existing?: any } = {}) {
   const inserts: any[] = [];
+  /**
+   * `order_activity` rows, kept apart from dispatch rows.
+   *
+   * A refusal now records itself on the order timeline, and `inserts` is what
+   * the assertions below mean by "a dispatch record" — pooling the two would
+   * make "persists nothing" pass or fail for the wrong reason.
+   */
+  const activity: any[] = [];
   const api = {
     inserts,
-    from() {
+    activity,
+    from(table?: string) {
+      if (table === "order_activity") {
+        return {
+          insert: async (row: any) => {
+            activity.push(row);
+            return { error: null };
+          },
+        };
+      }
       const chain: any = {
         select: () => chain,
         eq: () => chain,

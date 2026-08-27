@@ -75,9 +75,22 @@ function request(over: Partial<Parameters<typeof dispatchOrderToAlShrouq>[0]> = 
 /** A Supabase stand-in: records inserts, answers the live-dispatch lookup. */
 function fakeSupabase(opts: { existing?: Record<string, unknown> | null; insertError?: any } = {}) {
   const inserts: Record<string, unknown>[] = [];
+  /** `order_activity` rows — where a refusal is recorded, since no dispatch row is. */
+  const activity: Record<string, unknown>[] = [];
   const api = {
     inserts,
+    activity,
     from(table: string) {
+      // The refusal record goes to the order timeline, not to this table.
+      // Collected rather than refused so a test can assert what was written.
+      if (table === "order_activity") {
+        return {
+          insert: async (row: Record<string, unknown>) => {
+            activity.push(row);
+            return { error: null };
+          },
+        };
+      }
       if (table !== "alshrouq_dispatches") throw new Error(`unexpected table ${table}`);
       const chain: any = {
         select: () => chain,
@@ -611,5 +624,152 @@ describe("a 4xx refusal is reported with its reason", () => {
     if (r.kind !== "rejected") throw new Error("unreachable");
     expect(r.reason).toBeNull();
     expect(r.message).toContain("409");
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* A refusal outlives the toast that reported it                             */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * The regression for what actually blocked closing this incident.
+ *
+ * Phase 1 recovered the CRM's reason and put it in the message and a log line.
+ * Neither is durable: the agent's toast is gone on navigation, and the log goes
+ * to the platform's drain, which is not where the people handling the order
+ * look. An immediate refusal writes **no** dispatch row — correctly, because a
+ * 4xx created nothing and the order must stay sendable — so the refusal left
+ * no trace on the order at all. That is precisely why the reported production
+ * refusal could not be explained after the fact.
+ *
+ * It is recorded on `order_activity` now: durable, on the order's own timeline,
+ * and deliberately *not* on `alshrouq_dispatches`, so it cannot take the slot
+ * that would lock a fixable order out of dispatch.
+ */
+describe("a refusal is recorded on the order", () => {
+  const rejectionWith = (body: unknown, status = 422) =>
+    vi.fn(async () => ({ kind: "rejected" as const, operationId: "op-1", status, body }));
+
+  it("writes the reason to the order's activity, not to alshrouq_dispatches", async () => {
+    const supabase = fakeSupabase();
+    await dispatchOrderToAlShrouq(request(), supabase as any, {
+      ...deps({ live: true }),
+      createOrder: rejectionWith({ detail: "branch is not active" }) as any,
+    });
+
+    // The rule that keeps the order retryable: no dispatch row, no slot taken.
+    expect(supabase.inserts).toHaveLength(0);
+
+    expect(supabase.activity).toHaveLength(1);
+    const row = supabase.activity[0]! as any;
+    expect(row.order_id).toBe(ORDER_ID);
+    expect(row.actor_id).toBe(USER_ID);
+    expect(row.action).toBe("alshrouq_dispatch_rejected");
+    expect(row.details.reason).toBe("branch is not active");
+    expect(row.details.http_status).toBe(422);
+  });
+
+  /**
+   * The blind spot that would otherwise repeat this incident verbatim: a shape
+   * the parser cannot read used to be discarded whole. Key *names* are enough to
+   * teach it the shape, and cannot themselves carry a phone number or a token.
+   */
+  it("records the body's shape when no reason could be read", async () => {
+    const supabase = fakeSupabase();
+    await dispatchOrderToAlShrouq(request(), supabase as any, {
+      ...deps({ live: true }),
+      createOrder: rejectionWith({ status: "NOK", failures: ["x"], ref: 9 }, 400) as any,
+    });
+
+    const details = (supabase.activity[0]! as any).details;
+    expect(details.reason).toBeNull();
+    expect(details.body_shape).toEqual(["status", "failures", "ref"]);
+  });
+
+  /** Noise, when the reason is already there. */
+  it("omits the shape once a reason was read", async () => {
+    const supabase = fakeSupabase();
+    await dispatchOrderToAlShrouq(request(), supabase as any, {
+      ...deps({ live: true }),
+      createOrder: rejectionWith({ detail: "nope" }) as any,
+    });
+    expect((supabase.activity[0]! as any).details.body_shape).toBeUndefined();
+  });
+
+  /**
+   * Which optional keys went out is the correlation that settles a question
+   * like "was `customer_address` missing on the ones that failed" in one look —
+   * without putting the address, the phone or the note on a timeline agents read.
+   */
+  it("records which optional payload keys were sent, never their contents", async () => {
+    const supabase = fakeSupabase();
+    await dispatchOrderToAlShrouq(
+      request({ form: form({ mapUrl: "https://maps.app.goo.gl/abc123", details: "ring twice" }) }),
+      supabase as any,
+      { ...deps({ live: true }), createOrder: rejectionWith({ detail: "no" }) as any },
+    );
+
+    const details = (supabase.activity[0]! as any).details;
+    expect(details.sent_address).toBe(true);
+    expect(details.sent_details).toBe(true);
+    expect(details.client_order_id).toBe("9540");
+
+    const serialised = JSON.stringify(details);
+    expect(serialised).not.toContain("Test Customer");
+    expect(serialised).not.toContain("0500798930");
+    expect(serialised).not.toContain("maps.app.goo.gl");
+    expect(serialised).not.toContain("ring twice");
+  });
+
+  it("distinguishes a payload that carried no address", async () => {
+    const supabase = fakeSupabase();
+    await dispatchOrderToAlShrouq(
+      request({ form: form({ mapUrl: "", lat: "21.56312", lng: "39.17516" }) }),
+      supabase as any,
+      { ...deps({ live: true }), createOrder: rejectionWith({ detail: "no" }) as any },
+    );
+
+    const details = (supabase.activity[0]! as any).details;
+    expect(details.sent_address).toBe(false);
+    expect(details.sent_coordinates).toBe(true);
+  });
+
+  /**
+   * Bookkeeping must never turn a refusal into an error. The caller still gets
+   * the refusal and its reason even if the activity write is impossible.
+   */
+  it("still reports the refusal when the record cannot be written", async () => {
+    const supabase = {
+      from(table: string) {
+        if (table === "order_activity") throw new Error("no grant");
+        const chain: any = {
+          select: () => chain,
+          eq: () => chain,
+          is: () => chain,
+          maybeSingle: async () => ({ data: null, error: null }),
+        };
+        return chain;
+      },
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const r = await dispatchOrderToAlShrouq(request(), supabase as any, {
+      ...deps({ live: true }),
+      createOrder: rejectionWith({ detail: "still refused" }) as any,
+    });
+
+    expect(r.kind).toBe("rejected");
+    if (r.kind !== "rejected") throw new Error("unreachable");
+    expect(r.reason).toBe("still refused");
+    // Silence here would recreate the blindness this exists to remove.
+    expect(warn.mock.calls.some(([m]) => String(m).includes("could not record"))).toBe(true);
+  });
+
+  /** Only a refusal. An accepted dispatch has a row, and needs no second story. */
+  it("writes no activity row when the dispatch is accepted", async () => {
+    const supabase = fakeSupabase();
+    await dispatchOrderToAlShrouq(request(), supabase as any, deps({ live: true }));
+    expect(supabase.inserts).toHaveLength(1);
+    expect(supabase.activity).toHaveLength(0);
   });
 });

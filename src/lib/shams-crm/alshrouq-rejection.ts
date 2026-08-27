@@ -154,6 +154,44 @@ export function readAlshrouqRejectionReason(body: unknown): string | null {
   return null;
 }
 
+/**
+ * The `order_activity.action` a refused dispatch writes.
+ *
+ * Lives in this pure module rather than beside the dispatch service, because
+ * the order timeline renders it and must not import a server-only file.
+ * `alshrouq-resolution.ts` holds `RESOLUTION_ACTIVITY_ACTION` for the same
+ * reason; this is deliberately a *different* action, because an operator's
+ * conclusion and the courier's refusal are not the same event and must not read
+ * as one on the timeline.
+ */
+export const REJECTION_ACTIVITY_ACTION = "alshrouq_dispatch_rejected";
+
+/** How many top-level key names are worth keeping from a shape we cannot read. */
+const MAX_SHAPE_KEYS = 12;
+
+/**
+ * The *shape* of a refusal this module could not read — key names only.
+ *
+ * The blind spot that remains after everything else here: if the CRM answers
+ * with a shape `readAlshrouqRejectionReason` does not recognise, it returns
+ * `null` and the body is discarded, and the next incident is diagnosed exactly
+ * as badly as this one was. Recording which keys the body carried is enough to
+ * teach the parser that shape afterwards, and it is the smallest thing that
+ * could be.
+ *
+ * **Names, never values.** A key name cannot be a customer's phone number or a
+ * token; a value can. That is the whole reason this returns keys rather than the
+ * body — the body is already sanitized by `sanitizeResponseBody`, but that
+ * redacts by *known* key name, and a shape nobody has seen is precisely where an
+ * unknown key could carry something personal. Key names are safe under that
+ * uncertainty in a way values are not.
+ */
+export function rejectionBodyShape(body: unknown): string[] {
+  if (Array.isArray(body)) return [`[array:${body.length}]`];
+  if (!isRecord(body)) return typeof body === "object" ? [] : [`[${typeof body}]`];
+  return Object.keys(body).slice(0, MAX_SHAPE_KEYS);
+}
+
 /** A machine-readable code from the refusal, when it carries one. */
 export function readAlshrouqRejectionCode(body: unknown): string | null {
   if (!isRecord(body)) return null;

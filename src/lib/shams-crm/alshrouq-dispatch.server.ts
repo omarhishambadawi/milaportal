@@ -80,6 +80,8 @@ import {
   describeAlshrouqRejection,
   readAlshrouqRejectionCode,
   readAlshrouqRejectionReason,
+  rejectionBodyShape,
+  REJECTION_ACTIVITY_ACTION,
 } from "./alshrouq-rejection";
 import type { AlShrouqDispatchStatus } from "./alshrouq-dispatch-state";
 import type { AgentCredentialProblem, AgentCredentialResult } from "./agent-credentials.server";
@@ -304,6 +306,8 @@ function logDispatchEvent(
     errorKind?: string | null;
     reason?: string | null;
     code?: string | null;
+    /** Top-level key names, only when no reason could be read. Names, not values. */
+    bodyShape?: string[];
     reconciled?: boolean;
   },
 ): void {
@@ -318,6 +322,103 @@ function logDispatchEvent(
     dispatchedBy: request.userId,
     ...extra,
   });
+}
+
+/**
+ * Write the refusal onto the order's own history.
+ *
+ * ## Why a console line was not enough
+ *
+ * An immediate refusal persists **nothing** — deliberately, because a 4xx means
+ * nothing was created and the order must stay sendable once its data is fixed.
+ * The consequence, found while trying to close this incident, is that the
+ * refusal left no trace anyone could go back and read: the agent got a toast
+ * that vanished on navigation, the order page showed nothing afterwards, and
+ * the log line added alongside this goes to the platform's drain, which is
+ * ephemeral and is not where the people handling the order are looking. So
+ * "AlShrouq refused the delivery" was, by construction, undiagnosable after the
+ * fact — which is exactly why the reported case could not be explained.
+ *
+ * ## Why `order_activity`
+ *
+ * It is the order's existing history, it is already what the AlShrouq feature
+ * writes an operator's resolution to (`RESOLUTION_ACTIVITY_ACTION`), the
+ * timeline already renders it, and it needs no migration. Crucially it is **not**
+ * `alshrouq_dispatches`: no row there means no claim on
+ * `alshrouq_dispatches_live_order_key`, so recording the refusal cannot lock a
+ * fixable order out of dispatch. The retryability rule is untouched.
+ *
+ * `supabase` here is the service-role client — `order_activity` has no INSERT
+ * policy and the grant is revoked for `authenticated`, so this is the only
+ * client that can write it, and it is the one `alshrouqDispatchOrder` already
+ * passes in after its own permission check.
+ *
+ * ## What it carries
+ *
+ * The status, the CRM's own sanitized reason, its error code, and which optional
+ * payload keys were actually sent — the last because the difference between a
+ * payload with and without `customer_address` is the kind of correlation that
+ * settles a question like this in one look. Never the customer's name, phone,
+ * address, coordinates or note; never the payload; never a credential.
+ *
+ * When no reason could be read, the body's **top-level key names** are recorded
+ * instead, so a shape this build cannot parse is learnable from the next
+ * occurrence rather than lost again.
+ *
+ * ## It cannot change the outcome
+ *
+ * Bookkeeping must never turn a refusal into an error, so every failure here is
+ * swallowed — but reported, because a write that silently stopped working would
+ * recreate the blindness this exists to remove.
+ */
+async function recordRejection(
+  supabase: SupabaseLike,
+  request: DispatchRequest,
+  summary: DispatchPayloadSummary,
+  details: {
+    httpStatus: number;
+    reason: string | null;
+    code: string | null;
+    bodyShape: string[];
+    operationId: string;
+  },
+): Promise<void> {
+  try {
+    const { error } = await supabase.from("order_activity").insert({
+      order_id: request.orderId,
+      // Who pressed send. The same actor the resolution workflow records.
+      actor_id: request.userId,
+      action: REJECTION_ACTIVITY_ACTION,
+      details: {
+        http_status: details.httpStatus,
+        reason: details.reason,
+        code: details.code,
+        // Only when there was nothing to read — otherwise it is noise.
+        body_shape: details.reason === null ? details.bodyShape : undefined,
+        operation_id: details.operationId,
+        branch_no: request.branchNo,
+        alshrouq_branch_id: summary.branchId,
+        client_order_id: summary.clientOrderId,
+        payment_type: summary.paymentType,
+        order_value: summary.orderValue,
+        // The optional keys, as booleans. What was sent, never what was in it.
+        sent_address: summary.hasAddress,
+        sent_coordinates: summary.hasCoordinates,
+        sent_details: summary.hasDetails,
+      },
+    });
+    if (error) {
+      console.warn("[alshrouq] could not record the refusal on the order", {
+        orderId: request.orderId,
+        code: (error as { code?: string }).code ?? null,
+      });
+    }
+  } catch {
+    console.warn("[alshrouq] could not record the refusal on the order", {
+      orderId: request.orderId,
+      code: null,
+    });
+  }
 }
 
 function toView(row: Record<string, unknown> | null | undefined): DispatchView | null {
@@ -513,11 +614,24 @@ export async function dispatchOrderToAlShrouq(
      * row already exists and already owns the slot.)
      */
     const reason = readAlshrouqRejectionReason(sent.body);
+    const code = readAlshrouqRejectionCode(sent.body);
+    const bodyShape = rejectionBodyShape(sent.body);
     logDispatchEvent("rejected", request, payload, {
       operationId,
       httpStatus: sent.status,
       reason,
-      code: readAlshrouqRejectionCode(sent.body),
+      code,
+      // Only worth saying when the reason could not be read — it is the clue
+      // that tells the parser what shape to learn.
+      ...(reason === null ? { bodyShape } : {}),
+    });
+    // Durable, on the order itself. A toast and a log line both disappear.
+    await recordRejection(supabase, request, summary, {
+      httpStatus: sent.status,
+      reason,
+      code,
+      bodyShape,
+      operationId,
     });
     return {
       kind: "rejected",

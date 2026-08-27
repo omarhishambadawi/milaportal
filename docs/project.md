@@ -5057,6 +5057,76 @@ its row already owns the slot.
 no-retry-on-indeterminate rule, the payload contract, and the unique index. No
 payload field was changed on a guess.
 
+### What the refusal is, and what it is not
+
+Phase 2 of the same incident. Phase 1 recovered the CRM's reason; it did not
+explain the reported refusal, because by then the reason no longer existed
+anywhere.
+
+**Configuration is not the fault, and this is provable from the report alone.**
+The sentence the agent saw is produced only for `kind: "rejected"`, which
+`dispatchOrderToAlShrouq` returns only when `createAlshrouqOrder` reports a
+**4xx**. Reaching that line requires, in order: no live dispatch row for the
+order; the branch resolved against the CRM's live `branch_options` **and
+covered**; the payload built without a single field error; `liveEnabled()` true;
+an `orderAgentId` present; the agent's CRM credential resolved from Vault; and a
+CRM login that succeeded, because a login failure throws *before* the POST. So in
+production `ALSHROUQ_LIVE_DISPATCH_ENABLED` is `true`, `SHAMS_CRM_*` are present
+and valid, **P0205 is covered and has an AlShrouq id**, payment id 3 is in the
+CRM's live list, and the agent's Vault credential works. None of that is missing,
+and none of it can be the cause. It also rules out the payload-level failures —
+a missing name, phone or order number, an unknown payment id, half a coordinate
+pair — every one of which returns `invalid` or `branch_unresolved` instead.
+
+**Why the reason was still unavailable.** An immediate refusal persists
+**nothing**, by design: a 4xx created nothing, so the order must stay sendable
+once its data is corrected, and a `failed` row would take the order's slot in
+`alshrouq_dispatches_live_order_key` and lock it out permanently. The
+consequence nobody had drawn is that the refusal then survived only as a toast
+the agent navigated away from, plus (after Phase 1) a line in the platform's log
+drain, which is ephemeral and is not where the people handling the order look.
+The refusal was undiagnosable **by construction**.
+
+`order_activity` is where it goes now — the order's own history, which the
+AlShrouq feature already writes an operator's resolution to, which the timeline
+already renders, and which needs no migration. It is deliberately not
+`alshrouq_dispatches`: no row there, no slot taken, retryability unchanged. The
+write goes through the service-role client the handler already holds, because
+`order_activity` has no INSERT policy and the grant is revoked for
+`authenticated`. It carries the status, the sanitized reason, the error code, and
+**which optional payload keys were sent** — never the customer's name, phone,
+address, coordinates or note, never the payload, never a credential. Every
+failure of the write is swallowed and reported: bookkeeping must not turn a
+refusal into an error, and a write that silently stopped working would recreate
+the blindness.
+
+When no reason can be read, the body's **top-level key names** are recorded.
+That is the remaining blind spot closed: a shape the parser does not recognise
+used to be discarded whole, which would have reproduced this incident verbatim.
+Names, never values — a key name cannot be a phone number or a token, and a
+shape nobody has seen is exactly where an unknown key could carry one.
+
+**What was deliberately not changed.** No payload field. The repo's own
+disassembly of the Desktop's `_collect_alshrouq_payload` shows `customer_address`
+in its base tuple and `preparation_time` among its extensions, while this
+integration treats both as optional and in fact never sends `preparation_time` at
+all — `prepareAlShrouqDispatch` passes no `preparationTime`, so
+`AlShrouqBuildContext.preparationTime` has no caller. Those are the two
+structural differences between our payload and the reference client's, and they
+are **candidates, not findings**: nothing observed proves either is required, and
+altering a payload on that basis is what the brief forbids and what shipped the
+integration that was rejected on every call. The refusal record carries
+`sent_address`, `sent_coordinates` and `sent_details` precisely so the next
+refusal settles this by correlation rather than by argument.
+
+**Classification: (D) — an application defect in observability, on top of an
+external refusal whose cause is not yet known.** The application defect is fixed:
+the next refusal names itself on the order, permanently. The upstream reason
+remains unproven and is not claimed. Live verification was impossible from this
+environment — no CRM credentials, and the Supabase CLI account holds only
+`xscurilznfinllufgdpq` while the app runs on `gwnxlpophyvgafctrbkx` — so no live
+AlShrouq request was made and none is reported as made.
+
 ### AlShrouq create transport
 
 `alshrouq-create.server.ts` owns the create POST and the read that reconciles

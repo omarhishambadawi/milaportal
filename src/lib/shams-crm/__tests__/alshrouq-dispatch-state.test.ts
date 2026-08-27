@@ -173,11 +173,23 @@ function fakeSupabase(existing?: Record<string, unknown> | null) {
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
 
+  /** `order_activity` rows. Separate, so `inserts` still means dispatch rows. */
+  const activity: Record<string, unknown>[] = [];
+
   const api = {
     state,
     inserts,
     updates,
-    from() {
+    activity,
+    from(table?: string) {
+      if (table === "order_activity") {
+        return {
+          insert: async (row: Record<string, unknown>) => {
+            activity.push(row);
+            return { error: null };
+          },
+        };
+      }
       const filters: Record<string, unknown> = {};
       let pending: Record<string, unknown> | null = null;
 
