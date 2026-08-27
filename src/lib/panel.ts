@@ -23,10 +23,19 @@
 export interface PanelShell {
   /** Goes on the `Card` itself, beside its own `rounded-xl border bg-card`. */
   surface: string;
-  /** The card's header band, which is also its only internal divider. */
+  /** The card's header band, which is also its heaviest internal rule. */
   header: string;
   /** The card's content. */
   body: string;
+  /**
+   * Every other rule inside the card — a section break, a row separator, the
+   * line above a footer of actions.
+   *
+   * One token because the panels had reached three weights between them
+   * (`border-border`, `/60`, `/40`) for lines doing the same job, and a card
+   * whose internal rules all differ slightly reads as several cards.
+   */
+  divider: string;
 }
 
 /** The main column's cards — the workspace an agent fills in. */
@@ -34,6 +43,7 @@ export const PANEL_MAIN: PanelShell = {
   surface: "overflow-hidden border-border/60 shadow-xs dark:shadow-none",
   header: "border-b border-border/50 bg-muted/20 px-5 py-3.5 dark:bg-muted/10",
   body: "p-5",
+  divider: "border-border/50",
 };
 
 /** The context column's panels — what the portal found, beside the form. */
@@ -41,4 +51,21 @@ export const PANEL_CONTEXT: PanelShell = {
   surface: "overflow-hidden border-border/60 shadow-none",
   header: "border-b border-border/50 bg-muted/20 px-4 py-3 dark:bg-muted/10",
   body: "p-4",
+  divider: "border-border/50",
 };
+
+/**
+ * One field of a context panel: a small muted label over its value.
+ *
+ * The invoice panel and the dispatch card each had their own — 10.5px uppercase
+ * over `text-sm font-medium` in one, 11px uppercase over `text-sm font-medium`
+ * in the other — which is close enough to look like a mistake when the two sit
+ * one above the other in the same column. `text-[13px]` on the value rather than
+ * `text-sm`: these are facts to scan down, not sentences to read, and 14px in a
+ * two-up grid was the largest type in a column that is supposed to support the
+ * form rather than compete with it.
+ */
+export const PANEL_FIELD = {
+  label: "text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground",
+  value: "text-[13px] font-medium leading-snug text-foreground",
+} as const;

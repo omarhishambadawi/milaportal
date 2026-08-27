@@ -94,7 +94,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { fmtSAR } from "@/lib/branches";
 import { queryKeys } from "@/lib/query-keys";
-import { PANEL_CONTEXT } from "@/lib/panel";
+import { PANEL_CONTEXT, PANEL_FIELD } from "@/lib/panel";
 import { cn } from "@/lib/utils";
 import {
   alshrouqCancelScheduledDispatch,
@@ -179,11 +179,14 @@ export interface AlShrouqDispatchSectionProps {
 function Row({ label, value, muted }: { label: string; value: string; muted?: boolean }) {
   return (
     <div className="min-w-0 space-y-0.5">
-      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        {label}
-      </p>
+      <p className={PANEL_FIELD.label}>{label}</p>
+      {/* `PANEL_FIELD.value` is the shared field type — the same size and weight
+          the invoice panel's details use, so two panels one above the other in
+          the same column stop disagreeing about how large a fact is. A muted
+          value drops the weight as well as the colour: an absent fact should
+          not be as loud as one that is there. */}
       <p
-        className={`truncate text-sm ${muted ? "text-muted-foreground" : "font-medium text-foreground"}`}
+        className={cn("truncate", PANEL_FIELD.value, muted && "font-normal text-muted-foreground")}
         title={value}
         dir="auto"
       >
@@ -694,11 +697,9 @@ export function AlShrouqDispatchSection({
             field somebody could have got wrong.
             -------------------------------------------------------------- */}
         {(customerLink || locationText || coordinates) && (
-          <div className="space-y-2 border-t border-border/60 px-4 py-3">
+          <div className="space-y-2 border-t border-border/50 px-4 py-3">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                Delivery location
-              </p>
+              <p className={PANEL_FIELD.label}>Delivery location</p>
               {/* Only claimed once there is a point. A link nobody could
                   resolve is not a verified location. */}
               {coordinates && (
@@ -709,42 +710,56 @@ export function AlShrouqDispatchSection({
               )}
             </div>
 
-            {/* The customer's own link, opened rather than read: it is a URL,
-                and printing it as text asks an agent to copy it by hand. */}
+            {/* The point itself first, labelled, so "24.71360" is never
+                mistaken for a reference number.
+
+                Above the link rather than below it, and in the foreground
+                rather than muted. This is the fact the section exists to state
+                — the coordinates a courier actually routes to — and it was
+                being rendered as the quietest thing in the block, under a link
+                that is merely where it came from. */}
+            {coordinates && (
+              <p className="flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[13px] font-medium text-foreground">
+                <MapPin className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span>
+                  <span className="font-sans text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Lat
+                  </span>{" "}
+                  {coordinates.lat}
+                </span>
+                <span>
+                  <span className="font-sans text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Lng
+                  </span>{" "}
+                  {coordinates.lng}
+                </span>
+              </p>
+            )}
+
+            {/* Where the point came from: the customer's own link, opened
+                rather than read, because it is a URL and printing it as text
+                asks an agent to copy it by hand. Its provenance is the
+                operational fact here — a location the customer sent is worth
+                more than one somebody typed — so it reads as a statement with
+                an action attached rather than as another line of metadata. */}
             {customerLink ? (
               <a
                 href={customerLink}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex max-w-full items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+                className="inline-flex max-w-full items-center gap-1.5 text-xs font-medium text-primary hover:underline"
                 title={customerLink}
               >
-                <Link2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <Link2 className="h-3 w-3 shrink-0" aria-hidden="true" />
                 <span className="truncate">Location shared by the customer</span>
                 <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />
               </a>
             ) : (
               locationText && (
-                <p className="truncate text-sm font-medium" title={locationText} dir="auto">
+                <p className={cn("truncate", PANEL_FIELD.value)} title={locationText} dir="auto">
                   {locationText}
                 </p>
               )
-            )}
-
-            {/* The point itself, labelled, so "24.71360" is never mistaken for
-                a reference number. */}
-            {coordinates && (
-              <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-xs text-muted-foreground">
-                <MapPin className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                <span>
-                  <span className="font-sans text-[11px] uppercase tracking-wide">Lat</span>{" "}
-                  {coordinates.lat}
-                </span>
-                <span>
-                  <span className="font-sans text-[11px] uppercase tracking-wide">Lng</span>{" "}
-                  {coordinates.lng}
-                </span>
-              </p>
             )}
           </div>
         )}
@@ -760,11 +775,12 @@ export function AlShrouqDispatchSection({
             than a row reading "—".
             -------------------------------------------------------------- */}
         {deliveryNote && (
-          <div className="space-y-1 border-t border-border/60 px-4 py-3">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Delivery note
-            </p>
-            <p className="whitespace-pre-wrap break-words text-sm text-foreground" dir="auto">
+          <div className="space-y-1 border-t border-border/50 px-4 py-3">
+            <p className={PANEL_FIELD.label}>Delivery note</p>
+            <p
+              className="whitespace-pre-wrap break-words text-[13px] leading-snug text-foreground"
+              dir="auto"
+            >
               {deliveryNote}
             </p>
           </div>
@@ -774,7 +790,7 @@ export function AlShrouqDispatchSection({
             only — the dispatch is performed server-side by pg_cron and the
             worker, whether or not this page is open. */}
         {summary.scheduledFor && (
-          <div className="grid grid-cols-1 gap-x-4 gap-y-3 border-t border-border/60 bg-muted/20 px-4 py-3 dark:bg-muted/10 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-x-4 gap-y-3 border-t border-border/50 bg-muted/20 px-4 py-3 dark:bg-muted/10 sm:grid-cols-2">
             <div className="min-w-0 space-y-1">
               <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                 <CalendarClock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -891,7 +907,7 @@ export function AlShrouqDispatchSection({
           </Band>
         )}
 
-        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border/60 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border/50 px-4 py-3">
           {summary.handedOver ? (
             <>
               {/* The reference stays visible whether or not tracking exists. It
@@ -916,7 +932,7 @@ export function AlShrouqDispatchSection({
                   disabled placeholder, and nothing is assembled from the
                   reference — the destination comes from AlShrouq or not at all. */}
               {summary.trackingUrl && (
-                <Button variant="outline" size="sm" asChild>
+                <Button size="sm" asChild>
                   <a href={summary.trackingUrl} target="_blank" rel="noopener noreferrer">
                     <ExternalLink className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                     Open tracking

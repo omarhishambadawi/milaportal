@@ -1,6 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Bot, Clock, ExternalLink, Truck } from "lucide-react";
+import { Bot, ChevronDown, Clock, ExternalLink, Truck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PANEL_CONTEXT } from "@/lib/panel";
 import { fmtSAR } from "@/lib/branches";
@@ -18,6 +18,7 @@ import {
   isResolutionOutcome,
 } from "@/lib/shams-crm/alshrouq-resolution";
 import { useScheduledDispatchCountdown } from "@/features/alshrouq/use-scheduled-countdown";
+import { compactTimelineCount } from "../activity-fold";
 
 /**
  * Describe one logged change.
@@ -320,12 +321,32 @@ export function OrderActivityTimeline({ orderId }: { orderId: string }) {
           "Awaiting dispatch"
         : null;
 
+  /**
+   * The fold. Closed by default, and closing again is one click away.
+   *
+   * Nothing is dropped and nothing is fetched differently — every entry is
+   * already in `entries`; this decides how many of them are on screen.
+   */
+  const [showAll, setShowAll] = useState(false);
+  const compact = compactTimelineCount(entries, countdownLine !== null);
+  const visible = showAll ? entries : entries.slice(0, compact);
+  const hidden = entries.length - compact;
+
   return (
     <Card className={PANEL_CONTEXT.surface}>
-      <CardHeader className={PANEL_CONTEXT.header}>
+      <CardHeader
+        className={cn("flex flex-row items-center justify-between gap-x-3", PANEL_CONTEXT.header)}
+      >
         <CardTitle className="flex items-center gap-2 text-sm font-semibold">
           <Clock className="h-4 w-4 text-muted-foreground" /> Activity timeline
         </CardTitle>
+        {/* The count lives here rather than beside the fold, so the panel says
+            how much history there is whether or not it is folded. */}
+        {entries.length > 0 && (
+          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+            {entries.length} {entries.length === 1 ? "event" : "events"}
+          </span>
+        )}
       </CardHeader>
       <CardContent className={PANEL_CONTEXT.body}>
         {isLoading && <div className="text-xs text-muted-foreground">Loading…</div>}
@@ -333,7 +354,7 @@ export function OrderActivityTimeline({ orderId }: { orderId: string }) {
           <div className="text-xs text-muted-foreground">No activity yet.</div>
         )}
         <ol className="space-y-0">
-          {entries.map((e, i, all) => {
+          {visible.map((e, i, all) => {
             const last = i === all.length - 1;
             const countdownHere =
               countdownLine && e.dispatchKind === "scheduled" ? countdownLine : null;
@@ -351,10 +372,18 @@ export function OrderActivityTimeline({ orderId }: { orderId: string }) {
                   />
                   {!last && <span aria-hidden className="w-px flex-1 bg-border" />}
                 </div>
-                <div className={cn("min-w-0 flex-1", last ? "pb-0" : "pb-3")}>
-                  <div className="text-[13px] font-medium leading-snug">{e.title}</div>
+                <div className={cn("min-w-0 flex-1", last ? "pb-0" : "pb-2.5")}>
+                  {/* Title, then what it says, then who and when. Three steps,
+                      the same three every entry gets, so the column can be read
+                      down its left edge rather than parsed row by row. */}
+                  <div className="text-[12.5px] font-medium leading-snug">{e.title}</div>
                   {e.detail && (
-                    <div className="text-[11px] leading-snug text-muted-foreground">{e.detail}</div>
+                    <div
+                      className="break-words text-[11px] leading-snug text-muted-foreground"
+                      title={e.detail}
+                    >
+                      {e.detail}
+                    </div>
                   )}
                   {countdownHere && (
                     <div className="text-[11px] font-medium leading-snug text-foreground">
@@ -383,9 +412,9 @@ export function OrderActivityTimeline({ orderId }: { orderId: string }) {
                       Open tracking
                     </a>
                   )}
-                  <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">
+                  <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[10.5px] text-muted-foreground">
                     {e.actor && (
-                      <span className="inline-flex items-center gap-1 font-medium text-foreground">
+                      <span className="inline-flex items-center gap-1 font-medium text-foreground/90">
                         {e.actor.kind === "system" && (
                           <Bot className="h-3 w-3" aria-hidden="true" />
                         )}
@@ -402,6 +431,34 @@ export function OrderActivityTimeline({ orderId }: { orderId: string }) {
             );
           })}
         </ol>
+
+        {/* Everything is still here — this only decides how much of it is on
+            screen. `aria-expanded` on a real button, so a screen reader is told
+            the same thing the chevron says. */}
+        {hidden > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowAll((v) => !v)}
+            aria-expanded={showAll}
+            /* Foreground, not `text-primary`. The brand turquoise measures
+               2.35:1 on a card in light mode, which is thin for a 12px label
+               and thinner still for the panel's only affordance — and this
+               control does not need colour to read as one: it is full width,
+               under a rule, centred, and carries a chevron. Primary arrives on
+               hover, where it confirms rather than announces. */
+            className={cn(
+              "mt-1 flex w-full items-center justify-center gap-1 border-t pt-2.5 text-xs font-medium text-foreground transition-colors hover:text-primary",
+              PANEL_CONTEXT.divider,
+            )}
+          >
+            {showAll ? "Show recent activity" : "View full activity"}
+            {!showAll && <span className="tabular-nums text-muted-foreground">+{hidden}</span>}
+            <ChevronDown
+              aria-hidden="true"
+              className={cn("h-3.5 w-3.5 transition-transform", showAll && "rotate-180")}
+            />
+          </button>
+        )}
       </CardContent>
     </Card>
   );

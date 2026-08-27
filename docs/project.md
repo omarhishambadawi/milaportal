@@ -1933,6 +1933,77 @@ unchanged from before and recorded here rather than fixed, since the success
 chip's tint is shared with `StateTag` and every other soft success mark in the
 app.
 
+#### The context column — what it says first, and what it makes you ask for
+
+The four panels beside the form are read in a fixed order of urgency — is the
+invoice verified, has the delivery gone, where is the branch, what happened — and
+they were built at four different times, so each stated its facts at its own size
+inside its own frame. Three changes make them one column.
+
+**One field type** (`PANEL_FIELD`, beside the panel shells in `src/lib/panel.ts`).
+A 10.5px muted uppercase label over a 13px medium value, shared by the invoice
+panel's `Detail`, the dispatch card's `Row` and the branch panel's rows. The
+three had reached 10.5px/11px labels over `text-sm` values, which is close enough
+to look like a mistake when two of them sit one above the other. 13px rather than
+14px because these are facts to scan down, not sentences: `text-sm` in a two-up
+grid was the largest type in a column whose job is to support the form.
+
+**The invoice panel leads with the number.** The verified total was a tinted,
+bordered box — a card inside a card inside a column of cards — spending a border
+and a fill to announce something the figure already says. It is a plain block
+now: a small ticked label, the money at a size nothing else in the panel reaches,
+and `N of M verified` under it. That count used to live in a chip beside the
+panel's *name*, and only when the order had more than one invoice; it is stated
+for every order now, including `0 of 2`. Each document is a row of a divided list
+rather than an outlined block, so a single-invoice order — the common one — stops
+having a box drawn around the only thing in it. The fold, the fetch and *Check
+again* are untouched.
+
+**The dispatch card puts the point above the link.** `Lat`/`Lng` were the
+quietest thing in the delivery-location block, under the customer's map link;
+they are 13px foreground mono now, with the link beneath them as provenance. The
+link is where the point came from — the coordinates are what a courier routes to.
+*Open tracking* is the card's filled primary rather than the third of three
+outline buttons, which is what it always was in intent.
+
+**The branch panel joins the shell.** It read `PANEL_CONTEXT` for itself now, so
+the order form passes no `className` at all, and its four outlined pills — Copy
+all, Open map, Copy map link, Navigate — became compact filled chips. An outline
+is how this design system says "one of the two or three things to do here", and
+none of these are. Its attention border, which is how it says a code is a
+warehouse rather than a pharmacy, is untouched and still wins over the shell.
+
+**The timeline folds.** It was the tallest panel in the column and the least
+urgent thing on the page: an order verified, synced, flagged, scheduled,
+dispatched and accepted carries a dozen entries within the hour, at three to five
+lines each. It shows six and offers *View full activity*; nothing is dropped and
+nothing is fetched differently. Measured on an eleven-event order: 763px → 498px,
+a 35% cut, with the panel at 28% of the column instead of 40%.
+
+The one rule in that fold with a correctness edge lives in
+`features/orders/activity-fold.ts` and is pinned by `__tests__/activity-fold.test.ts`:
+`compactTimelineCount` **extends** the cut far enough to reach the scheduled
+dispatch entry whenever a countdown is attached to it. That entry carries the only
+ticking number on the page — how long until a courier is contacted — and its
+position depends on how much else has happened to the order, so on a busy one it
+falls past six. The cut is extended rather than the entry hoisted: the list is in
+time order and reads down a rail, and a timeline that reorders itself to promote a
+row is not a timeline.
+
+Contrast, measured against the compiled CSS in both themes (light / dark): field
+values and the verified total 16.51 / 15.1, field labels and timeline metadata
+5.97 / 6.89, coordinates 16.51 / 15.1, the branch panel's chip-buttons on their
+own fill 5.66 / 6.59, the timeline's fold 16.51 / 15.1. The fold is `foreground`
+with `hover:text-primary` for that last number: `text-primary` on a card measures
+**2.35 / 8.31**, which is thin for a 12px label and thinner still for a panel's
+only affordance — and the control reads as one without colour, being full width,
+under a rule, centred and chevroned. The 2.35 still applies to *Location shared by
+the customer*, which is a genuine external link and shares the colour with
+*Add invoice*, *Retry* and the timeline's *Open tracking*; it is recorded here
+rather than fixed, since `--primary` as link text is an app-wide decision and not
+an Orders one. No horizontal overflow and no overflowing descendant at 1440, 1280
+(the narrowest the column ever gets, 472px), 1024, 820, 640, 420 or 375.
+
 `OrderInvoicePanel` gives each document a compact header (number, state, total,
 customer) over branch, channel, document date, *Verified by MilaPortal* and the
 item lines. Every document **starts open** — folding was for the old capped

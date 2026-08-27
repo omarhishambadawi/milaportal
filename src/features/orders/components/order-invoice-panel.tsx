@@ -38,14 +38,22 @@
  */
 
 import { useState } from "react";
-import { AlertTriangle, Bot, ChevronDown, Clock3, PackageSearch, RefreshCw } from "lucide-react";
+import {
+  AlertTriangle,
+  BadgeCheck,
+  Bot,
+  ChevronDown,
+  Clock3,
+  PackageSearch,
+  RefreshCw,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CURRENCY, fmtSAR } from "@/lib/branches";
 import { cn } from "@/lib/utils";
-import { PANEL_CONTEXT } from "@/lib/panel";
+import { PANEL_CONTEXT, PANEL_FIELD } from "@/lib/panel";
 import { useBranchLabels, type BranchLabel } from "@/features/shams/hooks/use-shams-data";
 import type { ItemAvailability, StockState } from "@/lib/shams/availability";
 import type { OrderInvoice } from "../invoice-verification";
@@ -65,7 +73,7 @@ const STARTS_OPEN = true;
 
 export function OrderInvoicePanel({ invoices }: { invoices: OrderInvoicesResult }) {
   const { data: branchLabels } = useBranchLabels();
-  const { invoices: rows, verified, verifiedTotal, allVerified, isMulti, isLoading } = invoices;
+  const { invoices: rows, verified, verifiedTotal, allVerified, isLoading } = invoices;
 
   return (
     <Card className={PANEL_CONTEXT.surface}>
@@ -77,11 +85,6 @@ export function OrderInvoicePanel({ invoices }: { invoices: OrderInvoicesResult 
       >
         <CardTitle className="flex items-center gap-2 text-sm font-semibold">
           <PackageSearch className="h-4 w-4 text-muted-foreground" /> Invoice information
-          {isMulti && (
-            <span className="rounded-full bg-background px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground ring-1 ring-inset ring-border">
-              {verified.length}/{rows.length} verified
-            </span>
-          )}
         </CardTitle>
         {rows.length > 0 && (
           <Button
@@ -98,30 +101,50 @@ export function OrderInvoicePanel({ invoices }: { invoices: OrderInvoicesResult 
         )}
       </CardHeader>
 
-      <CardContent className={cn("space-y-2.5", PANEL_CONTEXT.body)}>
+      <CardContent className={cn("space-y-3", PANEL_CONTEXT.body)}>
         {rows.length === 0 ? (
           <p className="text-xs text-muted-foreground">
             No invoice number on this order yet. Add one on the left and the portal will look it up.
           </p>
         ) : (
           <>
-            {/* The verified total, and how complete it is. Labelled "so far"
-                while anything is outstanding, because a partial sum presented as
-                the order value would be a figure nobody could reconcile. */}
-            {verified.length > 0 && (
-              <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-lg border border-success/25 bg-success/5 px-3 py-2">
-                <span className="text-xs font-medium text-muted-foreground">
-                  {allVerified
-                    ? isMulti
-                      ? `Verified total — ${verified.length} invoices`
-                      : "Verified total"
-                    : `Verified so far — ${verified.length} of ${rows.length}`}
-                </span>
-                <span className="text-base font-semibold tabular-nums">
+            {/* The verified total, and how complete it is.
+
+                Two facts in a plain two-line block rather than the tinted,
+                bordered panel this replaces. That box was a card inside a card
+                inside a column of cards, and it spent a border and a fill
+                announcing something the figure itself already says. The
+                hierarchy carries it now: a small muted label, the money at the
+                size nothing else in this panel reaches, and the count
+                underneath.
+
+                Labelled "so far" while anything is outstanding, because a
+                partial sum presented as the order value would be a figure
+                nobody could reconcile. The count is rendered whenever the order
+                has invoices at all — including `0 of 2`, which is what the
+                header chip used to be the only place to read. */}
+            <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1">
+              <div className="min-w-0">
+                {verified.length > 0 && (
+                  <p className={cn("flex items-center gap-1", PANEL_FIELD.label)}>
+                    <BadgeCheck className="h-3 w-3 shrink-0 text-success" aria-hidden="true" />
+                    {allVerified ? "Verified total" : "Verified so far"}
+                  </p>
+                )}
+                <p className="mt-0.5 text-[11px] leading-tight text-muted-foreground">
+                  {verified.length} of {rows.length} verified
+                </p>
+              </div>
+              {/* Foreground, not `success`. The tick beside the label carries
+                  the verified meaning; the portal's success green measures
+                  ~3:1 and this is the one figure on the panel that has to be
+                  read exactly. */}
+              {verified.length > 0 && (
+                <span className="text-lg font-semibold leading-none tabular-nums text-foreground">
                   {fmtSAR(verifiedTotal)}
                 </span>
-              </div>
-            )}
+              )}
+            </div>
 
             {/* The order could not be brought into line with what was verified.
                 Said out loud rather than swallowed: a silent failure here is
@@ -149,14 +172,22 @@ export function OrderInvoicePanel({ invoices }: { invoices: OrderInvoicesResult 
 
             {isLoading && verified.length === 0 && <Skeleton className="h-14 w-full" />}
 
-            {rows.map((invoice) => (
-              <InvoiceBlock
-                key={invoice.key}
-                invoice={invoice}
-                labels={branchLabels}
-                defaultOpen={STARTS_OPEN}
-              />
-            ))}
+            {/* A divided list, not a stack of bordered boxes. Each invoice
+                used to be a rounded, outlined block sitting inside this card,
+                which put a frame around every document on a panel that is
+                already a frame — and on the common single-invoice order, a box
+                drawn around the only thing in it. A hairline between rows says
+                the same thing with none of the weight. */}
+            <div className={cn("divide-y", PANEL_CONTEXT.divider)}>
+              {rows.map((invoice) => (
+                <InvoiceBlock
+                  key={invoice.key}
+                  invoice={invoice}
+                  labels={branchLabels}
+                  defaultOpen={STARTS_OPEN}
+                />
+              ))}
+            </div>
           </>
         )}
       </CardContent>
@@ -185,18 +216,13 @@ function InvoiceBlock({
     : null;
 
   return (
-    <Collapsible
-      open={open}
-      onOpenChange={setOpen}
-      className={cn(
-        "rounded-lg border",
-        invoice.state === "verified" ? "border-border/70" : "border-border/50 bg-muted/15",
-      )}
-    >
-      <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-2 text-left">
+    <Collapsible open={open} onOpenChange={setOpen} className="py-2.5 first:pt-0 last:pb-0">
+      {/* The one line that must be readable at a glance: which document, what
+          state, how much. Everything else is underneath it. */}
+      <CollapsibleTrigger className="flex w-full items-center gap-2 text-left">
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="font-mono text-sm font-semibold" dir="ltr">
+            <span className="font-mono text-[13px] font-semibold" dir="ltr">
               #{invoice.invoiceNo}
             </span>
             <StateTag state={invoice.state} />
@@ -215,7 +241,7 @@ function InvoiceBlock({
           )}
         </span>
         {invoice.total !== null && (
-          <span className="shrink-0 text-sm font-semibold tabular-nums">
+          <span className="shrink-0 text-[13px] font-semibold tabular-nums">
             {fmtSAR(invoice.total)}
           </span>
         )}
@@ -228,9 +254,9 @@ function InvoiceBlock({
         />
       </CollapsibleTrigger>
 
-      <CollapsibleContent className="border-t border-border/50 px-3 py-2.5">
+      <CollapsibleContent className="pt-2.5">
         {invoice.state === "verified" && (
-          <dl className="grid gap-x-4 gap-y-2 sm:grid-cols-2">
+          <dl className="grid gap-x-4 gap-y-2.5 sm:grid-cols-2">
             {/* The MIS customer label, verbatim and never truncated: the suffix
                 that decides the Call Centre classification lives at its end, and
                 Arabic account names are long. `Customer_Name` (falling back to
@@ -251,7 +277,10 @@ function InvoiceBlock({
                 <span className="flex items-baseline gap-1.5">
                   <span className="font-mono">{invoice.branchCode}</span>
                   {city && (
-                    <span className="truncate text-xs text-muted-foreground" dir="auto">
+                    <span
+                      className="truncate text-[11px] font-normal text-muted-foreground"
+                      dir="auto"
+                    >
                       {city}
                     </span>
                   )}
@@ -317,8 +346,8 @@ function Detail({
 }) {
   return (
     <div className={cn("min-w-0", className)}>
-      <dt className="text-[10.5px] uppercase tracking-wide text-muted-foreground">{label}</dt>
-      <dd className="mt-0.5 text-sm font-medium">{children}</dd>
+      <dt className={PANEL_FIELD.label}>{label}</dt>
+      <dd className={cn("mt-0.5", PANEL_FIELD.value)}>{children}</dd>
     </div>
   );
 }
@@ -404,7 +433,7 @@ function ItemLines({ items }: { items: ItemAvailability[] }) {
       <table className="w-full table-fixed border-collapse text-left">
         <caption className="sr-only">Invoice items, prices and branch stock</caption>
         <thead>
-          <tr className="border-b border-border/60 text-[10px] uppercase tracking-wide text-muted-foreground">
+          <tr className="border-b border-border/50 text-[10px] uppercase tracking-wide text-muted-foreground">
             {/* No width on the product column: `table-fixed` gives it whatever
                 the fixed ones leave, which is the largest share and the point. */}
             <th scope="col" className="pb-1 pr-2 font-medium">
@@ -449,7 +478,7 @@ function ItemLines({ items }: { items: ItemAvailability[] }) {
                 {/* Wrapping, not truncating — see above. `break-words` so a long
                     unbroken code cannot widen the column either. */}
                 <span
-                  className="block break-words text-xs leading-snug"
+                  className="block break-words text-xs font-medium leading-snug text-foreground"
                   title={item.itemName || item.itemCode}
                 >
                   {item.itemName || item.itemCode}

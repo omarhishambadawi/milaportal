@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Bike, Clock, Copy, ExternalLink, Info, MapPin, Navigation, Phone } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { queryKeys } from "@/lib/query-keys";
+import { PANEL_CONTEXT, PANEL_FIELD } from "@/lib/panel";
 import { cn } from "@/lib/utils";
 import { copyText } from "../clipboard";
 import { REFERENCE_LABEL, dutyHoursLabel } from "../normalize";
@@ -32,6 +33,19 @@ const PREVIEW_COLUMNS =
   "branch_no,city,phone,area_manager,area_manager_phone,email,address,maps_url,latitude,longitude,scooter,scooter_note,working_hours,friday_hours,duty_hours,active,created_at,updated_at";
 
 /**
+ * A compact secondary action: Copy all, Open map, Copy map link, Navigate.
+ *
+ * Four outlined pills in a panel this small was four more rectangles on a page
+ * whose whole Phase 1 brief was to have fewer of them — and an outline is the
+ * design system's way of saying "this is one of the two or three things to do
+ * here", which is not what any of these are. A resting muted fill gives the
+ * same affordance at a fraction of the weight, and keeps them plainly
+ * subordinate to the panels above.
+ */
+const PANEL_ACTION =
+  "inline-flex items-center gap-1 rounded-md bg-muted/60 px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground dark:bg-muted/40";
+
+/**
  * One fact, with its own copy control.
  *
  * A two-column grid rather than the stacked label-over-value rows this replaces:
@@ -57,9 +71,7 @@ function Row({
   return (
     <div className="flex items-start gap-2 py-1.5">
       <Icon className="mt-px h-3.5 w-3.5 shrink-0 text-muted-foreground/70" aria-hidden />
-      <span className="w-16 shrink-0 pt-px text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-        {label}
-      </span>
+      <span className={cn("w-16 shrink-0 pt-px", PANEL_FIELD.label)}>{label}</span>
       <div className={cn("min-w-0 flex-1 text-xs leading-[16px]", mono && "font-mono")}>
         {href ? (
           <a
@@ -129,7 +141,9 @@ export function BranchPreviewPanel({
     return (
       <div
         className={cn(
-          "animate-pulse space-y-2 rounded-xl border border-border/60 bg-card p-3",
+          "animate-pulse space-y-2 rounded-xl border bg-card",
+          PANEL_CONTEXT.surface,
+          PANEL_CONTEXT.body,
           className,
         )}
       >
@@ -144,7 +158,8 @@ export function BranchPreviewPanel({
     return (
       <div
         className={cn(
-          "rounded-xl border border-dashed border-border/70 bg-muted/30 p-3 text-xs text-muted-foreground",
+          "rounded-xl border border-dashed border-border/70 bg-muted/30 text-xs text-muted-foreground",
+          PANEL_CONTEXT.body,
           className,
         )}
       >
@@ -160,25 +175,34 @@ export function BranchPreviewPanel({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-xl border bg-card shadow-sm dark:shadow-none dark:ring-1 dark:ring-inset dark:ring-white/[0.04]",
+        "rounded-xl border bg-card",
+        PANEL_CONTEXT.surface,
         referenceLabel ? "border-[var(--attention)]/40" : "border-border/60",
         className,
       )}
     >
-      <header className="flex items-start justify-between gap-2 border-b border-border/50 bg-muted/30 px-3 py-2 dark:bg-muted/20">
+      {/* Code, then city, then how long it is open — the three questions a
+          branch is looked up to answer, in that order. The code and the city
+          are one statement joined by a middot rather than two runs of text
+          separated by a gap, which is how the header line reads everywhere
+          else on this page now. */}
+      <header className={cn("flex items-start justify-between gap-2", PANEL_CONTEXT.header)}>
         <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-mono text-sm font-bold">{data.branch_no}</span>
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            <span className="font-mono text-sm font-semibold">{data.branch_no}</span>
+            <span aria-hidden="true" className="text-muted-foreground/50">
+              &middot;
+            </span>
             <span className="truncate text-xs text-muted-foreground" dir="auto">
               {data.city}
               {data.cityEnglish && ` · ${data.cityEnglish}`}
             </span>
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-1">
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
             {dutyLabel && !referenceLabel && (
               <span
                 className={cn(
-                  "rounded-full px-1.5 py-px text-[10px] font-semibold",
+                  "rounded-full px-2 py-0.5 text-[10px] font-semibold leading-4",
                   data.duty_hours != null && data.duty_hours >= 24
                     ? "bg-[var(--badge-violet)]/12 text-[var(--badge-violet)]"
                     : "bg-muted text-muted-foreground",
@@ -189,12 +213,12 @@ export function BranchPreviewPanel({
             )}
             {!referenceLabel &&
               (data.scooter ? (
-                <span className="inline-flex items-center gap-1 rounded-full bg-[var(--positive)]/12 px-1.5 py-px text-[10px] font-semibold text-[var(--positive)]">
+                <span className="inline-flex items-center gap-1 rounded-full bg-[var(--positive)]/12 px-2 py-0.5 text-[10px] font-semibold leading-4 text-[var(--positive)]">
                   <Bike className="h-3 w-3" />
                   {data.scooter_note ?? "Scooter"}
                 </span>
               ) : (
-                <span className="rounded-full bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+                <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium leading-4 text-muted-foreground">
                   No scooter
                 </span>
               ))}
@@ -203,20 +227,21 @@ export function BranchPreviewPanel({
         <button
           type="button"
           onClick={() => copyText(contactBlock(data), "Branch details")}
-          className="shrink-0 rounded-md border border-border/70 px-2 py-1 text-[10px] font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
+          className={cn("shrink-0", PANEL_ACTION)}
         >
+          <Copy className="h-3 w-3" aria-hidden="true" />
           Copy all
         </button>
       </header>
 
       {referenceLabel && (
-        <p className="flex items-center gap-1.5 border-b border-[var(--attention)]/25 bg-[var(--attention)]/10 px-3 py-1.5 text-[11px] font-medium text-[var(--attention)]">
+        <p className="flex items-center gap-1.5 border-b border-[var(--attention)]/25 bg-[var(--attention)]/10 px-4 py-2 text-[11px] font-medium text-[var(--attention)]">
           <Info className="h-3.5 w-3.5 shrink-0" aria-hidden />
           {referenceLabel} — a reference location, not a pharmacy. Customers are not sent here.
         </p>
       )}
 
-      <div className="divide-y divide-border/40 px-3 py-1">
+      <div className="divide-y divide-border/30 px-4 py-1.5">
         <Row
           icon={Phone}
           label="Phone"
@@ -249,14 +274,14 @@ export function BranchPreviewPanel({
       </div>
 
       {(data.mapsLink || data.navLink) && (
-        <div className="flex flex-wrap gap-1.5 border-t border-border/50 px-3 py-2">
+        <div className={cn("flex flex-wrap gap-1.5 border-t px-4 py-2.5", PANEL_CONTEXT.divider)}>
           {data.mapsLink && (
             <>
               <a
                 href={data.mapsLink}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 rounded-md border border-border/70 px-2 py-1 text-[11px] font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
+                className={PANEL_ACTION}
               >
                 <ExternalLink className="h-3 w-3" />
                 Open map
@@ -264,7 +289,7 @@ export function BranchPreviewPanel({
               <button
                 type="button"
                 onClick={() => copyText(data.mapsLink ?? "", "Maps link")}
-                className="inline-flex items-center gap-1 rounded-md border border-border/70 px-2 py-1 text-[11px] font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
+                className={PANEL_ACTION}
               >
                 <Copy className="h-3 w-3" />
                 Copy map link
@@ -276,7 +301,7 @@ export function BranchPreviewPanel({
               href={data.navLink}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 rounded-md border border-border/70 px-2 py-1 text-[11px] font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
+              className={PANEL_ACTION}
             >
               <Navigation className="h-3 w-3" />
               Navigate

@@ -1072,15 +1072,10 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
 
           {/* Appears the moment a branch is chosen, so the questions a customer
               asks next are answered without leaving a half-typed order. */}
-          {form.branch_no && (
-            // Flat, like the panels either side of it. The shared component
-            // carries `shadow-sm` for the pages that use it on its own; in this
-            // column it is one of three, and an elevated card between two flat
-            // ones reads as the odd one out rather than as the important one.
-            // Only the elevation is overridden — its attention border, which is
-            // how the panel says a code is not a pharmacy, is left alone.
-            <BranchPreviewPanel branchNo={form.branch_no} className="shadow-none" />
-          )}
+          {/* No shell override any more: the panel reads `PANEL_CONTEXT` for
+              itself, so it is flat and padded like the three panels around it
+              by construction rather than by a class passed in from here. */}
+          {form.branch_no && <BranchPreviewPanel branchNo={form.branch_no} />}
 
           {mode === "edit" && id && <OrderActivityTimeline orderId={id} />}
         </aside>
