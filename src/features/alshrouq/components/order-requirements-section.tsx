@@ -212,7 +212,10 @@ export function AlShrouqOrderRequirements({
         }`}
       >
         {covered ? (
-          <CheckCircle2 className="mt-px h-3.5 w-3.5 shrink-0 text-success" aria-hidden="true" />
+          <CheckCircle2
+            className="mt-px h-3.5 w-3.5 shrink-0 text-success-ink"
+            aria-hidden="true"
+          />
         ) : coverage.kind === "not_covered" || coverage.kind === "unlisted" ? (
           <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-warning" aria-hidden="true" />
         ) : (
@@ -222,8 +225,16 @@ export function AlShrouqOrderRequirements({
           <p className={covered ? "font-medium text-foreground" : "text-foreground"}>
             {describeBranchCoverage(coverage)}
           </p>
+          {/* `text-left` beside `dir="auto"`, for the same reason every other
+              value on this page carries it: the branch name is a fact in a
+              column, not a paragraph. It may still truncate — the branch panel
+              in the column opposite carries the name in full. */}
           {coverage.kind === "covered" && coverage.branchName && (
-            <p className="truncate text-muted-foreground" dir="auto" title={coverage.branchName}>
+            <p
+              className="truncate text-left text-muted-foreground"
+              dir="auto"
+              title={coverage.branchName}
+            >
               {coverage.branchName}
             </p>
           )}
@@ -304,7 +315,7 @@ export function AlShrouqOrderRequirements({
           </div>
 
           {location.kind === "resolved" ? (
-            <p className="flex items-center gap-1.5 text-[11px] font-medium text-success">
+            <p className="flex items-center gap-1.5 text-[11px] font-medium text-success-ink">
               <MapPin className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               Verified location
             </p>
@@ -356,7 +367,7 @@ export function AlShrouqOrderRequirements({
           --------------------------------------------------------------- */}
       <div className="space-y-2 border-t border-border/50 pt-3.5">
         <p className={cn("leading-none", FORM_FIELD.group)}>Payment &amp; collection</p>
-        <div className="grid grid-cols-1 gap-x-4 gap-y-3.5 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-x-5 gap-y-3.5 sm:grid-cols-2">
           <div className="min-w-0 space-y-1.5">
             <Label htmlFor="alshrouq-payment" className={FORM_FIELD.label}>
               <span>Payment method</span>
@@ -417,7 +428,7 @@ export function AlShrouqOrderRequirements({
                 <dt className="truncate text-muted-foreground">Collected by AlShrouq</dt>
                 <dd
                   className={`shrink-0 font-semibold tabular-nums ${
-                    collectsNothing ? "text-success" : "text-foreground"
+                    collectsNothing ? "text-success-ink" : "text-foreground"
                   }`}
                 >
                   {collectionText ? fmtSAR(Number(collectionText)) : "—"}

@@ -170,6 +170,44 @@ A **feature module** consistently contains: `components/`, `hooks/`,
 - `date-fns` `^4`, `clsx` + `tailwind-merge` (`cn()` in `src/lib/utils.ts`).
 - `xlsx` `^0.18` for report export.
 
+#### `--primary-ink` and `--success-ink` — the brand colours as type
+
+`--primary` and `--success` are **fills**. They are chosen to be sat on — a
+button, a chip, a tint — with `--primary-foreground` on top, and at L 0.72 / 0.62
+they do that well. Set as *text* on a card in light mode they measure **2.35:1**
+and **3.39:1**, and the portal uses both as text constantly: every link, every
+"Verified" mark, every automated caption.
+
+Darkening the fills would fix the text and break everything else — `--primary` is
+the brand, on 49 files and every primary button in the app — so these are two
+extra tokens rather than a change to the originals. Same hue, lower lightness,
+and slightly lower chroma so the colour stays inside sRGB instead of clipping its
+red channel to zero and drifting off-hue:
+
+| Token           | Light                    | Dark                    |
+| --------------- | ------------------------ | ----------------------- |
+| `--primary-ink` | `oklch(0.535 0.09 194)`  | `oklch(0.76 0.13 194)`  |
+| `--success-ink` | `oklch(0.525 0.13 155)`  | `oklch(0.7 0.15 155)`   |
+
+**They differ from the fills in light mode only.** On a dark card the fills
+already measure 8.31:1 and 6.76:1, so the dark values are the dark values of
+`--primary` and `--success` exactly, and nothing in dark mode changes colour.
+
+Light, measured against the compiled CSS: primary-ink 4.96:1 on the card, 4.89 on
+the page, 4.54 on its own 10% tint — which is where the chips sit and is the
+worst of the three; success-ink 5.09 / 5.02 / 4.56.
+
+Registered in `styles.css` (`@property`, `:root`, `.dark`) and mapped through
+`@theme inline` as `--color-primary-ink` / `--color-success-ink`, so
+`text-primary-ink` and `text-success-ink` are ordinary utilities. **They are for
+text only** — a fill stays `bg-primary` / `bg-success`, and the two jobs are why
+there are two tokens.
+
+Adopted on the Orders module and the AlShrouq components (27 call sites). The
+other 42 files that set `text-primary` — Dashboard, Users, Call centre, the
+Branches list — are unconverted and still measure 2.35:1; that is a separate
+pass, not an Orders one.
+
 ### Platform integrations
 
 - **Yeastar P-Series OpenAPI** (P570, firmware 37.23.x) — server-only client.
@@ -2077,6 +2115,51 @@ rather than an Orders one. No horizontal overflow, no overflowing descendant and
 no label/control collision at 1440, 1280, 1024, 820, 640, 420 or 375; the field
 grids collapse to one column below `sm`, and `max-w-xs` on the value shrinks to
 310px inside a 350px card rather than overflowing it.
+
+#### Direction is not alignment
+
+Every value on this page that can hold Arabic carries `dir="auto"`, which reads
+the first strong character and sets the element's bidi direction from it. That is
+what makes Arabic render correctly. On a **block** element it also flips
+`text-align: start` from left to right — and that is what took an Arabic customer
+name out from under its `CUSTOMER` label and put it against the far edge of the
+grid cell, while the English label, the English phone number beside it and every
+other value on the card stayed left. Measured in the AlShrouq card at 1440px:
+`سعده` sat **211.7px** from its label in a 243px cell. It read as though it
+belonged to the column on its right.
+
+The fix is one utility, and the reasoning is the whole of it: keep `dir="auto"`,
+because the text must still shape, order and punctuate as Arabic — and pin the
+*box* with `text-left`, because the field column is a layout fact rather than a
+linguistic one. **`text-left`, never `text-start`**: `start` resolves against the
+element's own direction, which is exactly the `rtl` that caused this.
+
+Applied to the five block-level values that detach: the AlShrouq card's fields
+(`ALIGN_IN_COLUMN` in `dispatch-section.tsx`), its delivery-location text, the
+invoice panel's collapsed customer line, the timeline's event subtitle, and the
+coverage banner's branch name. Verified at 0px offset from the label for pure
+Arabic (short and long), pure English, Arabic-first mixed and English-first
+mixed, at all seven widths. Inline spans inside a flex row — the header facts,
+the branch city — are content-sized and were never affected.
+
+Prose is deliberately left alone. The delivery note is a paragraph somebody
+wrote, and an Arabic paragraph right-aligned under its label is correct
+typography, not a bug.
+
+Two values stopped truncating while this was being fixed, on the rule that a fact
+stated **only** here must be readable without a hover: the AlShrouq card's field
+values (the customer name is what an agent reads to a driver, and a phone cannot
+recover `سعده الغام…`) and the timeline's subtitle, which now wraps like the
+detail line above it. The invoice panel's collapsed customer and the coverage
+branch name still truncate — both are spelled out in full elsewhere on the same
+page.
+
+Also in this pass: the Assignment grid moved from `gap-x-4 gap-y-3` to the
+`gap-x-5 gap-y-3.5` every other `FieldGroup` uses, the AlShrouq payment pair
+followed it, and the dispatch card's status badge lost `Badge`'s `rounded-md` for
+the `rounded-full … leading-4` geometry the rest of the page's chips share. The
+four section headers are one component and measure identically — 20×20 numeral at
+10.5px against a 14px title, one header padding across all four.
 
 `OrderInvoicePanel` gives each document a compact header (number, state, total,
 customer) over branch, channel, document date, *Verified by MilaPortal* and the

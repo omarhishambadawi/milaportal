@@ -127,7 +127,7 @@ export function OrderInvoicePanel({ invoices }: { invoices: OrderInvoicesResult 
               <div className="min-w-0">
                 {verified.length > 0 && (
                   <p className={cn("flex items-center gap-1", PANEL_FIELD.label)}>
-                    <BadgeCheck className="h-3 w-3 shrink-0 text-success" aria-hidden="true" />
+                    <BadgeCheck className="h-3 w-3 shrink-0 text-success-ink" aria-hidden="true" />
                     {allVerified ? "Verified total" : "Verified so far"}
                   </p>
                 )}
@@ -163,7 +163,7 @@ export function OrderInvoicePanel({ invoices }: { invoices: OrderInvoicesResult 
                   type="button"
                   onClick={invoices.retrySync}
                   disabled={invoices.isRecording}
-                  className="font-medium text-primary underline-offset-2 hover:underline"
+                  className="font-medium text-primary-ink underline-offset-2 hover:underline"
                 >
                   {invoices.isRecording ? "Retrying…" : "Retry"}
                 </button>
@@ -233,9 +233,19 @@ function InvoiceBlock({
             )}
           </span>
           {/* The customer stays visible with the document closed — it is the
-              fact most often checked and the one the channel is derived from. */}
+              fact most often checked and the one the channel is derived from.
+
+              `text-left` beside `dir="auto"` — see the AlShrouq card's
+              `ALIGN_IN_COLUMN`. This is a flex *column* item, so it fills the
+              row, and an Arabic name would otherwise align away from the invoice
+              number above it. Truncating is fine here and only here: the same
+              name is spelled out in full in the Customer detail one click
+              below. */}
           {invoice.state === "verified" && invoice.customer && (
-            <span className="truncate text-[11px] leading-tight text-muted-foreground" dir="auto">
+            <span
+              className="truncate text-left text-[11px] leading-tight text-muted-foreground"
+              dir="auto"
+            >
               {invoice.customer}
             </span>
           )}
@@ -294,7 +304,7 @@ function InvoiceBlock({
                 className={cn(
                   "inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
                   invoice.isCallCentre
-                    ? "bg-success/10 text-success"
+                    ? "bg-success/10 text-success-ink"
                     : "bg-destructive/10 text-destructive",
                 )}
               >
@@ -306,7 +316,7 @@ function InvoiceBlock({
                 Shams answered, and the timeline records it the same way. */}
             <Detail label="Verified by">
               <span className="inline-flex items-center gap-1">
-                <Bot className="h-3.5 w-3.5 text-success" aria-hidden="true" />
+                <Bot className="h-3.5 w-3.5 text-success-ink" aria-hidden="true" />
                 MilaPortal
               </span>
             </Detail>
@@ -355,7 +365,7 @@ function Detail({
 export function StateTag({ state }: { state: OrderInvoice["state"] }) {
   if (state === "verified") {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-success">
+      <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-success-ink">
         <Bot className="h-3 w-3" aria-hidden="true" />
         Verified
       </span>

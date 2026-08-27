@@ -88,7 +88,7 @@ export function CallCenterInvoiceField({
         </label>
         <p className="mt-1 flex items-start gap-1 text-[11px] leading-snug text-muted-foreground">
           {automated ? (
-            <Bot className="mt-px h-3 w-3 shrink-0 text-success" aria-hidden="true" />
+            <Bot className="mt-px h-3 w-3 shrink-0 text-success-ink" aria-hidden="true" />
           ) : !checked && !hasVerified ? (
             <Clock3 className="mt-px h-3 w-3 shrink-0" aria-hidden="true" />
           ) : null}

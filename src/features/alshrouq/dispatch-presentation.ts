@@ -55,14 +55,14 @@ export const ALSHROUQ_TONE_STYLES: Record<AlShrouqTone, AlShrouqToneStyle> = {
     icon: "text-muted-foreground",
   },
   info: {
-    badge: "bg-primary/10 text-primary",
+    badge: "bg-primary/10 text-primary-ink",
     band: "border-primary/25 bg-primary/5 text-foreground",
-    icon: "text-primary",
+    icon: "text-primary-ink",
   },
   success: {
-    badge: "bg-success/10 text-success",
+    badge: "bg-success/10 text-success-ink",
     band: "border-success/25 bg-success/5 text-foreground",
-    icon: "text-success",
+    icon: "text-success-ink",
   },
   warning: {
     badge: "bg-warning/10 text-warning",

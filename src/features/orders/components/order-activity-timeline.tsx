@@ -390,9 +390,13 @@ export function OrderActivityTimeline({ orderId }: { orderId: string }) {
                       {countdownHere}
                     </div>
                   )}
+                  {/* Wraps like the detail line above it rather than
+                      truncating, and `text-left` so an Arabic customer name
+                      stays under the event it belongs to instead of aligning to
+                      the far side of the entry. */}
                   {e.subtitle && (
                     <div
-                      className="truncate text-[11px] leading-snug text-muted-foreground"
+                      className="break-words text-left text-[11px] leading-snug text-muted-foreground"
                       dir="auto"
                     >
                       {e.subtitle}
@@ -406,7 +410,7 @@ export function OrderActivityTimeline({ orderId }: { orderId: string }) {
                       href={e.trackingUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+                      className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-primary-ink hover:underline"
                     >
                       <ExternalLink className="h-3 w-3" aria-hidden="true" />
                       Open tracking
@@ -440,14 +444,19 @@ export function OrderActivityTimeline({ orderId }: { orderId: string }) {
             type="button"
             onClick={() => setShowAll((v) => !v)}
             aria-expanded={showAll}
-            /* Foreground, not `text-primary`. The brand turquoise measures
-               2.35:1 on a card in light mode, which is thin for a 12px label
-               and thinner still for the panel's only affordance — and this
-               control does not need colour to read as one: it is full width,
-               under a rule, centred, and carries a chevron. Primary arrives on
-               hover, where it confirms rather than announces. */
+            /* Foreground at rest, brand on hover.
+
+               This began as a contrast decision — `text-primary` measured
+               2.35:1 on a card and could not carry a 12px label — and
+               `--primary-ink` has since made that argument moot. It stays
+               foreground anyway, because the reason now is what it is rather
+               than what it costs: this is a disclosure control, not a link. It
+               is full width, under a rule, centred and chevroned, and it already
+               reads as something to press. Colouring it like the links around it
+               would claim it navigates somewhere. The ink arrives on hover,
+               where it confirms rather than announces. */
             className={cn(
-              "mt-1 flex w-full items-center justify-center gap-1 border-t pt-2.5 text-xs font-medium text-foreground transition-colors hover:text-primary",
+              "mt-1 flex w-full items-center justify-center gap-1 border-t pt-2.5 text-xs font-medium text-foreground transition-colors hover:text-primary-ink",
               PANEL_CONTEXT.divider,
             )}
           >

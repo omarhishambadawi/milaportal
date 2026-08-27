@@ -176,6 +176,18 @@ export interface AlShrouqDispatchSectionProps {
  * rather than widening the grid, so the page never gains a sideways scrollbar on
  * a phone. The full text stays reachable through the tooltip.
  */
+/**
+ * How a value that may be Arabic sits in an LTR column.
+ *
+ * `dir="auto"` gives the text its own direction, which is what makes Arabic
+ * render correctly. On a block element it also flips `text-align: start` to the
+ * right, which is what detached those values from their labels. Pinning
+ * `text-left` keeps the *box* where the column is while leaving the *text* to
+ * `dir`. Not `text-start`, which resolves against the element's own direction —
+ * the `rtl` that caused this in the first place.
+ */
+const ALIGN_IN_COLUMN = "text-left";
+
 function Row({ label, value, muted }: { label: string; value: string; muted?: boolean }) {
   return (
     <div className="min-w-0 space-y-0.5">
@@ -185,8 +197,21 @@ function Row({ label, value, muted }: { label: string; value: string; muted?: bo
           the same column stop disagreeing about how large a fact is. A muted
           value drops the weight as well as the colour: an absent fact should
           not be as loud as one that is there. */}
+      {/* `text-left` beside `dir="auto"`: the value renders as Arabic and
+          stays in its column. Without it an Arabic name aligns to the far edge
+          of the cell and reads as though it belonged to the field to its right.
+
+          Wrapping rather than truncating, too. These six are short by nature
+          except the customer's name, which is the one an agent reads off the
+          card to a driver — and a name cut to `سعده الغام…` with the rest behind
+          a hover is not information a phone can recover. */}
       <p
-        className={cn("truncate", PANEL_FIELD.value, muted && "font-normal text-muted-foreground")}
+        className={cn(
+          "break-words",
+          ALIGN_IN_COLUMN,
+          PANEL_FIELD.value,
+          muted && "font-normal text-muted-foreground",
+        )}
         title={value}
         dir="auto"
       >
@@ -626,7 +651,7 @@ export function AlShrouqDispatchSection({
         <header className={cn("flex items-start gap-3", PANEL_CONTEXT.header)}>
           <span
             aria-hidden
-            className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary ring-1 ring-inset ring-primary/15"
+            className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary-ink ring-1 ring-inset ring-primary/15"
           >
             <Truck className="h-3.5 w-3.5" />
           </span>
@@ -639,7 +664,7 @@ export function AlShrouqDispatchSection({
               </h2>
               <Badge
                 variant="secondary"
-                className={`border-transparent px-2 py-0.5 text-[10px] font-semibold ${tone.badge}`}
+                className={`rounded-full border-transparent px-2 py-0.5 text-[10px] font-semibold leading-4 ${tone.badge}`}
               >
                 {status.label}
               </Badge>
@@ -703,7 +728,7 @@ export function AlShrouqDispatchSection({
               {/* Only claimed once there is a point. A link nobody could
                   resolve is not a verified location. */}
               {coordinates && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-success">
+                <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-success-ink">
                   <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
                   Verified
                 </span>
@@ -747,7 +772,7 @@ export function AlShrouqDispatchSection({
                 href={customerLink}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex max-w-full items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+                className="inline-flex max-w-full items-center gap-1.5 text-xs font-medium text-primary-ink hover:underline"
                 title={customerLink}
               >
                 <Link2 className="h-3 w-3 shrink-0" aria-hidden="true" />
@@ -756,7 +781,11 @@ export function AlShrouqDispatchSection({
               </a>
             ) : (
               locationText && (
-                <p className={cn("truncate", PANEL_FIELD.value)} title={locationText} dir="auto">
+                <p
+                  className={cn("break-words", ALIGN_IN_COLUMN, PANEL_FIELD.value)}
+                  title={locationText}
+                  dir="auto"
+                >
                   {locationText}
                 </p>
               )
@@ -810,7 +839,7 @@ export function AlShrouqDispatchSection({
                   digits do not jitter as the minutes tick. */}
               <p
                 className={`truncate text-sm font-semibold tabular-nums ${
-                  countdown.state === "waiting" ? "text-primary" : "text-foreground"
+                  countdown.state === "waiting" ? "text-primary-ink" : "text-foreground"
                 }`}
               >
                 {countdown.state === "waiting"

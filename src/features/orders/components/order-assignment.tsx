@@ -111,7 +111,9 @@ export function OrderAssignment({
   const derivedTeam = teamForAgent(current) ?? (team || null);
 
   return (
-    <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
+    // The form's own gutters, from `FieldGroup` — this is a field grid
+    // inside a section card like every other one on this side of the page.
+    <div className="grid gap-x-5 gap-y-3.5 sm:grid-cols-2">
       <div className="min-w-0 space-y-1.5">
         <p className={FORM_FIELD.label}>Assigned to</p>
         {canAssign ? (

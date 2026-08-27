@@ -112,6 +112,41 @@
   inherits: true;
   initial-value: oklch(0.99 0 0);
 }
+/*
+ * The two brand colours at the lightness that survives being set as *type*.
+ *
+ * `--primary` and `--success` are fills. They are sized and chosen to be sat
+ * on — a button, a chip, a tint — with `--primary-foreground` on top, and at
+ * L 0.72 / 0.62 they do that well. As text on a card in light mode they measure
+ * 2.35:1 and 3.39:1, which is below the 4.5:1 a 11–13px label needs, and the
+ * portal uses both as text: every link, every "Verified" mark, every automated
+ * caption.
+ *
+ * Darkening the fills themselves would fix the text and break everything else —
+ * `--primary` is the brand, on 49 files and every primary button in the app — so
+ * these are separate tokens rather than a change to the originals. Same hue,
+ * lower lightness and slightly lower chroma so the colour stays in sRGB rather
+ * than clipping its red channel to zero and drifting off-hue.
+ *
+ * **They differ from the base tokens in light mode only.** On a dark card the
+ * fills already measure 8.31:1 and 6.76:1, so the dark values here are the dark
+ * values of `--primary` and `--success` exactly, and nothing in dark mode
+ * changes colour.
+ *
+ * Measured, light: primary-ink 4.96:1 on the card, 4.89 on the page and 4.54 on
+ * its own 10% tint (which is where the chips sit, and the worst of the three);
+ * success-ink 5.09 / 5.02 / 4.56.
+ */
+@property --primary-ink {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.535 0.09 194);
+}
+@property --success-ink {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.525 0.13 155);
+}
 @property --warning {
   syntax: "<color>";
   inherits: true;
@@ -289,6 +324,7 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-ink: var(--primary-ink);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
@@ -299,6 +335,7 @@
   --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
+  --color-success-ink: var(--success-ink);
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
   --color-border: var(--border);
@@ -337,6 +374,10 @@
   --success-foreground: oklch(0.99 0 0);
   --warning: oklch(0.78 0.15 75);
   --warning-foreground: oklch(0.22 0.05 75);
+  /* The same turquoise and green, dark enough to be read as type. See the
+     @property block above for the measurements. */
+  --primary-ink: oklch(0.535 0.09 194);
+  --success-ink: oklch(0.525 0.13 155);
   --border: oklch(0.91 0.015 210);
   --input: oklch(0.91 0.015 210);
   --ring: oklch(0.72 0.12 194);
@@ -419,6 +460,10 @@
     --success-foreground: oklch(0.17 0.02 255);
     --warning: oklch(0.82 0.15 75);
     --warning-foreground: oklch(0.2 0.05 75);
+    /* Identical to the fills above: on a dark card they already measure 8.31:1
+       and 6.76:1, so dark mode keeps exactly the colour it has today. */
+    --primary-ink: oklch(0.76 0.13 194);
+    --success-ink: oklch(0.7 0.15 155);
     --border: oklch(0.32 0.02 250);
     --input: oklch(0.32 0.02 250);
     --ring: oklch(0.76 0.13 194);

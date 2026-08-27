@@ -118,7 +118,7 @@ export function CallCentreCell({ state }: { state: CallCentreState }) {
           <span
             className={cn(
               "inline-flex h-5 w-5 cursor-default items-center justify-center rounded-full",
-              state === "verified" && "bg-success/15 text-success",
+              state === "verified" && "bg-success/15 text-success-ink",
               (state === "walk_in" || state === "cancelled") &&
                 "bg-destructive/15 text-destructive",
               state === "pending" && "text-muted-foreground/50",

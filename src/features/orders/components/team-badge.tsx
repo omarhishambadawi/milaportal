@@ -4,7 +4,7 @@ export function TeamBadge({ team }: { team: string }) {
   const isTs = team === "telesales";
   const cls = isTs
     ? "bg-chart-3/10 text-chart-3 border-chart-3/25"
-    : "bg-primary/10 text-primary border-primary/25";
+    : "bg-primary/10 text-primary-ink border-primary/25";
   const full = isTs ? "Telesales" : "Customer Care";
   const abbr = isTs ? "TS" : "CC";
   return (

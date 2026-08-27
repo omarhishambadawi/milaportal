@@ -537,7 +537,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 <StatusBadge s={existing.status} variant="soft" />
               )}
               {valueIsVerified && (
-                <span className={cn(ORDER_CHIP, "bg-success/10 text-success")}>
+                <span className={cn(ORDER_CHIP, "bg-success/10 text-success-ink")}>
                   <BadgeCheck className="h-3 w-3" aria-hidden="true" />
                   Verified
                 </span>
@@ -738,7 +738,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                     deliveryType === ALSHROUQ ? (
                       <span className="flex items-start gap-1.5">
                         <Truck
-                          className="mt-px h-3.5 w-3.5 shrink-0 text-primary"
+                          className="mt-px h-3.5 w-3.5 shrink-0 text-primary-ink"
                           aria-hidden="true"
                         />
                         <span>
@@ -901,7 +901,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 label={`Order value (${CURRENCY})`}
                 hint={
                   valueIsVerified ? (
-                    <span className="inline-flex items-center gap-1 font-medium text-success">
+                    <span className="inline-flex items-center gap-1 font-medium text-success-ink">
                       <BadgeCheck className="h-3 w-3" aria-hidden="true" />
                       {shamsInvoices.isMulti
                         ? `Auto-filled from ${shamsInvoices.verified.length} verified invoices`
@@ -932,7 +932,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                     )}
                   />
                   {valueIsVerified && (
-                    <span className="pointer-events-none absolute right-2 top-1/2 inline-flex -translate-y-1/2 items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-success">
+                    <span className="pointer-events-none absolute right-2 top-1/2 inline-flex -translate-y-1/2 items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-success-ink">
                       <BadgeCheck className="h-3 w-3" aria-hidden="true" />
                       Verified
                     </span>
@@ -957,7 +957,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                     type="button"
                     variant="ghost"
                     size="sm"
-                    className="h-7 px-2 text-xs text-primary hover:bg-primary/10 hover:text-primary"
+                    className="h-7 px-2 text-xs text-primary-ink hover:bg-primary/10 hover:text-primary-ink"
                     disabled={readOnly}
                     onClick={() => setInvoices((arr) => [...arr, ""])}
                   >

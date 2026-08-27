@@ -78,7 +78,7 @@ function Row({
             href={href}
             target={href.startsWith("tel:") ? undefined : "_blank"}
             rel="noopener noreferrer"
-            className="break-words text-primary hover:underline"
+            className="break-words text-primary-ink hover:underline"
             dir={mono ? "ltr" : "auto"}
           >
             {value}

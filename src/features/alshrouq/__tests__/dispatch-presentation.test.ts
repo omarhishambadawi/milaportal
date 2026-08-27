@@ -563,6 +563,14 @@ describe("the state colours", () => {
    * `primary`, `success`, `warning`, `destructive`, `muted`, `border`,
    * `foreground` — so light and dark mode are handled by the theme rather than
    * by anything written here.
+   *
+   * `-ink` is admitted alongside `-foreground` as a suffix of those same
+   * tokens. `--primary-ink` and `--success-ink` are registered in `styles.css`
+   * and mapped through `@theme` exactly as the base tokens are; they are the
+   * same hue at the lightness that clears 4.5:1 when the colour is set as type
+   * rather than sat on. What this guard is for — no hex, no `rgb()`, no
+   * `oklch()`, nothing invented at the call site — is unchanged, and a literal
+   * colour still fails it.
    */
   it("uses only the portal's own tokens, and no literal colours", () => {
     const classes = Object.values(ALSHROUQ_TONE_STYLES)
@@ -572,7 +580,7 @@ describe("the state colours", () => {
     expect(classes).not.toMatch(/\b(rgb|hsl|oklch)\(/);
     for (const token of classes.split(/\s+/).filter(Boolean)) {
       expect(token).toMatch(
-        /^(dark:)?(text|bg|border)-(primary|success|warning|destructive|muted|foreground|border)(-foreground)?(\/\d{1,3})?$/,
+        /^(dark:)?(text|bg|border)-(primary|success|warning|destructive|muted|foreground|border)(-foreground|-ink)?(\/\d{1,3})?$/,
       );
     }
   });

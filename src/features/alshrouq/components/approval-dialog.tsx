@@ -556,14 +556,17 @@ export function AlShrouqApprovalDialog({
               <TimingOption
                 id="asap"
                 selected={timing === "asap"}
-                icon={<Zap className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />}
+                icon={<Zap className="h-3.5 w-3.5 shrink-0 text-primary-ink" aria-hidden="true" />}
                 title="As soon as possible"
               />
               <TimingOption
                 id="scheduled"
                 selected={timing === "scheduled"}
                 icon={
-                  <CalendarClock className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
+                  <CalendarClock
+                    className="h-3.5 w-3.5 shrink-0 text-primary-ink"
+                    aria-hidden="true"
+                  />
                 }
                 title="Schedule delivery"
               />
