@@ -45,6 +45,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Skeleton } from "@/components/ui/skeleton";
 import { CURRENCY, fmtSAR } from "@/lib/branches";
 import { cn } from "@/lib/utils";
+import { PANEL_CONTEXT } from "@/lib/panel";
 import { useBranchLabels, type BranchLabel } from "@/features/shams/hooks/use-shams-data";
 import type { ItemAvailability, StockState } from "@/lib/shams/availability";
 import type { OrderInvoice } from "../invoice-verification";
@@ -67,8 +68,13 @@ export function OrderInvoicePanel({ invoices }: { invoices: OrderInvoicesResult 
   const { invoices: rows, verified, verifiedTotal, allVerified, isMulti, isLoading } = invoices;
 
   return (
-    <Card className="overflow-hidden shadow-sm">
-      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border/60 bg-muted/25 px-4 py-3 dark:bg-muted/10">
+    <Card className={PANEL_CONTEXT.surface}>
+      <CardHeader
+        className={cn(
+          "flex flex-row flex-wrap items-center justify-between gap-x-4 gap-y-2",
+          PANEL_CONTEXT.header,
+        )}
+      >
         <CardTitle className="flex items-center gap-2 text-sm font-semibold">
           <PackageSearch className="h-4 w-4 text-muted-foreground" /> Invoice information
           {isMulti && (
@@ -92,7 +98,7 @@ export function OrderInvoicePanel({ invoices }: { invoices: OrderInvoicesResult 
         )}
       </CardHeader>
 
-      <CardContent className="space-y-2.5 p-4">
+      <CardContent className={cn("space-y-2.5", PANEL_CONTEXT.body)}>
         {rows.length === 0 ? (
           <p className="text-xs text-muted-foreground">
             No invoice number on this order yet. Add one on the left and the portal will look it up.

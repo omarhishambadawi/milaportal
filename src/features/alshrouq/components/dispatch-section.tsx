@@ -94,6 +94,8 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { fmtSAR } from "@/lib/branches";
 import { queryKeys } from "@/lib/query-keys";
+import { PANEL_CONTEXT } from "@/lib/panel";
+import { cn } from "@/lib/utils";
 import {
   alshrouqCancelScheduledDispatch,
   alshrouqDispatchContext,
@@ -617,8 +619,8 @@ export function AlShrouqDispatchSection({
 
   return (
     <>
-      <Card className="overflow-hidden shadow-sm">
-        <header className="flex items-start gap-3 border-b border-border/60 bg-muted/25 px-4 py-3 dark:bg-muted/10">
+      <Card className={PANEL_CONTEXT.surface}>
+        <header className={cn("flex items-start gap-3", PANEL_CONTEXT.header)}>
           <span
             aria-hidden
             className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary ring-1 ring-inset ring-primary/15"
@@ -644,7 +646,9 @@ export function AlShrouqDispatchSection({
           </div>
         </header>
 
-        <div className="grid grid-cols-1 gap-x-4 gap-y-3.5 p-4 sm:grid-cols-2">
+        <div
+          className={cn("grid grid-cols-1 gap-x-4 gap-y-3.5 sm:grid-cols-2", PANEL_CONTEXT.body)}
+        >
           <Row
             label="Order reference"
             value={saved ? (ctx?.displayNo ?? "—") : "Assigned after the order is created"}

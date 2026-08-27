@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Bot, Clock, ExternalLink, Truck } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { PANEL_CONTEXT } from "@/lib/panel";
 import { fmtSAR } from "@/lib/branches";
 import { BUSINESS_TIMEZONE } from "@/lib/timezone";
 import { actorName, useOrderActivity, type OrderActivityEvent } from "../hooks/use-order-activity";
@@ -320,13 +321,13 @@ export function OrderActivityTimeline({ orderId }: { orderId: string }) {
         : null;
 
   return (
-    <Card className="overflow-hidden shadow-sm">
-      <CardHeader className="border-b border-border/60 bg-muted/25 px-4 py-3 dark:bg-muted/10">
+    <Card className={PANEL_CONTEXT.surface}>
+      <CardHeader className={PANEL_CONTEXT.header}>
         <CardTitle className="flex items-center gap-2 text-sm font-semibold">
           <Clock className="h-4 w-4 text-muted-foreground" /> Activity timeline
         </CardTitle>
       </CardHeader>
-      <CardContent className="p-4">
+      <CardContent className={PANEL_CONTEXT.body}>
         {isLoading && <div className="text-xs text-muted-foreground">Loading…</div>}
         {!isLoading && entries.length === 0 && (
           <div className="text-xs text-muted-foreground">No activity yet.</div>

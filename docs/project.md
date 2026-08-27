@@ -956,7 +956,8 @@ unmodified in structure and consumed through the `@/components/ui/*` alias.
 - **Orders:** `copyable-order-no`, `invoice-cell`, `kpi-card`, `order-row`
   (`memo`, one table row — see Orders Module → List), `order-form` (the whole
   create/edit form, shared by `/orders/new` and `/orders/$id`),
-  `order-activity-timeline`, `status-badge`, `team-badge`.
+  `order-activity-timeline`, `status-badge` (also exports `ORDER_CHIP`, the one
+  chip geometry the order page's states share), `team-badge`.
 - **Complaints:** `complaint-form`, shared by `/complaints/$id` and
   `/complaints/new` for the same reason as `order-form`.
 - **Users:** `users-table`, `users-toolbar`, `users-stat-cards`,
@@ -1876,6 +1877,61 @@ fractions rather than the fixed `26rem` it started as — that made the
 verification column a sidebar at under 30% of the page, starving the invoice
 while the form's two-up fields swam in whitespace opposite. Measured at 1440px:
 806 / 538.
+
+#### Visual hierarchy — the page's type, weight and border budget
+
+The layout above decided *where* things sit. This decides how much ink each of
+them gets, and it is the answer to a page that had grown into a grid of boxes:
+seven cards at full border strength, a header whose facts were drawn with six
+icons, and three status pills that were three different shapes.
+
+**One panel shell, two weights** (`src/lib/panel.ts`). `PANEL_MAIN` and
+`PANEL_CONTEXT` hold the surface, the header band and the body padding for every
+card on the page, so `SectionCard`, `OrderInvoicePanel`, the AlShrouq dispatch
+card and `OrderActivityTimeline` cannot drift apart again — they had already
+reached two border tints and two header paddings between them. There are two
+constants rather than one because **the difference between the columns is the
+hierarchy**: the workflow column gets `shadow-xs` and `p-5`, the verification
+column is flat (`shadow-none`) and a shade denser at `p-4`, stacked at
+`space-y-4` against the workflow's `space-y-5`. The context column is present and
+plainly secondary without any of its content changing. `BranchPreviewPanel` is
+shared with the complaint form, so it is not edited — the order page passes it
+`className="shadow-none"` to flatten it alongside its neighbours, and *only* the
+elevation, because a `border-*` override in that slot would silently replace the
+attention border the panel uses to say a code is not a pharmacy.
+
+Borders are `border-border/60` and dividers `border-border/50` — the tint
+`BranchPreviewPanel` already used, so it is the existing convention rather than a
+new number. Input borders are untouched: a form control has to look operable.
+
+**The header.** Title, then state, then facts, then what the screen does — four
+steps of one system. Measured against the compiled CSS (light / dark): title
+16.28 / 16.46, fact line 5.89 / 7.51, the order value inside it 16.28 / 16.46,
+field labels 16.51 / 15.1. The facts are separated by middots rather than by an
+icon each; the icons were doing the separating, which is a lot of ink to draw a
+gap, and the value is the only entry given the foreground colour. The separator
+itself is `text-muted-foreground/50` (2.12 / 2.78) — `text-border` measured 1.28,
+a gap the reader cannot see. The header carries **one** border, a hairline
+underneath: not a surface, which is what the earlier sticky bar got wrong, but a
+line that closes the header and opens the workspace.
+
+**Three actions, three weights.** *Update order* is filled, *Cancel* is outlined,
+*Delete* is `variant="ghost"` in the destructive colour — it keeps the colour,
+which is what makes it read as dangerous, and loses the outline, which is what
+was giving a rarely-pressed action the same weight as the two beside it. Nothing
+about their behaviour changed; the submit still reaches the form by id.
+
+**One chip.** `ORDER_CHIP` (exported from `status-badge.tsx`) is the geometry for
+every state on the header line — the order's status, the verified value, the
+AlShrouq delivery. `StatusBadge` takes a `variant`: `outlined` (the default) is
+the table's chip, where the border separates a status from the cells either side
+of it; `soft` is the header's, where the title supplies that separation and the
+border only adds weight. No status changes colour or meaning — the tones are
+still `STATUS_STYLES` and `ALSHROUQ_TONE_STYLES`. The soft chips inherit those
+palettes' contrast as they stand: Pending 4.43, the `success/10` pair 2.97,
+unchanged from before and recorded here rather than fixed, since the success
+chip's tint is shared with `StateTag` and every other soft success mark in the
+app.
 
 `OrderInvoicePanel` gives each document a compact header (number, state, total,
 customer) over branch, channel, document date, *Verified by MilaPortal* and the

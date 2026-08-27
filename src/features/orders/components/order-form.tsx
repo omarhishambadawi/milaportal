@@ -38,8 +38,6 @@ import {
 } from "@/components/ui/command";
 import {
   BadgeCheck,
-  Building2,
-  CalendarDays,
   Check,
   ChevronRight,
   ChevronsUpDown,
@@ -50,19 +48,18 @@ import {
   StickyNote,
   Trash2,
   Truck,
-  User,
   UserCog,
-  Wallet,
   X,
 } from "lucide-react";
 import { ORDER_TYPES, DELIVERY_TYPES, CURRENCY, fmtSAR, formatOrderNo } from "@/lib/branches";
 import { cn } from "@/lib/utils";
+import { PANEL_MAIN } from "@/lib/panel";
 import { useOrderForm } from "@/features/orders/hooks/use-order-form";
 import { requiredFieldValue } from "@/features/orders/payload";
 import { invoiceKey } from "@/features/orders/invoice-verification";
 import { OrderActivityTimeline } from "@/features/orders/components/order-activity-timeline";
 import { OrderAssignment } from "@/features/orders/components/order-assignment";
-import { StatusBadge } from "@/features/orders/components/status-badge";
+import { ORDER_CHIP, StatusBadge } from "@/features/orders/components/status-badge";
 import { CallCenterInvoiceField } from "@/features/orders/components/call-center-invoice-field";
 import { OrderInvoicePanel, StateTag } from "@/features/orders/components/order-invoice-panel";
 import { BranchPreviewPanel } from "@/features/branches/components/branch-preview-panel";
@@ -107,8 +104,8 @@ function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <Card className="overflow-hidden shadow-sm">
-      <header className="flex items-start gap-3 border-b border-border/60 bg-muted/25 px-4 py-3 dark:bg-muted/10">
+    <Card className={PANEL_MAIN.surface}>
+      <header className={cn("flex items-start gap-3", PANEL_MAIN.header)}>
         <span
           aria-hidden
           className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary ring-1 ring-inset ring-primary/15"
@@ -119,10 +116,10 @@ function SectionCard({
           <h2 className="text-sm font-semibold leading-none tracking-tight text-foreground">
             {title}
           </h2>
-          <p className="mt-1 text-[11.5px] leading-tight text-muted-foreground">{hint}</p>
+          <p className="mt-1.5 text-[11.5px] leading-tight text-muted-foreground">{hint}</p>
         </div>
       </header>
-      <div className="grid gap-x-4 gap-y-3.5 p-4 sm:grid-cols-2">{children}</div>
+      <div className={cn("grid gap-x-5 gap-y-4 sm:grid-cols-2", PANEL_MAIN.body)}>{children}</div>
     </Card>
   );
 }
@@ -158,7 +155,7 @@ function Field({
 }) {
   return (
     <div className={cn("min-w-0 space-y-1.5", className)}>
-      <Label htmlFor={id} className="flex items-center gap-1.5 text-xs font-medium">
+      <Label htmlFor={id} className="flex items-center gap-1.5 text-xs font-semibold">
         <span>{label}</span>
         {required && (
           <span className="text-destructive" title="Required">
@@ -168,7 +165,7 @@ function Field({
         {optional && <span className="font-normal text-muted-foreground/80">&mdash; optional</span>}
       </Label>
       {children}
-      {hint && <div className="text-[11px] leading-tight text-muted-foreground">{hint}</div>}
+      {hint && <div className="text-[11px] leading-snug text-muted-foreground">{hint}</div>}
     </div>
   );
 }
@@ -425,20 +422,18 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
    * placeholders is noise, and every one of these has a field of its own that
    * says it is missing.
    */
-  const headerFacts: { icon: typeof ClipboardList; text: string }[] =
+  const headerFacts: string[] =
     mode === "create"
       ? []
       : [
-          form.order_type ? { icon: ClipboardList, text: form.order_type } : null,
+          form.order_type,
           // Omitted while the AlShrouq badge is showing, which already names the
           // method — and says more about it than this would.
-          deliveryType && !dispatchSummary ? { icon: Truck, text: deliveryType } : null,
-          form.branch_no
-            ? { icon: Building2, text: `${form.branch_no} ${cityFor(form.branch_no)}`.trim() }
-            : null,
-          form.customer_name ? { icon: User, text: form.customer_name } : null,
-          form.order_date ? { icon: CalendarDays, text: form.order_date } : null,
-        ].filter((f): f is { icon: typeof ClipboardList; text: string } => f !== null);
+          dispatchSummary ? "" : deliveryType,
+          form.branch_no ? `${form.branch_no} ${cityFor(form.branch_no)}`.trim() : "",
+          form.customer_name,
+          form.order_date,
+        ].filter((f): f is string => !!f);
 
   /** The order's value, formatted, or null when it has none yet. */
   const headerTotal = form.invoice_value.trim() !== "" ? Number(form.invoice_value) : null;
@@ -447,22 +442,26 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
     // Wide enough for two real columns and no wider. The workflow column holds
     // the fields, the verification column holds what the portal found; below
     // `xl` there is not enough width for both and they stack, workflow first.
-    <div className="mx-auto max-w-[1360px] space-y-4">
+    <div className="mx-auto max-w-[1360px] space-y-5">
       {/* ------------------------------------------------------------------ */}
       {/* Page header                                                         */}
       {/* ------------------------------------------------------------------ */}
       {/* Breadcrumb, then the order and its actions on one line, then the
           order's identity as a quiet line of facts.
 
-          Plain page furniture, deliberately: no card, no border, no shadow, no
-          backdrop and **not sticky**. It was all of those for one revision, and
-          a bar with its own surface and elevation reads as a component sitting
-          on top of the page rather than as the page's own heading — it competed
-          with the four cards below it instead of introducing them, and pinning
-          it cost a strip of the viewport on every scroll for information that
-          does not change while you read. The hierarchy here comes from type
-          size and colour, which is what the rest of the app uses. */}
-      <div className="space-y-2">
+          Plain page furniture, deliberately: no card, no backdrop, no shadow and
+          **not sticky**. It was all of those for one revision, and a bar with its
+          own surface and elevation reads as a component sitting on top of the
+          page rather than as the page's own heading — it competed with the cards
+          below it instead of introducing them, and pinning it cost a strip of the
+          viewport on every scroll for information that does not change while you
+          read.
+
+          The one border it does carry is a hairline underneath. That is not a
+          surface — it closes the header and opens the workspace, which is the
+          separation the page was missing when four cards began immediately below
+          a line of muted text with nothing between them but the page gap. */}
+      <header className="space-y-3 border-b border-border/50 pb-4">
         <nav
           aria-label="Breadcrumb"
           className="flex items-center gap-1 text-xs text-muted-foreground"
@@ -474,36 +473,89 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
           <span className="text-foreground">{mode === "create" ? "New order" : orderNo}</span>
         </nav>
 
-        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
-          {/* Title and state on one wrapping line. The badges answer, without a
-              click or a scroll, the two questions this screen is opened to ask:
-              has the order been verified, and has the delivery gone. */}
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
-            <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">{heading}</h1>
-            {mode === "edit" && existing?.status && <StatusBadge s={existing.status} />}
-            {valueIsVerified && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-semibold text-success">
-                <BadgeCheck className="h-3 w-3" aria-hidden="true" />
-                Verified
-              </span>
-            )}
-            {dispatchSummary && (
-              <span
-                className={cn(
-                  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                  alshrouqToneStyle(dispatchSummary.tone).badge,
+        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+          {/* The order's identity: what it is, then what is true of it. The title
+              owns the line, and the facts sit under it in a quieter type — they
+              support the heading rather than share it. */}
+          <div className="min-w-0 space-y-1.5">
+            {/* Title and state on one wrapping line. The chips answer, without a
+                click or a scroll, the two questions this screen is opened to ask:
+                has the order been verified, and has the delivery gone. One shape
+                for all three of them — see ORDER_CHIP. */}
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
+              <h1 className="text-xl font-semibold tracking-tight text-foreground sm:text-2xl">
+                {heading}
+              </h1>
+              {mode === "edit" && existing?.status && (
+                <StatusBadge s={existing.status} variant="soft" />
+              )}
+              {valueIsVerified && (
+                <span className={cn(ORDER_CHIP, "bg-success/10 text-success")}>
+                  <BadgeCheck className="h-3 w-3" aria-hidden="true" />
+                  Verified
+                </span>
+              )}
+              {dispatchSummary && (
+                <span className={cn(ORDER_CHIP, alshrouqToneStyle(dispatchSummary.tone).badge)}>
+                  <Truck className="h-3 w-3" aria-hidden="true" />
+                  AlShrouq &middot; {dispatchSummary.label}
+                </span>
+              )}
+            </div>
+
+            {/* The order's identity, and its value at the end of the same line.
+
+                One quiet row of facts rather than a panel: these are read far
+                more often than they are edited, and each already has a field of
+                its own below that says so if it is missing.
+
+                Separated by middots rather than by an icon each. The icons were
+                doing the separating, which is a lot of ink to draw a gap: six
+                glyphs to decode before reaching the four words that matter, on a
+                line whose whole job is to be skimmed. The value is the only entry
+                given the foreground colour — enough to find at a glance, without
+                becoming a display figure the page has to be built around. */}
+            {headerFacts.length > 0 && (
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+                {headerFacts.map((fact, i) => (
+                  <span key={`${i}-${fact}`} className="inline-flex min-w-0 items-center gap-2">
+                    {i > 0 && (
+                      <span aria-hidden="true" className="text-muted-foreground/50">
+                        &middot;
+                      </span>
+                    )}
+                    <span className="truncate" dir="auto" title={fact}>
+                      {fact}
+                    </span>
+                  </span>
+                ))}
+                {mode === "edit" && headerTotal !== null && Number.isFinite(headerTotal) && (
+                  <span className="inline-flex items-center gap-2">
+                    <span aria-hidden="true" className="text-muted-foreground/50">
+                      &middot;
+                    </span>
+                    <span className="font-semibold tabular-nums text-foreground">
+                      {fmtSAR(headerTotal)}
+                    </span>
+                  </span>
                 )}
-              >
-                <Truck className="h-3 w-3" aria-hidden="true" />
-                AlShrouq &middot; {dispatchSummary.label}
-              </span>
+              </div>
             )}
           </div>
 
+          {/* Three actions, three weights, one gap.
+
+              Update order is the page's primary and is filled. Cancel is the way
+              out and is outlined. Delete is destructive and is neither: it keeps
+              the destructive colour, which is what makes it read as dangerous,
+              and loses the outline, which is what was giving a rarely-pressed
+              action the same visual weight as the two beside it. It stays at the
+              far end of the group, away from the button an agent presses on
+              every visit. */}
           <div className="flex flex-wrap items-center gap-2">
             {mode === "edit" && canDelete && (
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
                 onClick={del}
                 className="text-destructive hover:bg-destructive/10 hover:text-destructive"
@@ -555,40 +607,17 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
           </div>
         </div>
 
-        {/* The order's identity, and its value at the end of the same line.
-
-            One quiet row of facts rather than a panel: these are read far more
-            often than they are edited, and each already has a field of its own
-            below that says so if it is missing. The value is the only entry
-            given the foreground colour — enough to find at a glance, without
-            becoming a display figure the page has to be built around. */}
-        {headerFacts.length > 0 && (
-          <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1 text-xs text-muted-foreground">
-            {headerFacts.map((fact) => (
-              <span key={fact.text} className="inline-flex min-w-0 items-center gap-1.5">
-                <fact.icon className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" />
-                <span className="truncate" dir="auto" title={fact.text}>
-                  {fact.text}
-                </span>
-              </span>
-            ))}
-            {mode === "edit" && headerTotal !== null && Number.isFinite(headerTotal) && (
-              <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
-                <Wallet className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" />
-                <span className="tabular-nums">{fmtSAR(headerTotal)}</span>
-              </span>
-            )}
-          </div>
-        )}
-
-        <p className="text-xs text-muted-foreground">
+        {/* How this screen behaves, one step quieter than the facts above it: the
+            line above says what this order *is*, this one says what the page will
+            do, and the two must not read as the same kind of statement. */}
+        <p className="text-[11.5px] leading-snug text-muted-foreground">
           {readOnly
             ? "This order is read-only for your role."
             : mode === "create"
               ? "Create a new order and link invoices automatically."
               : "Invoices are looked up and verified automatically; fields marked * are required."}
         </p>
-      </div>
+      </header>
 
       {/* 60/40, as fractions rather than a fixed right-hand width.
           `minmax(0,26rem)` made the verification column a sidebar: on a 1360px
@@ -599,11 +628,11 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
           the space is split in proportion and both halves get a usable measure.
           `minmax(0,…)` on both tracks is what stops a long Arabic customer name
           widening the page instead of wrapping. */}
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         {/* ------------------------------------------------------------------ */}
         {/* Workflow — what the agent fills in                                  */}
         {/* ------------------------------------------------------------------ */}
-        <form id={FORM_ID} onSubmit={submit} className="min-w-0 space-y-4">
+        <form id={FORM_ID} onSubmit={submit} className="min-w-0 space-y-5">
           <fieldset disabled={readOnly} className="contents">
             <SectionCard
               icon={ClipboardList}
@@ -856,7 +885,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 <div className="flex items-center justify-between gap-2">
                   <Label
                     htmlFor="invoice-0"
-                    className="flex items-center gap-1.5 text-xs font-medium"
+                    className="flex items-center gap-1.5 text-xs font-semibold"
                   >
                     <span>Invoice No.</span>
                     <span className="font-normal text-muted-foreground/80">
@@ -1043,7 +1072,15 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
 
           {/* Appears the moment a branch is chosen, so the questions a customer
               asks next are answered without leaving a half-typed order. */}
-          {form.branch_no && <BranchPreviewPanel branchNo={form.branch_no} />}
+          {form.branch_no && (
+            // Flat, like the panels either side of it. The shared component
+            // carries `shadow-sm` for the pages that use it on its own; in this
+            // column it is one of three, and an elevated card between two flat
+            // ones reads as the odd one out rather than as the important one.
+            // Only the elevation is overridden — its attention border, which is
+            // how the panel says a code is not a pharmacy, is left alone.
+            <BranchPreviewPanel branchNo={form.branch_no} className="shadow-none" />
+          )}
 
           {mode === "edit" && id && <OrderActivityTimeline orderId={id} />}
         </aside>
