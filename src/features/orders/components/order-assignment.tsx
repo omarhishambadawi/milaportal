@@ -40,6 +40,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { TEAMS } from "@/lib/branches";
+import { FORM_FIELD } from "@/lib/panel";
 import { cn } from "@/lib/utils";
 import type { DirectoryAgent } from "@/lib/directory";
 
@@ -111,25 +112,8 @@ export function OrderAssignment({
 
   return (
     <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
-      {/* Created by — a fact, stated once. Kept visibly separate from the
-          assignee because they are different people whenever a supervisor or an
-          administrator takes an order down, and conflating them is what put
-          non-agents into agent workload. */}
-      <div className="min-w-0 space-y-1.5 sm:col-span-2">
-        <p className="text-xs font-medium">Created by</p>
-        <p className="flex h-9 items-center gap-2 text-sm">
-          <UserPen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-          <span className="truncate">{creator?.full_name ?? "—"}</span>
-          {creator?.agent_code && (
-            <span className="shrink-0 font-mono text-xs text-muted-foreground">
-              {creator.agent_code}
-            </span>
-          )}
-        </p>
-      </div>
-
       <div className="min-w-0 space-y-1.5">
-        <p className="text-xs font-medium">Assigned to</p>
+        <p className={FORM_FIELD.label}>Assigned to</p>
         {canAssign ? (
           <Popover open={open} onOpenChange={setOpen}>
             <PopoverTrigger asChild>
@@ -207,15 +191,34 @@ export function OrderAssignment({
       </div>
 
       <div className="min-w-0 space-y-1.5">
-        <p className="text-xs font-medium">Team</p>
+        <p className={FORM_FIELD.label}>Team</p>
         <p className="flex h-9 items-center gap-2 text-sm">
           <UserCog className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
           <span className="font-medium">{derivedTeam ? teamLabel(derivedTeam) : "—"}</span>
-          <span className="truncate text-xs text-muted-foreground">
-            {canAssign ? "from the assigned agent" : ""}
-          </span>
+          {canAssign && (
+            <span className="truncate text-[11px] text-muted-foreground">
+              from the assigned agent
+            </span>
+          )}
         </p>
       </div>
+
+      {/* Created by — a fact, stated once, and now stated *after* the two
+          questions this section is opened to answer.
+
+          It was the first thing in the card and occupied a full labelled row of
+          its own, which gave the person who typed the order the same weight as
+          the person who owns it. It is still kept visibly separate from the
+          assignee, because they are different people whenever a supervisor or an
+          administrator takes an order down and conflating them is what put
+          non-agents into agent workload — but separate no longer has to mean
+          equal. One quiet line under the pair it qualifies. */}
+      <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] leading-tight text-muted-foreground sm:col-span-2">
+        <UserPen className="h-3 w-3 shrink-0" aria-hidden="true" />
+        <span>Created by</span>
+        <span className="truncate font-medium text-foreground">{creator?.full_name ?? "—"}</span>
+        {creator?.agent_code && <span className="shrink-0 font-mono">{creator.agent_code}</span>}
+      </p>
     </div>
   );
 }

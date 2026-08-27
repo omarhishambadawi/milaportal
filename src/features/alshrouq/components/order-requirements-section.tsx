@@ -46,6 +46,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { fmtSAR } from "@/lib/branches";
+import { FORM_FIELD } from "@/lib/panel";
+import { cn } from "@/lib/utils";
 import { alshrouqResolveLocation } from "@/lib/shams.functions";
 import { describeLocationResult } from "../location";
 import {
@@ -88,7 +90,10 @@ function Coordinate({
 }) {
   return (
     <div className="min-w-0 space-y-1">
-      <Label htmlFor={id} className="text-[11px] font-medium text-muted-foreground">
+      {/* A sub-field of the location block above it, so it is quieter than a
+          top-level form label but carries the same weight — semibold, compact,
+          scannable — that every other label on this form now does. */}
+      <Label htmlFor={id} className="text-[11px] font-semibold text-muted-foreground">
         {label}
       </Label>
       <Input
@@ -203,7 +208,7 @@ export function AlShrouqOrderRequirements({
             ? "border-success/25 bg-success/5"
             : coverage.kind === "not_covered" || coverage.kind === "unlisted"
               ? "border-warning/30 bg-warning/5"
-              : "border-border/60 bg-muted/20 dark:bg-muted/10"
+              : "border-border/50 bg-muted/20 dark:bg-muted/10"
         }`}
       >
         {covered ? (
@@ -226,12 +231,14 @@ export function AlShrouqOrderRequirements({
       </div>
 
       {/* ---------------------------------------------------------------
-          Delivery location. One compact block: the link, then the point
-          it produced. The customer's own link is the authority and goes
-          on the wire verbatim; the coordinates are what routing consumes.
+          Delivery. One block, read top to bottom: the link, the point it
+          produced, and whether that point is good. The customer's own link is
+          the authority and goes on the wire verbatim; the coordinates are what
+          routing consumes.
           --------------------------------------------------------------- */}
       <div className="space-y-2">
-        <Label htmlFor="alshrouq-map" className="flex items-center gap-1.5 text-xs font-medium">
+        <p className={cn("leading-none", FORM_FIELD.group)}>Delivery</p>
+        <Label htmlFor="alshrouq-map" className={FORM_FIELD.label}>
           <span>Delivery location</span>
           <span className="text-destructive" title="Required for AlShrouq">
             *
@@ -266,8 +273,13 @@ export function AlShrouqOrderRequirements({
           )}
         </div>
 
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {/*
+        {/* The pair and the verdict on it, bound together rather than
+            stacked as three equal siblings. The line underneath is metadata
+            confirming these two numbers — it is not a fourth control, and it
+            used to sit as far from them as they sat from the link. */}
+        <div className="space-y-1.5">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {/*
             The stored text, verbatim. It used to show the *parsed* value
             instead, which is what let the box read a valid "24.53738" while the
             field behind it held something `Number()` could not read — the form
@@ -275,50 +287,53 @@ export function AlShrouqOrderRequirements({
             holds cannot disagree with anything downstream, and it also stops
             reformatting under a person mid-keystroke.
           */}
-          <Coordinate
-            id="alshrouq-lat"
-            label="Latitude"
-            value={latitudeText}
-            onChange={setLatitude}
-            readOnly={readOnly}
-          />
-          <Coordinate
-            id="alshrouq-lng"
-            label="Longitude"
-            value={longitudeText}
-            onChange={setLongitude}
-            readOnly={readOnly}
-          />
-        </div>
+            <Coordinate
+              id="alshrouq-lat"
+              label="Latitude"
+              value={latitudeText}
+              onChange={setLatitude}
+              readOnly={readOnly}
+            />
+            <Coordinate
+              id="alshrouq-lng"
+              label="Longitude"
+              value={longitudeText}
+              onChange={setLongitude}
+              readOnly={readOnly}
+            />
+          </div>
 
-        {location.kind === "resolved" ? (
-          <p className="flex items-center gap-1.5 text-[11px] font-medium text-success">
-            <MapPin className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            Verified location
-          </p>
-        ) : (
-          /*
-            The one case that must never pass silently: a link is present and no
-            point came out of it. That used to render as grey helper text
-            alongside the standing "coordinates are never typed" line, which read
-            as an explanation rather than as something to act on — so the agent
-            saw two empty boxes, no way to fill them, and no statement that
-            anything had failed. It is now a warning, and it names the way out.
-          */
-          <p
-            className={`flex items-start gap-1.5 text-[11px] leading-snug ${
-              unread ? "font-medium text-warning" : "text-muted-foreground"
-            }`}
-            role={unread ? "status" : undefined}
-          >
-            {unread && <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />}
-            <span>
-              {resolveError ??
-                locationNote ??
-                "Coordinates are read from the link. Type them only when it cannot be read."}
-            </span>
-          </p>
-        )}
+          {location.kind === "resolved" ? (
+            <p className="flex items-center gap-1.5 text-[11px] font-medium text-success">
+              <MapPin className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              Verified location
+            </p>
+          ) : (
+            /*
+              The one case that must never pass silently: a link is present and no
+              point came out of it. That used to render as grey helper text
+              alongside the standing "coordinates are never typed" line, which read
+              as an explanation rather than as something to act on — so the agent
+              saw two empty boxes, no way to fill them, and no statement that
+              anything had failed. It is now a warning, and it names the way out.
+            */
+            <p
+              className={`flex items-start gap-1.5 text-[11px] leading-snug ${
+                unread ? "font-medium text-warning" : "text-muted-foreground"
+              }`}
+              role={unread ? "status" : undefined}
+            >
+              {unread && (
+                <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              )}
+              <span>
+                {resolveError ??
+                  locationNote ??
+                  "Coordinates are read from the link. Type them only when it cannot be read."}
+              </span>
+            </p>
+          )}
+        </div>
       </div>
 
       {/* ---------------------------------------------------------------
@@ -339,22 +354,21 @@ export function AlShrouqOrderRequirements({
           dialog and the dispatch card make — so no screen can promise a
           collection the payload does not send.
           --------------------------------------------------------------- */}
-      <div className="grid grid-cols-1 gap-x-4 gap-y-3.5 border-t border-border/60 pt-3.5 sm:grid-cols-2">
-        <div className="min-w-0 space-y-1.5">
-          <Label
-            htmlFor="alshrouq-payment"
-            className="flex items-center gap-1.5 text-xs font-medium"
-          >
-            <span>Payment method</span>
-            <span className="text-destructive" title="Required for AlShrouq">
-              *
-            </span>
-          </Label>
-          <Select value={paymentType} onValueChange={setPaymentType} disabled={readOnly}>
-            <SelectTrigger id="alshrouq-payment">
-              <SelectValue placeholder="How does the customer pay?" />
-            </SelectTrigger>
-            {/* The live list when the CRM has answered, its published names when
+      <div className="space-y-2 border-t border-border/50 pt-3.5">
+        <p className={cn("leading-none", FORM_FIELD.group)}>Payment &amp; collection</p>
+        <div className="grid grid-cols-1 gap-x-4 gap-y-3.5 sm:grid-cols-2">
+          <div className="min-w-0 space-y-1.5">
+            <Label htmlFor="alshrouq-payment" className={FORM_FIELD.label}>
+              <span>Payment method</span>
+              <span className="text-destructive" title="Required for AlShrouq">
+                *
+              </span>
+            </Label>
+            <Select value={paymentType} onValueChange={setPaymentType} disabled={readOnly}>
+              <SelectTrigger id="alshrouq-payment">
+                <SelectValue placeholder="How does the customer pay?" />
+              </SelectTrigger>
+              {/* The live list when the CRM has answered, its published names when
                 it has not.
 
                 A Radix `Select` whose value matches none of its items renders
@@ -362,42 +376,60 @@ export function AlShrouqOrderRequirements({
                 read "How does the customer pay?" — an answered field presenting
                 itself as unanswered — until the config request landed, and
                 permanently wherever it does not. See `alshrouqPaymentOptions`. */}
-            <SelectContent>
-              {alshrouqPaymentOptions(options.paymentOptions).map((p) => (
-                <SelectItem key={p.id} value={String(p.id)}>
-                  {p.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <p className="text-[11px] leading-tight text-muted-foreground">
-            The driver is told this. It is never assumed from the order type.
-          </p>
-        </div>
+              <SelectContent>
+                {alshrouqPaymentOptions(options.paymentOptions).map((p) => (
+                  <SelectItem key={p.id} value={String(p.id)}>
+                    {p.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className={FORM_FIELD.hint}>
+              The driver is told this. It is never assumed from the order type.
+            </p>
+          </div>
 
-        <div className="min-w-0 space-y-1.5">
-          <p className="text-xs font-medium">Collection</p>
-          <dl className="flex items-baseline justify-between gap-3 rounded-md border border-border/60 px-3 py-2 text-sm">
-            <dt className="truncate text-muted-foreground">Order value</dt>
-            <dd className="shrink-0 tabular-nums">
-              {orderValueText ? fmtSAR(Number(orderValueText)) : "—"}
-            </dd>
-          </dl>
-          <dl className="flex items-baseline justify-between gap-3 rounded-md border border-border/60 px-3 py-2 text-sm">
-            <dt className="truncate text-muted-foreground">Collected by AlShrouq</dt>
-            <dd
-              className={`shrink-0 font-semibold tabular-nums ${
-                collectsNothing ? "text-success" : "text-foreground"
-              }`}
-            >
-              {collectionText ? fmtSAR(Number(collectionText)) : "—"}
-            </dd>
-          </dl>
-          <p className="text-[11px] leading-tight text-muted-foreground">
-            {collectsNothing
-              ? "Already paid — the driver collects nothing."
-              : "The driver collects this amount at the door."}
-          </p>
+          {/* A readout, not two boxes.
+
+            These were a pair of separately bordered rows — two framed
+            rectangles, one above the other, inside the Order details card — to
+            present two numbers and a sentence. They are one divided list now:
+            what the order is worth, then what a driver is actually told to take,
+            then why the second is what it is. The rule between them is the whole
+            of the separation, and it is the one that matters, because these two
+            figures are the ones nobody may confuse.
+
+            The two stay named apart because they genuinely differ, and
+            conflating them is how somebody is asked to pay twice. The collection
+            figure comes from `alshrouqOrderValue` — the same call the
+            confirmation dialog and the dispatch card make — so no screen can
+            promise a collection the payload does not send. */}
+          <div className="min-w-0 space-y-1.5">
+            <p className={FORM_FIELD.label}>Collection</p>
+            <dl className="text-[13px]">
+              <div className="flex items-baseline justify-between gap-3 py-1">
+                <dt className="truncate text-muted-foreground">Order value</dt>
+                <dd className="shrink-0 tabular-nums">
+                  {orderValueText ? fmtSAR(Number(orderValueText)) : "—"}
+                </dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-3 border-t border-border/50 py-1 pt-1.5">
+                <dt className="truncate text-muted-foreground">Collected by AlShrouq</dt>
+                <dd
+                  className={`shrink-0 font-semibold tabular-nums ${
+                    collectsNothing ? "text-success" : "text-foreground"
+                  }`}
+                >
+                  {collectionText ? fmtSAR(Number(collectionText)) : "—"}
+                </dd>
+              </div>
+            </dl>
+            <p className={FORM_FIELD.hint}>
+              {collectsNothing
+                ? "Already paid — the driver collects nothing."
+                : "The driver collects this amount at the door."}
+            </p>
+          </div>
         </div>
       </div>
     </div>

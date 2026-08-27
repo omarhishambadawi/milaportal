@@ -41,19 +41,15 @@ import {
   Check,
   ChevronRight,
   ChevronsUpDown,
-  ClipboardList,
   Plus,
-  ReceiptText,
   ShieldAlert,
-  StickyNote,
   Trash2,
   Truck,
-  UserCog,
   X,
 } from "lucide-react";
 import { ORDER_TYPES, DELIVERY_TYPES, CURRENCY, fmtSAR, formatOrderNo } from "@/lib/branches";
 import { cn } from "@/lib/utils";
-import { PANEL_MAIN } from "@/lib/panel";
+import { FORM_FIELD, PANEL_MAIN } from "@/lib/panel";
 import { useOrderForm } from "@/features/orders/hooks/use-order-form";
 import { requiredFieldValue } from "@/features/orders/payload";
 import { invoiceKey } from "@/features/orders/invoice-verification";
@@ -83,22 +79,37 @@ const FORM_ID = "order-form";
  *
  * The form used to be a single tall card of five banded sections, which is what
  * made the page read as one long scroll with a metre of empty space to its
- * right. Each group is its own card now — same headings, same 8px icon tile,
- * same 11.5px line of context — so the workflow column can sit beside the
- * verification column instead of under it, and a group can be skipped by eye
- * rather than by scrolling past its fields.
+ * right. Each group is its own card now — same headings, same line of context —
+ * so the workflow column can sit beside the verification column instead of under
+ * it, and a group can be skipped by eye rather than by scrolling past its
+ * fields.
  *
  * Deliberately still not larger than `text-sm`: these organize a form, they are
  * not page titles, and four oversized headings in a column read as four pages
- * stacked. The icon does the work that size would otherwise have to.
+ * stacked.
+ *
+ * ## The number, and the icon it replaces
+ *
+ * Each card carried a 28px primary-tinted tile with a lucide glyph in it. Four
+ * of those down a column is four saturated squares competing with the one tinted
+ * thing on the page that means something — and the glyphs were decoration
+ * rather than navigation: a clipboard, a receipt and a sticky note do not tell
+ * an agent which of the four sections they are in, they only tell them a
+ * designer was here.
+ *
+ * A numeral does. The four cards are a sequence — take the order, price it,
+ * assign it, annotate it — and a step number is the one mark that says where in
+ * that sequence you are. It is muted and 20px rather than tinted and 28px,
+ * because a navigation cue that outweighs its own heading has stopped being one.
  */
 function SectionCard({
-  icon: Icon,
+  step,
   title,
   hint,
   children,
 }: {
-  icon: typeof ClipboardList;
+  /** Which of the four this is. Presentational — the title carries the meaning. */
+  step: number;
   title: string;
   hint: string;
   children: React.ReactNode;
@@ -108,9 +119,9 @@ function SectionCard({
       <header className={cn("flex items-start gap-3", PANEL_MAIN.header)}>
         <span
           aria-hidden
-          className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary ring-1 ring-inset ring-primary/15"
+          className="mt-px grid h-5 w-5 shrink-0 place-items-center rounded-md bg-muted text-[10.5px] font-semibold tabular-nums text-muted-foreground"
         >
-          <Icon className="h-3.5 w-3.5" />
+          {step}
         </span>
         <div className="min-w-0">
           <h2 className="text-sm font-semibold leading-none tracking-tight text-foreground">
@@ -121,6 +132,42 @@ function SectionCard({
       </header>
       <div className={cn("grid gap-x-5 gap-y-4 sm:grid-cols-2", PANEL_MAIN.body)}>{children}</div>
     </Card>
+  );
+}
+
+/**
+ * A named group of fields inside a section card.
+ *
+ * The answer to a card that read as one continuous run of six controls. The
+ * fields were already in a sensible order — when it came in, how it ships, who
+ * it is for — and nothing on screen said so, so finding the customer's phone
+ * number meant reading every label down to it.
+ *
+ * A label, not a card. Grouping by nesting a bordered box inside a bordered card
+ * is the thing this page has spent three phases removing, and it would put a
+ * frame around two inputs. What separates the groups is the card grid's own
+ * `gap-y-4` against the tighter `gap-y-3.5` *inside* a group: fields that belong
+ * together sit closer to each other than to the fields that do not, which is the
+ * whole of the effect and costs no borders and one line of type.
+ *
+ * `sm:col-span-2` so a group occupies a full row of the card's grid and runs its
+ * own two-up grid inside — same gutters, so every control on the card still
+ * lines up on the same two columns whether or not it is in a group.
+ */
+function FieldGroup({
+  label,
+  className,
+  children,
+}: {
+  label: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={cn("min-w-0 sm:col-span-2", className)}>
+      <p className={cn("leading-none", FORM_FIELD.group)}>{label}</p>
+      <div className="mt-2 grid gap-x-5 gap-y-3.5 sm:grid-cols-2">{children}</div>
+    </div>
   );
 }
 
@@ -155,7 +202,7 @@ function Field({
 }) {
   return (
     <div className={cn("min-w-0 space-y-1.5", className)}>
-      <Label htmlFor={id} className="flex items-center gap-1.5 text-xs font-semibold">
+      <Label htmlFor={id} className={FORM_FIELD.label}>
         <span>{label}</span>
         {required && (
           <span className="text-destructive" title="Required">
@@ -165,7 +212,7 @@ function Field({
         {optional && <span className="font-normal text-muted-foreground/80">&mdash; optional</span>}
       </Label>
       {children}
-      {hint && <div className="text-[11px] leading-snug text-muted-foreground">{hint}</div>}
+      {hint && <div className={FORM_FIELD.hint}>{hint}</div>}
     </div>
   );
 }
@@ -635,186 +682,192 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
         <form id={FORM_ID} onSubmit={submit} className="min-w-0 space-y-5">
           <fieldset disabled={readOnly} className="contents">
             <SectionCard
-              icon={ClipboardList}
+              step={1}
               title="Order details"
               hint="When it came in, how it is fulfilled, and who it is for."
             >
-              <Field id="order-date" label="Date" required>
-                <Input
-                  id="order-date"
-                  type="date"
-                  value={form.order_date}
-                  onChange={(e) => setForm((f) => ({ ...f, order_date: e.target.value }))}
-                  required
-                />
-              </Field>
+              <FieldGroup label="Order basics">
+                <Field id="order-date" label="Date" required>
+                  <Input
+                    id="order-date"
+                    type="date"
+                    value={form.order_date}
+                    onChange={(e) => setForm((f) => ({ ...f, order_date: e.target.value }))}
+                    required
+                  />
+                </Field>
 
-              {/* The Team selector that stood here is gone. It asked the
-                  question backwards: an order belongs to a person, and the team
-                  is a fact about that person — so picking a team and then an
-                  agent from another one was possible, and filed the order under
-                  a team its agent is not in. The Assignment section below reads
-                  the team off the assigned agent instead. */}
+                {/* The Team selector that stood here is gone. It asked the
+                    question backwards: an order belongs to a person, and the team
+                    is a fact about that person — so picking a team and then an
+                    agent from another one was possible, and filed the order under
+                    a team its agent is not in. The Assignment section below reads
+                    the team off the assigned agent instead. */}
 
-              <Field id="order-type" label="Order type" required>
-                <Select
-                  value={form.order_type}
-                  onValueChange={(v) => setForm((f) => ({ ...f, order_type: v }))}
-                  disabled={readOnly}
-                >
-                  <SelectTrigger id="order-type">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ORDER_TYPES.map((t) => (
-                      <SelectItem key={t} value={t}>
-                        {t}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-
-              {/* AlShrouq is the one method that hands the order to somebody
-                  outside the portal, so choosing it changes what happens when
-                  the order is created. Saying so here — where the choice is
-                  made — is what stops the approval dialog arriving as a
-                  surprise two fields later. */}
-              <Field
-                id="order-delivery"
-                label="Delivery & pickup"
-                required
-                hint={
-                  deliveryType === ALSHROUQ ? (
-                    <span className="flex items-start gap-1.5">
-                      <Truck
-                        className="mt-px h-3.5 w-3.5 shrink-0 text-primary"
-                        aria-hidden="true"
-                      />
-                      <span>
-                        {mode === "create"
-                          ? "AlShrouq delivers this order. When you create it you can choose to save it only, or to hand the delivery to AlShrouq."
-                          : "AlShrouq delivers this order. The delivery panel on the right shows where it stands."}
-                      </span>
-                    </span>
-                  ) : undefined
-                }
-              >
-                <Select
-                  value={deliveryType}
-                  onValueChange={(v) => setForm((f) => ({ ...f, delivery_type: v }))}
-                  disabled={readOnly}
-                >
-                  <SelectTrigger id="order-delivery">
-                    <SelectValue placeholder="Select a method…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {DELIVERY_TYPES.map((t) => (
-                      <SelectItem key={t} value={t}>
-                        {t}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-
-              {/* The branch. Everything the customer asks next — is it open,
-                  does it deliver, what is the address — is answered by the
-                  panel in the verification column, without leaving the form. */}
-              <Field id="order-branch" label="Branch No." required>
-                <Popover open={open} onOpenChange={setOpen}>
-                  <PopoverTrigger asChild>
-                    <Button
-                      id="order-branch"
-                      variant="outline"
-                      role="combobox"
-                      className="w-full justify-between font-normal"
-                      disabled={readOnly}
-                    >
-                      {form.branch_no ? (
-                        <span className="flex min-w-0 items-center gap-2">
-                          <span className="font-mono font-medium">{form.branch_no}</span>
-                          <span className="truncate text-muted-foreground" dir="auto">
-                            {cityFor(form.branch_no)}
-                          </span>
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground">Select a branch…</span>
-                      )}
-                      <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent
-                    align="start"
-                    className="w-[var(--radix-popover-trigger-width)] p-0"
+                <Field id="order-type" label="Order type" required>
+                  <Select
+                    value={form.order_type}
+                    onValueChange={(v) => setForm((f) => ({ ...f, order_type: v }))}
+                    disabled={readOnly}
                   >
-                    <Command>
-                      <CommandInput placeholder="Search a branch code or city…" />
-                      <CommandList>
-                        <CommandEmpty>No branch.</CommandEmpty>
-                        <CommandGroup>
-                          {(branches ?? []).map((b) => (
-                            <CommandItem
-                              key={b.branch_no}
-                              value={`${b.branch_no} ${b.city}`}
-                              onSelect={() => {
-                                setForm((f) => ({ ...f, branch_no: b.branch_no }));
-                                setOpen(false);
-                              }}
-                            >
-                              <Check
-                                className={cn(
-                                  "mr-2 h-4 w-4",
-                                  form.branch_no === b.branch_no ? "opacity-100" : "opacity-0",
-                                )}
-                              />
-                              <span className="mr-2 font-mono">{b.branch_no}</span>
-                              <span className="truncate text-xs text-muted-foreground" dir="auto">
-                                {b.city}
-                              </span>
-                            </CommandItem>
-                          ))}
-                        </CommandGroup>
-                      </CommandList>
-                    </Command>
-                  </PopoverContent>
-                </Popover>
-              </Field>
+                    <SelectTrigger id="order-type">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ORDER_TYPES.map((t) => (
+                        <SelectItem key={t} value={t}>
+                          {t}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+              </FieldGroup>
 
-              {/* Optional for every other method, required for AlShrouq: a
-                  courier has to know who to call. Marked, not enforced by the
-                  schema — an ordinary save must never be blocked by an AlShrouq
-                  rule, which is the outage the reverted integration caused. What
-                  the requirement actually gates is the handover. */}
-              <Field
-                id="customer-name"
-                label="Customer name"
-                required={alshrouq.active}
-                optional={!alshrouq.active}
-              >
-                <Input
+              <FieldGroup label="Fulfillment">
+                {/* AlShrouq is the one method that hands the order to somebody
+                    outside the portal, so choosing it changes what happens when
+                    the order is created. Saying so here — where the choice is
+                    made — is what stops the approval dialog arriving as a
+                    surprise two fields later. */}
+                <Field
+                  id="order-delivery"
+                  label="Delivery & pickup"
+                  required
+                  hint={
+                    deliveryType === ALSHROUQ ? (
+                      <span className="flex items-start gap-1.5">
+                        <Truck
+                          className="mt-px h-3.5 w-3.5 shrink-0 text-primary"
+                          aria-hidden="true"
+                        />
+                        <span>
+                          {mode === "create"
+                            ? "AlShrouq delivers this order. When you create it you can choose to save it only, or to hand the delivery to AlShrouq."
+                            : "AlShrouq delivers this order. The delivery panel on the right shows where it stands."}
+                        </span>
+                      </span>
+                    ) : undefined
+                  }
+                >
+                  <Select
+                    value={deliveryType}
+                    onValueChange={(v) => setForm((f) => ({ ...f, delivery_type: v }))}
+                    disabled={readOnly}
+                  >
+                    <SelectTrigger id="order-delivery">
+                      <SelectValue placeholder="Select a method…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DELIVERY_TYPES.map((t) => (
+                        <SelectItem key={t} value={t}>
+                          {t}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+
+                {/* The branch. Everything the customer asks next — is it open,
+                    does it deliver, what is the address — is answered by the
+                    panel in the verification column, without leaving the form. */}
+                <Field id="order-branch" label="Branch No." required>
+                  <Popover open={open} onOpenChange={setOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        id="order-branch"
+                        variant="outline"
+                        role="combobox"
+                        className="w-full justify-between font-normal"
+                        disabled={readOnly}
+                      >
+                        {form.branch_no ? (
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span className="font-mono font-medium">{form.branch_no}</span>
+                            <span className="truncate text-muted-foreground" dir="auto">
+                              {cityFor(form.branch_no)}
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">Select a branch…</span>
+                        )}
+                        <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      align="start"
+                      className="w-[var(--radix-popover-trigger-width)] p-0"
+                    >
+                      <Command>
+                        <CommandInput placeholder="Search a branch code or city…" />
+                        <CommandList>
+                          <CommandEmpty>No branch.</CommandEmpty>
+                          <CommandGroup>
+                            {(branches ?? []).map((b) => (
+                              <CommandItem
+                                key={b.branch_no}
+                                value={`${b.branch_no} ${b.city}`}
+                                onSelect={() => {
+                                  setForm((f) => ({ ...f, branch_no: b.branch_no }));
+                                  setOpen(false);
+                                }}
+                              >
+                                <Check
+                                  className={cn(
+                                    "mr-2 h-4 w-4",
+                                    form.branch_no === b.branch_no ? "opacity-100" : "opacity-0",
+                                  )}
+                                />
+                                <span className="mr-2 font-mono">{b.branch_no}</span>
+                                <span className="truncate text-xs text-muted-foreground" dir="auto">
+                                  {b.city}
+                                </span>
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                </Field>
+              </FieldGroup>
+
+              <FieldGroup label="Customer">
+                {/* Optional for every other method, required for AlShrouq: a
+                    courier has to know who to call. Marked, not enforced by the
+                    schema — an ordinary save must never be blocked by an AlShrouq
+                    rule, which is the outage the reverted integration caused. What
+                    the requirement actually gates is the handover. */}
+                <Field
                   id="customer-name"
-                  value={form.customer_name}
-                  onChange={(e) => setForm((f) => ({ ...f, customer_name: e.target.value }))}
-                  placeholder="As given on the call"
-                />
-              </Field>
+                  label="Customer name"
+                  required={alshrouq.active}
+                  optional={!alshrouq.active}
+                >
+                  <Input
+                    id="customer-name"
+                    value={form.customer_name}
+                    onChange={(e) => setForm((f) => ({ ...f, customer_name: e.target.value }))}
+                    placeholder="As given on the call"
+                  />
+                </Field>
 
-              <Field
-                id="customer-phone"
-                label="Customer phone"
-                required={alshrouq.active}
-                optional={!alshrouq.active}
-              >
-                <Input
+                <Field
                   id="customer-phone"
-                  value={form.customer_phone}
-                  onChange={(e) => setForm((f) => ({ ...f, customer_phone: e.target.value }))}
-                  placeholder="05XXXXXXXX"
-                  dir="ltr"
-                  inputMode="tel"
-                />
-              </Field>
+                  label="Customer phone"
+                  required={alshrouq.active}
+                  optional={!alshrouq.active}
+                >
+                  <Input
+                    id="customer-phone"
+                    value={form.customer_phone}
+                    onChange={(e) => setForm((f) => ({ ...f, customer_phone: e.target.value }))}
+                    placeholder="05XXXXXXXX"
+                    dir="ltr"
+                    inputMode="tel"
+                  />
+                </Field>
+              </FieldGroup>
 
               {/* The three things a courier needs that no order column holds.
                   Inside this card rather than in one of its own, because they
@@ -831,7 +884,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
             </SectionCard>
 
             <SectionCard
-              icon={ReceiptText}
+              step={2}
               title="Invoicing"
               hint="What the order is worth, and the invoices it covers."
             >
@@ -844,6 +897,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                   typed figure survived a verification. */}
               <Field
                 id="order-value"
+                className="sm:col-span-2"
                 label={`Order value (${CURRENCY})`}
                 hint={
                   valueIsVerified ? (
@@ -858,7 +912,12 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                   )
                 }
               >
-                <div className="relative">
+                {/* Capped rather than full-bleed. It is a figure, and a
+                    figure in a box the width of the card reads as a paragraph
+                    field — while a half-width grid cell left the other half of
+                    the row empty. `max-w-xs` is the measure of the number plus
+                    its verified chip and no more. */}
+                <div className="relative max-w-xs">
                   <Input
                     id="order-value"
                     type="number"
@@ -881,12 +940,14 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 </div>
               </Field>
 
-              <div className="min-w-0 space-y-1.5 sm:col-span-2">
+              <div
+                className={cn(
+                  "min-w-0 space-y-1.5 border-t pt-4 sm:col-span-2",
+                  PANEL_MAIN.divider,
+                )}
+              >
                 <div className="flex items-center justify-between gap-2">
-                  <Label
-                    htmlFor="invoice-0"
-                    className="flex items-center gap-1.5 text-xs font-semibold"
-                  >
+                  <Label htmlFor="invoice-0" className={FORM_FIELD.label}>
                     <span>Invoice No.</span>
                     <span className="font-normal text-muted-foreground/80">
                       &mdash; add one or more invoice numbers
@@ -967,7 +1028,7 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                 sits here because it is the same kind of fact — an operational
                 classification of the order, not a field describing it. */}
             <SectionCard
-              icon={UserCog}
+              step={3}
               title="Assignment"
               hint={
                 canPickAgent
@@ -991,7 +1052,11 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
                   }
                 />
               </div>
-              <div className="sm:col-span-2">
+              {/* Its own concern, under a hairline: an operational
+                  classification of the order rather than a third assignment
+                  field. The rule is what the tinted box around it used to be
+                  doing, at a fraction of the weight. */}
+              <div className={cn("border-t pt-4 sm:col-span-2", PANEL_MAIN.divider)}>
                 <CallCenterInvoiceField
                   checked={callCenterChecked}
                   automated={shamsInvoices.callCentreVerified}
@@ -1005,15 +1070,21 @@ export function OrderForm({ mode }: { mode: "create" | "edit" }) {
             </SectionCard>
 
             <SectionCard
-              icon={StickyNote}
+              step={4}
               title="Notes"
               hint="Anything the next person opening this order should know."
             >
+              {/* Deliberately the least-changed card on the page. Notes is a
+                  low-priority workspace and must not compete with the three
+                  sections above it, so the only thing adjusted here is the
+                  control's proportion: two rows left a 56px box under a 62px
+                  header, which reads as an afterthought rather than a place to
+                  write. Three rows is a paragraph. It still grows by hand. */}
               <div className="min-w-0 sm:col-span-2">
                 <Textarea
                   id="order-notes"
                   aria-label="Notes"
-                  rows={2}
+                  rows={3}
                   value={form.notes}
                   onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
                   placeholder="Optional"

@@ -2004,6 +2004,80 @@ rather than fixed, since `--primary` as link text is an app-wide decision and no
 an Orders one. No horizontal overflow and no overflowing descendant at 1440, 1280
 (the narrowest the column ever gets, 472px), 1024, 820, 640, 420 or 375.
 
+#### The workflow column — five groups, four steps, and no box for a checkbox
+
+The context column was made to state its answers first. This is its counterpart:
+the side an agent *edits*, which had ended up as four cards of continuous form
+where every control carried the same weight as every other one.
+
+**One form type** (`FORM_FIELD`, beside `PANEL_FIELD` in `src/lib/panel.ts`).
+The mirror of the panel token and deliberately a step louder — a form label is
+`font-semibold` in the foreground where a panel label is `font-medium` and
+muted, because the left column is written and the right is read. The two share a
+size and a case at the group level, which is what ties the columns together. It
+exists because the labels had drifted across three files that render inside the
+same card: the form's `Field` at `text-xs font-semibold`, the AlShrouq
+requirements at `text-xs font-medium`, its coordinates at `text-[11px]
+font-medium` and muted.
+
+**Five named groups, no nested cards.** Order details is *Order basics*
+(date, type), *Fulfillment* (method, branch) and *Customer* (name, phone);
+`AlShrouqOrderRequirements` adds *Delivery* and *Payment & collection*. What
+separates them is not a border but the card grid's own `gap-y-4` against the
+tighter `gap-y-3.5` inside a group — fields that belong together sit closer to
+each other than to the fields that do not, which is the whole of the effect and
+costs one line of type. `FieldGroup` is `sm:col-span-2` running its own two-up
+grid with the same gutters, so every control on a card still lines up on the same
+two columns whether or not it is in a group.
+
+**A number, not an icon.** Each card carried a 28px primary-tinted tile with a
+lucide glyph. Four of those is four saturated squares competing with the one
+tinted thing on the page that means something, and a clipboard, a receipt and a
+sticky note do not tell an agent which section they are in. The four cards are a
+sequence — take the order, price it, assign it, annotate it — and a step number
+is the mark that says where in it you are. Muted and 20px rather than tinted and
+28px: a navigation cue that outweighs its own heading has stopped being one.
+
+**Assignment answers its own question first.** *Created by* was the first thing
+in the card and held a full labelled row with an `h-9` value, which gave the
+person who typed the order the same weight as the person who owns it. *Assigned
+to* and *Team* lead now, and the creator is one quiet line beneath them — still
+separate from the assignee, because they are different people whenever a
+supervisor takes an order down and conflating them is what put non-agents into
+agent workload, but separate no longer has to mean equal. That is 45px back.
+
+**The Call Center flag loses its box.** It was a tinted, bordered panel whose
+colour carried the state, which put a card around a single checkbox inside a card
+inside a column of cards. Nothing is lost, because the state was never in the
+border: it is in the caption, which names the invoice, and in the icon beside it —
+a success `Bot` when the portal did it, a clock while nothing is verified. A
+hairline above it says it is its own concern rather than a third assignment
+field. The collection readout in the AlShrouq block went the same way: two
+separately bordered rows became one divided list, worth then collected then why.
+
+**Invoicing asks two questions in order.** The order value takes the full row and
+caps its own box at `max-w-xs` — it is a figure, and a figure in a card-wide box
+reads as a paragraph field, while the half-width cell it used to sit in left the
+other half of the row empty. The invoices follow under a rule.
+
+Density, measured against the Phase 2 form at 1440px: the workflow column goes
+**1517px → 1584px, +4.4%**. Order details carries +75 for its five group labels,
+Invoicing +17 for the rule, Notes +20 for a third textarea row (two rows left a
+56px box under a 62px header), and Assignment gives back −45. The *page* is no
+taller at `xl`, because the context column is 1772px and still sets the height;
+below `xl`, where the columns stack, the page grows by those 67px.
+
+Contrast, light / dark: field labels 16.51 / 15.1, group labels and the
+*Created by* line 5.97 / 6.89, the step numeral on its chip 5.42 / 6.13, the
+collection values 16.51 / 15.1, the required marker 4.79 / 4.77. Two figures
+inherit `--success` as *text* and measure **3.39 / 6.76** — the zero-collection
+amount and *Verified location*. Both predate this phase and keep their colour;
+like the 2.35 on `text-primary` links, moving `--success` is an app-wide decision
+rather than an Orders one. No horizontal overflow, no overflowing descendant and
+no label/control collision at 1440, 1280, 1024, 820, 640, 420 or 375; the field
+grids collapse to one column below `sm`, and `max-w-xs` on the value shrinks to
+310px inside a 350px card rather than overflowing it.
+
 `OrderInvoicePanel` gives each document a compact header (number, state, total,
 customer) over branch, channel, document date, *Verified by MilaPortal* and the
 item lines. Every document **starts open** — folding was for the old capped

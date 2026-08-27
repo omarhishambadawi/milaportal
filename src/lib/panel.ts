@@ -1,5 +1,5 @@
 /**
- * The workspace panel shell — one definition for every card on the order page.
+ * The order workspace's shared surfaces and type — one definition for the page.
  *
  * The order page is four editable cards beside three read-only panels, and each
  * of the seven had grown its own copy of the same three class strings: the
@@ -68,4 +68,34 @@ export const PANEL_CONTEXT: PanelShell = {
 export const PANEL_FIELD = {
   label: "text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground",
   value: "text-[13px] font-medium leading-snug text-foreground",
+} as const;
+
+/**
+ * One control on the editing side of the page, and the name of a group of them.
+ *
+ * The mirror of `PANEL_FIELD`, and deliberately a step louder: the left column
+ * is edited and the right column is read, so a form label is `font-semibold` in
+ * the foreground while a panel label is `font-medium` and muted. The two share a
+ * size and a case at the group level, which is what makes the columns read as
+ * one design rather than two.
+ *
+ * It exists because the labels had drifted apart across three files — the order
+ * form's `Field` at `text-xs font-semibold`, the AlShrouq requirements at
+ * `text-xs font-medium`, its coordinates at `text-[11px] font-medium` and muted —
+ * for controls that sit inside the same card, one under another.
+ */
+export const FORM_FIELD = {
+  /** A control's own label, beside its required marker. */
+  label: "flex items-center gap-1.5 text-xs font-semibold",
+  /**
+   * The name of a group of controls.
+   *
+   * Uppercase and small so that a group can be recognised without being read,
+   * which is the whole reason the groups are named: an agent scanning for the
+   * customer's phone number should find the block by its shape rather than by
+   * reading six field labels.
+   */
+  group: "text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground",
+  /** The line under a control, and the quietest thing in a card. */
+  hint: "text-[11px] leading-snug text-muted-foreground",
 } as const;
