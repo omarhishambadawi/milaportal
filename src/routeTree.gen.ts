@@ -14,6 +14,7 @@ import { Route as McpRouteImport } from './routes/mcp'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiShamsSyncRunRouteImport } from './routes/api/shams-sync-run'
 import { Route as ApiCspReportRouteImport } from './routes/api/csp-report'
 import { Route as ApiCdrSyncRouteImport } from './routes/api/cdr-sync'
 import { Route as ApiAlshrouqRunScheduledRouteImport } from './routes/api/alshrouq-run-scheduled'
@@ -42,6 +43,7 @@ import { Route as AppBranchesImportRouteImport } from './routes/_app.branches.im
 import { Route as AppAdminYeastarDiagnosticsRouteImport } from './routes/_app.admin.yeastar-diagnostics'
 import { Route as AppAdminYeastarRouteImport } from './routes/_app.admin.yeastar'
 import { Route as AppAdminUsersRouteImport } from './routes/_app.admin.users'
+import { Route as AppAdminShamsSyncRouteImport } from './routes/_app.admin.shams-sync'
 import { Route as AppAdminShamsDiagnosticsRouteImport } from './routes/_app.admin.shams-diagnostics'
 import { Route as AppAdminBranchesRouteImport } from './routes/_app.admin.branches'
 import { Route as Char91DotmcpChar93InvokeToolToolRouteImport } from './routes/[.mcp]/invoke-tool/$tool'
@@ -73,6 +75,11 @@ const AppRoute = AppRouteImport.update({
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiShamsSyncRunRoute = ApiShamsSyncRunRouteImport.update({
+  id: '/api/shams-sync-run',
+  path: '/api/shams-sync-run',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiCspReportRoute = ApiCspReportRouteImport.update({
@@ -218,6 +225,11 @@ const AppAdminUsersRoute = AppAdminUsersRouteImport.update({
   path: '/admin/users',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAdminShamsSyncRoute = AppAdminShamsSyncRouteImport.update({
+  id: '/admin/shams-sync',
+  path: '/admin/shams-sync',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppAdminShamsDiagnosticsRoute =
   AppAdminShamsDiagnosticsRouteImport.update({
     id: '/admin/shams-diagnostics',
@@ -278,10 +290,12 @@ export interface FileRoutesByFullPath {
   '/api/alshrouq-run-scheduled': typeof ApiAlshrouqRunScheduledRoute
   '/api/cdr-sync': typeof ApiCdrSyncRoute
   '/api/csp-report': typeof ApiCspReportRoute
+  '/api/shams-sync-run': typeof ApiShamsSyncRunRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
   '/admin/branches': typeof AppAdminBranchesRoute
   '/admin/shams-diagnostics': typeof AppAdminShamsDiagnosticsRoute
+  '/admin/shams-sync': typeof AppAdminShamsSyncRoute
   '/admin/users': typeof AppAdminUsersRoute
   '/admin/yeastar': typeof AppAdminYeastarRoute
   '/admin/yeastar-diagnostics': typeof AppAdminYeastarDiagnosticsRoute
@@ -320,10 +334,12 @@ export interface FileRoutesByTo {
   '/api/alshrouq-run-scheduled': typeof ApiAlshrouqRunScheduledRoute
   '/api/cdr-sync': typeof ApiCdrSyncRoute
   '/api/csp-report': typeof ApiCspReportRoute
+  '/api/shams-sync-run': typeof ApiShamsSyncRunRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
   '/admin/branches': typeof AppAdminBranchesRoute
   '/admin/shams-diagnostics': typeof AppAdminShamsDiagnosticsRoute
+  '/admin/shams-sync': typeof AppAdminShamsSyncRoute
   '/admin/users': typeof AppAdminUsersRoute
   '/admin/yeastar': typeof AppAdminYeastarRoute
   '/admin/yeastar-diagnostics': typeof AppAdminYeastarDiagnosticsRoute
@@ -364,10 +380,12 @@ export interface FileRoutesById {
   '/api/alshrouq-run-scheduled': typeof ApiAlshrouqRunScheduledRoute
   '/api/cdr-sync': typeof ApiCdrSyncRoute
   '/api/csp-report': typeof ApiCspReportRoute
+  '/api/shams-sync-run': typeof ApiShamsSyncRunRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
   '/_app/admin/branches': typeof AppAdminBranchesRoute
   '/_app/admin/shams-diagnostics': typeof AppAdminShamsDiagnosticsRoute
+  '/_app/admin/shams-sync': typeof AppAdminShamsSyncRoute
   '/_app/admin/users': typeof AppAdminUsersRoute
   '/_app/admin/yeastar': typeof AppAdminYeastarRoute
   '/_app/admin/yeastar-diagnostics': typeof AppAdminYeastarDiagnosticsRoute
@@ -408,10 +426,12 @@ export interface FileRouteTypes {
     | '/api/alshrouq-run-scheduled'
     | '/api/cdr-sync'
     | '/api/csp-report'
+    | '/api/shams-sync-run'
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
     | '/admin/branches'
     | '/admin/shams-diagnostics'
+    | '/admin/shams-sync'
     | '/admin/users'
     | '/admin/yeastar'
     | '/admin/yeastar-diagnostics'
@@ -450,10 +470,12 @@ export interface FileRouteTypes {
     | '/api/alshrouq-run-scheduled'
     | '/api/cdr-sync'
     | '/api/csp-report'
+    | '/api/shams-sync-run'
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
     | '/admin/branches'
     | '/admin/shams-diagnostics'
+    | '/admin/shams-sync'
     | '/admin/users'
     | '/admin/yeastar'
     | '/admin/yeastar-diagnostics'
@@ -493,10 +515,12 @@ export interface FileRouteTypes {
     | '/api/alshrouq-run-scheduled'
     | '/api/cdr-sync'
     | '/api/csp-report'
+    | '/api/shams-sync-run'
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
     | '/_app/admin/branches'
     | '/_app/admin/shams-diagnostics'
+    | '/_app/admin/shams-sync'
     | '/_app/admin/users'
     | '/_app/admin/yeastar'
     | '/_app/admin/yeastar-diagnostics'
@@ -532,6 +556,7 @@ export interface RootRouteChildren {
   ApiAlshrouqRunScheduledRoute: typeof ApiAlshrouqRunScheduledRoute
   ApiCdrSyncRoute: typeof ApiCdrSyncRoute
   ApiCspReportRoute: typeof ApiCspReportRoute
+  ApiShamsSyncRunRoute: typeof ApiShamsSyncRunRoute
   DotlovableOauthConsentRoute: typeof DotlovableOauthConsentRoute
   Char91DotmcpChar93InvokeToolToolRoute: typeof Char91DotmcpChar93InvokeToolToolRoute
   ApiPublicCdrProgressJobIdRoute: typeof ApiPublicCdrProgressJobIdRoute
@@ -575,6 +600,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/shams-sync-run': {
+      id: '/api/shams-sync-run'
+      path: '/api/shams-sync-run'
+      fullPath: '/api/shams-sync-run'
+      preLoaderRoute: typeof ApiShamsSyncRunRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/csp-report': {
@@ -773,6 +805,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAdminUsersRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/admin/shams-sync': {
+      id: '/_app/admin/shams-sync'
+      path: '/admin/shams-sync'
+      fullPath: '/admin/shams-sync'
+      preLoaderRoute: typeof AppAdminShamsSyncRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/admin/shams-diagnostics': {
       id: '/_app/admin/shams-diagnostics'
       path: '/admin/shams-diagnostics'
@@ -840,6 +879,7 @@ interface AppRouteChildren {
   AppShamsRoute: typeof AppShamsRoute
   AppAdminBranchesRoute: typeof AppAdminBranchesRoute
   AppAdminShamsDiagnosticsRoute: typeof AppAdminShamsDiagnosticsRoute
+  AppAdminShamsSyncRoute: typeof AppAdminShamsSyncRoute
   AppAdminUsersRoute: typeof AppAdminUsersRoute
   AppAdminYeastarRoute: typeof AppAdminYeastarRoute
   AppAdminYeastarDiagnosticsRoute: typeof AppAdminYeastarDiagnosticsRoute
@@ -868,6 +908,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppShamsRoute: AppShamsRoute,
   AppAdminBranchesRoute: AppAdminBranchesRoute,
   AppAdminShamsDiagnosticsRoute: AppAdminShamsDiagnosticsRoute,
+  AppAdminShamsSyncRoute: AppAdminShamsSyncRoute,
   AppAdminUsersRoute: AppAdminUsersRoute,
   AppAdminYeastarRoute: AppAdminYeastarRoute,
   AppAdminYeastarDiagnosticsRoute: AppAdminYeastarDiagnosticsRoute,
@@ -902,6 +943,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAlshrouqRunScheduledRoute: ApiAlshrouqRunScheduledRoute,
   ApiCdrSyncRoute: ApiCdrSyncRoute,
   ApiCspReportRoute: ApiCspReportRoute,
+  ApiShamsSyncRunRoute: ApiShamsSyncRunRoute,
   DotlovableOauthConsentRoute: DotlovableOauthConsentRoute,
   Char91DotmcpChar93InvokeToolToolRoute: Char91DotmcpChar93InvokeToolToolRoute,
   ApiPublicCdrProgressJobIdRoute: ApiPublicCdrProgressJobIdRoute,

@@ -51,6 +51,7 @@ import type { ResolveDispatchResult } from "@/lib/shams-crm/alshrouq-resolve.ser
 import type { AlShrouqLocationResult } from "@/features/alshrouq/location";
 import type { AgentSetupSummary, ExistingAgentLink } from "@/lib/shams-crm/agent-setup.server";
 import type { ShamsCrmOffer, ShamsOfferScope } from "@/lib/shams-crm/types";
+import type { ShamsSyncMonitorReport } from "@/lib/shams-crm/sync-monitor.server";
 import type { ShamsCrmHistory } from "@/lib/shams/types";
 
 /* -------------------------------------------------------------------------- */
@@ -1445,5 +1446,54 @@ export const shamsGetOfferScopes = createServerFn({ method: "POST" })
       const { ShamsCrmError } = await import("@/lib/shams-crm/client.server");
       const kind = err instanceof ShamsCrmError ? err.kind : "unknown";
       return { ok: false, scopes: [], error: { kind, message: "Offer pricing is unavailable." } };
+    }
+  });
+
+/* -------------------------------------------------------------------------- */
+/* Shams CRM sync monitoring                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Administrator-only view of the automated stock/promotions synchronisation.
+ *
+ * Read-only, and structurally so: nothing it reaches can start a run. The
+ * scheduled trigger lives behind `/api/shams-sync-run`, which is callable only
+ * with the service role key and never from a browser — so this function cannot
+ * be turned into a trigger by anyone finding it.
+ *
+ * Same gate as `shamsStatus` and the other diagnostics — `assertAdmin`, not
+ * `view_shams_mis` — because this is infrastructure telemetry rather than
+ * pharmacy data, and because a page load spends two requests against a
+ * third-party production API. The `shams_sync_runs` and
+ * `shams_sync_scheduler_state` tables enforce the same rule again in RLS, so a
+ * non-administrator reaching the tables directly sees nothing either.
+ *
+ * The report carries no credential, no session token and no upstream response
+ * body — `sync-monitor.server.ts` maps every failure to a kind and a sentence
+ * before it crosses this boundary.
+ */
+export interface ShamsSyncMonitorResult {
+  ok: boolean;
+  report: ShamsSyncMonitorReport | null;
+  error: ShamsFailure | null;
+}
+
+export const shamsSyncMonitor = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }): Promise<ShamsSyncMonitorResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertAdmin(supabase, userId);
+
+    try {
+      const { readShamsSyncMonitor } = await import("@/lib/shams-crm/sync-monitor.server");
+      return { ok: true, report: await readShamsSyncMonitor(supabase), error: null };
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith("Forbidden")) throw err;
+      console.warn("[shams-sync] monitor failed:", (err as Error)?.name ?? "unknown");
+      return {
+        ok: false,
+        report: null,
+        error: { kind: "unknown", message: "The synchronisation status could not be read." },
+      };
     }
   });

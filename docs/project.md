@@ -3135,6 +3135,137 @@ src/lib/shams-crm/alshrouq-config.server.ts  admin-only AlShrouq connectivity pr
 src/lib/shams-crm/types.ts               wire shapes + normalized models
 ```
 
+### Shams CRM stock and promotions sync — automated
+
+`shams-crm.cloud` runs the stock and promotions synchronisation itself, in a
+background worker. The PharmacyCRM Desktop performs none of it: it POSTs a
+trigger, receives a `run_id`, and polls a status endpoint — its own success
+message is "started in background… you can keep using the system". This was
+established in the Phase 1 investigation by unpacking the Desktop's PyInstaller
+archive: `max_pages`, `sync_mode`, `docno_mode`, `itm_cd` and `wh_cd` appear
+nowhere in the client and only in the server-composed `notes`, and the run notes
+carry a `worker_pid` no Windows process could have.
+
+So MilaPortal automates **pressing the button**, and records what happened. It
+contains no synchronisation logic because there is none to contain, and the
+Desktop remains the manual fallback, untouched.
+
+```
+POST /stock/sync              trigger, returns run_id
+GET  /stock/sync/status       latest_run, active_run, is_running, last_success_at_*
+POST /promotions/sync
+GET  /promotions/sync/status
+```
+
+```
+src/lib/shams-crm/sync-status.ts        PURE: wire shapes, notes parsing, the timestamp workaround, classifyRun
+src/lib/shams-crm/sync.server.ts        the four calls. Reads via crmFetch; the trigger is a single-attempt POST
+src/lib/shams-crm/sync-scheduler.server.ts  claim -> pre-check -> trigger -> record, and the reconcile pass
+src/lib/shams-crm/sync-monitor.server.ts    the admin page's read model
+src/routes/api/shams-sync-run.ts        the endpoint pg_cron pokes
+src/routes/_app.admin.shams-sync.tsx    administrator-only monitoring
+```
+
+Authentication is borrowed whole from `client.server.ts` on the existing
+`SHAMS_CRM_USERNAME` / `SHAMS_CRM_PASSWORD` pair — no new credential, no service
+account, and the service principal throughout since these endpoints act on the
+whole chain rather than on one agent's behalf.
+
+**The trigger deliberately does not reuse `crmFetch`.** That function answers a
+401 by logging in again and re-sending, which is right for a read and is the most
+dangerous thing this integration could do to a POST: a 401 on the response leg of
+an accepted trigger is indistinguishable from one refused before processing, so
+re-sending would queue a second run. The trigger is one attempt that reports
+ambiguity instead of resolving it, exactly as `alshrouq-create.server.ts` does.
+Nothing retries a trigger; an unknown outcome is recorded `indeterminate` and
+left for a person.
+
+#### Three guards, none trusted alone
+
+Phase 1 could not verify what `POST /stock/sync` does while a run is already
+active, and the scheduler must not be the thing that finds out unattended.
+
+1. `shams_sync_runs_active_key` — a partial unique index on `(sync_type) WHERE
+   status IN ('triggered','running')`. Two MilaPortal executions cannot both hold
+   a claim; the loser's insert fails with `23505` and it stops. The claim is
+   written *before* the CRM is contacted, so the window in which both could
+   decide to trigger does not exist.
+2. The CRM's own `is_running`, read immediately before every trigger — this
+   catches a run started by the Desktop, an operator, or the CRM's own scheduler.
+3. A four-hour stale-claim reaper, without which one row stuck in `running` would
+   block every future night silently. Guard 2 is what makes it safe: reaping
+   frees only our claim, and the status pre-check still runs.
+
+#### Scheduling
+
+`pg_cron` → `public.shams_sync_due(task)` → `net.http_post` → `/api/shams-sync-run`,
+the same shape as `alshrouq_dispatch_due()`, authenticating with the platform's
+own `email_queue_service_role_key` rather than a hand-maintained secret — the
+credential drift that cost that integration 5,769 silent cron runs is not
+reintroduced here.
+
+Two jobs, because they have different frequencies and different risk:
+
+| job | schedule | what it does |
+| --- | --- | --- |
+| `shams-sync-trigger` | `0 22 * * *` (01:00 Riyadh) | starts both syncs |
+| `shams-sync-reconcile` | `*/5 * * * *` | reads status and closes rows — **cannot trigger anything** |
+
+The reconcile job makes no HTTP request at all unless a run is open, so it costs
+nothing on an idle day. 01:00 Riyadh is off-peak, the observed runs took 24 and
+26 minutes concurrently, and it leaves the whole working day as recovery time.
+Changing it needs no deploy:
+
+```sql
+SELECT cron.alter_job(
+  (SELECT jobid FROM cron.job WHERE jobname = 'shams-sync-trigger'),
+  schedule := '0 23 * * *');
+```
+
+**Deployment requires one vault entry**, `shams_sync_scheduler_url`, holding the
+`/api/shams-sync-run` URL. Without it the poll is a loud no-op: it warns in the
+Postgres log, records `unconfigured` in `shams_sync_scheduler_state`, and the
+admin page says so.
+
+#### History, because the CRM keeps none
+
+`GET /stock/sync/status` returns exactly one run and there is no history
+endpoint, so `shams_sync_runs` is the only place the daily record exists. Status
+is one of `triggered · running · success · failed · skipped · indeterminate`;
+the first two are the non-terminal pair the unique index keys on. `skipped` is
+not a fault — it is almost always "a run was already active". Both tables are
+administrator-read in RLS and written only by the service role, so a browser
+cannot fabricate sync history.
+
+#### The promotions timestamp workaround
+
+The promotions service puts Riyadh local time into `last_success_at_utc`; stock
+is correct. Phase 1 proved it by contradiction — a response cached at 18:27:13
+UTC reported a run starting at 20:24:31 — and `assessTimestamp` checks that same
+contradiction on every response rather than carrying a hardcoded "promotions is
+broken" flag:
+
+* a value plausible as UTC is believed, so stock is never touched;
+* a value that could only be Riyadh local is corrected, and the row is stamped
+  `source_timestamps_corrected` so the correction is visible rather than hidden;
+* a value the Riyadh offset does **not** explain is left exactly as sent and
+  flagged, because "wrong in a way I do not understand" must not be quietly
+  rewritten into something plausible.
+
+It removes itself: once Shams fixes the source, timestamps stop arriving in the
+future and no correction is applied, with nobody deploying anything. Both ends of
+a run are assessed together so durations stay correct either way. The workaround
+lives only in `sync-status.ts`; deleting that one function is the whole removal.
+
+#### What this phase deliberately omits
+
+No manual trigger controls — no Run, Retry or Full Refresh. The scheduler is new
+and unproven in production, and the Desktop is the manual fallback in the
+meantime. `execution_source` already accepts `'manual'` so adding them later
+needs no migration. `shamsSyncMonitor` is administrator-only via `assertAdmin`
+and is structurally read-only: the trigger path is reachable only with the
+service role key, never from a browser.
+
 ### AlShrouq connectivity probe
 
 `alshrouq-config.server.ts` reads `GET /integrations/alshrouq/config` through the
