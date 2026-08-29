@@ -50,6 +50,7 @@ export type Database = {
           cancelled_by: string | null
           client_order_id: string
           created_at: string
+          crm_agent_id: string | null
           customer_address: string | null
           customer_lat: number | null
           customer_lng: number | null
@@ -89,6 +90,7 @@ export type Database = {
           cancelled_by?: string | null
           client_order_id: string
           created_at?: string
+          crm_agent_id?: string | null
           customer_address?: string | null
           customer_lat?: number | null
           customer_lng?: number | null
@@ -128,6 +130,7 @@ export type Database = {
           cancelled_by?: string | null
           client_order_id?: string
           created_at?: string
+          crm_agent_id?: string | null
           customer_address?: string | null
           customer_lat?: number | null
           customer_lng?: number | null
@@ -175,6 +178,36 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      alshrouq_scheduler_state: {
+        Row: {
+          id: number
+          last_error: string | null
+          last_outcome: string | null
+          last_poke_at: string | null
+          last_poll_at: string | null
+          last_request_id: number | null
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          last_error?: string | null
+          last_outcome?: string | null
+          last_poke_at?: string | null
+          last_poll_at?: string | null
+          last_request_id?: number | null
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          last_error?: string | null
+          last_outcome?: string | null
+          last_poke_at?: string | null
+          last_poll_at?: string | null
+          last_request_id?: number | null
+          updated_at?: string
+        }
+        Relationships: []
       }
       branch_imports: {
         Row: {
@@ -977,6 +1010,108 @@ export type Database = {
           user_id?: string
           vault_key?: string | null
           verified_at?: string | null
+        }
+        Relationships: []
+      }
+      shams_sync_runs: {
+        Row: {
+          branches_seen: number | null
+          branches_targeted: number | null
+          completed_at: string | null
+          created_at: string
+          duration_seconds: number | null
+          error_summary: string | null
+          execution_source: string
+          id: string
+          last_observed_at: string | null
+          pages_fetched: number | null
+          rows_changed: number | null
+          rows_seen: number | null
+          shams_run_id: string | null
+          skip_reason: string | null
+          source_timestamps_corrected: boolean
+          started_at: string | null
+          status: string
+          sync_type: string
+          triggered_at: string
+          updated_at: string
+        }
+        Insert: {
+          branches_seen?: number | null
+          branches_targeted?: number | null
+          completed_at?: string | null
+          created_at?: string
+          duration_seconds?: number | null
+          error_summary?: string | null
+          execution_source?: string
+          id?: string
+          last_observed_at?: string | null
+          pages_fetched?: number | null
+          rows_changed?: number | null
+          rows_seen?: number | null
+          shams_run_id?: string | null
+          skip_reason?: string | null
+          source_timestamps_corrected?: boolean
+          started_at?: string | null
+          status: string
+          sync_type: string
+          triggered_at?: string
+          updated_at?: string
+        }
+        Update: {
+          branches_seen?: number | null
+          branches_targeted?: number | null
+          completed_at?: string | null
+          created_at?: string
+          duration_seconds?: number | null
+          error_summary?: string | null
+          execution_source?: string
+          id?: string
+          last_observed_at?: string | null
+          pages_fetched?: number | null
+          rows_changed?: number | null
+          rows_seen?: number | null
+          shams_run_id?: string | null
+          skip_reason?: string | null
+          source_timestamps_corrected?: boolean
+          started_at?: string | null
+          status?: string
+          sync_type?: string
+          triggered_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      shams_sync_scheduler_state: {
+        Row: {
+          id: number
+          last_error: string | null
+          last_outcome: string | null
+          last_poke_at: string | null
+          last_poll_at: string | null
+          last_request_id: number | null
+          last_task: string | null
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          last_error?: string | null
+          last_outcome?: string | null
+          last_poke_at?: string | null
+          last_poll_at?: string | null
+          last_request_id?: number | null
+          last_task?: string | null
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          last_error?: string | null
+          last_outcome?: string | null
+          last_poke_at?: string | null
+          last_poll_at?: string | null
+          last_request_id?: number | null
+          last_task?: string | null
+          updated_at?: string
         }
         Relationships: []
       }
@@ -1824,6 +1959,7 @@ export type Database = {
         Args: { _password: string; _user_id: string }
         Returns: string
       }
+      shams_sync_due: { Args: { task?: string }; Returns: number }
       st_3dclosestpoint: {
         Args: { geom1: unknown; geom2: unknown }
         Returns: unknown
