@@ -29,6 +29,7 @@ import { Route as AppOrdersIndexRouteImport } from './routes/_app.orders.index'
 import { Route as AppComplaintsIndexRouteImport } from './routes/_app.complaints.index'
 import { Route as AppCallsIndexRouteImport } from './routes/_app.calls.index'
 import { Route as AppBranchesIndexRouteImport } from './routes/_app.branches.index'
+import { Route as AppAdminIndexRouteImport } from './routes/_app.admin.index'
 import { Route as AppOrdersNewRouteImport } from './routes/_app.orders.new'
 import { Route as AppOrdersIdRouteImport } from './routes/_app.orders.$id'
 import { Route as AppComplaintsNewRouteImport } from './routes/_app.complaints.new'
@@ -152,6 +153,11 @@ const AppCallsIndexRoute = AppCallsIndexRouteImport.update({
 const AppBranchesIndexRoute = AppBranchesIndexRouteImport.update({
   id: '/branches/',
   path: '/branches/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAdminIndexRoute = AppAdminIndexRouteImport.update({
+  id: '/admin/',
+  path: '/admin/',
   getParentRoute: () => AppRoute,
 } as any)
 const AppOrdersNewRoute = AppOrdersNewRouteImport.update({
@@ -310,6 +316,7 @@ export interface FileRoutesByFullPath {
   '/complaints/new': typeof AppComplaintsNewRoute
   '/orders/$id': typeof AppOrdersIdRoute
   '/orders/new': typeof AppOrdersNewRoute
+  '/admin/': typeof AppAdminIndexRoute
   '/branches/': typeof AppBranchesIndexRoute
   '/calls/': typeof AppCallsIndexRoute
   '/complaints/': typeof AppComplaintsIndexRoute
@@ -354,6 +361,7 @@ export interface FileRoutesByTo {
   '/complaints/new': typeof AppComplaintsNewRoute
   '/orders/$id': typeof AppOrdersIdRoute
   '/orders/new': typeof AppOrdersNewRoute
+  '/admin': typeof AppAdminIndexRoute
   '/branches': typeof AppBranchesIndexRoute
   '/calls': typeof AppCallsIndexRoute
   '/complaints': typeof AppComplaintsIndexRoute
@@ -400,6 +408,7 @@ export interface FileRoutesById {
   '/_app/complaints/new': typeof AppComplaintsNewRoute
   '/_app/orders/$id': typeof AppOrdersIdRoute
   '/_app/orders/new': typeof AppOrdersNewRoute
+  '/_app/admin/': typeof AppAdminIndexRoute
   '/_app/branches/': typeof AppBranchesIndexRoute
   '/_app/calls/': typeof AppCallsIndexRoute
   '/_app/complaints/': typeof AppComplaintsIndexRoute
@@ -446,6 +455,7 @@ export interface FileRouteTypes {
     | '/complaints/new'
     | '/orders/$id'
     | '/orders/new'
+    | '/admin/'
     | '/branches/'
     | '/calls/'
     | '/complaints/'
@@ -490,6 +500,7 @@ export interface FileRouteTypes {
     | '/complaints/new'
     | '/orders/$id'
     | '/orders/new'
+    | '/admin'
     | '/branches'
     | '/calls'
     | '/complaints'
@@ -535,6 +546,7 @@ export interface FileRouteTypes {
     | '/_app/complaints/new'
     | '/_app/orders/$id'
     | '/_app/orders/new'
+    | '/_app/admin/'
     | '/_app/branches/'
     | '/_app/calls/'
     | '/_app/complaints/'
@@ -705,6 +717,13 @@ declare module '@tanstack/react-router' {
       path: '/branches'
       fullPath: '/branches/'
       preLoaderRoute: typeof AppBranchesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/admin/': {
+      id: '/_app/admin/'
+      path: '/admin'
+      fullPath: '/admin/'
+      preLoaderRoute: typeof AppAdminIndexRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/orders/new': {
@@ -894,6 +913,7 @@ interface AppRouteChildren {
   AppComplaintsNewRoute: typeof AppComplaintsNewRoute
   AppOrdersIdRoute: typeof AppOrdersIdRoute
   AppOrdersNewRoute: typeof AppOrdersNewRoute
+  AppAdminIndexRoute: typeof AppAdminIndexRoute
   AppBranchesIndexRoute: typeof AppBranchesIndexRoute
   AppCallsIndexRoute: typeof AppCallsIndexRoute
   AppComplaintsIndexRoute: typeof AppComplaintsIndexRoute
@@ -923,6 +943,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppComplaintsNewRoute: AppComplaintsNewRoute,
   AppOrdersIdRoute: AppOrdersIdRoute,
   AppOrdersNewRoute: AppOrdersNewRoute,
+  AppAdminIndexRoute: AppAdminIndexRoute,
   AppBranchesIndexRoute: AppBranchesIndexRoute,
   AppCallsIndexRoute: AppCallsIndexRoute,
   AppComplaintsIndexRoute: AppComplaintsIndexRoute,

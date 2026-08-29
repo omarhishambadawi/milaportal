@@ -1,37 +1,45 @@
 /**
- * Shams CRM Automation Control Center — administrator only.
+ * Shams Sync Control Center — administrator only.
  *
- * Phase 2A made this page a window; Phase 2B makes it a control panel. The
- * administrator decides *when* stock and promotions are refreshed and *how
- * often*, by editing schedule rows — `pg_cron` is never rescheduled.
+ * The operational console for automated stock and promotions synchronisation:
+ * whether automation is on, when it next runs, what happened last time, and the
+ * manual override.
  *
- * The gate here is presentational. Every server function calls `assertAdmin`,
- * and all four tables enforce the same rule again in RLS; this only means a
- * non-administrator sees a refusal rather than a thrown error.
+ * ## What this file is and is not
+ *
+ * It is presentation. Every server function, mutation, guard and confirmation it
+ * calls is unchanged from Phase 2B — `assertAdmin` server-side, RLS on all four
+ * tables, the claim index, the `is_running` pre-check, and no automatic retry.
+ * Rewriting the layout must not, and does not, move any of that.
  *
  * ## Times are Riyadh, everywhere, always
  *
- * No UTC value is rendered anywhere on this page. Slots store a local time and a
- * named zone, and the "next run" values come from the same function the
- * scheduler uses — so the page cannot promise a run that will not happen.
+ * No UTC value is rendered on this page. Slots store a local time and a named
+ * zone, and every "next run" comes from the same pure function the scheduler
+ * uses, so the page cannot promise a run that will not happen.
  *
- * ## What the panels are for
+ * ## Reading order
  *
- * Automation answers "is the schedule live". Scheduled Updates answers "when".
- * The Shams panels answer "did it work". The scheduler panel answers "are we
- * still asking" — and that last one matters most, because a page showing only
- * Shams's health would have looked perfectly fine right through the AlShrouq
- * outage, where nothing had been sent for days behind 5,769 "successful" cron
- * runs.
+ * Automation first, because it governs everything below it; then the schedule;
+ * then the manual override; then what Shams itself reports; then history. That
+ * is the order an administrator asks the questions in.
  */
 
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Loader2, Play, Plus, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarClock,
+  Loader2,
+  Play,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Zap,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import {
@@ -44,7 +52,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { isAdministrator, useAuth } from "@/lib/auth";
 import {
   shamsSyncDeleteSlot,
   shamsSyncMonitor,
@@ -52,90 +59,31 @@ import {
   shamsSyncSaveSlot,
   shamsSyncSetAutomation,
 } from "@/lib/shams.functions";
-import { TD, TH } from "@/features/shams/constants";
 import { formatLocalTime, nextOccurrence } from "@/lib/shams-crm/sync-schedule";
 import type { ShamsSyncRunRecord, ShamsSyncSide } from "@/lib/shams-crm/sync-monitor.server";
+import { AdminPage, LastUpdated } from "@/features/admin/components/admin-shell";
+import {
+  AdminCard,
+  AdminCardHeader,
+  AdminSection,
+  CardSkeleton,
+  DataRow,
+  EmptyState,
+  HealthIndicator,
+  NoticeState,
+  StatusBadge,
+  TableSkeleton,
+  statusTone,
+  type Tone,
+} from "@/features/admin/components/primitives";
+import { count, duration, riyadh, riyadhShort } from "@/features/admin/format";
 
 export const Route = createFileRoute("/_app/admin/shams-sync")({
   component: ShamsSyncPage,
 });
 
 /* -------------------------------------------------------------------------- */
-/* Formatting                                                                  */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Timestamps render in Riyadh, explicitly labelled.
- *
- * An unlabelled local time on an admin page read from two countries is how the
- * three-hour confusion started in the first place.
- */
-function when(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const ms = Date.parse(iso);
-  if (!Number.isFinite(ms)) return "—";
-  return `${new Intl.DateTimeFormat("en-GB", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: "Asia/Riyadh",
-  }).format(ms)} (Riyadh)`;
-}
-
-function duration(seconds: number | null | undefined): string {
-  if (seconds === null || seconds === undefined) return "—";
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return m > 0 ? `${m}m ${s}s` : `${s}s`;
-}
-
-function count(n: number | null | undefined): string {
-  return n === null || n === undefined ? "—" : n.toLocaleString("en-GB");
-}
-
-/** Colour carries the same meaning as the word, never instead of it. */
-const STATUS_TONE: Record<string, string> = {
-  success: "text-emerald-700 dark:text-emerald-400",
-  running: "text-sky-700 dark:text-sky-400",
-  triggered: "text-sky-700 dark:text-sky-400",
-  failed: "text-destructive",
-  indeterminate: "text-amber-700 dark:text-amber-500",
-  skipped: "text-muted-foreground",
-};
-
-function Status({ value }: { value: string | null }) {
-  if (!value) return <>—</>;
-  return <span className={STATUS_TONE[value] ?? ""}>{value}</span>;
-}
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex justify-between gap-4 border-b py-1.5 last:border-b-0">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="text-right font-medium tabular-nums">{children}</span>
-    </div>
-  );
-}
-
-function Section({
-  title,
-  hint,
-  children,
-}: {
-  title: string;
-  hint: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="space-y-2">
-      <h2 className="text-base font-semibold">{title}</h2>
-      <p className="text-sm text-muted-foreground">{hint}</p>
-      {children}
-    </section>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Status panels                                                               */
+/* Status panel                                                                */
 /* -------------------------------------------------------------------------- */
 
 function SidePanel({
@@ -152,94 +100,86 @@ function SidePanel({
   const status = side.status;
   const latest = status?.latestRun ?? null;
 
+  const tone: Tone = side.error
+    ? "danger"
+    : status?.isRunning
+      ? "info"
+      : statusTone(latest?.status);
+  const label = side.error
+    ? "Status unavailable"
+    : status?.isRunning
+      ? "Running now"
+      : latest?.status
+        ? latest.status === "success"
+          ? "Healthy"
+          : latest.status
+        : "No run recorded";
+
   return (
-    <Card>
-      <CardContent className="space-y-1 py-4 text-sm">
-        <div className="flex items-baseline justify-between pb-2">
-          <h3 className="font-semibold">{title}</h3>
-          <span className="text-xs">
-            {status?.isRunning ? (
-              <span className="text-sky-700 dark:text-sky-400">running now</span>
-            ) : (
-              <span className="text-muted-foreground">idle</span>
-            )}
-          </span>
-        </div>
+    <AdminCard>
+      <AdminCardHeader
+        title={title}
+        actions={
+          <StatusBadge
+            tone={tone}
+            label={
+              side.error ? "Unavailable" : status?.isRunning ? "Running" : (latest?.status ?? "—")
+            }
+          />
+        }
+      />
+      <div className="space-y-3 px-4 py-3 sm:px-5">
+        <HealthIndicator
+          tone={tone}
+          label={label}
+          detail={
+            side.error
+              ? "The scheduler is unaffected and will try again."
+              : status?.lastSuccessAt
+                ? `Last success ${riyadh(status.lastSuccessAt)}`
+                : undefined
+          }
+          pulse={status?.isRunning === true}
+        />
 
-        {side.error && (
-          <p className="pb-2 text-destructive">
-            Status unavailable ({side.error.kind}). The scheduler is unaffected and will try again.
-          </p>
-        )}
-
-        {status && (
-          <>
-            <Row label="Next scheduled update">{nextRun ? when(nextRun) : "not scheduled"}</Row>
-            <Row label="Last successful run">{when(status.lastSuccessAt)}</Row>
-            <Row label="Latest run">
-              <Status value={latest?.status ?? null} />
-            </Row>
-            <Row label="Duration">{duration(latest?.durationSeconds)}</Row>
-            <Row label="Rows seen">{count(latest?.rowsSeen)}</Row>
-            <Row label="Rows changed">{count(latest?.rowsChanged)}</Row>
-            <Row label={unit === "pages" ? "Pages fetched" : "Branches fetched"}>
+        {!side.error && status && (
+          <div>
+            <DataRow label="Next scheduled">{nextRun ? riyadh(nextRun) : "Not scheduled"}</DataRow>
+            <DataRow label="Duration">{duration(latest?.durationSeconds)}</DataRow>
+            <DataRow label="Rows seen">{count(latest?.rowsSeen)}</DataRow>
+            <DataRow label="Rows changed">{count(latest?.rowsChanged)}</DataRow>
+            <DataRow label={unit === "pages" ? "Pages fetched" : "Branches fetched"}>
               {count(unit === "pages" ? latest?.pagesFetched : latest?.branchesSeen)}
-            </Row>
-            <Row label="Shams run id">{latest?.runId ?? "—"}</Row>
-            <Row label="Shams internal schedule">
+            </DataRow>
+            <DataRow label="Shams run id">{latest?.runId ?? "—"}</DataRow>
+            <DataRow label="Internal Shams schedule">
               {status.syncIntervalMinutes && status.syncIntervalMinutes > 0
-                ? `every ${status.syncIntervalMinutes} min`
-                : "off (manual)"}
-            </Row>
-
-            {status.timestampsCorrected && (
-              <p className="pt-2 text-xs text-amber-700 dark:text-amber-500">
-                Shams reported this endpoint&apos;s times as Riyadh local in a field labelled UTC.
-                They have been corrected here. Raw value: {status.lastSuccessAtRaw ?? "—"}
-              </p>
-            )}
-            {status.timestampsUnexplained && (
-              <p className="pt-2 text-xs text-destructive">
-                Shams reported a time in the future that the Riyadh offset does not explain. It has
-                been left exactly as sent rather than guessed at.
-              </p>
-            )}
-          </>
+                ? `Every ${status.syncIntervalMinutes} min`
+                : "Off (manual)"}
+            </DataRow>
+          </div>
         )}
 
-        {!status && !side.error && (
-          <p className="text-muted-foreground">Not configured on this deployment.</p>
+        {status?.timestampsCorrected && (
+          <NoticeState
+            tone="warning"
+            message={
+              <>
+                Shams reports this endpoint&apos;s times as Riyadh local in a field labelled UTC.
+                They are corrected here. Raw value:{" "}
+                <span className="font-mono text-xs">{status.lastSuccessAtRaw ?? "—"}</span>
+              </>
+            }
+          />
         )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function HistoryRow({ run }: { run: ShamsSyncRunRecord }) {
-  return (
-    <tr className="border-t align-top">
-      <td className={TD}>{when(run.triggeredAt)}</td>
-      <td className={TD}>{run.syncType}</td>
-      <td className={TD}>
-        <Status value={run.status} />
-      </td>
-      <td className={TD}>
-        {run.executionSource}
-        {run.executionSource === "scheduled" && run.scheduledFor && (
-          <span className="block text-xs text-muted-foreground">for {when(run.scheduledFor)}</span>
+        {status?.timestampsUnexplained && (
+          <NoticeState
+            tone="danger"
+            message="Shams reported a time in the future that the Riyadh offset does not explain. It has been left exactly as sent rather than guessed at."
+          />
         )}
-      </td>
-      <td className={`${TD} tabular-nums`}>{duration(run.durationSeconds)}</td>
-      <td className={`${TD} tabular-nums`}>{count(run.rowsSeen)}</td>
-      <td className={`${TD} tabular-nums`}>{count(run.rowsChanged)}</td>
-      <td className={TD}>{run.shamsRunId ?? "—"}</td>
-      <td className={TD}>
-        {run.skipReason ?? run.errorSummary ?? "—"}
-        {run.sourceTimestampsCorrected && (
-          <span className="block text-xs text-muted-foreground">times corrected from Riyadh</span>
-        )}
-      </td>
-    </tr>
+      </div>
+    </AdminCard>
   );
 }
 
@@ -255,7 +195,11 @@ interface SlotDraft {
   enabled: boolean;
 }
 
-function SlotEditor({
+const CELL = "px-4 py-3 align-middle";
+const HEAD =
+  "px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground";
+
+function SlotEditorRow({
   draft,
   busy,
   onChange,
@@ -269,43 +213,43 @@ function SlotEditor({
   onCancel: () => void;
 }) {
   return (
-    <tr className="border-t bg-muted/30 align-top">
-      <td className={TD}>
+    <tr className="border-t bg-muted/40">
+      <td className={CELL}>
         <Input
           type="time"
           value={draft.localTime}
           onChange={(e) => onChange({ ...draft, localTime: e.target.value })}
-          className="w-32"
-          aria-label="Time of day (Riyadh)"
+          className="h-8 w-32"
+          aria-label="Time of day, Riyadh"
         />
         <span className="mt-1 block text-xs text-muted-foreground">Riyadh</span>
       </td>
-      <td className={TD}>
+      <td className={CELL}>
         <Switch
           checked={draft.syncStock}
           onCheckedChange={(v) => onChange({ ...draft, syncStock: v })}
           aria-label="Update Stock at this time"
         />
       </td>
-      <td className={TD}>
+      <td className={CELL}>
         <Switch
           checked={draft.syncPromotions}
           onCheckedChange={(v) => onChange({ ...draft, syncPromotions: v })}
           aria-label="Update Promotions at this time"
         />
       </td>
-      <td className={TD}>
+      <td className={CELL}>
         <Switch
           checked={draft.enabled}
           onCheckedChange={(v) => onChange({ ...draft, enabled: v })}
           aria-label="Schedule enabled"
         />
       </td>
-      <td className={TD}>—</td>
-      <td className={TD}>
-        <div className="flex gap-2">
+      <td className={`${CELL} text-muted-foreground`}>—</td>
+      <td className={CELL}>
+        <div className="flex justify-end gap-2">
           <Button size="sm" onClick={onSave} disabled={busy}>
-            {busy && <Loader2 className="mr-2 h-3 w-3 animate-spin" aria-hidden="true" />}
+            {busy && <Loader2 className="mr-1.5 h-3 w-3 animate-spin" aria-hidden="true" />}
             Save
           </Button>
           <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>
@@ -322,16 +266,12 @@ function SlotEditor({
 /* -------------------------------------------------------------------------- */
 
 function ShamsSyncPage() {
-  const { role } = useAuth();
-  const admin = isAdministrator(role);
-
   const load = useServerFn(shamsSyncMonitor);
   const monitor = useQuery({
     queryKey: ["shams-sync-monitor"],
     queryFn: () => load({ data: undefined }),
     refetchOnWindowFocus: true,
     staleTime: 30_000,
-    enabled: admin,
   });
 
   const setAutomation = useServerFn(shamsSyncSetAutomation);
@@ -342,6 +282,7 @@ function ShamsSyncPage() {
   const [draft, setDraft] = useState<SlotDraft | null>(null);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [confirmRun, setConfirmRun] = useState<("stock" | "promotions")[] | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; time: string } | null>(null);
 
   const after = (result: { ok: boolean; message: string | null }) => {
     setNotice({ ok: result.ok, text: result.message ?? "" });
@@ -369,17 +310,6 @@ function ShamsSyncPage() {
     },
   });
 
-  if (!admin) {
-    return (
-      <Card>
-        <CardContent className="flex items-center gap-3 py-6 text-sm text-muted-foreground">
-          <ShieldAlert className="h-5 w-5" aria-hidden="true" />
-          Administrator access is required for Shams synchronisation.
-        </CardContent>
-      </Card>
-    );
-  }
-
   const report = monitor.data?.ok ? monitor.data.report : null;
   const scheduler = report?.scheduler ?? null;
   const automationOn = report?.settings.automationEnabled ?? false;
@@ -388,74 +318,103 @@ function ShamsSyncPage() {
   const pollStale =
     lastPollMs !== null && Number.isFinite(lastPollMs) && Date.now() - lastPollMs > 15 * 60_000;
   const schedulerUnconfigured = scheduler?.lastOutcome === "unconfigured";
+  const schedulerTone: Tone = !scheduler
+    ? "neutral"
+    : schedulerUnconfigured
+      ? "danger"
+      : pollStale
+        ? "warning"
+        : "success";
 
   const anyRunning =
     report?.stock.status?.isRunning === true || report?.promotions.status?.isRunning === true;
   const busy = runMutation.isPending || automationMutation.isPending || slotMutation.isPending;
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-1">
-          <h1 className="text-xl font-semibold">Shams CRM automation</h1>
-          <p className="text-sm text-muted-foreground">
-            Control when Stock and Promotions are refreshed. All times are Riyadh. The PharmacyCRM
-            Desktop remains available as a manual fallback.
-          </p>
-        </div>
-        <Button variant="secondary" onClick={() => monitor.refetch()} disabled={monitor.isFetching}>
-          {monitor.isFetching ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
-          ) : (
-            <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
-          )}
-          Refresh
-        </Button>
-      </div>
-
-      {notice && (
-        <p
-          className={`text-sm ${notice.ok ? "text-emerald-700 dark:text-emerald-400" : "text-destructive"}`}
-        >
-          {notice.text}
-        </p>
-      )}
+    <AdminPage
+      title="Shams Sync Control Center"
+      description="Automated stock and promotions synchronisation with Shams CRM. Set when updates run, start one by hand, and review what happened."
+      actions={
+        <>
+          <StatusBadge
+            tone={automationOn ? "success" : "neutral"}
+            label={automationOn ? "Automation on" : "Automation off"}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => monitor.refetch()}
+            disabled={monitor.isFetching}
+          >
+            <RefreshCw
+              className={`mr-2 h-3.5 w-3.5 ${monitor.isFetching ? "animate-spin" : ""}`}
+              aria-hidden="true"
+            />
+            Refresh
+          </Button>
+        </>
+      }
+      meta={<LastUpdated at={report?.observedAt} refreshing={monitor.isFetching} />}
+    >
+      {notice && <NoticeState tone={notice.ok ? "success" : "danger"} message={notice.text} />}
 
       {monitor.isError && (
-        <p className="text-sm text-destructive">
-          The status could not be loaded. You may not have administrator access.
-        </p>
+        <NoticeState
+          tone="danger"
+          message="The status could not be loaded. You may not have administrator access."
+        />
+      )}
+      {monitor.data && !monitor.data.ok && (
+        <NoticeState
+          tone="danger"
+          message={monitor.data.error?.message ?? "The synchronisation status could not be read."}
+        />
+      )}
+      {report && !report.configured && (
+        <NoticeState
+          tone="warning"
+          message="The Shams CRM connection is not configured on this deployment, so nothing can be synchronised."
+        />
       )}
 
-      {report && !report.configured && (
-        <Card>
-          <CardContent className="py-4 text-sm text-muted-foreground">
-            The Shams CRM connection is not configured on this deployment, so nothing can be
-            synchronised. Set <code>SHAMS_CRM_USERNAME</code> and <code>SHAMS_CRM_PASSWORD</code>.
-          </CardContent>
-        </Card>
+      {monitor.isLoading && (
+        <>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <CardSkeleton rows={5} />
+            <CardSkeleton rows={5} />
+          </div>
+          <AdminCard>
+            <TableSkeleton rows={4} cols={6} />
+          </AdminCard>
+        </>
       )}
 
       {report && (
         <>
-          {/* ---------------------------------------------------------------- */}
-          <Section
+          {/* ------------------------------------------------------------ */}
+          <AdminSection
             title="Automation"
-            hint="Governs the schedule only. Update Now stays available to administrators either way."
+            description="Governs the schedule only. Update now stays available to administrators either way."
           >
-            <Card>
-              <CardContent className="space-y-3 py-4 text-sm">
-                <div className="flex items-center justify-between gap-4">
-                  <div className="space-y-0.5">
-                    <div className="font-medium">
-                      {automationOn ? "Automation is ON" : "Automation is OFF"}
-                    </div>
-                    <p className="text-muted-foreground">
-                      {automationOn
-                        ? "Enabled schedules below will run at their configured times."
-                        : "No scheduled update will run. Nothing below is active."}
-                    </p>
-                  </div>
+            <AdminCard emphasis>
+              <div className="flex flex-wrap items-center justify-between gap-4 border-b px-4 py-4 sm:px-5">
+                <HealthIndicator
+                  tone={automationOn ? "success" : "neutral"}
+                  label={automationOn ? "Automation is ON" : "Automation is OFF"}
+                  detail={
+                    automationOn
+                      ? "Enabled schedules below will run at their configured times."
+                      : "No scheduled update will run. Nothing below is active."
+                  }
+                  pulse={automationOn && !pollStale && !schedulerUnconfigured}
+                />
+                <div className="flex items-center gap-3">
+                  {automationMutation.isPending && (
+                    <Loader2
+                      className="h-4 w-4 animate-spin text-muted-foreground"
+                      aria-hidden="true"
+                    />
+                  )}
                   <Switch
                     checked={automationOn}
                     disabled={automationMutation.isPending}
@@ -463,238 +422,278 @@ function ShamsSyncPage() {
                     aria-label="Global automation"
                   />
                 </div>
+              </div>
 
-                <div className="grid gap-1 border-t pt-3 sm:grid-cols-2">
-                  <Row label="Next Stock update">
-                    {report.nextStockRun ? when(report.nextStockRun) : "not scheduled"}
-                  </Row>
-                  <Row label="Next Promotions update">
-                    {report.nextPromotionsRun ? when(report.nextPromotionsRun) : "not scheduled"}
-                  </Row>
+              <div className="grid gap-x-6 px-4 py-2 sm:grid-cols-2 sm:px-5">
+                <DataRow label="Next stock update">
+                  {report.nextStockRun ? riyadh(report.nextStockRun) : "Not scheduled"}
+                </DataRow>
+                <DataRow label="Next promotions update">
+                  {report.nextPromotionsRun ? riyadh(report.nextPromotionsRun) : "Not scheduled"}
+                </DataRow>
+                <DataRow label="Scheduler">
+                  <StatusBadge
+                    tone={schedulerTone}
+                    label={
+                      !scheduler
+                        ? "Never reported"
+                        : schedulerUnconfigured
+                          ? "Not connected"
+                          : pollStale
+                            ? "Stale"
+                            : "Healthy"
+                    }
+                  />
+                </DataRow>
+                <DataRow label="Last scheduler activity">
+                  {scheduler?.lastPollAt ? riyadh(scheduler.lastPollAt) : "—"}
+                </DataRow>
+              </div>
+
+              {(schedulerUnconfigured || pollStale || scheduler?.lastError) && (
+                <div className="border-t px-4 py-3 sm:px-5">
+                  <NoticeState
+                    tone={schedulerUnconfigured ? "danger" : "warning"}
+                    message={
+                      schedulerUnconfigured
+                        ? "The scheduler endpoint is not connected on this deployment, so no scheduled update can run even with automation on."
+                        : pollStale
+                          ? "The scheduler has not polled in over 15 minutes. Check that the scheduled job is running."
+                          : (scheduler?.lastError ?? "")
+                    }
+                  />
                 </div>
+              )}
+            </AdminCard>
+          </AdminSection>
 
-                {schedulerUnconfigured && (
-                  <p className="border-t pt-3 text-destructive">
-                    The scheduler endpoint is not connected on this deployment, so no scheduled
-                    update can run even with automation on. An administrator needs to complete the
-                    setup.
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          </Section>
-
-          {/* ---------------------------------------------------------------- */}
-          <Section
+          {/* ------------------------------------------------------------ */}
+          <AdminSection
             title="Scheduled updates"
-            hint="Each row is one time of day. Changing them never touches the server's cron configuration."
+            description="Each row is one time of day. Changing them never touches the server's scheduled-job configuration."
+            actions={
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy || draft !== null}
+                onClick={() =>
+                  setDraft({
+                    id: null,
+                    localTime: "15:00",
+                    syncStock: true,
+                    syncPromotions: true,
+                    enabled: true,
+                  })
+                }
+              >
+                <Plus className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Add schedule
+              </Button>
+            }
           >
-            <div className="overflow-x-auto rounded-md border">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50 text-left">
-                  <tr>
-                    {["Time", "Stock", "Promotions", "Status", "Next run", "Actions"].map((h) => (
-                      <th key={h} className={TH}>
-                        {h}
+            <AdminCard className="overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[42rem] text-sm">
+                  <thead className="bg-muted/50">
+                    <tr>
+                      <th className={HEAD} scope="col">
+                        Time
                       </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {report.slots.length === 0 && !draft && (
-                    <tr className="border-t">
-                      <td className={`${TD} text-muted-foreground`} colSpan={6}>
-                        No schedules configured. Nothing will run automatically.
-                      </td>
+                      <th className={HEAD} scope="col">
+                        Stock
+                      </th>
+                      <th className={HEAD} scope="col">
+                        Promotions
+                      </th>
+                      <th className={HEAD} scope="col">
+                        Status
+                      </th>
+                      <th className={HEAD} scope="col">
+                        Next run
+                      </th>
+                      <th className={`${HEAD} text-right`} scope="col">
+                        Actions
+                      </th>
                     </tr>
-                  )}
+                  </thead>
+                  <tbody>
+                    {report.slots.length === 0 && !draft && (
+                      <tr>
+                        <td colSpan={6}>
+                          <EmptyState
+                            icon={CalendarClock}
+                            title="No schedules configured"
+                            description="Nothing will run automatically until a schedule is added."
+                          />
+                        </td>
+                      </tr>
+                    )}
 
-                  {report.slots.map((slot) =>
-                    draft?.id === slot.id ? (
-                      <SlotEditor
-                        key={slot.id}
+                    {report.slots.map((slot) =>
+                      draft?.id === slot.id ? (
+                        <SlotEditorRow
+                          key={slot.id}
+                          draft={draft}
+                          busy={slotMutation.isPending}
+                          onChange={setDraft}
+                          onSave={() => slotMutation.mutate(draft)}
+                          onCancel={() => setDraft(null)}
+                        />
+                      ) : (
+                        <tr key={slot.id} className="border-t hover:bg-muted/30">
+                          <td className={CELL}>
+                            <div className="font-semibold tabular-nums">
+                              {formatLocalTime(slot.localTime)}
+                            </div>
+                            <div className="text-xs text-muted-foreground">Riyadh</div>
+                          </td>
+                          <td className={CELL}>
+                            <StatusBadge
+                              tone={slot.syncStock ? "success" : "neutral"}
+                              label={slot.syncStock ? "On" : "Off"}
+                            />
+                          </td>
+                          <td className={CELL}>
+                            <StatusBadge
+                              tone={slot.syncPromotions ? "success" : "neutral"}
+                              label={slot.syncPromotions ? "On" : "Off"}
+                            />
+                          </td>
+                          <td className={CELL}>
+                            {slot.enabled ? (
+                              automationOn ? (
+                                <StatusBadge tone="success" label="Active" />
+                              ) : (
+                                <StatusBadge tone="neutral" label="Automation off" />
+                              )
+                            ) : (
+                              <StatusBadge tone="neutral" label="Disabled" />
+                            )}
+                          </td>
+                          <td className={`${CELL} tabular-nums`}>
+                            {/*
+                              Computed from the slot rather than read from the
+                              stored next_due_at, which is null until the first
+                              tick after automation is switched on — otherwise
+                              this column would read "—" while the card above
+                              promises a time.
+                            */}
+                            {slot.enabled && automationOn
+                              ? riyadhShort(nextOccurrence(slot, new Date())?.toISOString())
+                              : "—"}
+                          </td>
+                          <td className={CELL}>
+                            <div className="flex justify-end gap-1">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                disabled={busy}
+                                onClick={() =>
+                                  setDraft({
+                                    id: slot.id,
+                                    localTime: slot.localTime,
+                                    syncStock: slot.syncStock,
+                                    syncPromotions: slot.syncPromotions,
+                                    enabled: slot.enabled,
+                                  })
+                                }
+                              >
+                                Edit
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                disabled={busy || deleteMutation.isPending}
+                                onClick={() =>
+                                  setConfirmDelete({
+                                    id: slot.id,
+                                    time: formatLocalTime(slot.localTime),
+                                  })
+                                }
+                                aria-label={`Remove the ${formatLocalTime(slot.localTime)} schedule`}
+                              >
+                                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ),
+                    )}
+
+                    {draft && draft.id === null && (
+                      <SlotEditorRow
                         draft={draft}
                         busy={slotMutation.isPending}
                         onChange={setDraft}
                         onSave={() => slotMutation.mutate(draft)}
                         onCancel={() => setDraft(null)}
                       />
-                    ) : (
-                      <tr key={slot.id} className="border-t align-top">
-                        <td className={`${TD} font-medium tabular-nums`}>
-                          {formatLocalTime(slot.localTime)}
-                          <span className="block text-xs font-normal text-muted-foreground">
-                            Riyadh
-                          </span>
-                        </td>
-                        <td className={TD}>{slot.syncStock ? "ON" : "off"}</td>
-                        <td className={TD}>{slot.syncPromotions ? "ON" : "off"}</td>
-                        <td className={TD}>
-                          {slot.enabled ? (
-                            automationOn ? (
-                              <span className="text-emerald-700 dark:text-emerald-400">Active</span>
-                            ) : (
-                              <span className="text-muted-foreground">Enabled, automation off</span>
-                            )
-                          ) : (
-                            <span className="text-muted-foreground">Disabled</span>
-                          )}
-                        </td>
-                        <td className={TD}>
-                          {/*
-                            Computed from the slot rather than read from the
-                            stored `next_due_at`, which is null until the first
-                            tick after automation is switched on. Reading the
-                            stored value would show "—" on a slot the Automation
-                            card above is simultaneously promising a time for.
-                          */}
-                          {slot.enabled && automationOn
-                            ? when(nextOccurrence(slot, new Date())?.toISOString())
-                            : "—"}
-                        </td>
-                        <td className={TD}>
-                          <div className="flex flex-wrap gap-2">
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              disabled={busy}
-                              onClick={() =>
-                                setDraft({
-                                  id: slot.id,
-                                  localTime: slot.localTime,
-                                  syncStock: slot.syncStock,
-                                  syncPromotions: slot.syncPromotions,
-                                  enabled: slot.enabled,
-                                })
-                              }
-                            >
-                              Edit
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              disabled={busy || deleteMutation.isPending}
-                              onClick={() => deleteMutation.mutate(slot.id)}
-                              aria-label={`Remove the ${formatLocalTime(slot.localTime)} schedule`}
-                            >
-                              <Trash2 className="h-4 w-4" aria-hidden="true" />
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ),
-                  )}
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </AdminCard>
+          </AdminSection>
 
-                  {draft && draft.id === null && (
-                    <SlotEditor
-                      draft={draft}
-                      busy={slotMutation.isPending}
-                      onChange={setDraft}
-                      onSave={() => slotMutation.mutate(draft)}
-                      onCancel={() => setDraft(null)}
-                    />
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            <Button
-              variant="secondary"
-              disabled={busy || draft !== null}
-              onClick={() =>
-                setDraft({
-                  id: null,
-                  localTime: "15:00",
-                  syncStock: true,
-                  syncPromotions: true,
-                  enabled: true,
-                })
-              }
-            >
-              <Plus className="mr-2 h-4 w-4" aria-hidden="true" />
-              Add schedule
-            </Button>
-          </Section>
-
-          {/* ---------------------------------------------------------------- */}
-          <Section
+          {/* ------------------------------------------------------------ */}
+          <AdminSection
             title="Update now"
-            hint="Runs immediately, whether or not automation is on. A manual run never replaces or cancels a scheduled one."
+            description="Runs immediately, whether or not automation is on. A manual run never replaces or cancels a scheduled one."
           >
-            <Card>
-              <CardContent className="flex flex-wrap items-center gap-2 py-4">
+            <AdminCard className="p-4">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button
-                  variant="secondary"
+                  variant="outline"
                   disabled={busy || anyRunning}
                   onClick={() => setConfirmRun(["stock"])}
                 >
-                  <Play className="mr-2 h-4 w-4" aria-hidden="true" />
+                  <Play className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   Update Stock now
                 </Button>
                 <Button
-                  variant="secondary"
+                  variant="outline"
                   disabled={busy || anyRunning}
                   onClick={() => setConfirmRun(["promotions"])}
                 >
-                  <Play className="mr-2 h-4 w-4" aria-hidden="true" />
+                  <Play className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   Update Promotions now
                 </Button>
                 <Button
                   disabled={busy || anyRunning}
                   onClick={() => setConfirmRun(["stock", "promotions"])}
                 >
-                  <Play className="mr-2 h-4 w-4" aria-hidden="true" />
+                  <Zap className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   Update both now
                 </Button>
                 {runMutation.isPending && (
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  <Loader2
+                    className="h-4 w-4 animate-spin text-muted-foreground"
+                    aria-hidden="true"
+                  />
                 )}
-                {anyRunning && (
-                  <span className="text-sm text-muted-foreground">
-                    A synchronisation is already running at Shams.
-                  </span>
-                )}
-              </CardContent>
-            </Card>
-          </Section>
+              </div>
+              <p className="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                Shams runs these in the background. Based on observed runs each takes about 25
+                minutes. A run will not start if one is already in progress.
+              </p>
+              {anyRunning && (
+                <div className="mt-3">
+                  <NoticeState
+                    tone="info"
+                    message="A synchronisation is already running at Shams, so manual runs are unavailable until it finishes."
+                  />
+                </div>
+              )}
+            </AdminCard>
+          </AdminSection>
 
-          {/* ---------------------------------------------------------------- */}
-          <Section
-            title="Scheduler"
-            hint="Whether MilaPortal is still asking, separate from whether Shams is healthy."
-          >
-            <Card>
-              <CardContent className="space-y-1 py-4 text-sm">
-                <Row label="Last poll">
-                  {when(scheduler?.lastPollAt)}
-                  {pollStale && (
-                    <span className="ml-2 text-destructive">stale — is pg_cron running?</span>
-                  )}
-                </Row>
-                <Row label="Last request sent">{when(scheduler?.lastPokeAt)}</Row>
-                <Row label="Last outcome">
-                  <span className={schedulerUnconfigured ? "text-destructive" : undefined}>
-                    {scheduler?.lastOutcome ?? "—"}
-                  </span>
-                </Row>
-                {scheduler?.lastError && (
-                  <p className="pt-2 text-destructive">{scheduler.lastError}</p>
-                )}
-                {!scheduler && (
-                  <p className="text-muted-foreground">
-                    The scheduler has never reported in. Check that the migration has been applied.
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          </Section>
-
-          {/* ---------------------------------------------------------------- */}
-          <Section
+          {/* ------------------------------------------------------------ */}
+          <AdminSection
             title="Current status at Shams"
-            hint="Read live from Shams CRM each time this page loads."
+            description="Read live from Shams CRM each time this page loads."
           >
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-4 lg:grid-cols-2">
               <SidePanel
                 title="Stock"
                 side={report.stock}
@@ -708,66 +707,88 @@ function ShamsSyncPage() {
                 nextRun={report.nextPromotionsRun}
               />
             </div>
-          </Section>
+          </AdminSection>
 
-          {/* ---------------------------------------------------------------- */}
-          <Section
+          {/* ------------------------------------------------------------ */}
+          <AdminSection
             title="Recent runs"
-            hint="MilaPortal's own record. Shams keeps only its latest run, so this is the only place the history exists."
+            description="MilaPortal's own record. Shams keeps only its latest run, so this is the only place the history exists."
           >
-            <div className="overflow-x-auto rounded-md border">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50 text-left">
-                  <tr>
-                    {[
-                      "Triggered",
-                      "Type",
-                      "Status",
-                      "Source",
-                      "Duration",
-                      "Rows seen",
-                      "Rows changed",
-                      "Shams run",
-                      "Note",
-                    ].map((h) => (
-                      <th key={h} className={TH}>
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {report.history.length === 0 && (
-                    <tr className="border-t">
-                      <td className={`${TD} text-muted-foreground`} colSpan={9}>
-                        No runs recorded yet.
-                      </td>
+            <AdminCard className="overflow-hidden">
+              <div className="max-h-[32rem] overflow-auto">
+                <table className="w-full min-w-[56rem] text-sm">
+                  <thead className="sticky top-0 z-10 bg-muted/95 backdrop-blur supports-[backdrop-filter]:bg-muted/80">
+                    <tr>
+                      {[
+                        "Time",
+                        "Source",
+                        "Type",
+                        "Status",
+                        "Duration",
+                        "Rows seen",
+                        "Rows changed",
+                        "Shams run",
+                        "Notes",
+                      ].map((h) => (
+                        <th key={h} className={HEAD} scope="col">
+                          {h}
+                        </th>
+                      ))}
                     </tr>
-                  )}
-                  {report.history.map((run) => (
-                    <HistoryRow key={run.id} run={run} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Section>
-
-          <p className="text-xs text-muted-foreground">As of {when(report.observedAt)}</p>
+                  </thead>
+                  <tbody>
+                    {report.history.length === 0 && (
+                      <tr>
+                        <td colSpan={9}>
+                          <EmptyState
+                            title="No runs recorded yet"
+                            description="Scheduled and manual synchronisations will appear here."
+                          />
+                        </td>
+                      </tr>
+                    )}
+                    {report.history.map((run: ShamsSyncRunRecord) => (
+                      <tr key={run.id} className="border-t align-top hover:bg-muted/30">
+                        <td className={`${CELL} whitespace-nowrap tabular-nums`}>
+                          {riyadhShort(run.triggeredAt)}
+                        </td>
+                        <td className={CELL}>
+                          <span className="capitalize">{run.executionSource}</span>
+                          {run.executionSource === "scheduled" && run.scheduledFor && (
+                            <span className="block text-xs text-muted-foreground">
+                              for {riyadhShort(run.scheduledFor)}
+                            </span>
+                          )}
+                        </td>
+                        <td className={`${CELL} capitalize`}>{run.syncType}</td>
+                        <td className={CELL}>
+                          <StatusBadge status={run.status} />
+                        </td>
+                        <td className={`${CELL} tabular-nums`}>{duration(run.durationSeconds)}</td>
+                        <td className={`${CELL} tabular-nums`}>{count(run.rowsSeen)}</td>
+                        <td className={`${CELL} tabular-nums`}>{count(run.rowsChanged)}</td>
+                        <td className={`${CELL} tabular-nums`}>{run.shamsRunId ?? "—"}</td>
+                        <td className={`${CELL} max-w-xs`}>
+                          <span className="text-muted-foreground">
+                            {run.skipReason ?? run.errorSummary ?? "—"}
+                          </span>
+                          {run.sourceTimestampsCorrected && (
+                            <span className="mt-0.5 block text-xs text-muted-foreground/80">
+                              times corrected from Riyadh
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </AdminCard>
+          </AdminSection>
         </>
       )}
 
-      {monitor.isLoading && (
-        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-          Reading status from Shams CRM…
-        </p>
-      )}
-
-      {/*
-        The confirmation names exactly what will happen and how long it lasts.
-        Starting a full catalogue refresh on a third-party production system is
-        not something to do on a single click.
-      */}
+      {/* ---------------------------------------------------------------- */}
       <AlertDialog open={confirmRun !== null} onOpenChange={(open) => !open && setConfirmRun(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -799,6 +820,32 @@ function ShamsSyncPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+
+      <AlertDialog
+        open={confirmDelete !== null}
+        onOpenChange={(open) => !open && setConfirmDelete(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove the {confirmDelete?.time} schedule?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Stock and Promotions will no longer run automatically at this time. Existing run
+              history is kept, and any other schedules are unaffected.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (confirmDelete) deleteMutation.mutate(confirmDelete.id);
+                setConfirmDelete(null);
+              }}
+            >
+              Remove schedule
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </AdminPage>
   );
 }

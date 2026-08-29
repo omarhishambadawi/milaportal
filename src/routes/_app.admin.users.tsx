@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useState } from "react";
-import { Plus, RefreshCw, ScrollText, ShieldAlert, Users as UsersIcon } from "lucide-react";
+import { Plus, RefreshCw, ScrollText, ShieldAlert } from "lucide-react";
 
 import {
   AlertDialog,
@@ -28,6 +28,7 @@ import { UsersStatCards } from "@/features/users/components/users-stat-cards";
 import { UsersTable } from "@/features/users/components/users-table";
 import { UsersToolbar } from "@/features/users/components/users-toolbar";
 import { useUsersFilters } from "@/features/users/hooks/use-users-filters";
+import { AdminPage } from "@/features/admin/components/admin-shell";
 import { useUsersList } from "@/features/users/hooks/use-users-list";
 import { useUsersMutations } from "@/features/users/hooks/use-users-mutations";
 import type { AdminUserRow, UserDraft } from "@/features/users/types";
@@ -151,17 +152,12 @@ function AdminUsers() {
   });
 
   return (
-    <div className="animate-in space-y-4 fade-in duration-150">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-            <UsersIcon className="h-6 w-6 text-primary" aria-hidden /> Users
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Accounts, roles, permissions and passwords.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+    <AdminPage
+      requireAdministrator={false}
+      title="Users and roles"
+      description="Accounts, roles, permissions and passwords."
+      actions={
+        <>
           {/* Background refetches are otherwise invisible: the list is cached for
               a minute, so without this the page can look frozen after a change
               made in another tab. */}
@@ -174,7 +170,7 @@ function AdminUsers() {
           {canViewActivity && (
             <Button
               variant="outline"
-              className="shadow-sm"
+              size="sm"
               onClick={() => {
                 setActivityFor(null);
                 setActivityOpen(true);
@@ -184,13 +180,13 @@ function AdminUsers() {
               Activity log
             </Button>
           )}
-          <Button className="shadow-sm" onClick={() => setCreating(true)}>
+          <Button size="sm" onClick={() => setCreating(true)}>
             <Plus className="mr-2 h-4 w-4" aria-hidden />
             Add user
           </Button>
-        </div>
-      </div>
-
+        </>
+      }
+    >
       <UsersStatCards stats={filters.stats} status={filters.status} onSelect={filters.setStatus} />
 
       <UsersToolbar
@@ -339,6 +335,6 @@ function AdminUsers() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </AdminPage>
   );
 }

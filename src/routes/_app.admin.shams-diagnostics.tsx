@@ -18,10 +18,8 @@ import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Loader2, ShieldAlert } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { isAdministrator, useAuth } from "@/lib/auth";
 import {
   shamsAlshrouqConfigProbe,
   shamsCrmSetupAgentLinks,
@@ -29,31 +27,48 @@ import {
   shamsCrmSearchDiagnostic,
   shamsCrmSmokeTest,
 } from "@/lib/shams.functions";
-import { TD, TH } from "@/features/shams/constants";
+import { TD } from "@/features/shams/constants";
+import { AdminPage } from "@/features/admin/components/admin-shell";
+import { AdminCard, AdminSection, NoticeState } from "@/features/admin/components/primitives";
+
+/** Shared with the other admin tables so column headers read alike. */
+const ADMIN_TH =
+  "px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground";
 
 export const Route = createFileRoute("/_app/admin/shams-diagnostics")({
   component: ShamsDiagnosticsPage,
 });
 
+/**
+ * The probe result table.
+ *
+ * Delegates to the shared admin surfaces so diagnostics looks like the rest of
+ * the console. Deliberately a thin wrapper rather than a rewrite: every probe
+ * below renders its own cells, and this phase changes how they are framed, not
+ * what they report.
+ */
 function Table({ head, children }: { head: string[]; children: React.ReactNode }) {
   return (
-    <div className="overflow-x-auto rounded-md border">
-      <table className="w-full text-sm">
-        <thead className="bg-muted/50 text-left">
-          <tr>
-            {head.map((h) => (
-              <th key={h} className={TH}>
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>{children}</tbody>
-      </table>
-    </div>
+    <AdminCard className="overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/50 text-left">
+            <tr>
+              {head.map((h) => (
+                <th key={h} className={ADMIN_TH} scope="col">
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>{children}</tbody>
+        </table>
+      </div>
+    </AdminCard>
   );
 }
 
+/** One probe, framed by the shared section heading. */
 function Section({
   title,
   hint,
@@ -64,16 +79,13 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="space-y-2">
-      <h2 className="text-base font-semibold">{title}</h2>
-      <p className="text-sm text-muted-foreground">{hint}</p>
+    <AdminSection title={title} description={hint}>
       {children}
-    </section>
+    </AdminSection>
   );
 }
 
 function ShamsDiagnosticsPage() {
-  const { role } = useAuth();
   const run = useServerFn(shamsCatalogDiagnostics);
   const probe = useMutation({ mutationFn: () => run({ data: undefined }) });
   const runCrm = useServerFn(shamsCrmSmokeTest);
@@ -95,29 +107,14 @@ function ShamsDiagnosticsPage() {
     mutationFn: (dryRun: boolean) => runAgentSetup({ data: { dryRun, force } }),
   });
 
-  if (!isAdministrator(role)) {
-    return (
-      <Card>
-        <CardContent className="flex items-center gap-3 py-6 text-sm text-muted-foreground">
-          <ShieldAlert className="h-5 w-5" aria-hidden="true" />
-          Administrator access is required for Shams diagnostics.
-        </CardContent>
-      </Card>
-    );
-  }
-
   const result = probe.data;
   const report = result?.report ?? null;
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-1">
-        <h1 className="text-xl font-semibold">Shams catalog diagnostics</h1>
-        <p className="text-sm text-muted-foreground">
-          Read-only. One run spends about two dozen requests against the Shams MIS.
-        </p>
-      </div>
-
+    <AdminPage
+      title="Shams diagnostics"
+      description="On-demand health checks against the Shams systems: connectivity, credentials, catalogue and search. Every probe here is read-only unless its own description says otherwise."
+    >
       <Section
         title="Shams CRM — connection smoke test"
         hint="Authenticates against the Shams CRM backend and downloads the catalog once."
@@ -352,27 +349,21 @@ function ShamsDiagnosticsPage() {
       </Button>
 
       {probe.isError && (
-        <Card>
-          <CardContent className="py-4 text-sm text-destructive">
-            The diagnostics call failed. You may not have administrator access.
-          </CardContent>
-        </Card>
+        <NoticeState
+          tone="danger"
+          message="The diagnostics call failed. You may not have administrator access."
+        />
       )}
 
       {result && !result.configured && (
-        <Card>
-          <CardContent className="py-4 text-sm text-muted-foreground">
-            The Shams MIS connection is not configured for this deployment.
-          </CardContent>
-        </Card>
+        <NoticeState
+          tone="warning"
+          message="The Shams MIS connection is not configured for this deployment."
+        />
       )}
 
       {result?.error && (
-        <Card>
-          <CardContent className="py-4 text-sm text-destructive">
-            {result.error.kind}: {result.error.message}
-          </CardContent>
-        </Card>
+        <NoticeState tone="danger" message={`${result.error.kind}: ${result.error.message}`} />
       )}
 
       {report && (
@@ -439,6 +430,6 @@ function ShamsDiagnosticsPage() {
           </Section>
         </div>
       )}
-    </div>
+    </AdminPage>
   );
 }

@@ -10,6 +10,7 @@ import {
   Users,
   MapPin,
   ShieldAlert,
+  ShieldCheck,
   MessageSquareWarning,
   Headphones,
   PhoneOutgoing,
@@ -163,6 +164,15 @@ function AppLayout() {
       // Shams MIS reads the pharmacy's own system, behind its own page-level
       // permission so it can be granted or withdrawn on its own.
       ...(canShams ? [{ to: "/shams", label: "Shams MIS", icon: PackageSearch }] : []),
+      /*
+       * The administration area. Its own rail carries the pages inside it, so
+       * the global sidebar needs one entry rather than four — and the entry is
+       * administrator-only, while Users stays on `manage_users` so supervisors
+       * keep the link they have always had.
+       */
+      ...(isAdministrator(role)
+        ? [{ to: "/admin", label: "Administration", icon: ShieldCheck }]
+        : []),
       ...(canUsers ? [{ to: "/admin/users", label: "Users", icon: Users }] : []),
       ...(canBranches ? [{ to: "/branches", label: "Branches", icon: MapPin }] : []),
     ],
