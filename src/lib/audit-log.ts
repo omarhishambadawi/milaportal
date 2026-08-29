@@ -50,6 +50,10 @@ export const AUDIT_ACTION_LABEL = {
   "branches.imported": "Imported the Branch Directory",
   "branches.rolled_back": "Rolled the Branch Directory back",
   "branches.updated": "Edited a branch",
+  "shams_sync.automation_toggled": "Changed Shams automation",
+  "shams_sync.schedule_saved": "Saved a Shams schedule",
+  "shams_sync.schedule_deleted": "Removed a Shams schedule",
+  "shams_sync.manual_run": "Started a Shams sync manually",
 } as const satisfies Record<AuditAction, string>;
 
 /**

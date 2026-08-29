@@ -21,6 +21,13 @@
 
 import type { ShamsSyncKind, ShamsSyncStatus } from "./sync-status";
 import { getSyncStatus, isSyncConfigured } from "./sync.server";
+import { nextRunFor } from "./sync-schedule";
+import {
+  readScheduleSlots,
+  readSyncSettings,
+  type ScheduleSlotRecord,
+  type ShamsSyncSettings,
+} from "./sync-settings.server";
 
 interface SupabaseLike {
   from: (table: string) => any;
@@ -52,6 +59,11 @@ export interface ShamsSyncRunRecord {
   errorSummary: string | null;
   sourceTimestampsCorrected: boolean;
   lastObservedAt: string | null;
+  /** The occurrence this run belongs to; null for manual and pre-Control-Center rows. */
+  scheduledFor: string | null;
+  scheduleSlotId: string | null;
+  /** The administrator who pressed Update Now, for a manual run. */
+  requestedBy: string | null;
 }
 
 /** What the poll last did. Null when the row has never been written. */
@@ -77,6 +89,17 @@ export interface ShamsSyncMonitorReport {
   promotions: ShamsSyncSide;
   scheduler: ShamsSchedulerState | null;
   history: ShamsSyncRunRecord[];
+  /** The global automation switch and who last moved it. */
+  settings: ShamsSyncSettings;
+  /** The configured daily slots, in timetable order. */
+  slots: ScheduleSlotRecord[];
+  /**
+   * The soonest occurrence that would actually run each kind, or null when
+   * automation is off or nothing targets it. Computed from the same function the
+   * scheduler uses, so the page cannot promise a run that will not happen.
+   */
+  nextStockRun: string | null;
+  nextPromotionsRun: string | null;
   /** When this report was assembled, for the "as of" line. */
   observedAt: string;
 }
@@ -126,6 +149,9 @@ function toRecord(row: Record<string, any>): ShamsSyncRunRecord {
     errorSummary: row.error_summary ?? null,
     sourceTimestampsCorrected: row.source_timestamps_corrected === true,
     lastObservedAt: row.last_observed_at ?? null,
+    scheduledFor: row.scheduled_for ?? null,
+    scheduleSlotId: row.schedule_slot_id ?? null,
+    requestedBy: row.requested_by ?? null,
   };
 }
 
@@ -142,7 +168,7 @@ export async function readShamsSyncMonitor(
 ): Promise<ShamsSyncMonitorReport> {
   const configured = isSyncConfigured();
 
-  const [stock, promotions, historyResult, stateResult] = await Promise.all([
+  const [stock, promotions, historyResult, stateResult, settings, slots] = await Promise.all([
     configured
       ? readSide("stock", now.getTime())
       : Promise.resolve<ShamsSyncSide>({ status: null, error: null }),
@@ -155,12 +181,20 @@ export async function readShamsSyncMonitor(
       .order("triggered_at", { ascending: false })
       .limit(HISTORY_LIMIT),
     supabase.from("shams_sync_scheduler_state").select("*").eq("id", 1).maybeSingle(),
+    readSyncSettings(supabase),
+    readScheduleSlots(supabase),
   ]);
 
   const stateRow = (stateResult as { data?: Record<string, any> | null })?.data ?? null;
 
   return {
     configured,
+    settings,
+    slots,
+    nextStockRun:
+      nextRunFor("stock", slots, settings.automationEnabled, now)?.toISOString() ?? null,
+    nextPromotionsRun:
+      nextRunFor("promotions", slots, settings.automationEnabled, now)?.toISOString() ?? null,
     stock,
     promotions,
     scheduler: stateRow

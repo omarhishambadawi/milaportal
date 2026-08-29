@@ -3257,7 +3257,89 @@ future and no correction is applied, with nobody deploying anything. Both ends o
 a run are assessed together so durations stay correct either way. The workaround
 lives only in `sync-status.ts`; deleting that one function is the whole removal.
 
-#### What this phase deliberately omits
+#### The Control Center — configurable daily slots
+
+Phase 2A hardcoded one nightly trigger into `pg_cron` (`0 22 * * *`), so changing
+the schedule meant changing a cron job, which meant a migration, which meant an
+engineer. Phase 2B replaces that with schedule **data**, and `pg_cron` is touched
+exactly once — by `20260829120000` — and never again.
+
+```
+src/lib/shams-crm/sync-schedule.ts        PURE: slot arithmetic, Riyadh conversion, catch-up policy
+src/lib/shams-crm/sync-settings.server.ts settings + slots, validation, next_due_at maintenance
+src/lib/shams-crm/sync-scheduler.server.ts runShamsSyncTick -> evaluate slots -> runShamsSyncTriggers
+```
+
+Three tables. `shams_sync_settings` (one row) holds the global switch;
+`shams_sync_schedule_slots` holds one row per daily time; `shams_sync_runs` gains
+`scheduled_for`, `schedule_slot_id` and `requested_by`.
+
+**Slots are daily times, not a frequency.** The three seeded defaults are 15:00,
+21:00 and 00:00 Asia/Riyadh, each targeting both kinds. The gaps between them are
+6h, 3h and 15h — deliberately uneven — so they cannot be collapsed into "every
+eight hours" without changing what was asked for. A test asserts those gaps
+precisely so nobody "simplifies" them later.
+
+**`next_due_at` is the contract with the database.** `shams_sync_tick()` runs
+every minute and compares one indexed timestamp; it contains no scheduling logic
+and issues **no HTTP request** unless a run is open or an enabled slot is due
+with automation on — roughly 1,438 of 1,440 minutes a day cost one query and
+nothing else. The arithmetic lives in `sync-schedule.ts`, where it is tested.
+
+**Times are local, storage is UTC.** A slot stores `15:00` plus `Asia/Riyadh`;
+the conversion goes through the named zone rather than a hardcoded `+03:00`, and
+no UTC value is rendered anywhere on the page. `next_due_at` is recomputed on
+every write, so the time the Control Center displays is the same value the
+scheduler will act on.
+
+##### Exactly once per occurrence
+
+`shams_sync_runs_occurrence_key` — `UNIQUE (sync_type, scheduled_for) WHERE
+execution_source = 'scheduled' AND scheduled_for IS NOT NULL`. A duplicate cron
+tick, two racing workers, a redeploy mid-evaluation and a `pg_net` retry all
+converge on the same row; the second insert violates the index and stops. Keyed
+on the occurrence rather than the slot, so two slots configured at the same time
+cannot produce two stock runs for one instant either.
+
+A slot is advanced **whatever the outcome**, including a failed trigger. Leaving
+it due would retry every minute for two hours and then record itself as missed;
+Phase 2A's rule holds — a trigger is never automatically retried, and Update Now
+is the human retry.
+
+##### Manual runs
+
+`shamsSyncRunNow` is administrator-gated, audited before the attempt, and reuses
+`runShamsSyncTriggers` — the same claim, the same `is_running` pre-check, the
+same no-retry rule. There is no second implementation of "start a sync".
+
+`execution_source` and `requested_by` come from the **verified** caller, never
+from the request body. `scheduled_for` is left null, which is the whole of the
+"manual does not consume a slot" rule: with no occurrence, the unique index does
+not apply to the row, so a manual run at 13:00 leaves the 15:00 occurrence
+untouched. Manual runs stay available with automation off — the switch governs
+the schedule, not an administrator's ability to act.
+
+Manual runs also skip the stale-claim reaper: pressing a button should not
+quietly close somebody else's stuck run as a side effect.
+
+##### Catch-up
+
+Two hours. Inside the window a missed occurrence runs once, carrying its original
+`scheduled_for`. Outside it, the occurrence is recorded as `skipped` — reusing
+the existing status vocabulary rather than widening a CHECK constraint — and the
+slot advances to the next occurrence **after now**, never day-by-day. Three days
+of arrears therefore produce one skipped occurrence per kind, not seventy-two
+hours of runs.
+
+##### Applying the migration changes nothing
+
+`automation_enabled` seeds to `false`. The three slots exist, are enabled, and
+target both kinds, but nothing evaluates them until an administrator turns
+automation on in the Control Center. `shams_sync_scheduler_url` is still required
+and still uncreated; with it absent the tick records `unconfigured` and the
+Control Center says so without exposing the value.
+
+#### What Phase 2A deliberately omitted (superseded by the Control Center above)
 
 No manual trigger controls — no Run, Retry or Full Refresh. The scheduler is new
 and unproven in production, and the Desktop is the manual fallback in the

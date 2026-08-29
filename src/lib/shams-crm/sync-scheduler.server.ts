@@ -2,18 +2,25 @@
  * The Shams sync scheduler: starting the daily runs without anyone's browser
  * being open, and finding out afterwards how they went. Server-only.
  *
- * ## The two halves
+ * ## The three parts
  *
- *   `runShamsSyncTriggers`   — once a day, from `pg_cron` via
- *                              `shams_sync_due('trigger')`. Claims, checks,
- *                              triggers, records.
+ *   `runShamsSyncTick`       — the entry point, from `pg_cron` via
+ *                              `shams_sync_tick()`. Evaluates the configured
+ *                              schedule slots, acts on whatever is due, then
+ *                              reconciles. Contains no schedule arithmetic of
+ *                              its own; that is `sync-schedule.ts`.
  *
- *   `runShamsSyncReconcile`  — every five minutes *while a run is open*, via
- *                              `shams_sync_due('reconcile')`. Reads status and
- *                              closes rows. Triggers nothing, ever.
+ *   `runShamsSyncTriggers`   — claims, checks, triggers, records. Shared by the
+ *                              schedule and by the Control Center's manual
+ *                              buttons, so both inherit the same guards. This is
+ *                              the only function that can start a sync.
  *
- * Splitting them is what keeps the dangerous half small. Only one function in
- * this file can cause a sync to start, and it is the one that runs once a night.
+ *   `runShamsSyncReconcile`  — reads status and closes rows. Triggers nothing,
+ *                              ever.
+ *
+ * Keeping the dangerous part small is the point: exactly one function starts
+ * syncs, and every caller reaches it through `RunTriggersOptions` rather than by
+ * reimplementing it.
  *
  * ## Three guards, none of them trusted alone
  *
@@ -71,6 +78,30 @@ const STALE_CLAIM_MS = 4 * 60 * 60 * 1000;
 
 /** Postgres unique-violation. The expected outcome of losing a claim race. */
 const UNIQUE_VIOLATION = "23505";
+
+/**
+ * What one invocation of the trigger path is being asked to do.
+ *
+ * Everything here used to be hardcoded — both kinds, always `scheduled`. Opening
+ * these four seams is what lets the Control Center's manual buttons and the
+ * schedule's per-slot targeting share one code path, and therefore one set of
+ * guards. There is deliberately no second implementation of "start a sync".
+ */
+export interface RunTriggersOptions {
+  /** Which kinds to attempt. Defaults to both. */
+  kinds?: readonly ShamsSyncKind[];
+  /** Recorded on the row, and it decides whether the reaper runs. */
+  source?: "scheduled" | "manual";
+  /** The verified administrator, for a manual run. Never a browser-supplied id. */
+  requestedBy?: string | null;
+  /**
+   * The occurrence this run belongs to. Set for scheduled runs, null for manual
+   * ones — which is the whole of the "manual does not consume a slot" rule.
+   */
+  scheduledFor?: Date | null;
+  slotId?: string | null;
+  now?: Date;
+}
 
 export interface ShamsSyncTriggerSummary {
   /** Kinds that reached the CRM and started a run. */
@@ -204,8 +235,17 @@ async function reapStaleClaims(supabase: SupabaseLike, now: Date): Promise<numbe
  */
 export async function runShamsSyncTriggers(
   supabase: SupabaseLike,
-  now: Date = new Date(),
+  options: RunTriggersOptions = {},
 ): Promise<ShamsSyncTriggerSummary> {
+  const {
+    kinds = KINDS,
+    source = "scheduled",
+    requestedBy = null,
+    scheduledFor = null,
+    slotId = null,
+    now = new Date(),
+  } = options;
+
   const summary: ShamsSyncTriggerSummary = {
     triggered: 0,
     skipped: 0,
@@ -226,9 +266,13 @@ export async function runShamsSyncTriggers(
     return summary;
   }
 
-  summary.reaped = await reapStaleClaims(supabase, now);
+  /*
+   * Reaping is a scheduled-path concern only. A manual click should not quietly
+   * close somebody else's stuck run as a side effect of pressing a button.
+   */
+  if (source === "scheduled") summary.reaped = await reapStaleClaims(supabase, now);
 
-  for (const kind of KINDS) {
+  for (const kind of kinds) {
     /*
      * The claim. `status: 'triggered'` is written *before* the CRM is contacted,
      * so the window in which two executions could both decide to trigger does
@@ -240,18 +284,32 @@ export async function runShamsSyncTriggers(
       .insert({
         sync_type: kind,
         status: "triggered",
-        execution_source: "scheduled",
+        execution_source: source,
         triggered_at: now.toISOString(),
+        /*
+         * `scheduled_for` is what `shams_sync_runs_occurrence_key` keys on, so
+         * writing it here is what makes an occurrence run exactly once. Manual
+         * runs leave it null and sit outside that index entirely — which is
+         * precisely why a manual run cannot consume a scheduled slot.
+         */
+        scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
+        schedule_slot_id: slotId,
+        requested_by: requestedBy,
       })
       .select("id")
       .single();
 
     if (claimError || !claim) {
       if ((claimError as { code?: string } | null)?.code === UNIQUE_VIOLATION) {
-        // Someone else holds it. Not an error, and not recorded as one: a row
-        // for this work already exists and is the record of it.
+        /*
+         * Either guard may have fired: a run of this kind is already open
+         * (`shams_sync_runs_active_key`), or this exact occurrence has already
+         * been handled (`shams_sync_runs_occurrence_key`). Both mean the same
+         * thing operationally — a row for this work already exists and is the
+         * record of it — so neither is an error and neither writes a second row.
+         */
         summary.skipped++;
-        console.info(`[shams-sync] ${kind}: a run is already open locally; not triggering`);
+        console.info(`[shams-sync] ${kind}: already claimed; not triggering`);
         continue;
       }
       summary.failed++;
@@ -445,6 +503,176 @@ export async function runShamsSyncReconcile(
       source_timestamps_corrected: status.timestampsCorrected,
     });
   }
+
+  return summary;
+}
+
+/* -------------------------------------------------------------------------- */
+/* The tick — schedule evaluation                                              */
+/* -------------------------------------------------------------------------- */
+
+export interface ShamsSyncTickSummary {
+  /** Slots whose occurrence came due and was acted on. */
+  slotsDue: number;
+  /** Slots whose occurrence was abandoned as too late to be useful. */
+  slotsMissed: number;
+  triggered: number;
+  skipped: number;
+  failed: number;
+  indeterminate: number;
+  reaped: number;
+  /** Open rows brought up to date in the same pass. */
+  reconciled: number;
+  notConfigured: boolean;
+  automationEnabled: boolean;
+}
+
+/**
+ * One evaluation of the business schedule, plus reconciliation.
+ *
+ * Called from `pg_cron` every minute via `shams_sync_tick()` — but only when
+ * that function has already established there is something to do, so this is not
+ * running 1,440 times a day.
+ *
+ * ## Order matters
+ *
+ * Reconciliation runs **after** triggering, not before, so a run started in this
+ * same pass is picked up on the next tick rather than being read back a
+ * millisecond after it was queued.
+ *
+ * ## A missed occurrence is recorded, not discarded
+ *
+ * When a slot is more than the grace window late, its kinds are written as
+ * `skipped` rows carrying the original `scheduled_for`. That costs one row and
+ * buys the only thing that makes a gap in the history explicable later: the
+ * difference between "the scheduler never ran" and "the scheduler ran and
+ * decided this was too stale to be useful".
+ */
+export async function runShamsSyncTick(
+  supabase: SupabaseLike,
+  now: Date = new Date(),
+): Promise<ShamsSyncTickSummary> {
+  const summary: ShamsSyncTickSummary = {
+    slotsDue: 0,
+    slotsMissed: 0,
+    triggered: 0,
+    skipped: 0,
+    failed: 0,
+    indeterminate: 0,
+    reaped: 0,
+    reconciled: 0,
+    notConfigured: false,
+    automationEnabled: false,
+  };
+
+  const { readScheduleSlots, readSyncSettings, advanceSlot } =
+    await import("./sync-settings.server");
+  const { evaluateSlots } = await import("./sync-schedule");
+
+  const settings = await readSyncSettings(supabase);
+  summary.automationEnabled = settings.automationEnabled;
+
+  const slots = await readScheduleSlots(supabase);
+  const decisions = evaluateSlots(slots, settings.automationEnabled, now);
+
+  for (const decision of decisions) {
+    if (decision.verdict === "not_due") {
+      /*
+       * A slot that has never been evaluated acquires its first due time here.
+       * Only written when it actually changes, so an idle tick does not rewrite
+       * every row every minute.
+       */
+      const current = decision.slot.nextDueAt;
+      const computed = decision.nextDueAt?.toISOString() ?? null;
+      if (settings.automationEnabled && current !== computed && current === null) {
+        await advanceSlot(supabase, decision.slot.id, null, decision.nextDueAt, now);
+      }
+      continue;
+    }
+
+    if (decision.verdict === "missed") {
+      summary.slotsMissed++;
+      const lateMinutes = Math.round(decision.lateMs / 60_000);
+      try {
+        for (const kind of decision.kinds) {
+          /*
+           * Recorded through the same insert the trigger path uses, so the
+           * occurrence index applies here too: a missed slot cannot be recorded
+           * twice, and a slot that was recorded as missed can never later be run.
+           */
+          const { error } = await supabase.from(RUNS).insert({
+            sync_type: kind,
+            status: "skipped",
+            execution_source: "scheduled",
+            skip_reason:
+              `Missed its scheduled window — the scheduler reached it ${lateMinutes} minutes late, ` +
+              `beyond the two-hour catch-up limit.`,
+            triggered_at: now.toISOString(),
+            scheduled_for: decision.occurrence.toISOString(),
+            schedule_slot_id: decision.slot.id,
+            last_observed_at: now.toISOString(),
+          });
+          if (!error) summary.skipped++;
+        }
+      } finally {
+        // See the `finally` on the due branch below: the advance is what stops
+        // the occurrence being reconsidered, so it must survive a failed write.
+        await advanceSlot(supabase, decision.slot.id, decision.occurrence, decision.nextDueAt, now);
+      }
+      console.warn(
+        `[shams-sync] slot ${decision.slot.localTime}: missed by ${lateMinutes}m; recorded and advanced`,
+      );
+      continue;
+    }
+
+    // Due.
+    summary.slotsDue++;
+    try {
+      const result = await runShamsSyncTriggers(supabase, {
+        kinds: decision.kinds,
+        source: "scheduled",
+        scheduledFor: decision.occurrence,
+        slotId: decision.slot.id,
+        now,
+      });
+
+      summary.triggered += result.triggered;
+      summary.skipped += result.skipped;
+      summary.failed += result.failed;
+      summary.indeterminate += result.indeterminate;
+      summary.reaped += result.reaped;
+      if (result.notConfigured) summary.notConfigured = true;
+    } catch (err) {
+      /*
+       * An unexpected throw — a database write that failed, not a sync outcome.
+       * Counted as a failure of this occurrence and swallowed here rather than
+       * propagated, so one bad slot cannot stop the remaining slots or the
+       * reconciliation pass from running.
+       */
+      summary.failed += decision.kinds.length;
+      console.error(
+        `[shams-sync] slot ${decision.slot.localTime}: evaluation failed:`,
+        (err as Error)?.name ?? "unknown",
+      );
+    } finally {
+      /*
+       * Advanced whatever the outcome — triggered, skipped, failed,
+       * indeterminate, or an exception on the way through.
+       *
+       * This is the whole of the no-retry-loop guarantee, and it is in a
+       * `finally` because an advance that only happened on the happy path would
+       * leave a failed occurrence due: it would be reattempted every minute for
+       * two hours and then recorded as missed, which is precisely the retry
+       * loop Phase 2A's rule exists to prevent. The occurrence keeps its own
+       * `failed` or `indeterminate` row as the record of what happened, and
+       * `Update Now` is the explicit human retry.
+       */
+      await advanceSlot(supabase, decision.slot.id, decision.occurrence, decision.nextDueAt, now);
+    }
+  }
+
+  const reconcile = await runShamsSyncReconcile(supabase, now);
+  summary.reconciled = reconcile.completed + reconcile.failed + reconcile.lost;
 
   return summary;
 }

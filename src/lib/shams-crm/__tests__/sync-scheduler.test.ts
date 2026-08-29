@@ -107,7 +107,7 @@ describe("runShamsSyncTriggers — the guards", () => {
     vi.mocked(getSyncStatus).mockResolvedValue(busy);
     const { supabase, updates } = makeDb();
 
-    const summary = await runShamsSyncTriggers(supabase, NOW);
+    const summary = await runShamsSyncTriggers(supabase, { now: NOW });
 
     // The assertion that matters.
     expect(triggerSync).not.toHaveBeenCalled();
@@ -123,7 +123,7 @@ describe("runShamsSyncTriggers — the guards", () => {
     vi.mocked(getSyncStatus).mockResolvedValue(idle);
     const { supabase } = makeDb({ claimConflict: true });
 
-    const summary = await runShamsSyncTriggers(supabase, NOW);
+    const summary = await runShamsSyncTriggers(supabase, { now: NOW });
 
     // The local guard fires before the CRM is contacted at all.
     expect(getSyncStatus).not.toHaveBeenCalled();
@@ -136,7 +136,7 @@ describe("runShamsSyncTriggers — the guards", () => {
     vi.mocked(triggerSync).mockResolvedValue({ kind: "triggered", runId: "348" });
     const { supabase, inserts, updates } = makeDb();
 
-    const summary = await runShamsSyncTriggers(supabase, NOW);
+    const summary = await runShamsSyncTriggers(supabase, { now: NOW });
 
     expect(summary.triggered).toBe(2);
     expect(inserts).toHaveLength(2);
@@ -155,7 +155,7 @@ describe("runShamsSyncTriggers — the guards", () => {
     });
     const { supabase, updates } = makeDb();
 
-    const summary = await runShamsSyncTriggers(supabase, NOW);
+    const summary = await runShamsSyncTriggers(supabase, { now: NOW });
 
     expect(summary.indeterminate).toBe(2);
     // One attempt per kind. Never two.
@@ -167,7 +167,7 @@ describe("runShamsSyncTriggers — the guards", () => {
     vi.mocked(getSyncStatus).mockRejectedValue(new Error("network"));
     const { supabase, updates } = makeDb();
 
-    const summary = await runShamsSyncTriggers(supabase, NOW);
+    const summary = await runShamsSyncTriggers(supabase, { now: NOW });
 
     // Unable to check the guard means unable to proceed.
     expect(triggerSync).not.toHaveBeenCalled();
@@ -180,7 +180,7 @@ describe("runShamsSyncTriggers — the guards", () => {
     vi.mocked(triggerSync).mockResolvedValue({ kind: "triggered", runId: "76" });
     const { supabase } = makeDb();
 
-    const summary = await runShamsSyncTriggers(supabase, NOW);
+    const summary = await runShamsSyncTriggers(supabase, { now: NOW });
 
     // Stock being busy must not hold promotions back: Phase 1 observed both
     // running concurrently and found no dependency in either direction.
@@ -194,7 +194,7 @@ describe("runShamsSyncTriggers — the guards", () => {
     vi.mocked(isSyncConfigured).mockReturnValue(false);
     const { supabase, inserts } = makeDb();
 
-    const summary = await runShamsSyncTriggers(supabase, NOW);
+    const summary = await runShamsSyncTriggers(supabase, { now: NOW });
 
     expect(summary.notConfigured).toBe(true);
     expect(triggerSync).not.toHaveBeenCalled();
@@ -208,7 +208,7 @@ describe("runShamsSyncTriggers — the guards", () => {
     vi.mocked(triggerSync).mockResolvedValue({ kind: "triggered", runId: "349" });
     const { supabase } = makeDb({ staleRows: [{ id: "orphan" }] });
 
-    const summary = await runShamsSyncTriggers(supabase, NOW);
+    const summary = await runShamsSyncTriggers(supabase, { now: NOW });
 
     expect(summary.reaped).toBe(1);
     /*
@@ -333,7 +333,7 @@ describe("what leaves the scheduler", () => {
     vi.mocked(triggerSync).mockResolvedValue({ kind: "triggered", runId: "348" });
     const { supabase } = makeDb();
 
-    const trigger = await runShamsSyncTriggers(supabase, NOW);
+    const trigger = await runShamsSyncTriggers(supabase, { now: NOW });
     const reconcile = await runShamsSyncReconcile(makeDb({ openRows: [] }).supabase, NOW);
 
     for (const summary of [trigger, reconcile]) {
@@ -350,7 +350,7 @@ describe("what leaves the scheduler", () => {
     );
     const { supabase, updates } = makeDb();
 
-    await runShamsSyncTriggers(supabase, NOW);
+    await runShamsSyncTriggers(supabase, { now: NOW });
 
     for (const update of updates) {
       const text = String(update.patch.error_summary ?? "");

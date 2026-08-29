@@ -4,9 +4,10 @@ import { createClient } from "@supabase/supabase-js";
 /**
  * The Shams sync worker endpoint.
  *
- * `pg_cron` runs `public.shams_sync_due(task)` — once a day with `'trigger'`,
- * every five minutes with `'reconcile'` — and that function POSTs here through
- * `net.http_post` carrying the platform's service role key as a Bearer token.
+ * `pg_cron` runs `public.shams_sync_tick()` every minute. That function makes no
+ * HTTP request at all unless a run is open or an enabled schedule slot is due
+ * and automation is on; when it does, it POSTs here through `net.http_post`
+ * carrying the platform's service role key as a Bearer token.
  * This route does the work, because the transport, the session handling, the
  * status normalisation and the timestamp correction are all TypeScript in this
  * Worker; reimplementing any of them in plpgsql would be a second integration to
@@ -76,10 +77,22 @@ function serviceClient() {
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
-/** Only the two tasks the cron jobs send. Anything else is refused. */
-function readTask(body: unknown): "trigger" | "reconcile" | null {
+/**
+ * Only the tasks the cron job sends. Anything else is refused.
+ *
+ * `tick` is the Control Center entry point: evaluate the configured schedule and
+ * act on whatever is due. `reconcile` is kept because it is strictly weaker —
+ * it cannot start a sync — and remains useful for closing open rows by hand
+ * without touching the schedule.
+ *
+ * `trigger` is deliberately **gone**. It started both kinds unconditionally,
+ * ignoring the schedule and the global automation switch, which is no longer a
+ * thing this endpoint should be able to do: manual runs now go through the
+ * audited, administrator-gated server function instead.
+ */
+function readTask(body: unknown): "tick" | "reconcile" | null {
   const task = (body as { task?: unknown } | null)?.task;
-  return task === "trigger" || task === "reconcile" ? task : null;
+  return task === "tick" || task === "reconcile" ? task : null;
 }
 
 export const Route = createFileRoute("/api/shams-sync-run")({
@@ -141,15 +154,15 @@ export const Route = createFileRoute("/api/shams-sync-run")({
         if (!task) return json({ error: "bad_task" }, 400);
 
         try {
-          if (task === "trigger") {
-            const { runShamsSyncTriggers } = await import("@/lib/shams-crm/sync-scheduler.server");
-            const summary = await runShamsSyncTriggers(supabase as any);
+          if (task === "tick") {
+            const { runShamsSyncTick } = await import("@/lib/shams-crm/sync-scheduler.server");
+            const summary = await runShamsSyncTick(supabase as any);
             /*
              * Counts only. Never a run's contents, never a credential — the
              * summary types are integers and one boolean, and a test asserts
              * nothing else reaches them.
              */
-            console.info("[shams-sync] daily trigger", summary);
+            console.info("[shams-sync] tick", summary);
             return json({ ok: true, task, ...summary });
           }
 

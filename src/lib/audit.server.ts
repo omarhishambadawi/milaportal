@@ -40,6 +40,19 @@ export const AUDIT_ACTIONS = {
   branchesRolledBack: "branches.rolled_back",
   /** One branch was corrected in place, from its card, without an import. */
   branchUpdated: "branches.updated",
+  /** The global Shams automation switch was moved. */
+  shamsAutomationToggled: "shams_sync.automation_toggled",
+  /** A Shams schedule slot was created or edited. */
+  shamsScheduleSaved: "shams_sync.schedule_saved",
+  /** A Shams schedule slot was removed. */
+  shamsScheduleDeleted: "shams_sync.schedule_deleted",
+  /**
+   * An administrator started a sync by hand from the Control Center.
+   *
+   * Audited because it is the first action in this integration that lets a
+   * browser start work on a third-party production system.
+   */
+  shamsManualRun: "shams_sync.manual_run",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

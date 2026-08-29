@@ -1497,3 +1497,219 @@ export const shamsSyncMonitor = createServerFn({ method: "POST" })
       };
     }
   });
+/* -------------------------------------------------------------------------- */
+/* Shams CRM Control Center — administrator controls                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The shape every Control Center mutation answers with.
+ *
+ * `ok: false` with a `message` is an ordinary refusal the UI renders inline —
+ * an invalid time, a slot that targets nothing. Authorization failures still
+ * throw, so they surface as errors rather than being flattened into something a
+ * form might render as a validation hint.
+ */
+export interface ShamsSyncControlResult {
+  ok: boolean;
+  message: string | null;
+}
+
+const slotInput = z.object({
+  id: z.string().uuid().nullable().optional(),
+  /** `HH:MM`. Re-validated server-side; the form is not the last word. */
+  localTime: z.string().regex(/^\d{1,2}:\d{2}$/),
+  syncStock: z.boolean(),
+  syncPromotions: z.boolean(),
+  enabled: z.boolean(),
+});
+
+/**
+ * Turn the global automation switch on or off.
+ *
+ * The switch governs the *schedule only*. Manual runs stay available to
+ * administrators with automation off — an operator dealing with a stale
+ * catalogue at short notice should not have to enable a nightly schedule to do
+ * it.
+ */
+export const shamsSyncSetAutomation = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => z.object({ enabled: z.boolean() }).parse(d))
+  .handler(async ({ context, data }): Promise<ShamsSyncControlResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertAdmin(supabase, userId);
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { setAutomationEnabled } = await import("@/lib/shams-crm/sync-settings.server");
+    await setAutomationEnabled(supabaseAdmin as any, data.enabled, userId);
+
+    const { logAdminAction, AUDIT_ACTIONS } = await import("@/lib/audit.server");
+    await logAdminAction({
+      actorId: userId,
+      targetUserId: null,
+      action: AUDIT_ACTIONS.shamsAutomationToggled,
+      details: { enabled: data.enabled },
+    });
+
+    return { ok: true, message: data.enabled ? "Automation is on." : "Automation is off." };
+  });
+
+/** Create or edit one schedule slot. */
+export const shamsSyncSaveSlot = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => slotInput.parse(d))
+  .handler(async ({ context, data }): Promise<ShamsSyncControlResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertAdmin(supabase, userId);
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { upsertScheduleSlot } = await import("@/lib/shams-crm/sync-settings.server");
+    const result = await upsertScheduleSlot(
+      supabaseAdmin as any,
+      {
+        id: data.id ?? null,
+        localTime: data.localTime,
+        syncStock: data.syncStock,
+        syncPromotions: data.syncPromotions,
+        enabled: data.enabled,
+      },
+      userId,
+    );
+
+    if (result.kind === "invalid" || result.kind === "limit") {
+      return { ok: false, message: result.message };
+    }
+    if (result.kind === "not_found") {
+      return { ok: false, message: "That schedule no longer exists." };
+    }
+
+    const { logAdminAction, AUDIT_ACTIONS } = await import("@/lib/audit.server");
+    await logAdminAction({
+      actorId: userId,
+      targetUserId: null,
+      action: AUDIT_ACTIONS.shamsScheduleSaved,
+      // The slot's configuration, which is not sensitive and is the whole point
+      // of auditing the change.
+      details: {
+        slotId: result.slot.id,
+        localTime: result.slot.localTime,
+        timeZone: result.slot.timeZone,
+        syncStock: result.slot.syncStock,
+        syncPromotions: result.slot.syncPromotions,
+        enabled: result.slot.enabled,
+      },
+    });
+
+    return { ok: true, message: "Schedule saved." };
+  });
+
+/** Remove a schedule slot. */
+export const shamsSyncDeleteSlot = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ context, data }): Promise<ShamsSyncControlResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertAdmin(supabase, userId);
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { deleteScheduleSlot } = await import("@/lib/shams-crm/sync-settings.server");
+    const removed = await deleteScheduleSlot(supabaseAdmin as any, data.id);
+    if (!removed) return { ok: false, message: "That schedule no longer exists." };
+
+    const { logAdminAction, AUDIT_ACTIONS } = await import("@/lib/audit.server");
+    await logAdminAction({
+      actorId: userId,
+      targetUserId: null,
+      action: AUDIT_ACTIONS.shamsScheduleDeleted,
+      details: { slotId: data.id },
+    });
+
+    return { ok: true, message: "Schedule removed." };
+  });
+
+export interface ShamsSyncManualRunResult {
+  ok: boolean;
+  triggered: number;
+  skipped: number;
+  failed: number;
+  indeterminate: number;
+  message: string;
+}
+
+/**
+ * Start a sync now, by hand.
+ *
+ * This is the first thing in the integration that lets a browser start work on a
+ * third-party production system, so it is deliberately narrow:
+ *
+ *   * `assertAdmin`, server-side, and the tables enforce the same in RLS.
+ *   * It reuses `runShamsSyncTriggers` — the same claim, the same `is_running`
+ *     pre-check, the same no-retry rule. No second implementation of "start a
+ *     sync" exists.
+ *   * `execution_source: 'manual'` and `requested_by` come from the *verified*
+ *     caller, never from the request body, so a run cannot be attributed to
+ *     somebody else by asking.
+ *   * `scheduledFor` is left null, which is what keeps a manual run outside the
+ *     occurrence index and therefore unable to consume a scheduled slot.
+ *
+ * Available whether or not automation is on: the global switch governs the
+ * schedule, not an administrator's ability to act.
+ */
+export const shamsSyncRunNow = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) =>
+    z
+      .object({
+        kinds: z
+          .array(z.enum(["stock", "promotions"]))
+          .min(1)
+          .max(2),
+      })
+      .parse(d),
+  )
+  .handler(async ({ context, data }): Promise<ShamsSyncManualRunResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertAdmin(supabase, userId);
+
+    const { logAdminAction, AUDIT_ACTIONS } = await import("@/lib/audit.server");
+    /*
+     * Written before the attempt, not after. A run that starts and then loses
+     * its response — a timeout, a closed tab — must still leave a record that a
+     * named person asked for it.
+     */
+    await logAdminAction({
+      actorId: userId,
+      targetUserId: null,
+      action: AUDIT_ACTIONS.shamsManualRun,
+      details: { kinds: data.kinds },
+    });
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { runShamsSyncTriggers } = await import("@/lib/shams-crm/sync-scheduler.server");
+    const summary = await runShamsSyncTriggers(supabaseAdmin as any, {
+      kinds: data.kinds,
+      source: "manual",
+      requestedBy: userId,
+    });
+
+    const parts: string[] = [];
+    if (summary.triggered > 0) {
+      parts.push(
+        `${summary.triggered} started. Shams runs this in the background and it typically takes about 25 minutes.`,
+      );
+    }
+    if (summary.skipped > 0) parts.push(`${summary.skipped} skipped, already running.`);
+    if (summary.failed > 0) parts.push(`${summary.failed} could not be started.`);
+    if (summary.indeterminate > 0) {
+      parts.push(`${summary.indeterminate} sent but unconfirmed. Check the history.`);
+    }
+    if (summary.notConfigured) parts.push("Shams CRM is not configured on this deployment.");
+
+    return {
+      ok: summary.failed === 0 && !summary.notConfigured,
+      triggered: summary.triggered,
+      skipped: summary.skipped,
+      failed: summary.failed,
+      indeterminate: summary.indeterminate,
+      message: parts.join(" ") || "Nothing to do.",
+    };
+  });
