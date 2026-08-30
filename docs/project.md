@@ -1092,7 +1092,8 @@ baseline).
 ### Orders
 
 `use-orders-list-filters` · `use-orders-list-data` (paginated page fetch with
-`keepPreviousData`, the `orders_kpi_summary` RPC, per-row enrichment) ·
+`keepPreviousData`, the `orders_kpi_summary` RPC through `features/orders/kpi.ts`,
+per-row enrichment) ·
 `use-orders-mutations` · `use-orders-export` ·
 `use-orders-scroll-restoration` (returns to the edited row, below) ·
 `use-starred-orders` (per-agent stars in `order_stars`; optimistic toggle) ·
@@ -2191,6 +2192,35 @@ attempt at this feature shipped an 11-argument version (`_verification`,
 `_agent_ids`) that may already have been applied to a database even though its
 file is no longer in the tree. Both drops are `IF EXISTS`, so the migration is
 correct whether that function is present or not.
+
+### The KPI strip, and the argument list it is asked with
+
+`features/orders/kpi.ts` holds both halves of the KPI exchange — `buildKpiArgs`,
+which assembles the RPC's named arguments from the filter state, and
+`readKpiSummary`, which reads the returned `jsonb` into the three cards' twelve
+figures. Pure and outside the hook, because both carry a hazard that TypeScript
+cannot see.
+
+**The argument list is an unchecked contract.** `orders_kpi_summary` is absent
+from the generated Supabase types, so the call goes through `as any`; PostgREST
+in turn resolves an RPC _by its argument names_. An argument the deployed
+function does not declare therefore type-checks, lints, builds and deploys, and
+fails only at runtime with `PGRST202`. This has happened once: the
+`_verification` argument above shipped correctly on both sides, but migration
+`20260830140000` had not been applied to the database the client was talking to,
+so every card read 0 SAR and 0 orders over a month holding 3,611 of them.
+`__tests__/kpi-summary.test.ts` now holds `buildKpiArgs`'s keys against the
+parameters that migration actually declares, in both directions — an argument the
+SQL does not take, and a parameter the client stops sending, each fail the suite.
+
+**A summary that failed to arrive is not a summary of zero.** `readKpiSummary`
+returns `null` for a missing payload rather than twelve zeros, because zeros are
+also the honest answer for a filter that matches nothing — and collapsing the two
+is what let an erroring query render as a quiet day. `useOrdersListData` reports
+the distinction as `summaryUnavailable`; the cards print an em dash in each slot
+instead of a figure, and the strip says so in one line beneath itself. The list
+below is a separate query and is explicitly described as unaffected, since it
+still holds good rows when only the aggregation has failed.
 
 ### Searching by order number
 

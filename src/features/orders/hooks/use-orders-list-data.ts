@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { queryKeys } from "@/lib/query-keys";
 import type { OrdersFilters } from "@/lib/query-keys";
 import { ORDER_LIST_COLUMNS } from "../constants";
+import { EMPTY_KPI_SUMMARY, buildKpiArgs, readKpiSummary } from "../kpi";
 
 interface UseOrdersListDataArgs {
   from: string;
@@ -85,27 +86,31 @@ export function useOrdersListData({
     },
   });
 
-  // KPI totals across the entire filtered set (server-side aggregation).
-  const { data: kpi } = useQuery({
+  // KPI totals across the entire filtered set (server-side aggregation). The
+  // argument list is built by `buildKpiArgs` and is a contract with the SQL
+  // function that nothing type-checks — see the note in ../kpi.
+  const { data: kpi, error: kpiError } = useQuery({
     queryKey: queryKeys.orders.kpi(filterKey),
     placeholderData: keepPreviousData,
     queryFn: async () => {
-      const { data, error } = await supabase.rpc("orders_kpi_summary" as any, {
-        _from: from,
-        _to: to,
-        _team: team,
-        _agent: canFilterAgents && agent !== "all" ? agent : null,
-        _status: status,
-        _mine: mineOnly && !!userId,
-        _q: searching ? term : null,
-        _fulfillment: fulfillment,
-        _starred: starredOnly,
-        // Appended with a SQL-side default, so the MCP tools that call this
-        // function with the older argument list are unaffected. The cards have to
-        // narrow with the table or the page shows a list and a total describing
-        // different sets of orders.
-        _verification: verification,
-      });
+      const { data, error } = await supabase.rpc(
+        "orders_kpi_summary" as any,
+        buildKpiArgs({
+          from,
+          to,
+          team,
+          agent,
+          status,
+          fulfillment,
+          verification,
+          mineOnly,
+          starredOnly,
+          userId,
+          canFilterAgents,
+          term,
+          searching,
+        }),
+      );
       if (error) throw error;
       return (data ?? {}) as Record<string, number>;
     },
@@ -128,26 +133,26 @@ export function useOrdersListData({
   const rangeEnd = Math.min(total, (currentPage + 1) * pageSize);
   const pageRows = enrichedRows;
 
-  const summary = {
-    cashSales: Number(kpi?.cash_sales ?? 0),
-    cashCompletedSales: Number(kpi?.cash_completed_sales ?? 0),
-    cashCount: Number(kpi?.cash_count ?? 0),
-    cashCompletedCount: Number(kpi?.cash_completed_count ?? 0),
-    wasSales: Number(kpi?.was_sales ?? 0),
-    wasCompletedSales: Number(kpi?.was_completed_sales ?? 0),
-    wasCount: Number(kpi?.was_count ?? 0),
-    wasCompletedCount: Number(kpi?.was_completed_count ?? 0),
-    totalSales: Number(kpi?.total_sales ?? 0),
-    totalCompletedSales: Number(kpi?.total_completed_sales ?? 0),
-    totalCount: Number(kpi?.total_count ?? 0),
-    completedCount: Number(kpi?.completed_count ?? 0),
-  };
+  const summary = readKpiSummary(kpi) ?? EMPTY_KPI_SUMMARY;
+  /**
+   * The summary was asked for and the answer did not come back.
+   *
+   * Reported separately because the twelve figures above cannot carry it: the
+   * fallback that keeps the cards renderable while the first answer is in flight
+   * is twelve zeros, and twelve zeros is also a legitimate answer for a filter
+   * that matches nothing. Without this flag the strip states a total of 0 SAR
+   * with the same confidence either way — which is exactly how a `PGRST202` from
+   * a function signature the database had not been migrated to yet reached the
+   * floor looking like a quiet day.
+   */
+  const summaryUnavailable = kpiError != null;
 
   return {
     isLoading,
     isFetching,
     pageRows,
     summary,
+    summaryUnavailable,
     total,
     totalPages,
     currentPage,

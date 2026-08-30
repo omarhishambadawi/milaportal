@@ -9,6 +9,7 @@ export function KpiCard({
   completedSales,
   totalOrders,
   completedOrders,
+  unavailable,
 }: {
   label: string;
   tone: string;
@@ -17,7 +18,15 @@ export function KpiCard({
   completedSales: number;
   totalOrders: number;
   completedOrders: number;
+  /**
+   * The summary query failed. Every figure becomes an em dash rather than the
+   * zero it would otherwise fall back to — the card must not be able to state a
+   * total it does not have. Same card, same layout, same four slots.
+   */
+  unavailable?: boolean;
 }) {
+  const money = (v: number) => (unavailable ? "—" : fmtSAR(v));
+  const count = (v: number) => (unavailable ? "—" : v);
   return (
     <div
       className={cn(
@@ -32,14 +41,12 @@ export function KpiCard({
       <div className="mt-3 space-y-1.5">
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-xs text-muted-foreground">Total sales</span>
-          <span className="text-base font-semibold tabular-nums truncate">
-            {fmtSAR(totalSales)}
-          </span>
+          <span className="text-base font-semibold tabular-nums truncate">{money(totalSales)}</span>
         </div>
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-xs text-muted-foreground">Completed sales</span>
           <span className="text-base font-semibold tabular-nums truncate text-[var(--positive)]">
-            {fmtSAR(completedSales)}
+            {money(completedSales)}
           </span>
         </div>
       </div>
@@ -48,14 +55,14 @@ export function KpiCard({
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
             Total orders
           </div>
-          <div className="text-2xl font-bold tabular-nums leading-tight">{totalOrders}</div>
+          <div className="text-2xl font-bold tabular-nums leading-tight">{count(totalOrders)}</div>
         </div>
         <div className="text-right">
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
             Completed
           </div>
           <div className="text-2xl font-bold tabular-nums leading-tight text-[var(--positive)]">
-            {completedOrders}
+            {count(completedOrders)}
           </div>
         </div>
       </div>

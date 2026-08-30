@@ -90,7 +90,16 @@ function OrdersList() {
     cities: f.cities,
   });
 
-  const { pageRows, summary, total, totalPages, currentPage, rangeStart, rangeEnd } = data;
+  const {
+    pageRows,
+    summary,
+    summaryUnavailable,
+    total,
+    totalPages,
+    currentPage,
+    rangeStart,
+    rangeEnd,
+  } = data;
   // The starred filter is an `id IN (…)` built from the agent's shortlist, so
   // until that list has arrived the narrowed query would legitimately match
   // nothing. Reporting it as loading keeps "No orders found" off the screen for
@@ -468,6 +477,7 @@ function OrdersList() {
           completedSales={summary.cashCompletedSales}
           totalOrders={summary.cashCount}
           completedOrders={summary.cashCompletedCount}
+          unavailable={summaryUnavailable}
         />
         <KpiCard
           label="Wasfaty"
@@ -476,6 +486,7 @@ function OrdersList() {
           completedSales={summary.wasCompletedSales}
           totalOrders={summary.wasCount}
           completedOrders={summary.wasCompletedCount}
+          unavailable={summaryUnavailable}
         />
         <KpiCard
           label="Total"
@@ -485,8 +496,19 @@ function OrdersList() {
           completedSales={summary.totalCompletedSales}
           totalOrders={summary.totalCount}
           completedOrders={summary.completedCount}
+          unavailable={summaryUnavailable}
         />
       </div>
+
+      {/* The strip is the only thing that failed, and it says so itself rather
+          than leaving three cards of dashes to be read as an empty day. The list
+          below is a separate query and is unaffected, which is worth stating: an
+          agent looking at rows and no totals should know the rows are sound. */}
+      {summaryUnavailable && (
+        <p role="status" className="-mt-1 text-xs text-destructive">
+          Totals could not be loaded. The list below is unaffected.
+        </p>
+      )}
 
       <Card className="animate-in fade-in fill-mode-both delay-150 duration-300">
         <CardContent className="p-0">
