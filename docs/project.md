@@ -1495,6 +1495,16 @@ and three cards share the page. The primary steps to 24px at `md:` rather than
 "1,247,820.55 SAR" needs 188px at 24px in a 160px column; the secondary steps
 16px → 18px at the same breakpoint, holding the ratio at every width.
 
+The card's own padding runs 16 → 14 → 20px, and the dip is deliberate. `sm:` is
+where the row goes three across, so the card drops from 572px to 189px at exactly
+the breakpoint where the padding used to grow to 20px — two things sized against
+different assumptions landing on the same pixel. A 7-digit total then sat 0.6px
+over its box at 640px, and `truncate` renders 0.6px as "1,860,700.67 S…"; the
+header label was clipped 7px with it. The padding now follows the width it sits
+in rather than the viewport: tightest where the card is narrowest, back to 20px at
+`md:` where the card recovers to 232px. Verified unclipped at 640, 660, 768, 1024
+and 1440, and the rendered card is byte-identical to before at the last three.
+
 `DashKpiCard`'s `loading` swaps each **figure** for a tinted bar drawn inside the
 element the figure would occupy — not a parallel skeleton tree, which is a second
 set of heights to keep in step with the first and had already drifted 22px. The

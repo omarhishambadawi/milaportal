@@ -100,7 +100,18 @@ export function DashKpiCard({
   return (
     <div
       className={cn(
-        "group/kpi relative flex h-full flex-col rounded-xl border bg-gradient-to-br p-4 sm:p-5 print:p-2.5",
+        /* Padding 16 -> 14 -> 20, and the dip in the middle is the point.
+           `sm:` is where the row goes three across, so the card drops from 572px
+           to 189px at exactly the breakpoint where the padding used to *grow* to
+           20px — two things sized against different assumptions landing on the
+           same pixel. That left "1,860,700.67 SAR" 0.6px over its box at 640, and
+           `truncate` renders 0.6px as "1,860,700.67 S…". The header label went
+           with it: "Wasfaty" was clipped 7px.
+           So the padding follows the width it sits in rather than the viewport:
+           tightest where the card is narrowest, back to 20px at `md:` where the
+           card recovers to 232px. Nothing at or above `md:` moves — the rendered
+           card is byte-identical at 768, 1024 and 1440. */
+        "group/kpi relative flex h-full flex-col rounded-xl border bg-gradient-to-br p-4 sm:p-3.5 md:p-5 print:p-2.5",
         tone,
         // Same restraint as `AnalyticsCard`: a slow, small lift. A KPI row that
         // twitches as the pointer crosses it is the difference between an
