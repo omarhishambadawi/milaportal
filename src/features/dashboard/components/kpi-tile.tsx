@@ -29,17 +29,30 @@ export function KpiTile({
 }) {
   return (
     <Card className="border-border/60 shadow-sm">
-      <CardContent className="p-3 sm:p-4">
-        <div className="truncate text-[10px] uppercase tracking-wider text-muted-foreground sm:text-[11px]">
+      {/* The `data-dash-tile-*` attributes carry no styling of their own. They are
+          the hooks the PDF export's type scale hangs on (`.dash-print-layout` in
+          styles.css), so a strip of these does not print larger than the headline
+          KPI cards above it — which it did, at 20px against their 13px. */}
+      <CardContent data-dash-tile className="p-3 sm:p-4">
+        <div
+          data-dash-tile-label
+          className="truncate text-[10px] uppercase tracking-wider text-muted-foreground sm:text-[11px]"
+        >
           {label}
         </div>
         <div
+          data-dash-tile-value
           className={cn("mt-1 truncate text-base font-semibold tabular-nums sm:text-xl", valueTone)}
         >
           {value}
         </div>
         {sub && (
-          <div className={cn("mt-0.5 truncate text-[11px] tabular-nums", subTone)}>{sub}</div>
+          <div
+            data-dash-tile-sub
+            className={cn("mt-0.5 truncate text-[11px] tabular-nums", subTone)}
+          >
+            {sub}
+          </div>
         )}
       </CardContent>
     </Card>

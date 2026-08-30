@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Suspense, lazy } from "react";
+import { cn } from "@/lib/utils";
 import { fmtSAR } from "@/lib/branches";
 import {
   Banknote,
@@ -221,7 +222,7 @@ function Dashboard() {
           chart inside measures the page rather than the monitor. `undefined`
           otherwise: the screen layout is never touched by the export. */}
       <div
-        className="space-y-6 print:space-y-4"
+        className={cn("space-y-6 print:space-y-4", printing && "dash-print-layout")}
         style={printing ? { width: PRINT_WIDTH_PX } : undefined}
       >
         <ReportPrintHeader title="Dashboard Report" period={`${scopeLabel} · ${f.dateLabel}`} />

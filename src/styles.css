@@ -847,6 +847,97 @@ html.theme-vt * {
 }
 
 /* ---------------------------------------------------------------------------
+ * Dashboard export layout
+ * ---------------------------------------------------------------------------
+ * Applied by the Dashboard route while it lays the page out for the PDF writer,
+ * and deliberately NOT inside `@media print`. That distinction is the whole
+ * reason this block exists.
+ *
+ * Recharts sizes its SVG from a `ResizeObserver` on the card, and the export
+ * gives it four frames to do that *before* calling `print()`. Anything expressed
+ * as `@media print` — or as a `print:` utility that changes a chart's box —
+ * lands after that measurement, so the SVG keeps the geometry it was measured at
+ * and is dropped into a box of a different size.
+ *
+ * Which is what was happening. The panel grids are `lg:grid-cols-2`, and Chrome
+ * evaluates media queries during print against the PAGE box (≈703px) rather than
+ * the window — verified by printing a `lg:hidden` probe, which appeared. So a
+ * dashboard exported from any desktop window measured its charts two-up at
+ * ~345px and then printed them into one-up cards 703px wide: every chart card
+ * half empty, and eleven pages of it.
+ *
+ * Forcing the two-up here, from a class the route toggles with its own state,
+ * makes the printed layout identical to the measured one — and identical
+ * whatever the width of the window the export was run from.
+ *
+ * Only grids of *cards* are marked. The crosstabs and the complaint tables stay
+ * full width, because `AnalyticsTable` carries an inline `min-width` floor that
+ * no rule here can override and a 630px table in a 345px column is a table
+ * sliced off at the right edge.
+ * ------------------------------------------------------------------------- */
+.dash-print-layout .dash-print-2col {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/*
+ * Report type scale.
+ *
+ * On screen a section heading is 20px over a 24px KPI figure and the ranking
+ * reads correctly. On A4 the figures step down — three KPI cards share 186mm —
+ * while the headings did not, so the printed page had 20px section headings over
+ * 13px figures: the loudest thing on a page of numbers was the word "Complaints".
+ *
+ * Scoped to this container rather than expressed as `print:` utilities on the
+ * components, because `SectionTitle` and `AnalyticsCard` are shared with the
+ * Monthly Report and its printed scale is not this sprint's to move. The two
+ * `data-` attributes exist for exactly this selector.
+ */
+.dash-print-layout [data-dash-section] {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.dash-print-layout [data-dash-card-title] {
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.dash-print-layout [data-dash-card-subtitle] {
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+/*
+ * The KPI strips — Monthly performance, Delivery methods, Complaints.
+ *
+ * These print at their screen size, which put "SAR 1.2M" at 20px directly under
+ * headline cards whose own figures had stepped down to 13px: the least important
+ * strip on the sheet became its largest type. And at four across a 186mm page a
+ * 11px uppercase label has about 28mm to live in, which truncated "Total
+ * complaints" to "TOTAL COMPLAI…".
+ *
+ * Both fixed by one scale, and by tightening the tile padding that was sized for
+ * a pointer rather than for paper.
+ */
+.dash-print-layout [data-dash-tile] {
+  padding: 7px 9px;
+}
+
+.dash-print-layout [data-dash-tile-value] {
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.dash-print-layout [data-dash-tile-label] {
+  font-size: 8.5px;
+  letter-spacing: 0.05em;
+}
+
+.dash-print-layout [data-dash-tile-sub] {
+  font-size: 8px;
+}
+
+/* ---------------------------------------------------------------------------
  * Dashboard entrance
  * ---------------------------------------------------------------------------
  * Two animations, and deliberately only two. A dashboard is a wall of cards; if
@@ -861,14 +952,16 @@ html.theme-vt * {
  * ------------------------------------------------------------------------- */
 
 /*
- * 10px, not 24. The distance is what separates "settling into place" from
- * "flying in", and at this size the movement is felt more than watched — which
- * is the whole brief for a corporate surface.
+ * 14px, not 24 and not 4. The distance is what separates "settling into place"
+ * from "flying in": at 24 the page reads as a feed, and at the 10 this started
+ * on the movement was so slight on a large monitor that the reveal was there in
+ * the code and absent to the eye. Fourteen is visible without being watched,
+ * which is the brief for a corporate surface.
  */
 @keyframes dash-enter {
   from {
     opacity: 0;
-    transform: translate3d(0, 10px, 0);
+    transform: translate3d(0, 14px, 0);
   }
   to {
     opacity: 1;
@@ -885,7 +978,7 @@ html.theme-vt * {
  * expressed in CSS class names has to be renumbered every time a section moves.
  */
 .dash-enter {
-  animation: dash-enter 520ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation: dash-enter 560ms cubic-bezier(0.4, 0, 0.2, 1) both;
   animation-delay: var(--dash-delay, 0ms);
 }
 
@@ -893,8 +986,9 @@ html.theme-vt * {
  * A chart's axes, grid and legend are not animated by Recharts — they simply
  * appear the instant the panel mounts, which against a series that spends a
  * second drawing itself read as the frame arriving before the picture. This
- * fades the frame up under it. Shorter than the series animation on purpose:
- * the chrome should be settled before the data finishes.
+ * fades the frame up under it. Shorter than both the section entrance (560ms)
+ * and the series (950-1200ms) on purpose: the frame should be settled before
+ * either the card it sits in or the data it measures has finished arriving.
  */
 @keyframes chart-reveal {
   from {
@@ -906,7 +1000,7 @@ html.theme-vt * {
 }
 
 .chart-reveal {
-  animation: chart-reveal 320ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation: chart-reveal 360ms cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
 /*

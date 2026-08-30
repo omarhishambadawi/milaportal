@@ -17,10 +17,20 @@ import { widestLabel } from "../text-metrics";
  * Ceiling on the category axis, as a share of panel width.
  *
  * Without a ceiling one 40-character name would take the plot area to nothing
- * and the chart would stop being a chart. A third is the point where the bars
+ * and the chart would stop being a chart. Two fifths is the point where the bars
  * still carry the comparison; past it, ellipsis is the better trade.
+ *
+ * It was a third, which was tuned against a half-width panel on a wide monitor —
+ * around 700px, where a third is 238px and no name this data set contains gets
+ * anywhere near it. The PDF export lays the same panels out two-up in a 703px
+ * page, so the panel is ~345px and the ceiling bites at 117px: "Abdulrahman
+ * Al-Otaibi" measures 128px at 12px and printed as "Abdulrahman…". At two fifths
+ * it fits with room to spare and the plot still has 200px to draw in.
+ *
+ * The ceiling only binds when a label is genuinely long, so on screen — where
+ * the natural width is what is used — nothing moves.
  */
-const MAX_AXIS_SHARE = 0.34;
+const MAX_AXIS_SHARE = 0.42;
 
 /** Floor, so a panel of short names still has a tidy left margin. */
 const MIN_AXIS_WIDTH = 64;

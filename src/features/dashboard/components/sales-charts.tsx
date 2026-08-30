@@ -200,7 +200,7 @@ function TeamBarChart({ data }: { data: (Named & { sales: number })[] }) {
 
 function SalesChartsImpl({ data }: { data: SalesChartsData }) {
   return (
-    <div className="grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
+    <div className="dash-print-2col grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
       <ChartPanel
         title="Daily sales trend"
         subtitle="All orders against completed"

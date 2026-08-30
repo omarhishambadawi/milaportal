@@ -140,7 +140,7 @@ function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
   const growthData = useMemo(() => data.filter((d) => d.growth != null), [data]);
 
   return (
-    <div className="grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
+    <div className="dash-print-2col grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
       <ChartPanel
         title="Monthly revenue trend"
         subtitle="Completed revenue per team, month by month"

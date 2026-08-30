@@ -242,7 +242,7 @@ export function DeliveryMethodsSection({
         />
       </div>
 
-      <div className="mt-3 grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
+      <div className="dash-print-2col mt-3 grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
         <AnalyticsCard
           title="Order distribution"
           subtitle="Delivery vs Store Pickup · Cash and Wasfaty distribution"

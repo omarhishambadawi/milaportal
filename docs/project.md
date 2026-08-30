@@ -1215,13 +1215,18 @@ the PDF export below.
 
 #### Page entrance (`components/reveal.tsx`, `.dash-enter` in `styles.css`)
 
-Two animations on the whole page, and deliberately only two: sections rise 10px
-and fade in on a `DASH_DELAY` ladder (header → KPI cards → charts → secondary
-content, about 70ms a step, topping out inside the first viewport), and a
-chart's chrome — axes, grid, legend, none of which Recharts animates — fades up
-under the series with `.chart-reveal`. Both are `opacity` and `transform` only,
-so neither can shift the layout, and both drop to nothing under
+Two animations on the whole page, and deliberately only two: sections rise 14px
+and fade in over 560ms on a `DASH_DELAY` ladder (header → KPI cards → charts →
+secondary content, about 70ms a step, topping out inside the first viewport), and
+a chart's chrome — axes, grid, legend, none of which Recharts animates — fades up
+under the series over 360ms with `.chart-reveal`. Both are `opacity` and
+`transform` only, so neither can shift the layout, and both drop to nothing under
 `prefers-reduced-motion` and under `@media print`.
+
+The three durations relate rather than coincide: 360ms of chrome inside 560ms of
+card inside a 950–1200ms series, so each is settled before the thing it sits in
+finishes arriving. The rise was 10px until a visual pass found it imperceptible
+on a large monitor — the reveal was in the code and absent to the eye.
 
 Eleven independent aggregation queries plus an on-demand export dataset, all
 keyed under `queryKeys.dashboard.*` so one `dashboard.all()` invalidation sweeps
@@ -1292,6 +1297,42 @@ the `@media print` block in `styles.css`; `AnalyticsCard` carries
 `print:break-inside-avoid` so no panel is cut across a sheet boundary. KPI cards
 carry `print:` type sizes because three of them share 186mm of paper and
 `1,247,820.55 SAR` at 24px does not fit 60mm.
+
+#### `.dash-print-layout` — why the export's layout is NOT a media query
+
+**Chrome evaluates media queries during print against the page box, not the
+window.** Verified rather than assumed: printing a `lg:hidden` probe 3000px tall
+added three sheets to the PDF from a 1440px window, so `lg:` (1024px) is
+inactive on paper, where the box is ~703px.
+
+Every chart grid on the Dashboard is `lg:grid-cols-2`. So a dashboard exported
+from any desktop window measured its charts two-up at ~345px — and then printed
+them one-up into cards 703px wide. Recharts bakes width and height into the SVG
+it renders, and print does not re-run a `ResizeObserver`, so the result was a PDF
+of half-empty chart cards, eleven pages long, and different depending on how wide
+the window happened to be.
+
+`.dash-print-layout` (in `styles.css`, deliberately **outside** `@media print`)
+is toggled onto the pinned container by the route's own `printing` state, so it
+lands before the four-frame wait and Recharts measures the layout that will
+actually be printed. It carries:
+
+- **`.dash-print-2col`** — the two-up the screen already measured, forced from
+  React state. Marked on grids of _cards_ only: the crosstabs and complaint
+  tables stay full width, because `AnalyticsTable` sets an inline `min-width`
+  floor that no rule here can override and a 630px table in a 345px column is a
+  table sliced off at the right edge.
+- **A report type scale**, hung on `data-dash-section`, `data-dash-card-title`,
+  `data-dash-card-subtitle` and `data-dash-tile-*`. On screen a 20px section
+  heading over a 24px KPI figure ranks correctly; on paper the figures step down
+  to 13px and the headings did not, so the loudest thing on a page of numbers was
+  the word "Complaints". Scoped to this container rather than expressed as
+  `print:` utilities, because `SectionTitle`, `AnalyticsCard`, `StatCard` and
+  `KpiTile` are shared with the Monthly Report and its printed scale is not the
+  Dashboard's to move.
+
+Result: **8 pages, A4 portrait, byte-identical from 900px, 1440px and 1920px
+windows.** Measured with headless Chrome `--print-to-pdf` over the real page.
 
 ### Complaints visualisation
 

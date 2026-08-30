@@ -30,7 +30,8 @@ export function StatCard({
 }) {
   return (
     <Card className="group/stat border-border/60 shadow-sm transition-shadow duration-300 hover:shadow-md">
-      <CardContent className="p-3 sm:p-4">
+      {/* See `kpi-tile.tsx` for what the `data-dash-tile-*` hooks are for. */}
+      <CardContent data-dash-tile className="p-3 sm:p-4">
         <div className="flex items-center gap-2">
           {Icon && (
             <span
@@ -44,17 +45,24 @@ export function StatCard({
               <Icon className="h-3.5 w-3.5" strokeWidth={2} />
             </span>
           )}
-          <div className="min-w-0 truncate text-[10px] uppercase tracking-wider text-muted-foreground sm:text-[11px]">
+          <div
+            data-dash-tile-label
+            className="min-w-0 truncate text-[10px] uppercase tracking-wider text-muted-foreground sm:text-[11px]"
+          >
             {label}
           </div>
         </div>
         <div
+          data-dash-tile-value
           className={cn("mt-1.5 truncate text-base font-semibold tabular-nums sm:text-xl", accent)}
         >
           {value}
         </div>
         {sub && (
-          <div className="mt-0.5 truncate text-[10px] text-muted-foreground sm:text-[11px]">
+          <div
+            data-dash-tile-sub
+            className="mt-0.5 truncate text-[10px] text-muted-foreground sm:text-[11px]"
+          >
             {sub}
           </div>
         )}

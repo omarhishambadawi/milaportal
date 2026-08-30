@@ -77,12 +77,17 @@ export function AnalyticsCard({
             {loading ? (
               <div className="h-4 w-36 animate-pulse rounded bg-muted" />
             ) : (
-              <CardTitle className="truncate text-sm font-semibold tracking-tight sm:text-base">
+              <CardTitle
+                data-dash-card-title
+                className="truncate text-sm font-semibold tracking-tight sm:text-base"
+              >
                 {title}
               </CardTitle>
             )}
             {subtitle && !loading && (
-              <p className="mt-0.5 truncate text-xs text-muted-foreground">{subtitle}</p>
+              <p data-dash-card-subtitle className="mt-0.5 truncate text-xs text-muted-foreground">
+                {subtitle}
+              </p>
             )}
           </div>
         </div>

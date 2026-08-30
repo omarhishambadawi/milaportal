@@ -390,7 +390,7 @@ function MonthlyGrowthSectionImpl({
       </div>
 
       {current && (
-        <div className="mt-3 grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
+        <div className="dash-print-2col mt-3 grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
           <TeamPerformance current={current} />
           <RevenueDrivers current={current} previous={previous} />
         </div>

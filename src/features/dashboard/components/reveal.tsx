@@ -43,9 +43,11 @@ export function Reveal({
 /**
  * The ladder, named rather than spelled as numbers at eight call sites.
  *
- * Roughly one step per 70ms: fast enough that the page does not feel withheld,
- * slow enough that the steps are distinguishable as an order rather than
- * reading as one movement with jitter in it.
+ * Roughly one step per 70ms against a 560ms entrance: fast enough that the page
+ * does not feel withheld, slow enough that the steps are distinguishable as an
+ * order rather than reading as one movement with jitter in it. The ladder is
+ * about a third of the entrance, so consecutive sections overlap heavily and the
+ * page reads as one wave rather than as eight separate arrivals.
  */
 export const DASH_DELAY = {
   header: 0,
