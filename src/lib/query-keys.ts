@@ -116,7 +116,7 @@ export const queryKeys = {
   },
 
   dashboard: {
-    /** Invalidation boundary — sweeps all 12 dashboard aggregations. */
+    /** Invalidation boundary — sweeps all 11 dashboard aggregations. */
     all: () => ["dashboard"] as const,
     kpis: (f: DashboardFilters) => ["dashboard", "kpis", f] as const,
     daily: (f: DashboardFilters) => ["dashboard", "daily", f] as const,
@@ -131,9 +131,6 @@ export const queryKeys = {
       ["dashboard", "complaints-kpis", f] as const,
     complaintsLocations: (f: Omit<DashboardFilters, "team">) =>
       ["dashboard", "complaints-locations", f] as const,
-    /** On-demand XLSX dataset. `enabled: false`; fetched via refetch(). */
-    exportData: (f: DashboardFilters & { isAdmin: boolean; userId: string | undefined }) =>
-      ["dashboard", "export", f] as const,
   },
 
   complaints: {

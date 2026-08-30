@@ -983,6 +983,39 @@ html.theme-vt * {
 }
 
 /*
+ * The same entrance, for content that must not wait behind it.
+ *
+ * `dash-enter` holds its element at zero opacity through a delay and then spends
+ * 560ms fading it in. In front of a chart that is fine — the chart has nothing to
+ * say yet. In front of the KPI cards it is not: those figures are why the page
+ * was opened, and once `orders_kpis` has answered, an animation is the only thing
+ * left between the reader and the number.
+ *
+ * So opacity is done by 40% of a 300ms timeline — about 120ms, below the
+ * threshold at which a delay is felt as one — while the rise runs the full
+ * length. The band still settles into the page instead of snapping into it; it
+ * simply becomes *readable* first. No delay either: the KPI cards are step one of
+ * the reveal, not step two.
+ */
+@keyframes dash-enter-instant {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.dash-enter-instant {
+  animation: dash-enter-instant 300ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+/*
  * A chart's axes, grid and legend are not animated by Recharts — they simply
  * appear the instant the panel mounts, which against a series that spends a
  * second drawing itself read as the frame arriving before the picture. This
@@ -1011,6 +1044,7 @@ html.theme-vt * {
  */
 @media (prefers-reduced-motion: reduce) {
   .dash-enter,
+  .dash-enter-instant,
   .chart-reveal {
     animation: none;
   }

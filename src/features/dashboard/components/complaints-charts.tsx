@@ -9,7 +9,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { ShieldAlert } from "lucide-react";
+import { MapPinned } from "lucide-react";
 
 import {
   AXIS_TICK,
@@ -49,21 +49,38 @@ import { ChartEmpty } from "./chart-empty";
  * line, a reason breakdown or a channel split could only be invented, and this
  * chart does not invent them.
  *
- * What the data does support is the one composition that matters: each branch's
- * complaint count *split by whether it has been dealt with*. Stacked, the bar's
- * full length is the branch's volume — the ranking the table gives — and the
- * amber portion is the part still owed to a customer. A branch with forty
- * resolved complaints and a branch with fifteen open ones are different
- * problems, and on a plain total bar they look like the same one.
+ * What the data does support is the one composition that matters: complaint
+ * volume *split by whether it has been dealt with*. Stacked, the bar's full
+ * length is the volume — the ranking the table gives — and the amber portion is
+ * the part still owed to a customer. Forty resolved complaints and fifteen open
+ * ones are different problems, and on a plain total bar they look like the same
+ * one.
  *
- * Ranked horizontally rather than as columns because the categories are branch
- * names: they are words, of unpredictable length, some of them Arabic, and a
- * vertical axis is the only one that can give them room. It also puts this panel
- * in the same visual family as the three ranked sales charts above it, using the
- * same measured axis (`use-ranked-axis`) and the same reveal.
+ * ---------------------------------------------------------------------------
+ * City, not branch
+ * ---------------------------------------------------------------------------
+ * A city is the level a regional manager can act at, and there are an order of
+ * magnitude fewer of them than branches — so one panel carries the whole picture
+ * rather than a top ten out of hundreds.
+ *
+ * The city is genuinely in the data and is not the branch field renamed. The
+ * `complaints` table carries `branch_no` and no city at all; the RPC derives one
+ * with `LEFT JOIN public.branches b ON b.branch_no = s.branch_no` and groups on
+ * `b.city`, which is why this reads the `location_type = 'city'` rows rather
+ * than relabelling the branch rows. A complaint whose branch is not in the
+ * branch directory lands in that join's `COALESCE(b.city, '—')` bucket, and it
+ * is plotted exactly as the RPC reports it — an unattributed complaint is a real
+ * row, and dropping it quietly would make this panel disagree with the KPI strip
+ * directly above it.
+ *
+ * Ranked horizontally rather than as columns because the categories are place
+ * names: words, of unpredictable length, some of them Arabic, and a vertical
+ * axis is the only one that can give them room. It also puts this panel in the
+ * same visual family as the three ranked sales charts above it, using the same
+ * measured axis (`use-ranked-axis`) and the same reveal.
  */
 
-export interface ComplaintBranchRow {
+export interface ComplaintCityRow {
   name: string;
   total: number;
   resolved: number;
@@ -74,6 +91,16 @@ export interface ComplaintBranchRow {
 const RESOLVED_COLOR = "var(--positive)";
 const OPEN_COLOR = "var(--attention)";
 
+/**
+ * Ceiling on the number of cities plotted.
+ *
+ * The tail of a complaints ranking is cities with one or two, which carry no
+ * decision and would squeeze the rows that do. The table beneath this chart
+ * still lists every city, so nothing is hidden — only unplotted, and the
+ * subtitle says so when the ceiling actually bites.
+ */
+const MAX_CITIES = 12;
+
 const fmtTooltipCount = (value: number | string) =>
   formatCount(typeof value === "string" ? Number(value) : value);
 
@@ -82,20 +109,23 @@ const fmtAxisCount = (value: number | string) => {
   return Number.isFinite(n) ? String(Math.round(n)) : "";
 };
 
-function ComplaintsBranchChartImpl({ data }: { data: readonly ComplaintBranchRow[] }) {
+function ComplaintsCityChartImpl({ data }: { data: readonly ComplaintCityRow[] }) {
   const { ref, width } = usePanelWidth();
   const series = useMemo(
     () =>
-      data.map((r) => ({
-        name: r.name,
-        resolved: r.resolved,
-        open: r.open,
-        // The closing line of the tooltip. Precomputed per row because it is
-        // per-row: the rate is this branch's, not the period's.
-        note: `${formatCount(r.total)} total · ${formatPercent(
-          r.total > 0 ? (r.resolved / r.total) * 100 : 0,
-        )} resolved`,
-      })),
+      [...data]
+        .sort((a, b) => b.total - a.total)
+        .slice(0, MAX_CITIES)
+        .map((r) => ({
+          name: r.name,
+          resolved: r.resolved,
+          open: r.open,
+          // The closing line of the tooltip. Precomputed per row because it is
+          // per-row: the rate is this city's, not the period's.
+          note: `${formatCount(r.total)} total · ${formatPercent(
+            r.total > 0 ? (r.resolved / r.total) * 100 : 0,
+          )} resolved`,
+        })),
     [data],
   );
   const { ready, motion } = useChartReveal(series, ref);
@@ -106,15 +136,17 @@ function ComplaintsBranchChartImpl({ data }: { data: readonly ComplaintBranchRow
 
   return (
     <AnalyticsCard
-      title="Complaints by branch"
-      subtitle="Top 10 by volume · resolved against still open"
-      icon={ShieldAlert}
+      title="Complaints by city"
+      subtitle={`Highest volume first · resolved against still open${
+        data.length > MAX_CITIES ? ` · top ${MAX_CITIES}` : ""
+      }`}
+      icon={MapPinned}
     >
       <div ref={ref} className="w-full" style={{ height }}>
         {series.length === 0 ? (
           <ChartEmpty
             label="No complaints in this period"
-            hint="Nothing was logged against a branch in the selected range."
+            hint="Nothing was logged against a city in the selected range."
           />
         ) : (
           ready && (
@@ -138,7 +170,7 @@ function ComplaintsBranchChartImpl({ data }: { data: readonly ComplaintBranchRow
                     tick={AXIS_TICK}
                     tickFormatter={fmtAxisCount}
                     // Complaints are counted, never fractional; without this a
-                    // branch with three of them gets an axis reading 0, 0.75, 1.5.
+                    // city with three of them gets an axis reading 0, 0.75, 1.5.
                     allowDecimals={false}
                     tickLine={false}
                     axisLine={false}
@@ -195,9 +227,9 @@ function ComplaintsBranchChartImpl({ data }: { data: readonly ComplaintBranchRow
 /**
  * Memoised on the rows themselves.
  *
- * `cmpBranchData` is a `useMemo` in `use-dashboard-data`, so the reference is
+ * `cmpCityData` is a `useMemo` in `use-dashboard-data`, so the reference is
  * stable across the ten other aggregation queries settling — and re-running a
- * Recharts layout plus a canvas label measurement for unchanged data is the
- * most expensive no-op available on this page.
+ * Recharts layout plus a canvas label measurement for unchanged data is the most
+ * expensive no-op available on this page.
  */
-export const ComplaintsBranchChart = memo(ComplaintsBranchChartImpl);
+export const ComplaintsCityChart = memo(ComplaintsCityChartImpl);

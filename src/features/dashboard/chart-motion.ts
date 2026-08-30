@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -103,33 +104,54 @@ export interface ChartMotion {
    * this module instead of a per-series default nobody reads.
    */
   animationBegin: number;
+  /**
+   * Recharts' own "this series has finished" signal, when one is being listened
+   * for.
+   *
+   * Absent from the still presets, and from `buildChartMotion`, which stays a
+   * pure function of two booleans. `useSettledChartMotion` adds it — see the
+   * long note there for why a timer could not do this job.
+   */
+  onAnimationEnd?: () => void;
 }
 
 /**
  * Per-series-type durations.
  *
- * The whole set was previously 550-700ms, which is the right budget for motion
- * that fires on page load and must not delay reading. Once each panel waits for
- * the reader to scroll to it, that constraint is gone: the entrance is the first
- * thing they look at rather than something between them and the numbers, and at
- * half a second it was over before the eye had settled on the card.
+ * The set has been raised twice. It began at 550-700ms, which is the right
+ * budget for motion that fires on page load and must not delay reading; once
+ * each panel waited for the reader to scroll to it that constraint was gone, and
+ * it moved to 900-1200ms. At that band the entrances were *visible* but they
+ * were over before the eye had finished travelling to the card — technically
+ * animated, and read as quick rather than as considered.
  *
- * So the band moves to 900-1200ms. The ordering is unchanged and for the same
- * reasons: a line travels furthest and carries the slowest read; a pie sweeps
- * round rather than up, which reads slower than it measures; a stacked bar is
- * shortest because its segments animate in sequence and would otherwise add up.
+ * 1200-1600ms is where a chart drawing itself stops being an effect and becomes
+ * the panel arriving. It is affordable because nothing here plays until its
+ * panel is on screen and the numbers on this page — the KPI band — do not wait
+ * behind any of it (`.dash-enter-instant`).
+ *
+ * The ordering is unchanged and for the same reasons: a line travels furthest
+ * and carries the slowest read; an area is a line with a fill following it; a
+ * pie sweeps round rather than up, which reads slower than it measures; a
+ * stacked bar is shortest because its segments animate in sequence and would
+ * otherwise add up.
  */
-const DURATION = { line: 1200, area: 1100, bar: 950, pie: 1000 } as const;
+const DURATION = { line: 1600, area: 1500, bar: 1300, pie: 1200 } as const;
 
 /**
- * How long after the entrance to keep animation armed before settling.
+ * The fallback disarm, as a multiple of the longest entrance.
  *
- * Scales with the animation rather than staying at the old flat 200ms: the flip
- * to static must land after the slowest series has finished, or it would snap a
- * still-drawing chart to its final size — the exact glitch the settle exists to
- * prevent.
+ * Not a deadline. The real disarm is `onAnimationEnd` — see
+ * `useSettledChartMotion`. This exists only for the case where that signal never
+ * arrives at all (a panel whose series render nothing, a tab hidden for the
+ * whole life of the entrance), where staying armed forever would let a resize
+ * restart an animation days later.
+ *
+ * Generous on purpose. Anything close to the animation's own length is a race
+ * against it, and losing that race is precisely the bug this replaced.
  */
-const SETTLE_SLACK_MS = 300;
+const SETTLE_FALLBACK_FACTOR = 3;
+const SETTLE_FALLBACK_FLOOR_MS = 1500;
 
 const STILL: ChartMotion = {
   isAnimationActive: false,
@@ -190,8 +212,11 @@ export function useChartMotion(
   return useMemo(() => buildChartMotion(reduced, forceStill), [reduced, forceStill]);
 }
 
-/** Longest entrance on the page, plus slack. One timer length for every panel. */
-const SETTLE_MS = Math.max(...Object.values(DURATION)) + SETTLE_SLACK_MS;
+/** Longest entrance on the page. */
+const LONGEST_MS = Math.max(...Object.values(DURATION));
+
+/** The fallback disarm window. See `SETTLE_FALLBACK_FACTOR`. */
+const SETTLE_FALLBACK_MS = LONGEST_MS * SETTLE_FALLBACK_FACTOR + SETTLE_FALLBACK_FLOOR_MS;
 
 /**
  * The presets, but ARMED only around a genuine data change.
@@ -227,12 +252,36 @@ const SETTLE_MS = Math.max(...Object.values(DURATION)) + SETTLE_SLACK_MS;
  * as `prevData`, that second animation interpolates from the old values to the
  * new ones rather than from zero — a transition, not a redraw.
  *
+ * ---------------------------------------------------------------------------
+ * Why the flip is `onAnimationEnd` and not a timer
+ * ---------------------------------------------------------------------------
+ * It used to be `setTimeout(disarm, longestDuration + 300)`, and that is a
+ * wall-clock guess about an animation that does not run on wall-clock time.
+ * react-smooth steps the tween on `requestAnimationFrame`; the timer does not
+ * care. Whenever the two disagree — a busy main thread, a slow machine, exactly
+ * the first seconds of this route while it mounts ten charts, resolves eleven
+ * queries and pulls two lazy chunks — the timer wins and the series is switched
+ * to its static render **mid-draw**.
+ *
+ * Instrumented on a real load, with a `MutationObserver` over the revenue
+ * trend's `<path>`: the last `stroke-dasharray` written was
+ * `39.2px / 568.4px` — the line **7% drawn** — and the next mutation was the
+ * static path replacing it. That is the jump. It is not a Recharts bug and it
+ * was not visible at 950-1200ms on an idle machine, which is why it survived the
+ * first fix; raising the durations to 1200-1600ms would have made it routine.
+ *
+ * So the disarm is now Recharts' own completion signal, spread onto every series
+ * with the rest of the preset. It cannot fire early, it cannot fire late, and
+ * when it fires the static geometry is by definition the frame already on
+ * screen. `SETTLE_FALLBACK_MS` remains only for the case where the signal never
+ * comes at all.
+ *
  * @param identity The data this panel draws. Compared by reference, so it must
  *                 be the memoised array the chart is handed — a fresh literal
  *                 every render would re-arm on every render and defeat this.
  * @param gate     Whether the panel may animate at all yet. False holds every
- *                 preset still without starting the settle timer, so a panel
- *                 that is not on screen keeps its entrance for when it is.
+ *                 preset still without arming anything, so a panel that is not
+ *                 on screen keeps its entrance for when it is.
  */
 export function useSettledChartMotion(
   identity: unknown,
@@ -242,15 +291,40 @@ export function useSettledChartMotion(
   const motion = useChartMotion(forceStill);
   const [armed, setArmed] = useState(true);
 
+  // Stable, so adding it to the presets below cannot hand Recharts a new prop
+  // object on every render — which would be a new `<Animate>` and a restart.
+  const settle = useCallback(() => setArmed(false), []);
+
   useEffect(() => {
     if (!gate) return;
     // Re-arming on mount is a no-op: React bails out of a set to the same value.
     setArmed(true);
-    const timer = setTimeout(() => setArmed(false), SETTLE_MS);
+    const timer = setTimeout(settle, SETTLE_FALLBACK_MS);
     return () => clearTimeout(timer);
-  }, [identity, gate]);
+  }, [identity, gate, settle]);
 
-  return gate && armed ? motion : ALL_STILL;
+  /**
+   * The moving presets with the completion signal attached.
+   *
+   * Built here rather than in `buildChartMotion` so that function stays a pure
+   * function of two booleans and its contract stays assertable without a
+   * renderer. Memoised on the two things it depends on, for the reason in
+   * `settle` above.
+   */
+  const listening = useMemo(() => {
+    const withEnd = (preset: ChartMotion): ChartMotion => ({
+      ...preset,
+      onAnimationEnd: settle,
+    });
+    return {
+      line: withEnd(motion.line),
+      area: withEnd(motion.area),
+      bar: withEnd(motion.bar),
+      pie: withEnd(motion.pie),
+    };
+  }, [motion, settle]);
+
+  return gate && armed ? listening : ALL_STILL;
 }
 
 /**
@@ -391,5 +465,11 @@ export function useChartReveal(
   return { ready: seen, motion };
 }
 
-/** Test seam — the settle window and the per-series budget. */
-export const __motionTiming = { SETTLE_MS, SETTLE_SLACK_MS, DURATION };
+/** Test seam — the fallback window and the per-series budget. */
+export const __motionTiming = {
+  SETTLE_FALLBACK_MS,
+  SETTLE_FALLBACK_FACTOR,
+  SETTLE_FALLBACK_FLOOR_MS,
+  LONGEST_MS,
+  DURATION,
+};

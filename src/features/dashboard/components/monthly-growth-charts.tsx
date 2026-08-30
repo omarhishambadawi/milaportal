@@ -181,18 +181,23 @@ function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
                   {...TOOLTIP_MOTION}
                 />
                 <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
-                {/* Dots small and unfilled-looking at rest, decisive on hover. A
-                  3px dot at every month on two series is fourteen marks competing
-                  with the two lines they belong to; the reader wants the shape,
-                  and the exact point only where the pointer is. `activeDot` takes
-                  a card-coloured ring so it reads as lifted off the line. */}
+                {/* No resting dots, and one point on hover.
+                  Two reasons, and the second is the load-bearing one. Fourteen
+                  2px marks on two lines compete with the lines they belong to,
+                  and the reader wants the shape — the exact point only where the
+                  pointer is. And Recharts withholds `renderDots` until
+                  `isAnimationFinished`, so a dotted line ends its reveal by
+                  putting fourteen marks on screen in a single frame: a pop, at
+                  the exact moment the animation was meant to settle. `activeDot`
+                  takes a card-coloured ring so the hovered point reads as lifted
+                  off the line. */}
                 <Line
                   type="monotone"
                   dataKey="careRevenue"
                   name="Customer Care"
                   stroke="var(--color-chart-1)"
                   strokeWidth={2}
-                  dot={{ r: 2, strokeWidth: 0, fill: "var(--color-chart-1)" }}
+                  dot={false}
                   activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--color-card)" }}
                   connectNulls={false}
                   {...motion.line}
@@ -203,7 +208,7 @@ function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
                   name="Telesales"
                   stroke="var(--color-chart-3)"
                   strokeWidth={2}
-                  dot={{ r: 2, strokeWidth: 0, fill: "var(--color-chart-3)" }}
+                  dot={false}
                   activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--color-card)" }}
                   // Off deliberately: Feb and Mar have no Telesales, and joining
                   // March to April would draw a line through months the team did

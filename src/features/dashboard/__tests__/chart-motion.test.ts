@@ -29,15 +29,28 @@ describe("buildChartMotion", () => {
     }
   });
 
-  it("keeps every duration inside the 900-1200ms band", () => {
-    // Each panel now waits for the reader to scroll to it, so the entrance is
-    // the first thing they look at rather than something between them and the
-    // numbers. Below ~900ms it was over before the eye had settled; past
-    // ~1200ms it would stop being motion and become a wait.
+  it("keeps every duration inside the 1200-1600ms band", () => {
+    // Each panel waits for the reader to scroll to it and the KPI figures do not
+    // wait behind any of this, so the entrance is the first thing they look at
+    // rather than something between them and the numbers. Below ~1200ms it was
+    // over before the eye had finished travelling to the card — visible, but
+    // quick rather than considered. Past ~1600ms it would stop being motion and
+    // become a wait.
     for (const key of SERIES) {
-      expect(moving[key].animationDuration, `${key} duration`).toBeGreaterThanOrEqual(900);
-      expect(moving[key].animationDuration, `${key} duration`).toBeLessThanOrEqual(1200);
+      expect(moving[key].animationDuration, `${key} duration`).toBeGreaterThanOrEqual(1200);
+      expect(moving[key].animationDuration, `${key} duration`).toBeLessThanOrEqual(1600);
     }
+  });
+
+  it("ranks the series types by how long each one takes to read", () => {
+    // A line travels furthest; an area is a line with a fill following it; a pie
+    // sweeps round rather than up; a stacked bar animates its segments in
+    // sequence and would otherwise add up. Asserted as an ordering rather than
+    // as four numbers so retuning the band cannot silently invert it.
+    const { DURATION } = __motionTiming;
+    expect(DURATION.line).toBeGreaterThan(DURATION.area);
+    expect(DURATION.area).toBeGreaterThan(DURATION.pie);
+    expect(DURATION.bar).toBeGreaterThan(DURATION.pie);
   });
 
   it("shares ONE easing curve, and one that decelerates into rest", () => {
@@ -96,17 +109,29 @@ describe("buildChartMotion", () => {
   });
 });
 
-describe("settle window", () => {
-  it("outlasts the longest entrance, so nothing is cut short", () => {
-    // `useSettledChartMotion` disarms on one timer for every panel. If that
-    // timer were shorter than the slowest series, the flip to static would snap
-    // a half-drawn chart to its final size — the exact glitch it exists to stop.
-    const longest = Math.max(...Object.values(__motionTiming.DURATION));
-    expect(__motionTiming.SETTLE_MS).toBeGreaterThan(longest);
-    expect(__motionTiming.SETTLE_MS - longest).toBe(__motionTiming.SETTLE_SLACK_MS);
+describe("the disarm fallback", () => {
+  /**
+   * The disarm itself is `onAnimationEnd` — Recharts' own completion signal,
+   * which cannot fire early. What is left to assert is that the timer behind it
+   * is a fallback and not a second deadline.
+   *
+   * The bug this replaced: the disarm was `longest + 300ms` on a `setTimeout`,
+   * which is a wall-clock guess about a `requestAnimationFrame` animation.
+   * Instrumented on a real load, the revenue trend's last painted frame was
+   * `stroke-dasharray: 39.2px / 568.4px` — the line 7% drawn — and the next
+   * mutation was the static path replacing it. The timer had won the race.
+   */
+  it("is far enough clear of the animation that it cannot win the race", () => {
+    const { LONGEST_MS, SETTLE_FALLBACK_MS, SETTLE_FALLBACK_FACTOR } = __motionTiming;
+    expect(LONGEST_MS).toBe(Math.max(...Object.values(__motionTiming.DURATION)));
+    // A multiple, not a margin: a fixed slack is a race on a slow enough device.
+    expect(SETTLE_FALLBACK_FACTOR).toBeGreaterThanOrEqual(2);
+    expect(SETTLE_FALLBACK_MS).toBeGreaterThanOrEqual(LONGEST_MS * 2);
   });
 
-  it("still settles promptly — the arm window is not a second animation budget", () => {
-    expect(__motionTiming.SETTLE_MS).toBeLessThanOrEqual(1800);
+  it("still eventually disarms, so a resize cannot restart an old entrance", () => {
+    // Unbounded arming would leave every panel one `ResponsiveContainer`
+    // measurement away from replaying its entrance for the rest of the session.
+    expect(__motionTiming.SETTLE_FALLBACK_MS).toBeLessThanOrEqual(10_000);
   });
 });

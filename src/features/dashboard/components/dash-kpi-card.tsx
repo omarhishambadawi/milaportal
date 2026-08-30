@@ -130,27 +130,54 @@ export function DashKpiCard({
         </span>
       </div>
 
-      {/* The `print:` sizes are the A4 column, not a second design. Three of
-          these cards share 186mm of paper, which is about 60mm each — and
-          "1,247,820.55 SAR" set at 24px does not fit 60mm, so on screen it is
-          the display figure it should be and on paper it steps down a size
-          rather than being truncated to "1,247,820.55 S…". Same for the line
-          under it, which stacks instead of competing for one row. */}
-      <div className="mt-3.5 print:mt-2">
-        <div className="truncate text-xl font-semibold leading-tight tabular-nums sm:text-2xl print:text-[13px]">
-          {figure(fmtSAR(s.totalSales), "w-40")}
+      {/* Two figures, both primary.
+          Completed sales used to be twelve pixels of green on the right of a
+          caption, under a twenty-four pixel revenue figure — a footnote about
+          the number management is actually judged on. It now gets its own label,
+          its own line and the same type as revenue, ranked directly under it:
+          what was taken, then what of it landed.
+
+          Stacked rather than side by side, and that is a responsiveness
+          decision. Two SAR figures at 24px need about 370px between them; the
+          three cards share the page, so on a 1024px viewport there is not that
+          much and one of them would truncate. Stacked, each gets the card's full
+          width at every breakpoint.
+
+          The `print:` sizes are the A4 column, not a second design: three of
+          these cards share 186mm of paper, about 60mm each, and
+          "1,247,820.55 SAR" at 24px does not fit 60mm. */}
+      {/* 24px from `md:` and not from `sm:`.
+          Between 640 and 768 the grid is already three across, which leaves each
+          figure about 160px — and "1,247,820.55 SAR" needs 188 at 24px. It
+          truncated. One step down at that band fits it exactly, and above 768
+          there is room for the display size. */}
+      {/* 24px from `md:` and not from `sm:`. Between 640 and 768 the grid is
+          already three across, which leaves each figure about 160px — and
+          "1,247,820.55 SAR" needs 188 of them at 24px, so it truncated. One step
+          down over that band fits it exactly; above 768 there is room for the
+          display size. */}
+      <div className="mt-4 space-y-3 print:mt-2 print:space-y-1.5">
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground print:text-[7px]">
+            Total sales
+          </div>
+          <div className="mt-0.5 truncate text-xl font-semibold leading-tight tabular-nums md:text-2xl print:mt-0 print:text-[13px]">
+            {figure(fmtSAR(s.totalSales), "w-40")}
+          </div>
         </div>
-        <div className="mt-1 flex items-baseline justify-between gap-2 text-xs print:mt-0.5 print:flex-col print:items-start print:gap-0 print:text-[9px]">
-          <span className="text-muted-foreground">Total sales</span>
-          <span className="max-w-full truncate font-semibold tabular-nums text-[var(--positive)]">
-            {figure(`${fmtSAR(s.completedSales)} completed`, "w-32")}
-          </span>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground print:text-[7px]">
+            Completed sales
+          </div>
+          <div className="mt-0.5 truncate text-xl font-semibold leading-tight tabular-nums text-[var(--positive)] md:text-2xl print:mt-0 print:text-[13px]">
+            {figure(fmtSAR(s.completedSales), "w-40")}
+          </div>
         </div>
       </div>
 
-      <div className="mt-3.5 grid grid-cols-2 gap-2 border-t border-border/60 pt-3 print:mt-2 print:pt-1.5">
+      <div className="mt-4 grid grid-cols-2 gap-2 border-t border-border/60 pt-3 print:mt-2 print:pt-1.5">
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          <div className="whitespace-nowrap text-[10px] uppercase tracking-wider text-muted-foreground">
             Total orders
           </div>
           <div className="text-lg font-semibold leading-tight tabular-nums sm:text-xl print:text-xs">
@@ -158,7 +185,13 @@ export function DashKpiCard({
           </div>
         </div>
         <div className="text-right">
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          {/* "Completed", not "Completed orders": paired with "Total orders" in
+              the other half of the row it is unambiguous, and the longer label
+              wraps to two lines in a three-up card at tablet width — which drops
+              its value half a line below its neighbour's and makes the row look
+              misaligned. `whitespace-nowrap` on both keeps that decided here
+              rather than by the viewport. */}
+          <div className="whitespace-nowrap text-[10px] uppercase tracking-wider text-muted-foreground">
             Completed
           </div>
           <div className="text-lg font-semibold leading-tight tabular-nums text-[var(--positive)] sm:text-xl print:text-xs">

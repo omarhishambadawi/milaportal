@@ -22,18 +22,34 @@ import { cn } from "@/lib/utils";
  */
 export function Reveal({
   delay = 0,
+  instant = false,
   className,
   children,
 }: {
   /** Milliseconds after the page's own entrance. See `DASH_DELAY`. */
   delay?: number;
+  /**
+   * Reach full opacity almost immediately, and ignore the delay.
+   *
+   * For the KPI band, and only for it. Those three cards are the reason the page
+   * was opened, and the standard entrance put 70ms of delay and 560ms of fade in
+   * front of them — so on a connection where the `orders_kpis` round trip landed
+   * quickly, the numbers were ready and the animation was still the thing
+   * standing between the reader and them. That reads as a slow dashboard, and it
+   * is not: it is a fast dashboard behind a decoration.
+   *
+   * The rise is kept, so the band still settles with the rest of the page rather
+   * than snapping into a page that is fading. Only the opacity ramp is pulled
+   * forward. See `.dash-enter-instant` in `styles.css`.
+   */
+  instant?: boolean;
   className?: string;
   children: ReactNode;
 }) {
   return (
     <div
-      className={cn("dash-enter", className)}
-      style={{ "--dash-delay": `${delay}ms` } as CSSProperties}
+      className={cn(instant ? "dash-enter-instant" : "dash-enter", className)}
+      style={instant ? undefined : ({ "--dash-delay": `${delay}ms` } as CSSProperties)}
     >
       {children}
     </div>

@@ -480,11 +480,28 @@ export function useDashboardData({
         .slice(0, 10),
     [cmpLocRows],
   );
+  /**
+   * Complaints per city, with the resolved/open split the RPC already returns.
+   *
+   * `resolved` and `open` are additive here — `complaints_locations` has always
+   * returned them for the city rows as well as the branch rows, and this shape
+   * simply stopped throwing two of the four columns away. The city itself is not
+   * a column on `complaints`: the RPC derives it by joining `branches` on
+   * `branch_no` and grouping on `b.city`, with an unmatched branch landing in its
+   * `COALESCE(b.city, '—')` bucket. Nothing is filtered out, so the rows sum to
+   * the same total the KPI strip reports.
+   */
   const cmpCityData = useMemo(
     () =>
       (cmpLocRows ?? [])
         .filter((r) => r.location_type === "city")
-        .map((r) => ({ name: r.location, total: Number(r.total), rate: Number(r.rate) }))
+        .map((r) => ({
+          name: r.location,
+          total: Number(r.total),
+          resolved: Number(r.resolved),
+          open: Number(r.open),
+          rate: Number(r.rate),
+        }))
         .sort((a, b) => b.total - a.total),
     [cmpLocRows],
   );

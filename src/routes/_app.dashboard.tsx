@@ -1,12 +1,6 @@
 ﻿import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
   Select,
   SelectContent,
   SelectItem,
@@ -21,8 +15,6 @@ import {
   CheckCircle2,
   CircleAlert,
   ClipboardPlus,
-  Download,
-  FileSpreadsheet,
   Gauge,
   LayoutDashboard,
   ListChecks,
@@ -56,7 +48,6 @@ import { ReportPrintFooter, ReportPrintHeader } from "@/components/print-chrome"
 import { PRINT_WIDTH_PX } from "@/lib/print-width";
 import { usePrintExport } from "@/lib/print-export";
 import { ChartPrintContext } from "@/features/dashboard/chart-motion";
-import { exportDashboard } from "@/features/dashboard/export";
 import {
   ChartCardSkeleton,
   SalesChartsSkeleton,
@@ -80,7 +71,6 @@ import { DASH_DELAY, Reveal } from "@/features/dashboard/components/reveal";
 import { MonthlyGrowthSection } from "@/features/dashboard/components/monthly-growth-section";
 import { useDashboardFilters } from "@/features/dashboard/hooks/use-dashboard-filters";
 import { useDashboardData } from "@/features/dashboard/hooks/use-dashboard-data";
-import { useDashboardExportData } from "@/features/dashboard/hooks/use-dashboard-export-data";
 import { useMonthlyGrowth } from "@/features/dashboard/hooks/use-monthly-growth";
 
 /**
@@ -118,9 +108,9 @@ const SaudiSalesMap = lazy(() =>
  * in this route's chunk and undo the split the two boundaries above it exist to
  * make. `ChartCardSkeleton` holds the card while it arrives.
  */
-const ComplaintsBranchChart = lazy(() =>
+const ComplaintsCityChart = lazy(() =>
   import("@/features/dashboard/components/complaints-charts").then((m) => ({
-    default: m.ComplaintsBranchChart,
+    default: m.ComplaintsCityChart,
   })),
 );
 
@@ -154,16 +144,6 @@ function Dashboard() {
    * filter, for the same reason.
    */
   const growth = useMonthlyGrowth({ enabled: f.canViewDashboard && f.canViewTeamAnalytics });
-  const { refetchExport, exportBusy } = useDashboardExportData({
-    from: f.from,
-    to: f.to,
-    effectiveAgent: f.effectiveAgent,
-    effectiveTeam: f.effectiveTeam,
-    dashFilters: f.dashFilters,
-    isAdmin: f.isAdmin,
-    userId: f.userId,
-  });
-
   /**
    * The PDF export.
    *
@@ -291,57 +271,16 @@ function Dashboard() {
               </Button>
             )}
             {f.canExport && (
-              /* One control, two documents. The workbook is the working export —
-                 ten sheets of underlying rows, meant to be filtered and pivoted.
-                 The PDF is the reading copy: this page as it stands, laid out for
-                 A4. They answer different needs and neither replaces the other,
-                 so the menu names both rather than the button picking one. */
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" disabled={exportBusy || printing}>
-                    <Download className="h-4 w-4 mr-2" />
-                    {exportBusy || printing ? "Preparing…" : "Export"}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-60">
-                  {/* `items-start`, because the item is two lines: the base
-                      style centres its icon, which against a name and a
-                      description leaves the glyph floating between them. */}
-                  <DropdownMenuItem
-                    className="items-start gap-2.5 py-2"
-                    onSelect={() => void print()}
-                  >
-                    <Printer className="mt-0.5 h-4 w-4" />
-                    <span className="flex min-w-0 flex-col">
-                      <span>PDF report</span>
-                      <span className="text-xs text-muted-foreground">
-                        This dashboard, laid out for A4
-                      </span>
-                    </span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    className="items-start gap-2.5 py-2"
-                    onSelect={async () => {
-                      const r = await refetchExport();
-                      if (r.data)
-                        await exportDashboard(r.data, {
-                          from: f.from,
-                          to: f.to,
-                          agentLabel: f.selectedAgentLabel,
-                          teamLabel: f.teamFilter,
-                        });
-                    }}
-                  >
-                    <FileSpreadsheet className="mt-0.5 h-4 w-4" />
-                    <span className="flex min-w-0 flex-col">
-                      <span>Excel workbook</span>
-                      <span className="text-xs text-muted-foreground">
-                        Ten sheets of underlying rows
-                      </span>
-                    </span>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              /* One export, and it says which one.
+                 The workbook that used to sit beside this is gone: it was ten
+                 sheets of raw rows, which is a different product from a report
+                 and was maintained as if it were the same one. The button names
+                 the format rather than saying "Export" and asking the reader to
+                 open a menu to find out what they get. */
+              <Button variant="outline" size="sm" onClick={() => void print()} disabled={printing}>
+                <Printer className="mr-2 h-4 w-4" />
+                {printing ? "Preparing PDF…" : "Export PDF"}
+              </Button>
             )}
           </div>
         </Reveal>
@@ -526,7 +465,7 @@ function Dashboard() {
 
           <div className="mt-3">
             <Suspense fallback={<ChartCardSkeleton height={340} />}>
-              <ComplaintsBranchChart data={d.cmpBranchData} />
+              <ComplaintsCityChart data={d.cmpCityData} />
             </Suspense>
           </div>
 
@@ -559,7 +498,12 @@ function Dashboard() {
               </AnalyticsTable>
             </AnalyticsCard>
 
-            <AnalyticsCard title="Complaints by city" icon={CircleAlert} flush>
+            {/* Named for its columns, not its dimension. The chart above is now
+                also by city, and two cards headed "Complaints by city" in one
+                section is a section that reads as a mistake — this one is the
+                rate table, and saying so is what tells the reader which of the
+                two answers their question. */}
+            <AnalyticsCard title="Resolution rate by city" icon={CircleAlert} flush>
               <AnalyticsTable minWidth={360}>
                 <Thead>
                   <tr>

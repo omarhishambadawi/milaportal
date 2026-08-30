@@ -268,7 +268,8 @@ module landing page.
 Routes are thin. Each delegates to feature hooks:
 `use*Filters` (URL/local state + permission flags) → `use*Data` /
 `use*Metrics` (React Query) → `use*Mutations` (writes + invalidation) →
-`export.ts` (XLSX). Dashboard and Orders read Postgres RPCs directly under RLS;
+`export.ts` (XLSX, where a module still has one — the Dashboard's was removed
+when its export became PDF-only). Dashboard and Orders read Postgres RPCs directly under RLS;
 Calls, Users, Branch import and Geo go through server functions.
 
 ---
@@ -986,7 +987,8 @@ unmodified in structure and consumed through the `@/components/ui/*` alias.
 - **Dashboard:** `stat-card`, `dash-kpi-card`, `analytics-card`,
   `analytics-table` (+ `Thead/Tbody/Th/Td/EmptyRow`), `chart-empty`,
   `delivery-matrix`, `horizontal-bar-panel`, `sales-charts` (lazy) +
-  `sales-charts-skeleton` (+ `ChartCardSkeleton`), `complaints-charts` (lazy),
+  `sales-charts-skeleton` (+ `ChartCardSkeleton`), `complaints-charts` (lazy,
+  by city),
   `in-view-chart`, `reveal`, `section-title`. Ranked-panel geometry — measured
   axis width, row rhythm, panel height — lives in `hooks/use-ranked-axis.ts` and
   is shared by `horizontal-bar-panel` and `complaints-charts`. The four heavy panels — `delivery-matrix`,
@@ -1040,7 +1042,6 @@ names for roles without `view_all_agents` while leaving the ranking intact, and
 `sections`, which gates each query's `enabled` so a consumer reading five of the
 eleven pays for five — omitting it means all eleven, which is what the Dashboard
 itself does) ·
-`use-dashboard-export-data` (`enabled: false`, fetched via `refetch()`) ·
 `use-monthly-growth` (the monthly comparison timeline — one `orders_kpis` call
 per month per team through `orderKpisQuery`, combined with the historical
 baseline).
@@ -1148,7 +1149,7 @@ Provider-agnostic and pure. `index.ts` is the only import surface.
 ### Chart motion (`chart-motion.ts`)
 
 One module owns every Dashboard chart's enter animation: one shared
-`cubic-bezier(0.4, 0, 0.2, 1)`, 950–1200ms per series type, `animationBegin: 0`,
+`cubic-bezier(0.4, 0, 0.2, 1)`, 1200–1600ms per series type, `animationBegin: 0`,
 nothing looping, bouncing or scaling. `buildChartMotion` is a pure function of
 `(reduced, forceStill)` so the contract is unit-tested rather than checked by
 eye; `usePrefersReducedMotion` makes reduced-motion still, and `forceStill` does
@@ -1158,6 +1159,42 @@ the same for the PDF export.
 `Pie` and 0 for everything else**. A preset that set only the duration therefore
 left the pie starting four tenths of a second after the rest of the page — the
 one panel that looked like it had stalled.
+
+#### The disarm is `onAnimationEnd`, and that is the fix for the second glitch
+
+`useSettledChartMotion` used to disarm on `setTimeout(longest + 300ms)`, which is
+a wall-clock guess about an animation react-smooth steps on
+`requestAnimationFrame`. Whenever the two disagree — a busy main thread, a slow
+device, or precisely the first seconds of this route while it mounts ten charts,
+resolves eleven queries and pulls two lazy chunks — **the timer wins and the
+series is switched to its static render mid-draw.**
+
+Instrumented with a `MutationObserver` over the revenue trend's `<path>` on a
+real load: the last `stroke-dasharray` written was `39.2px / 568.4px` — the line
+**7% drawn** — and the next mutation was the static path replacing it. That is
+the jump, it is not a Recharts bug, and it was rare enough at 950–1200ms on an
+idle machine to survive the first fix. Raising the band to 1200–1600ms would have
+made it routine.
+
+So the disarm is now Recharts' own `onAnimationEnd`, spread onto every series
+with the rest of the preset. It cannot fire early, it cannot fire late, and when
+it fires the static geometry is by definition the frame already on screen.
+`SETTLE_FALLBACK_MS` (3× the longest duration, plus a floor) remains only for the
+case where that signal never arrives at all — a panel whose series render
+nothing, or a tab hidden for the whole life of the entrance — where staying armed
+forever would leave a panel one `ResponsiveContainer` measurement away from
+replaying its entrance for the rest of the session.
+
+Re-verified across repeated fresh loads: the drawn fraction is monotonic, reaches
+100%, and the static swap never precedes completion.
+
+`buildChartMotion` stays a pure function of two booleans — the callback is added
+in the hook — so the contract remains assertable without a renderer.
+
+The revenue trend also lost its resting dots. Recharts withholds `renderDots`
+until `isAnimationFinished`, so a dotted line ends its reveal by putting fourteen
+marks on screen in a single frame: a pop at the exact moment the animation was
+meant to settle. `activeDot` still marks the hovered point.
 
 `useSettledChartMotion(identity)` is what stops the restarts. Recharts wraps each
 series in `<Animate key={"bar-" + animationId}>`, and `animationId` is the
@@ -1215,11 +1252,20 @@ the PDF export below.
 
 #### Page entrance (`components/reveal.tsx`, `.dash-enter` in `styles.css`)
 
-Two animations on the whole page, and deliberately only two: sections rise 14px
-and fade in over 560ms on a `DASH_DELAY` ladder (header → KPI cards → charts →
-secondary content, about 70ms a step, topping out inside the first viewport), and
-a chart's chrome — axes, grid, legend, none of which Recharts animates — fades up
-under the series over 360ms with `.chart-reveal`. Both are `opacity` and
+Three animations on the whole page. Sections rise 14px and fade in over 560ms on
+a `DASH_DELAY` ladder (header → charts → secondary content, about 70ms a step,
+topping out inside the first viewport). A chart's chrome — axes, grid, legend,
+none of which Recharts animates — fades up under the series over 360ms with
+`.chart-reveal`.
+
+And the **KPI band is deliberately not on that ladder**: it uses
+`.dash-enter-instant`, which reaches full opacity at 40% of a 300ms timeline
+(~120ms, below the threshold at which a delay is felt) with no delay at all,
+while the rise runs the full length. Those three cards are why the page was
+opened; once `orders_kpis` has answered, an entrance animation is the only thing
+left between the reader and the number, and a dashboard that is fast behind a
+decoration reads as a slow dashboard. The band still settles with the page — it
+simply becomes _readable_ first. Both are `opacity` and
 `transform` only, so neither can shift the layout, and both drop to nothing under
 `prefers-reduced-motion` and under `@media print`.
 
@@ -1228,9 +1274,8 @@ card inside a 950–1200ms series, so each is settled before the thing it sits i
 finishes arriving. The rise was 10px until a visual pass found it imperceptible
 on a large monitor — the reveal was in the code and absent to the eye.
 
-Eleven independent aggregation queries plus an on-demand export dataset, all
-keyed under `queryKeys.dashboard.*` so one `dashboard.all()` invalidation sweeps
-them. Every aggregation is a Postgres RPC (`SECURITY INVOKER`, so RLS applies),
+Eleven independent aggregation queries, all keyed under `queryKeys.dashboard.*`
+so one `dashboard.all()` invalidation sweeps them. Every aggregation is a Postgres RPC (`SECURITY INVOKER`, so RLS applies),
 not a client-side reduction:
 
 | Panel                                | RPC                      |
@@ -1256,18 +1301,23 @@ ranking, the values and the chart layout stay exactly as they are.
 each `lazy()`-loaded behind a skeleton, so Recharts stays out of the route's own
 chunk.
 
-### Export — two documents, one button
+### Export — PDF only
 
-The Export control is a menu with two items, because the two answer different
-needs and neither replaces the other:
+One control, `Export PDF`, and it names the format rather than opening a menu to
+say what you get.
 
-- **Excel workbook** — `features/dashboard/export.ts`, a multi-sheet XLSX built
-  from a query with `enabled: false` and fetched only when the item is chosen.
-  Ten sheets of underlying rows, meant to be filtered and pivoted. Unchanged.
-- **PDF report** — `window.print()` over the real DOM, the same mechanism the
-  Reports and Calls pages use. No PDF library, no canvas rasteriser, nothing
-  added to the bundle: the browser's own writer renders the live document at
-  print resolution, so text stays selectable and charts stay vector.
+The Excel workbook that briefly sat beside it is **gone** — `export.ts`, the
+`use-dashboard-export-data` hook behind it and the `queryKeys.dashboard.exportData`
+entry are deleted, not disabled. It was ten sheets of raw rows, which is a
+different product from a report, and it was the only reason the Dashboard still
+pulled every order and complaint in the range. `xlsx` remains a dependency and is
+untouched: Orders, Complaints and the Branches import/export are genuinely
+tabular and still use it.
+
+The PDF is `window.print()` over the real DOM, the same mechanism the Reports and
+Calls pages use. No PDF library, no canvas rasteriser, nothing added to the
+bundle: the browser's own writer renders the live document at print resolution,
+so text stays selectable and charts stay vector.
 
 Three things make the PDF a report rather than a photograph of a web page, and
 none of them touches the screen layout:
@@ -1336,20 +1386,34 @@ windows.** Measured with headless Chrome `--print-to-pdf` over the real page.
 
 ### Complaints visualisation
 
-`complaints-charts.tsx` draws **Complaints by branch — resolved against open**,
-a stacked horizontal bar over the top 10 branches by volume. The shape is
-constrained by what the data actually contains and no RPC was added to widen it:
-`complaints_locations` returns total / resolved / open / rate per branch and per
-city, and `complaints_kpis` the same four for the period. There is **no complaint
-date series, no category, no channel and no source**, so a trend line, a reason
-breakdown or a channel split could only be invented. What the data does support
-is the composition that matters — each branch's volume split by whether it has
-been dealt with — where the bar's length is the ranking the table gives and the
-amber portion is the backlog. Colours are the page's own `--positive` /
+`complaints-charts.tsx` draws **Complaints by city — resolved against open**, a
+stacked horizontal bar over the highest-volume cities (capped at 12; the subtitle
+says so when the cap bites, and the table below still lists every city).
+
+The shape is constrained by what the data actually contains and no RPC was added
+to widen it: `complaints_locations` returns total / resolved / open / rate per
+branch _and per city_, and `complaints_kpis` the same four for the period. There
+is **no complaint date series, no category, no channel and no source**, so a
+trend line, a reason breakdown or a channel split could only be invented. What
+the data does support is the composition that matters — volume split by whether
+it has been dealt with — where the bar's length is the ranking the table gives
+and the amber portion is the backlog. Colours are the page's own `--positive` /
 `--attention` semantics, the same pair the tables under it use.
 
+**City is derived, not a column, and the distinction matters.** `complaints`
+carries `branch_no` and no city at all; `complaints_locations` produces its city
+rows with `LEFT JOIN public.branches b ON b.branch_no = s.branch_no` grouped on
+`b.city`. So this panel reads the `location_type = 'city'` rows — it does not
+relabel the branch rows. A complaint whose branch is absent from the branch
+directory falls into that join's `COALESCE(b.city, '—')` bucket and is plotted as
+the RPC reports it, so the chart's rows still sum to the total the KPI strip
+above shows. `cmpCityData` gained `resolved` and `open`, which the RPC had always
+returned for city rows and the mapping had been discarding.
+
 The KPI strip and both tables are unchanged and still carry the exact figures;
-the chart sits between them, so the section reads summary → picture → detail.
+the chart sits between them, so the section reads summary → picture → detail. The
+city table is titled **Resolution rate by city** — named for its columns, because
+two cards headed "Complaints by city" in one section reads as a mistake.
 
 ### Empty and loading states
 
@@ -1358,6 +1422,16 @@ panel: a muted glyph, the fact, and the reason. An empty Recharts chart is a pai
 of axes labelled 0 to 0, which reads as a panel that failed rather than as a
 period with no orders in it. The panel keeps its height, so a filter that empties
 one card does not resize the row it shares.
+
+`DashKpiCard` leads with **two co-equal figures** — total sales, then completed
+sales in the positive tone, each with its own label and both at the display size.
+Completed sales used to be twelve pixels of green on the right of a caption under
+a twenty-four pixel revenue figure, which is a footnote about the number
+management is actually judged on. They are stacked rather than side by side
+because two SAR figures at 24px need ~370px between them and three cards share
+the page; the display size itself steps in at `md:` rather than `sm:`, because
+between 640 and 768 the grid is already three across and
+"1,247,820.55 SAR" needs 188px at 24px in a 160px column.
 
 `DashKpiCard`'s `loading` swaps each **figure** for a tinted bar drawn inside the
 element the figure would occupy — not a parallel skeleton tree, which is a second
@@ -1739,9 +1813,9 @@ and its layout, and the community build of `xlsx` can carry neither — cell sty
 and embedded charts are SheetJS Pro features — so the workbook was a plainer copy
 of a document the PDF already delivers.
 
-`xlsx` remains a dependency and is untouched elsewhere: the Dashboard export,
-the Orders export and the Branches import/export are genuinely tabular and still
-use it.
+`xlsx` remains a dependency and is untouched elsewhere: the Orders export and
+the Branches import/export are genuinely tabular and still use it. (The Dashboard
+export was later reduced to PDF only for the same reason as this one.)
 
 ---
 
