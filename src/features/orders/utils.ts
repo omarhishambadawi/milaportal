@@ -1,4 +1,5 @@
 import { format, parseISO } from "date-fns";
+import { stripOrderPrefix } from "@/lib/branches";
 import { isFulfillmentGroup } from "./fulfillment";
 
 export const toISO = (d: Date) => format(d, "yyyy-MM-dd");
@@ -9,6 +10,35 @@ export const normalizeSearchTerm = (value: string) =>
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 80);
+
+/**
+ * The term the Orders search actually queries with.
+ *
+ * `orders.display_no` stores the bare number — `3853` — while every screen, and
+ * therefore every note, message and screenshot, shows it through `formatOrderNo`
+ * as `CC-3853`. So the string an agent copies out of the app was one the app
+ * could not find, and the most common search on the page was the one that did
+ * not work.
+ *
+ * The fix is at the *term*, not in the query: a term that is exactly a prefixed
+ * order number becomes the bare number before it is sent. That keeps `CC-3853`
+ * and `3853` a single search, which matters because the term also goes to
+ * `orders_kpi_summary` — normalising here means the table and the KPI cards
+ * above it are still asking the same question, with no change to either query
+ * and no second `display_no` clause to pay for.
+ *
+ * `stripOrderPrefix` is the existing helper (`lib/branches`), the one
+ * `formatOrderNo`'s prefixes come from, so the two cannot drift. It is applied
+ * only when it actually removed a prefix **and** what is left is all digits —
+ * an ordinary word must never be rewritten, and a customer called "CC-Pharmacy"
+ * is still searched for verbatim. Nothing about how order numbers are stored or
+ * displayed changes.
+ */
+export function toSearchTerm(value: string): string {
+  const term = normalizeSearchTerm(value);
+  const stripped = stripOrderPrefix(term);
+  return stripped !== term && /^\d+$/.test(stripped) ? stripped : term;
+}
 
 /**
  * The selected day, split so the weekday can be emphasised.
@@ -28,11 +58,32 @@ export function describeDateRange(
   return { weekday: null, date: `${format(from, "d MMM yyyy")} — ${format(to, "d MMM yyyy")}` };
 }
 
-/** Format ISO date as "Friday, Jul 10, 2026". */
+/** Format ISO date as "Friday, Jul 10, 2026". The order page and the export. */
 export const fmtOrderDate = (iso: string | null | undefined) => {
   if (!iso) return "—";
   try {
     return format(parseISO(iso), "EEEE, MMM d, yyyy");
+  } catch {
+    return String(iso);
+  }
+};
+
+/**
+ * Format ISO date as "30/08/26" — the **list's** date.
+ *
+ * Display only: the stored value, the sort (`order_date` in Postgres) and the
+ * date-range filter are all untouched, and the long form above still serves the
+ * order page and the XLSX export, where there is room for it.
+ *
+ * The list needed a narrower one. "Friday, Jul 10, 2026" spells out a weekday
+ * the page header already states once for the whole range, and it was the widest
+ * column in the table for the least-read fact in it. Fixed-width and tabular, so
+ * the digits line up down the column.
+ */
+export const fmtOrderDateShort = (iso: string | null | undefined) => {
+  if (!iso) return "—";
+  try {
+    return format(parseISO(iso), "dd/MM/yy");
   } catch {
     return String(iso);
   }
@@ -100,6 +151,11 @@ export interface OrderFilterState {
    * See FULFILLMENT_OPTIONS.
    */
   fulfillment: string;
+  /**
+   * "all" | "verified" | "unverified" — the Invoice Verification filter, over
+   * `orders.invoices_verified`. See `./verification`.
+   */
+  verification: string;
   /** Narrow to the signed-in agent's starred orders. */
   starredOnly: boolean;
   /**
@@ -145,9 +201,28 @@ function applyFulfillment(qb: any, fulfillment: string) {
 }
 
 /**
+ * Narrow a query to an invoice-verification state.
+ *
+ * The mirror of `matchesVerification`, and one line each. The negative uses
+ * `not(col, is, true)` rather than `eq(col, false)`: `invoices_verified` is
+ * nullable and an order the MIS has not answered for holds NULL, so the obvious
+ * spelling would drop exactly the orders *Non verified* is asking for — the same
+ * three-valued-logic trap `applyFulfillment` above carries a paragraph about.
+ */
+function applyVerification(qb: any, verification: string) {
+  if (verification === "verified") return qb.is("invoices_verified", true);
+  if (verification === "unverified") return qb.not("invoices_verified", "is", true);
+  return qb;
+}
+
+/**
  * Apply the shared orders filter set to a PostgREST query builder. Pure: all
  * inputs are passed in, so the list page fetch and the export share one
  * implementation with identical semantics.
+ *
+ * Every narrowing is an independent `AND`, which is what makes the filters
+ * compose: adding a verification state does not disturb the status, the team,
+ * the agent or the date, and clearing one leaves the rest standing.
  */
 export function applyOrderFilters(qb: any, s: OrderFilterState) {
   if (!s.searching) qb = qb.gte("order_date", s.from).lte("order_date", s.to);
@@ -162,6 +237,7 @@ export function applyOrderFilters(qb: any, s: OrderFilterState) {
   // filter on has no starred orders, and that is the honest answer.
   if (s.starredOnly) qb = qb.in("id", s.starredIds as string[]);
   qb = applyFulfillment(qb, s.fulfillment);
+  qb = applyVerification(qb, s.verification);
   if (s.searching) qb = qb.or(buildSearchOr(s.term));
   return qb;
 }

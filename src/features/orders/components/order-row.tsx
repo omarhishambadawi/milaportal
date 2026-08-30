@@ -14,10 +14,11 @@ import { cn } from "@/lib/utils";
 
 import { CallCentreCell, callCentreState } from "./call-centre-cell";
 import { CopyableOrderNo } from "./copyable-order-no";
+import { FulfillmentBadge } from "./fulfillment-badge";
 import { InvoiceCell } from "./invoice-cell";
 import { StatusBadge } from "./status-badge";
 import { TeamBadge } from "./team-badge";
-import { fmtOrderDate } from "../utils";
+import { fmtOrderDateShort } from "../utils";
 
 interface OrderRowProps {
   /** One enriched row from `useOrdersListData`. Memoised upstream. */
@@ -139,7 +140,7 @@ function OrderRowImpl({
       <td
         className={cn("whitespace-nowrap px-3 text-xs tabular-nums text-muted-foreground", cellCls)}
       >
-        {fmtOrderDate(o.order_date)}
+        {fmtOrderDateShort(o.order_date)}
       </td>
       <td className={cn("px-3 text-sm", cellCls)}>
         <div className="truncate font-semibold text-foreground leading-tight">
@@ -164,8 +165,19 @@ function OrderRowImpl({
       <td className={cn("px-3 text-[13px] font-mono text-foreground/90", cellCls)}>
         <InvoiceCell value={o.invoice_no} />
       </td>
+      {/* Cash / Wasfaty, and under it how the order was fulfilled.
+
+          The badge goes in this cell rather than in a column of its own: the
+          cell held one line in a row whose height is already set by the
+          two-line Customer, Agent and Branch cells beside it, so a second line
+          here costs the table no height at all. The column is widened with
+          space the shortened Date column gave back, so nothing else is
+          compressed to make room. */}
       <td className={cn("px-2 text-xs text-muted-foreground whitespace-nowrap", cellCls)}>
         {o.order_type}
+        <div className="mt-1">
+          <FulfillmentBadge deliveryType={o.delivery_type} />
+        </div>
       </td>
       <td className={cn("px-3 text-sm", cellCls)}>
         <div className="font-mono font-medium truncate leading-tight">{o.branch_no ?? "—"}</div>

@@ -720,6 +720,30 @@ html.theme-vt * {
  */
 
 /*
+ * Orders — reduced motion.
+ *
+ * The Orders list's entrances are `tw-animate-css` `animate-in fade-in`: the
+ * toolbar, the KPI strip and the table settling in on load, and the table body
+ * cross-fading when a filter, a search or a scope changes. All of them are
+ * courtesies, so under `prefers-reduced-motion` they simply do not play and the
+ * content is there at full opacity instead.
+ *
+ * Scoped to `.orders-page` rather than applied to `.animate-in` globally: what
+ * the app's other pages do with motion is their own decision, and a blanket rule
+ * here would also silence `order-row-return` and the branch-card flashes above,
+ * which carry information rather than decoration.
+ *
+ * The dimming of the table while the next page is in flight is deliberately left
+ * alone. It is state made visible, not movement, and reduced motion does not ask
+ * for it to be removed.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .orders-page .animate-in {
+    animation: none !important;
+  }
+}
+
+/*
  * The branch card's "here it is" flash, played when a locator result is clicked.
  *
  * An overlay inside the card rather than a class on the card itself, for two

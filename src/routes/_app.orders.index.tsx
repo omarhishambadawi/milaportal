@@ -18,15 +18,19 @@ import {
   ChevronRight,
   Download,
   Eye,
-  Plus,
   Search,
   ShieldCheck,
   Star,
+  X,
 } from "lucide-react";
 import { STATUSES, TEAMS } from "@/lib/branches";
 import { cn } from "@/lib/utils";
 import { DateRangePicker } from "@/components/date-range-picker";
-import { FULFILLMENT_OPTIONS, PAGE_SIZE_OPTIONS } from "@/features/orders/constants";
+import {
+  FULFILLMENT_OPTIONS,
+  PAGE_SIZE_OPTIONS,
+  VERIFICATION_OPTIONS,
+} from "@/features/orders/constants";
 import { KpiCard } from "@/features/orders/components/kpi-card";
 import { OrderRow } from "@/features/orders/components/order-row";
 import { useOrdersListFilters } from "@/features/orders/hooks/use-orders-list-filters";
@@ -53,6 +57,7 @@ function OrdersList() {
     agent: f.agent,
     status: f.status,
     fulfillment: f.fulfillment,
+    verification: f.verification,
 
     mineOnly: f.mineOnly,
     starredOnly: f.starredOnly,
@@ -118,6 +123,29 @@ function OrdersList() {
     [navigate],
   );
 
+  // What the agent last asked the list for, as one string.
+  //
+  // The <tbody> is keyed on it, so switching scope, changing a filter, running a
+  // search or turning a page remounts the body and the incoming rows arrive as
+  // one quiet fade instead of a swap. Keyed on the *request* rather than on the
+  // rows: `keepPreviousData` holds the old rows on screen while the next page is
+  // in flight, so a key derived from row ids would fire after the moment it is
+  // meant to cover. A background refetch that changes nothing is not included,
+  // and nothing here affects what is fetched.
+  const viewKey = [
+    f.mineOnly,
+    f.starredOnly,
+    f.team,
+    f.agent,
+    f.status,
+    f.fulfillment,
+    f.verification,
+    f.term,
+    f.from,
+    f.to,
+    f.page,
+  ].join("|");
+
   if (!f.canView) {
     return (
       <div className="text-center py-16">
@@ -128,7 +156,9 @@ function OrdersList() {
   }
 
   return (
-    <div className="space-y-4">
+    // `orders-page` scopes this page's reduced-motion rule (styles.css). It
+    // carries no styling of its own.
+    <div className="orders-page space-y-4">
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 sm:flex sm:flex-wrap sm:items-center sm:justify-between">
         <div className="min-w-0">
           <h1 className="truncate text-xl font-semibold tracking-tight sm:text-2xl">Orders</h1>
@@ -229,18 +259,18 @@ function OrdersList() {
               bar. It is not a filter — it acts on whatever the filters have
               already selected — and down there it was the only control on a
               second row, so the container carried a row of empty space to hold
-              one button. Outline, so it reads as a utility beside the primary
-              New order rather than competing with it. */}
+              one button.
+
+              It is the only action here now. "New order" stood beside it as the
+              page's primary button and has been removed: the sidebar offers it
+              on every page, including this one, so the header copy was a second
+              route to the same form. Creating an order is otherwise unchanged —
+              `/orders/new`, the `create_orders` permission and the form are all
+              untouched. */}
           {f.canExport && (
             <Button variant="outline" size="sm" onClick={exportXlsx}>
               <Download className="h-4 w-4 sm:mr-2" />
               <span className="hidden sm:inline">Export Excel</span>
-            </Button>
-          )}
-          {f.canCreate && (
-            <Button size="sm" onClick={() => navigate({ to: "/orders/new" })}>
-              <Plus className="h-4 w-4 sm:mr-2" />
-              <span className="hidden sm:inline">New order</span>
             </Button>
           )}
         </div>
@@ -252,14 +282,21 @@ function OrdersList() {
           cards on purpose: this is a strip of controls, not content, and it sat
           two sizes too tall — `p-4` around `h-10` controls plus a second row
           holding nothing but the (now relocated) Export button. */}
-      <Card>
+      <Card className="animate-in fade-in fill-mode-both duration-300">
         <CardContent className="p-2.5 sm:p-3 flex flex-wrap items-center gap-2">
           {/* Search is the primary control of the bar and is built to look it:
               it takes the leftover width up to `max-w-md` and lifts its shadow
               on focus. The dropdowns beside it narrow a set; this is the one an
               agent types an invoice number into all day. */}
-          <div className="relative flex-1 min-w-[220px] lg:min-w-[260px] lg:max-w-md">
-            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          {/* Same box, same width, same height, same place in the bar. What
+              changed is the finish: the icon dims a shade so it reads as an
+              affordance rather than as content, the focus state adds a soft
+              primary ring to the lifted shadow instead of relying on the shadow
+              alone, and the field can now be cleared without selecting its
+              contents — an × while there is text, and Escape from the keyboard.
+              `pr-9` is the room that × needs; nothing else moved. */}
+          <div className="group/search relative flex-1 min-w-[220px] lg:min-w-[260px] lg:max-w-md">
+            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/70 transition-colors group-focus-within/search:text-foreground" />
             <Input
               placeholder="Search order, invoice, customer, phone…"
               value={f.q}
@@ -268,12 +305,34 @@ function OrdersList() {
                 f.setQ(e.target.value);
                 f.setPage(0);
               }}
+              onKeyDown={(e) => {
+                // The convention for a search field, and the reason the × never
+                // has to be reached for.
+                if (e.key === "Escape" && f.q) {
+                  e.preventDefault();
+                  f.setQ("");
+                  f.setPage(0);
+                }
+              }}
               aria-label="Search orders"
               // Same radius, border and focus ring as every other control here
               // — the emphasis comes from width, breathing room around the icon
               // and a shadow that lifts on focus, not from a different shape.
-              className="h-10 w-full pl-10 pr-3 text-sm shadow-sm transition-shadow placeholder:text-muted-foreground/75 focus-visible:shadow-md"
+              className="h-10 w-full pl-10 pr-9 text-sm shadow-sm transition-[box-shadow,border-color] duration-200 placeholder:text-muted-foreground/75 focus-visible:border-primary/50 focus-visible:shadow-md"
             />
+            {f.q && (
+              <button
+                type="button"
+                onClick={() => {
+                  f.setQ("");
+                  f.setPage(0);
+                }}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
           <Select
             value={f.team}
@@ -323,6 +382,30 @@ function OrdersList() {
               {STATUSES.map((s) => (
                 <SelectItem key={s} value={s}>
                   {s}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {/* Invoice Verification — three states over `orders.invoices_verified`,
+              the column the first column of the table already reads. Applied
+              through the same `onFilterChange` and the same `applyOrderFilters`
+              as everything beside it, so it composes with status, team, agent,
+              date, fulfillment, scope and search rather than replacing any of
+              them. See features/orders/verification.ts. */}
+          <Select
+            value={f.verification}
+            onValueChange={(v) => f.onFilterChange(() => f.setVerification(v))}
+          >
+            {/* 140px — the same width as Status and Team beside it, which is
+                both the more consistent choice and, at 1440, exactly the ten
+                pixels that keep the bar on one row. */}
+            <SelectTrigger className="h-10 w-[140px]">
+              <SelectValue placeholder="Invoice" />
+            </SelectTrigger>
+            <SelectContent>
+              {VERIFICATION_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -377,7 +460,7 @@ function OrdersList() {
       </Card>
 
       {/* KPI summary: 3 cards — Cash · Wasfaty · Total (each shows sales + completed sales + total/completed orders split) */}
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-3 animate-in fade-in fill-mode-both delay-75 duration-300">
         <KpiCard
           label="Cash"
           tone="from-[var(--tint-cash)] to-transparent"
@@ -405,7 +488,7 @@ function OrdersList() {
         />
       </div>
 
-      <Card>
+      <Card className="animate-in fade-in fill-mode-both delay-150 duration-300">
         <CardContent className="p-0">
           {/*
             One table at every width, scrolled sideways on a phone.
@@ -427,15 +510,24 @@ function OrdersList() {
               className="w-full caption-bottom text-sm border-separate border-spacing-0"
               style={{ minWidth: 1240 }}
             >
+              {/* Two of these changed, and they pay for each other exactly.
+
+                  Date drops 176 → 92 because `dd/MM/yy` needs a fraction of what
+                  the spelled-out weekday did, and Type takes the 84px back
+                  (76 → 160) to seat the Delivery/Pickup badge beside the payment
+                  type it already showed. Every other column is untouched, the
+                  table's `min-w` is unchanged, and no font or row height moved:
+                  the new information is paid for by the column that was widest
+                  for the least. */}
               <colgroup>
                 <col style={{ width: 44 }} />
                 <col style={{ width: 40 }} />
                 <col style={{ width: 168 }} />
-                <col style={{ width: 176 }} />
+                <col style={{ width: 92 }} />
                 <col style={{ width: 210 }} />
                 <col style={{ width: 160 }} />
                 <col style={{ width: 140 }} />
-                <col style={{ width: 76 }} />
+                <col style={{ width: 160 }} />
                 <col style={{ width: 118 }} />
                 <col style={{ width: 122 }} />
                 <col style={{ width: 132 }} />
@@ -470,7 +562,17 @@ function OrdersList() {
                   <th className="px-1 py-3 border-b border-border/70"></th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody
+                key={viewKey}
+                className={cn(
+                  "animate-in fade-in duration-200",
+                  // Opacity only, and only once the first page has painted —
+                  // the rows stay exactly where they are while the next set
+                  // loads, which is the point of keeping them on screen.
+                  "transition-opacity duration-200",
+                  !isLoading && data.isFetching && "opacity-70",
+                )}
+              >
                 {isLoading && (
                   <tr>
                     <td

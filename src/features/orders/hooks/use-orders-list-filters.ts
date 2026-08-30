@@ -9,7 +9,7 @@ import type { OrdersFilters } from "@/lib/query-keys";
 import { useAgentDirectory } from "@/lib/directory";
 import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, PAGE_SIZE_STORAGE_KEY } from "../constants";
 import type { OrdersFilterCache } from "../types";
-import { applyOrderFilters, describeDateRange, normalizeSearchTerm, toISO } from "../utils";
+import { applyOrderFilters, describeDateRange, toISO, toSearchTerm } from "../utils";
 import { useStarredOrders } from "./use-starred-orders";
 
 // In-memory filter cache. Survives SPA navigation (e.g. edit an order and come
@@ -66,6 +66,7 @@ export function useOrdersListFilters() {
   const [agent, setAgent] = useState<string>(initial?.agent ?? "all");
   const [status, setStatus] = useState<string>(initial?.status ?? "all");
   const [fulfillment, setFulfillment] = useState<string>(initial?.fulfillment ?? "all");
+  const [verification, setVerification] = useState<string>(initial?.verification ?? "all");
   const [mineOnly, setMineOnly] = useState<boolean>(initial?.mineOnly ?? false);
   const [starredOnly, setStarredOnly] = useState<boolean>(initial?.starredOnly ?? false);
   const [page, setPage] = useState(initial?.page ?? 0);
@@ -98,12 +99,17 @@ export function useOrdersListFilters() {
     agent,
     status,
     fulfillment,
+    verification,
     mineOnly,
     starredOnly,
     page,
   };
 
-  const term = normalizeSearchTerm(debouncedQ);
+  // `toSearchTerm`, not `normalizeSearchTerm`: it does the same normalisation and
+  // then turns a prefixed order number (`CC-3853`) into the bare number the
+  // `display_no` column actually stores. Done once, here, so the page fetch, the
+  // KPI RPC and the export all search for the same thing.
+  const term = toSearchTerm(debouncedQ);
   const searching = term.length > 0;
 
   /**
@@ -153,6 +159,7 @@ export function useOrdersListFilters() {
     agent,
     status,
     fulfillment,
+    verification,
     mineOnly,
     starredOnly,
     starKey: starredOnly ? starredIds.join(",") : "",
@@ -174,6 +181,7 @@ export function useOrdersListFilters() {
       agent,
       term,
       fulfillment,
+      verification,
       starredOnly,
       starredIds,
     });
@@ -214,6 +222,8 @@ export function useOrdersListFilters() {
     setStatus,
     fulfillment,
     setFulfillment,
+    verification,
+    setVerification,
     mineOnly,
     setMineOnly,
     starredOnly,

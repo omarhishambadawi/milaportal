@@ -34,6 +34,8 @@ export interface OrdersFilters {
   status: string;
   /** "all" | "delivery" | "pickup" — the Delivery & Pickup filter. */
   fulfillment: string;
+  /** "all" | "verified" | "unverified" — the Invoice Verification filter. */
+  verification: string;
   mineOnly: boolean;
   /** Narrow to the signed-in agent's starred orders. */
   starredOnly: boolean;

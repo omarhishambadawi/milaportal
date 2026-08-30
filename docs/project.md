@@ -1038,7 +1038,8 @@ unmodified in structure and consumed through the `@/components/ui/*` alias.
   shared `saudi-sales-map` — are `memo`ised, because the route re-renders once
   per aggregation query that settles (eleven of them) and each panel's props are
   `useMemo`d in `use-dashboard-data` / `use-monthly-growth`.
-- **Orders:** `copyable-order-no`, `invoice-cell`, `kpi-card`, `order-row`
+- **Orders:** `copyable-order-no`, `fulfillment-badge` (Delivery / Pickup on the
+  row, reading `classifyFulfillment`), `invoice-cell`, `kpi-card`, `order-row`
   (`memo`, one table row — see Orders Module → List), `order-form` (the whole
   create/edit form, shared by `/orders/new` and `/orders/$id`),
   `order-activity-timeline`, `status-badge` (also exports `ORDER_CHIP`, the one
@@ -1941,10 +1942,10 @@ export was later reduced to PDF only for the same reason as this one.)
 
 Server-side pagination (`range` + `count`), `keepPreviousData` so a filter change
 never blanks the table, and a single `orders_kpi_summary` RPC for the KPI strip.
-Filters: date range, team, agent, status, **fulfillment**, "mine only",
-**"starred only"**, free-text search — all composable, all applied server-side
-through one `applyOrderFilters`. Page size (25/50/100) persists at
-`orders.pageSize`.
+Filters: date range, team, agent, status, **fulfillment**, **invoice
+verification**, "mine only", **"starred only"**, free-text search — all
+composable, all applied server-side through one `applyOrderFilters`. Page size
+(25/50/100) persists at `orders.pageSize`.
 
 **The page fetch names its columns** (`ORDER_LIST_COLUMNS` in
 `features/orders/constants.ts`), rather than `select("*")`. The five it leaves
@@ -1976,21 +1977,33 @@ source: `updateStatus` / `canEditOrder` are `useCallback`ed in
   property to filter them by. It is a separate `aria-pressed` toggle rather than
   a third segment of the pair: it **narrows** whichever of All/My is selected,
   and a third segment would promise a mutual exclusivity it does not have.
-- **Actions — Export Excel, New order.** Export is here rather than in the
-  filter bar because it acts on what the filters have already selected rather
-  than being one of them, and in the bar it was the only control on a second
-  row, so the container carried a row of empty space to hold one button.
+- **Actions — Export Excel.** Export is here rather than in the filter bar
+  because it acts on what the filters have already selected rather than being
+  one of them, and in the bar it was the only control on a second row, so the
+  container carried a row of empty space to hold one button.
+
+  **New order** stood beside it as the page primary and has been removed. The
+  sidebar offers it on every page, this one included, so the header copy was a
+  second route to the same form; `/orders/new`, the `create_orders` permission
+  and the form itself are untouched.
 
 The header stays on one row down to 720px; the group wraps rather than
 overflowing below that.
 
-**Filter bar** — Search · Team · Agent · Status · Delivery & Pickup · Date. One
-row of `h-10` controls at ≥1150px of content width (it was ≥1280 before Starred
-moved to the header), two below that, never three; `p-2.5 sm:p-3` around them,
-since it is a strip of controls rather than content. Search is the primary
-control and is built to look it — it takes the leftover width (capped at
-`max-w-md`) and lifts its shadow on focus — while keeping the same radius,
-border and focus ring as everything beside it.
+**Filter bar** — Search · Team · Agent · Status · **Invoice** · Delivery &
+Pickup · Date. One row of `h-10` controls, two below the width that fits them,
+never three; `p-2.5 sm:p-3` around them, since it is a strip of controls rather
+than content. Search is the primary control and is built to look it — it takes
+the leftover width (capped at `max-w-md`) and lifts its shadow on focus — while
+keeping the same radius, border and focus ring as everything beside it.
+
+Adding the sixth control moved the one-row threshold. Measured against the real
+compiled CSS with the 92px rail: one row at 1440 and above, two at 1366, and two
+at 1280 — where the bar already wrapped before the filter was added. The new
+select is `w-[140px]`, the same width as Status and Team, which is both the more
+consistent choice and exactly the ten pixels that keep 1440 on one row. Nothing
+else was narrowed to make room: shrinking the existing controls to absorb a new
+one is how a toolbar becomes unreadable.
 
 Contrast, measured against the compiled CSS in both themes (light / dark):
 active Starred label 2.3 / 9.4, its count badge 16.3 / 16.5, inactive badge
@@ -2136,6 +2149,138 @@ and empty whenever the filter is off — so starring an order while filtered
 refetches the narrowed page, and starring one while unfiltered refetches nothing.
 `useStarredOrders` is called inside `useOrdersListFilters` rather than the route
 because the ids must be in hand where `applyFilters` is built.
+
+### Invoice Verification — the filter
+
+`features/orders/verification.ts` is the one definition, declared beside
+`fulfillment.ts` and for the same reason. Three options over one existing
+column, `orders.invoices_verified` — already fetched by the list and already
+read by the row's Call Centre cell:
+
+| option           | value        | selects                         |
+| ---------------- | ------------ | ------------------------------- |
+| **All invoices** | `all`        | no narrowing                    |
+| **Verified**     | `verified`   | `invoices_verified IS TRUE`     |
+| **Non verified** | `unverified` | `invoices_verified IS NOT TRUE` |
+
+**The negative is the whole difficulty.** The column is nullable, and an order
+the MIS has not answered for yet holds NULL rather than false — which is most of
+a working day's orders. Under SQL's three-valued logic both `NOT
+invoices_verified` and `invoices_verified = false` evaluate to NULL rather than
+true, so the obvious spelling of _Non verified_ returns almost none of the orders
+it exists to show. Every layer therefore says "is not true": `not(col, is, true)`
+through PostgREST, `IS NOT TRUE` in SQL. `__tests__/verification.test.ts` asserts
+the wrong spellings are absent from the migration as well as pinning the right
+ones.
+
+It is an ordinary independent `AND` inside `applyOrderFilters`, which is what
+makes it compose — status + team + agent + date + fulfillment + starred +
+verification is all of them, and clearing one leaves the rest standing — and it
+reaches all three surfaces the way every other filter does:
+
+- **The list**, through `applyOrderFilters`.
+- **The KPI cards**, through `orders_kpi_summary(_verification)` (migration
+  `20260830140000`). A predicate on only the table would put a list and a total
+  on one screen describing different sets of orders, which is the defect
+  `order_fulfillment()` exists to have ended.
+- **The export**, which inherits it by sharing `applyFilters`.
+
+That migration drops **two** superseded signatures, not one. Adding a parameter
+makes a new signature rather than replacing the old, and a since-reverted earlier
+attempt at this feature shipped an 11-argument version (`_verification`,
+`_agent_ids`) that may already have been applied to a database even though its
+file is no longer in the tree. Both drops are `IF EXISTS`, so the migration is
+correct whether that function is present or not.
+
+### Searching by order number
+
+`orders.display_no` stores the bare number — `3853` — while every screen shows it
+through `formatOrderNo` as `CC-3853`. So the string an agent copies out of the
+app was one the app could not find, and the most common search on the page was
+the one that did not work.
+
+`toSearchTerm` fixes it at the **term**, not in the query: a term that is exactly
+a prefixed order number becomes the bare number before it is sent. `3853`,
+`cc-3853` and `CC-3853` are therefore one search. Doing it here rather than by
+adding a second `display_no` clause matters because the same term also goes to
+`orders_kpi_summary` — normalising once keeps the table and the cards above it
+asking the same question, with no change to either query and no second index scan
+to pay for.
+
+It reuses `stripOrderPrefix` from `lib/branches`, the helper `formatOrderNo`'s
+prefixes come from, so the two cannot drift. It is applied only when that helper
+actually removed a prefix **and** what remains is all digits, so no ordinary
+search changes behaviour: "Ahmed", "0551234567" and a customer called
+"CC-Pharmacy" are all still searched for verbatim. Nothing about how order
+numbers are stored or displayed changed.
+
+### Delivery / Pickup on the row
+
+`components/fulfillment-badge` reads `delivery_type` through
+`classifyFulfillment`, so the badge, the Delivery & Pickup filter, the KPI RPC
+and the Dashboard mix all answer from one definition of what a delivery is.
+`delivery_type` joined `ORDER_LIST_COLUMNS` for it — it had been excluded because
+no cell rendered it, and it is a short enum-like string rather than free text.
+
+**It has no column of its own.** It sits under Cash/Wasfaty in the existing Type
+cell, and that placement is what makes it free: Type held a single line in a row
+whose height is already set by the two-line Customer, Agent and Branch cells
+beside it, so the second line costs the table nothing. Measured against the real
+compiled CSS, the row is **64px before and 64px after**.
+
+The space it needed came from one place. Date dropped from 176px to 92px (see
+below) and Type took the 84px back, 76 → 160. Every other column is untouched,
+the table's `min-w` is unchanged, and no font size or row height moved: the new
+information is paid for by the column that was widest for the least.
+
+Geometry is `TeamBadge`'s, class for class, because that is the row's existing
+small-badge pattern. Neutral chip with a coloured 12px glyph rather than a
+coloured chip — the row already spends its colour on the status pill and the
+verification rail — and the truck/storefront pair carries the distinction. An
+order with no method recorded renders nothing rather than a third badge for the
+absence of a fact.
+
+### The list's date
+
+`fmtOrderDateShort` — `dd/MM/yy`, so "30/08/26". Display only: the stored value,
+the `order_date` sort and the date-range filter are all untouched, and
+`fmtOrderDate`'s long form still serves the order page and the XLSX export.
+
+The list needed a narrower one. "Friday, Jul 10, 2026" spelled out a weekday the
+page header already states once for the whole range, and at 176px it was the
+widest column in the table for the least-read fact in it.
+
+### Motion
+
+Subtle, and only where it answers something. The vocabulary is the app's existing
+`tw-animate-css` utilities — no new dependency, no new keyframes.
+
+- **Entrance.** The toolbar, the KPI strip and the table settle in on load with
+  `animate-in fade-in fill-mode-both` at 300ms, staggered 0 / 75 / 150ms so the
+  page resolves in reading order.
+- **A changed view.** The `<tbody>` is keyed on a signature of the request, so
+  switching scope, changing a filter, running a search or turning a page remounts
+  the body and the rows arrive as one 200ms fade instead of a swap. Keyed on the
+  request rather than on the rows because `keepPreviousData` holds the old rows
+  on screen while the next page is in flight, so a row-derived key would fire
+  after the moment it is meant to cover.
+- **A refetch in flight** dims the body to 70%. Opacity only: the rows stay
+  exactly where they are, which is the point of keeping them on screen.
+- **Focus and hover** are colour and shadow transitions already present on the
+  rows and the controls; the search box adds one on its border and its icon.
+
+**Nothing moves.** Every one of these animates opacity alone — verified against
+the compiled CSS: `animate-in fade-in` resolves to `--tw-enter-opacity: 0` with
+`--tw-enter-translate-x/y: 0` and `--tw-enter-scale: 1`, an identity transform.
+There is no translate, no scale and therefore no layout shift, which is also why
+none of them can move a row out from under a cursor mid-click.
+
+`prefers-reduced-motion` is honoured by a rule in `styles.css` scoped to
+`.orders-page`, which stops the entrances and the body fade. Scoped rather than
+global because what the app's other pages do with motion is their own decision,
+and a blanket rule would also silence `order-row-return` and the branch-card
+flashes, which carry information rather than decoration. The refetch dimming is
+deliberately left alone: it is state made visible, not movement.
 
 ### Fulfillment — one definition, three surfaces
 

@@ -9,8 +9,10 @@ export const PAGE_SIZE_STORAGE_KEY = "orders.pageSize";
  * Every one of these is rendered or acted on by a row: the identity columns, the
  * two `callCentreState` flags, `agent_id` for `canEditOrder` and the directory
  * lookup, `branch_no` for the city lookup. The five left out are the ones the
- * list never touches — `created_at`, `created_by`, `updated_at`, `delivery_type`
- * and, the one that matters, `notes`.
+ * list never touches — `created_at`, `created_by`, `updated_at` and, the one
+ * that matters, `notes`. `delivery_type` was on that list until the row started
+ * showing a Delivery/Pickup badge; it is a short enum-like string, so the added
+ * row cost is negligible next to what `notes` would have been.
  *
  * `notes` is unbounded free text and was being shipped for every row of every
  * page: at 100 rows a page it is routinely the largest part of the response, for
@@ -29,6 +31,7 @@ export const ORDER_LIST_COLUMNS = [
   "invoice_no",
   "order_type",
   "branch_no",
+  "delivery_type",
   "invoice_value",
   "status",
   "invoices_verified",
@@ -70,3 +73,12 @@ export const ORDER_EXPORT_COLUMNS = [
  * the state that let the list and the KPI cards disagree.
  */
 export { FULFILLMENT_OPTIONS, type FulfillmentOption } from "./fulfillment";
+
+/**
+ * Invoice Verification filter.
+ *
+ * Re-exported for the same reason as the line above: the three states and the
+ * predicate that decides them live in `./verification`, so the dropdown, the
+ * list query, the KPI RPC and the export cannot form separate opinions.
+ */
+export { VERIFICATION_OPTIONS, type VerificationFilter } from "./verification";

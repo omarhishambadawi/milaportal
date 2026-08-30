@@ -12,6 +12,8 @@ interface UseOrdersListDataArgs {
   agent: string;
   status: string;
   fulfillment: string;
+  /** The Invoice Verification filter — see `features/orders/verification.ts`. */
+  verification: string;
   mineOnly: boolean;
   /**
    * Narrow to the caller's starred orders. The page fetch gets this through
@@ -46,6 +48,7 @@ export function useOrdersListData({
   agent,
   status,
   fulfillment,
+  verification,
   mineOnly,
   starredOnly,
   userId,
@@ -97,6 +100,11 @@ export function useOrdersListData({
         _q: searching ? term : null,
         _fulfillment: fulfillment,
         _starred: starredOnly,
+        // Appended with a SQL-side default, so the MCP tools that call this
+        // function with the older argument list are unaffected. The cards have to
+        // narrow with the table or the page shows a list and a total describing
+        // different sets of orders.
+        _verification: verification,
       });
       if (error) throw error;
       return (data ?? {}) as Record<string, number>;
