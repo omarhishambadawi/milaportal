@@ -19,6 +19,23 @@ export const STATUS_STYLES: Record<string, string> = {
 
 export const CURRENCY = "SAR";
 /**
+ * The locale every number in the app is formatted through. Pinned, never the
+ * runtime default.
+ *
+ * `toLocaleString()` with no locale means "whatever locale the process happens
+ * to run under", and this app renders the same component twice in two different
+ * processes: the SSR pass in Node/workerd and the hydration pass in the browser.
+ * A dev machine whose Node resolves to `ar-EG` serves `١٬٢٩٠ SAR` in the HTML and
+ * then hydrates `1,290 SAR` over it — React throws away the tree with a hydration
+ * mismatch. It costs nothing to be explicit, and matches `money()` in
+ * features/reports/daily.ts, which pins the same locale for the same reason.
+ *
+ * Exported so the formatters that live outside this file — `formatCompactSAR`
+ * and `formatCount` in features/dashboard/format.ts — pin the same one, rather
+ * than each carrying its own copy of the string.
+ */
+export const DISPLAY_LOCALE = "en-US";
+/**
  * Money, in the one place the app formats it.
  *
  * `exact` fixes the fraction at two digits. The default rounds *up to* two and
@@ -41,7 +58,10 @@ export const fmtSAR = (
   const n = typeof v === "string" ? Number(v) : v;
   if (n == null || isNaN(n as number)) return "—";
   const digits = opts?.exact ? { minimumFractionDigits: 2, maximumFractionDigits: 2 } : {};
-  const text = (n as number).toLocaleString(undefined, { maximumFractionDigits: 2, ...digits });
+  const text = (n as number).toLocaleString(DISPLAY_LOCALE, {
+    maximumFractionDigits: 2,
+    ...digits,
+  });
   return opts?.bare ? text : `${text} ${CURRENCY}`;
 };
 

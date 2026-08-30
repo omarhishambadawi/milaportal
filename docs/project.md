@@ -40,6 +40,13 @@ Cross-cutting characteristics visible in the code:
 - **Business timezone is centralized** at `Asia/Riyadh` (UTC+3, no DST) in
   `src/lib/timezone.ts`. Rows are stored in UTC.
 - **Currency is SAR**, formatted by `fmtSAR` in `src/lib/branches.ts`.
+- **Number formatting is pinned** to `DISPLAY_LOCALE` (`en-US`), exported from
+  `src/lib/branches.ts` and shared by `fmtSAR` and the Dashboard's
+  `formatCompactSAR` / `formatCount`. Never pass `undefined` (or no argument) to
+  `toLocaleString`: the app renders each component twice — once in the SSR
+  process, once on hydration — and a Node process resolving to, say, `ar-EG`
+  serves `١٬٢٩٠ SAR` under a client that renders `1,290 SAR`, which React
+  reports as a hydration mismatch.
 
 ---
 
@@ -1170,7 +1177,7 @@ Provider-agnostic and pure. `index.ts` is the only import surface.
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `lib/utils.ts`                               | `cn()` — `clsx` + `tailwind-merge`.                                                                                                                                                                                                                                                  |
 | `lib/timezone.ts`                            | `BUSINESS_TIMEZONE = "Asia/Riyadh"`, `BUSINESS_UTC_OFFSET_MINUTES = 180`. Fixed a real bug where timelines formatted in UTC+2 while call analytics bucketed in UTC+3.                                                                                                                |
-| `lib/branches.ts`                            | `ORDER_TYPES` (Cash, Wasfaty), `DELIVERY_TYPES` (AlShrouq, Store Pickup, Branch Scooter, Azman), `STATUSES`, `COMPLAINT_STATUSES`, `TEAMS`, `STATUS_STYLES`, `CURRENCY = "SAR"`, `fmtSAR`, `formatOrderNo`, `stripOrderPrefix`.                                                      |
+| `lib/branches.ts`                            | `ORDER_TYPES` (Cash, Wasfaty), `DELIVERY_TYPES` (AlShrouq, Store Pickup, Branch Scooter, Azman), `STATUSES`, `COMPLAINT_STATUSES`, `TEAMS`, `STATUS_STYLES`, `CURRENCY = "SAR"`, `DISPLAY_LOCALE = "en-US"`, `fmtSAR`, `formatOrderNo`, `stripOrderPrefix`.                          |
 | `lib/query-keys.ts`                          | Hierarchical key factory; every entity has a real `all()` invalidation boundary. Lookups live under their own root so an order write does not refetch the directory.                                                                                                                 |
 | `lib/query-client.ts`                        | `QUERY_DEFAULTS` / `MUTATION_DEFAULTS`, each option carrying its rationale.                                                                                                                                                                                                          |
 | `lib/supabase-paginate.ts`                   | `fetchAllPaginated` — PostgREST caps a response at 1000 rows; safety ceiling 200k.                                                                                                                                                                                                   |

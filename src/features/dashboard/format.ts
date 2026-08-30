@@ -11,6 +11,8 @@
  * precision in a KPI tile is what makes a dashboard read as a spreadsheet.
  */
 
+import { DISPLAY_LOCALE } from "@/lib/branches";
+
 /** `1.20` → `1.2`, `3.00` → `3`. One decimal, only when it carries meaning. */
 function trimZero(n: number): string {
   const s = n.toFixed(1);
@@ -45,11 +47,11 @@ export function formatCompactSAR(value: number | null | undefined): string {
   const abs = Math.abs(value);
   if (abs >= 1_000_000) return `SAR ${trimZero(value / 1_000_000)}M`;
   if (abs >= 10_000) return `SAR ${trimZero(value / 1_000)}K`;
-  return `SAR ${Math.round(value).toLocaleString()}`;
+  return `SAR ${Math.round(value).toLocaleString(DISPLAY_LOCALE)}`;
 }
 
 /** An order count: grouped, never abbreviated. `2,727`, not `2.7K`. */
 export function formatCount(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "—";
-  return value.toLocaleString();
+  return value.toLocaleString(DISPLAY_LOCALE);
 }
