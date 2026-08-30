@@ -1,10 +1,14 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+﻿import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -14,16 +18,17 @@ import {
   ChevronRight,
   Download,
   Eye,
-  SearchX,
+  Plus,
+  Search,
   ShieldCheck,
   Star,
-  Truck,
 } from "lucide-react";
+import { STATUSES, TEAMS } from "@/lib/branches";
 import { cn } from "@/lib/utils";
-import { PAGE_SIZE_OPTIONS } from "@/features/orders/constants";
+import { DateRangePicker } from "@/components/date-range-picker";
+import { FULFILLMENT_OPTIONS, PAGE_SIZE_OPTIONS } from "@/features/orders/constants";
 import { KpiCard } from "@/features/orders/components/kpi-card";
 import { OrderRow } from "@/features/orders/components/order-row";
-import { OrdersToolbar } from "@/features/orders/components/orders-toolbar";
 import { useOrdersListFilters } from "@/features/orders/hooks/use-orders-list-filters";
 import { useOrdersListData } from "@/features/orders/hooks/use-orders-list-data";
 import { useOrdersMutations } from "@/features/orders/hooks/use-orders-mutations";
@@ -38,9 +43,6 @@ export const Route = createFileRoute("/_app/orders/")({
   component: OrdersList,
 });
 
-/** The table's twelve columns, for the loading and empty rows. */
-const COLUMN_COUNT = 12;
-
 function OrdersList() {
   const navigate = useNavigate();
   const f = useOrdersListFilters();
@@ -51,7 +53,6 @@ function OrdersList() {
     agent: f.agent,
     status: f.status,
     fulfillment: f.fulfillment,
-    verification: f.verification,
 
     mineOnly: f.mineOnly,
     starredOnly: f.starredOnly,
@@ -59,7 +60,6 @@ function OrdersList() {
     canFilterAgents: f.canFilterAgents,
     term: f.term,
     searching: f.searching,
-    searchAgentIds: f.searchAgentIds,
     filterKey: f.filterKey,
     page: f.page,
     pageSize: f.pageSize,
@@ -91,36 +91,6 @@ function OrdersList() {
   // nothing. Reporting it as loading keeps "No orders found" off the screen for
   // the one frame before the ids land.
   const isLoading = data.isLoading || (f.starredOnly && f.starsLoading);
-  // A settled list being replaced under a new filter, rather than a first load.
-  // Drives the table's dimming and the progress hairline; `isLoading` owns the
-  // first paint, where there is nothing to dim.
-  const isRefreshing = !isLoading && data.isFetching;
-
-  /**
-   * What the agent asked for, as one string.
-   *
-   * The `<tbody>` is keyed on it, which is what makes a filter change, a scope
-   * change, a search or a page turn cross-fade rather than snap: a new key
-   * remounts the body, so the incoming rows play the entry animation together.
-   * Keyed on the *request* rather than on the rows, deliberately —
-   * `keepPreviousData` holds the old rows on screen while the new page is in
-   * flight, so a key derived from row ids would fire once on arrival, after the
-   * moment it is meant to cover. Scrolling to another page of the same filter is
-   * included; a background refetch that changes nothing is not.
-   */
-  const viewKey = [
-    f.mineOnly,
-    f.starredOnly,
-    f.team,
-    f.agent,
-    f.status,
-    f.fulfillment,
-    f.verification,
-    f.term,
-    f.from,
-    f.to,
-    f.page,
-  ].join("|");
 
   // Put the agent back on the order they left (filters, search and pagination
   // are already preserved via the module-level filter cache). `rowsKey` re-runs
@@ -150,7 +120,7 @@ function OrdersList() {
 
   if (!f.canView) {
     return (
-      <div className="py-16 text-center">
+      <div className="text-center py-16">
         <Eye className="mx-auto h-10 w-10 text-muted-foreground" />
         <p className="mt-2 text-sm text-muted-foreground">You don't have access to Orders.</p>
       </div>
@@ -158,71 +128,256 @@ function OrdersList() {
   }
 
   return (
-    // `orders-page` is the scope for this page's reduced-motion rules (see
-    // styles.css). Nothing else hangs off it.
-    <div className="orders-page space-y-3.5">
-      {/* Header. Title, what is being looked at, and the one action that is not
-          a filter.
-
-          "New order" used to sit here as the page's primary button. It is one
-          click away in the sidebar, on every page including this one, and a
-          second copy of it was the loudest thing on a screen whose job is
-          reading a list — so the header is now the sentence describing the list
-          and nothing else. Creating an order is unchanged. */}
-      <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
+    <div className="space-y-4">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 sm:flex sm:flex-wrap sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <h1 className="truncate text-xl font-semibold tracking-tight sm:text-[22px]">Orders</h1>
+          <h1 className="truncate text-xl font-semibold tracking-tight sm:text-2xl">Orders</h1>
           {/* The day name, not just the date. A list of one day's orders is read
               against the shift it belongs to — "Monday" tells an agent what they
               are looking at in a way "28/07/2026" makes them work out. Absent
               for a multi-day range, where naming one weekday would describe only
-              the first of them, and while searching, where the range is off. */}
-          <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 truncate text-xs text-muted-foreground sm:text-[13px]">
-            {!f.searching && (
-              <>
-                {f.dateParts.weekday && (
-                  <span className="font-medium text-foreground">{f.dateParts.weekday},</span>
-                )}
-                <span>{f.dateParts.date}</span>
-                <span aria-hidden className="text-border">
-                  •
-                </span>
-              </>
-            )}
-            <span>
-              <span className="font-semibold tabular-nums text-foreground">{total}</span>{" "}
-              {f.mineOnly ? "of your orders" : "orders"}
-              {f.starredOnly ? " · starred" : ""}
-              {f.searching ? " · search results" : ""}
-            </span>
+              the first of them. */}
+          {!f.searching && (
+            <p className="truncate text-xs sm:text-sm">
+              {f.dateParts.weekday && (
+                <span className="font-semibold text-foreground">{f.dateParts.weekday}, </span>
+              )}
+              <span className="text-muted-foreground">{f.dateParts.date}</span>
+            </p>
+          )}
+          <p className="truncate text-xs text-muted-foreground sm:text-sm">
+            <span className="font-medium text-foreground">{total}</span>{" "}
+            {f.mineOnly ? "of your" : ""} orders{f.starredOnly ? " · starred" : ""}
+            {f.searching ? " · search results" : ""}
           </p>
         </div>
+        <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
+          {/* Which orders am I looking at — the scope group.
+              All / My were one button that swapped its own label, which meant
+              the state you were not in was invisible. Two buttons state both,
+              and Starred joins them because it answers the same question: it
+              names a set of orders, not a property to filter them by, which is
+              why it reads better here than among the dropdowns.
 
-        {/* Export acts on whatever the filters have already selected, so it is a
-            page action rather than one of them. Outline: a utility, not the
-            page's purpose. */}
-        {f.canExport && (
-          <Button variant="outline" size="sm" onClick={exportXlsx} className="h-9 shrink-0">
-            <Download className="h-4 w-4 sm:mr-2" />
-            <span className="hidden sm:inline">Export Excel</span>
-          </Button>
-        )}
+              Grouped tightly and divided from the actions on the right, so the
+              header splits into "what I'm looking at" and "what I can do". */}
+          <div className="flex items-center gap-1.5">
+            {/* Guarded so clicking the scope you are already on does nothing.
+                `onFilterChange` resets to page 1, which is right when the set
+                changes and wrong when it does not — as a single toggle the case
+                could not arise, and as two buttons it can. */}
+            <Button
+              variant={!f.mineOnly ? "default" : "outline"}
+              size="sm"
+              aria-pressed={!f.mineOnly}
+              onClick={() => f.mineOnly && f.onFilterChange(() => f.setMineOnly(false))}
+            >
+              All orders
+            </Button>
+            <Button
+              variant={f.mineOnly ? "default" : "outline"}
+              size="sm"
+              aria-pressed={f.mineOnly}
+              onClick={() => !f.mineOnly && f.onFilterChange(() => f.setMineOnly(true))}
+            >
+              My orders
+            </Button>
+            {/* Starred is *not* a third option of the pair beside it — it
+                narrows whichever of All/My is selected, and every other filter
+                on top of that. Hence a separate pressed toggle rather than a
+                third segment, which would promise the mutual exclusivity it
+                does not have. */}
+            <Button
+              variant={f.starredOnly ? "default" : "outline"}
+              size="sm"
+              aria-pressed={f.starredOnly}
+              disabled={!f.canStar}
+              onClick={() => f.onFilterChange(() => f.setStarredOnly((v) => !v))}
+              title={
+                f.starredOnly
+                  ? "Showing only orders you starred — click to show all"
+                  : "Show only orders you starred"
+              }
+            >
+              {/* Inherits the button's own foreground in both states, so the
+                  contrast is the variant's rather than a colour of its own —
+                  amber on a turquoise fill was the one pairing the design system
+                  has no token for. */}
+              <Star className={cn("h-4 w-4 sm:mr-2", f.starredOnly && "fill-current")} />
+              <span className="hidden sm:inline">Starred</span>
+              {f.starred.size > 0 && (
+                <span
+                  className={cn(
+                    "ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums",
+                    // A solid chip when active, not a translucent one: white on
+                    // 20%-white over the primary fill measures 1.01:1, which is
+                    // a count you cannot read at all.
+                    f.starredOnly
+                      ? "bg-background text-foreground"
+                      : "bg-muted text-muted-foreground",
+                  )}
+                >
+                  {f.starred.size}
+                </span>
+              )}
+            </Button>
+          </div>
+
+          <div className="mx-0.5 hidden h-5 w-px bg-border sm:block" aria-hidden />
+
+          {/* Export sits with the page-level actions rather than in the filter
+              bar. It is not a filter — it acts on whatever the filters have
+              already selected — and down there it was the only control on a
+              second row, so the container carried a row of empty space to hold
+              one button. Outline, so it reads as a utility beside the primary
+              New order rather than competing with it. */}
+          {f.canExport && (
+            <Button variant="outline" size="sm" onClick={exportXlsx}>
+              <Download className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Export Excel</span>
+            </Button>
+          )}
+          {f.canCreate && (
+            <Button size="sm" onClick={() => navigate({ to: "/orders/new" })}>
+              <Plus className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">New order</span>
+            </Button>
+          )}
+        </div>
       </div>
 
-      <OrdersToolbar f={f} />
+      {/* Filter bar.
+          One row of equal-height controls at desktop width, wrapping to as many
+          as it needs below that. The padding is tighter than the page's other
+          cards on purpose: this is a strip of controls, not content, and it sat
+          two sizes too tall — `p-4` around `h-10` controls plus a second row
+          holding nothing but the (now relocated) Export button. */}
+      <Card>
+        <CardContent className="p-2.5 sm:p-3 flex flex-wrap items-center gap-2">
+          {/* Search is the primary control of the bar and is built to look it:
+              it takes the leftover width up to `max-w-md` and lifts its shadow
+              on focus. The dropdowns beside it narrow a set; this is the one an
+              agent types an invoice number into all day. */}
+          <div className="relative flex-1 min-w-[220px] lg:min-w-[260px] lg:max-w-md">
+            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Search order, invoice, customer, phone…"
+              value={f.q}
+              maxLength={80}
+              onChange={(e) => {
+                f.setQ(e.target.value);
+                f.setPage(0);
+              }}
+              aria-label="Search orders"
+              // Same radius, border and focus ring as every other control here
+              // — the emphasis comes from width, breathing room around the icon
+              // and a shadow that lifts on focus, not from a different shape.
+              className="h-10 w-full pl-10 pr-3 text-sm shadow-sm transition-shadow placeholder:text-muted-foreground/75 focus-visible:shadow-md"
+            />
+          </div>
+          <Select
+            value={f.team}
+            onValueChange={(v) =>
+              f.onFilterChange(() => {
+                f.setTeam(v);
+                f.setAgent("all");
+              })
+            }
+          >
+            <SelectTrigger className="h-10 w-[140px]">
+              <SelectValue placeholder="Team" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All teams</SelectItem>
+              {TEAMS.map((t) => (
+                <SelectItem key={t.value} value={t.value}>
+                  {t.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {/* `view_all_agents`, not administrator — an Auditor reviews other
+              people's work and holds it by default. */}
+          {f.canFilterAgents && (
+            <Select value={f.agent} onValueChange={(v) => f.onFilterChange(() => f.setAgent(v))}>
+              <SelectTrigger className="h-10 w-[160px]">
+                <SelectValue placeholder="Agent" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All agents</SelectItem>
+                {f.filteredAgentOpts.map((a: any) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.full_name}
+                    {a.agent_code ? ` (${a.agent_code})` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <Select value={f.status} onValueChange={(v) => f.onFilterChange(() => f.setStatus(v))}>
+            <SelectTrigger className="h-10 w-[140px]">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All statuses</SelectItem>
+              {STATUSES.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {/* Delivery & Pickup, at two resolutions in one control.
 
-      {/* KPI summary: 3 cards — Cash · Wasfaty · Total (each shows sales +
-          completed sales + total/completed orders split). Three across from
-          `sm`; the card itself is what adapts to a narrow column (see
-          `KpiCard`), because two-up here made the summary taller than the first
-          screen of the table it summarises.
+              The top two entries are the grouped question — was it taken to the
+              customer, or collected at the branch — and Delivery deliberately
+              spans every courier, which is what it had stopped doing. Under them
+              sit the individual methods for the narrower question, so picking
+              "Azman" never has to mean leaving the grouped view first. Both feed
+              the list, the KPI summary and the export through one classification
+              (see features/orders/fulfillment.ts). */}
+          <Select
+            value={f.fulfillment}
+            onValueChange={(v) => f.onFilterChange(() => f.setFulfillment(v))}
+          >
+            <SelectTrigger className="h-10 w-[170px]">
+              <SelectValue placeholder="Delivery & Pickup" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Delivery &amp; Pickup</SelectItem>
+              {FULFILLMENT_OPTIONS.filter((o) => o.group === "fulfillment").map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+              <SelectSeparator />
+              {/* SelectLabel reads its group from context, so it must sit inside a
+                  SelectGroup — as a direct child of SelectContent it throws and
+                  takes the whole page down. */}
+              <SelectGroup>
+                <SelectLabel>Method</SelectLabel>
+                {FULFILLMENT_OPTIONS.filter((o) => o.group === "method").map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
 
-          On a phone the same reasoning gives two columns rather than one: three
-          full-width cards stacked came to about 700px, so an agent opening
-          Orders on a handset scrolled past the summary to reach the orders. Cash
-          and Wasfaty pair naturally — they are the two halves — and Total spans
-          both underneath, which is the hierarchy anyway. */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <DateRangePicker
+            range={f.range}
+            onChange={(r) => {
+              f.setRange(r);
+              f.setPage(0);
+            }}
+            disabled={f.searching}
+          />
+        </CardContent>
+      </Card>
+
+      {/* KPI summary: 3 cards — Cash · Wasfaty · Total (each shows sales + completed sales + total/completed orders split) */}
+      <div className="grid gap-3 sm:grid-cols-3">
         <KpiCard
           label="Cash"
           tone="from-[var(--tint-cash)] to-transparent"
@@ -241,7 +396,6 @@ function OrdersList() {
         />
         <KpiCard
           label="Total"
-          className="col-span-2 sm:col-span-1"
           tone="from-primary/10 to-transparent"
           highlight
           totalSales={summary.totalSales}
@@ -251,174 +405,127 @@ function OrdersList() {
         />
       </div>
 
-      {/* Deliberately no `overflow-hidden` on the card. Clipping both axes makes
-          an element a scroll container, and `position: sticky` measures against
-          the nearest scrolling ancestor — one that never scrolls produces no
-          offset, so the table's sticky header and its sticky pager would both
-          stop sticking. Same trap the app shell documents at length. */}
       <Card>
-        <CardContent className="relative p-0">
-          {/* A 2px hairline across the top of the table while a new page is in
-              flight. `keepPreviousData` means the old rows stay readable during a
-              filter change — which is right, and also means nothing on screen
-              says the list is about to change. This does, without a spinner and
-              without moving anything. */}
-          <div
-            aria-hidden
-            className={cn(
-              "pointer-events-none absolute inset-x-0 top-0 z-20 h-0.5 overflow-hidden transition-opacity duration-200",
-              isRefreshing ? "opacity-100" : "opacity-0",
-            )}
-          >
-            <div className="orders-progress h-full w-1/3 bg-primary/70" />
+        <CardContent className="p-0">
+          {/*
+            One table at every width, scrolled sideways on a phone.
+
+            This replaces a bespoke mobile card list that rendered below `md`.
+            The cards read well but they were a second layout of the same rows
+            with their own truncation rules, and a column that was added to the
+            table did not appear in them — the verified rail, the agent code and
+            the delivery type were all desktop-only facts. A phone user
+            reconciling invoices could not see what a desktop user could.
+
+            A raw <table> rather than the ui/table wrapper, because the wrapper's
+            own overflow container fights an outer one. `min-w` is what forces
+            the horizontal scroll rather than letting twelve columns crush
+            themselves into 380px.
+          */}
+          <div className="w-full overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+            <table
+              className="w-full caption-bottom text-sm border-separate border-spacing-0"
+              style={{ minWidth: 1240 }}
+            >
+              <colgroup>
+                <col style={{ width: 44 }} />
+                <col style={{ width: 40 }} />
+                <col style={{ width: 168 }} />
+                <col style={{ width: 176 }} />
+                <col style={{ width: 210 }} />
+                <col style={{ width: 160 }} />
+                <col style={{ width: 140 }} />
+                <col style={{ width: 76 }} />
+                <col style={{ width: 118 }} />
+                <col style={{ width: 122 }} />
+                <col style={{ width: 132 }} />
+                <col style={{ width: 48 }} />
+              </colgroup>
+              <thead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">
+                <tr className="text-[10.5px] uppercase tracking-[0.08em] font-semibold text-muted-foreground">
+                  <th
+                    className="text-center px-2 py-3 border-b border-border/70"
+                    title="Call Centre — derived from verified invoice data"
+                  >
+                    <ShieldCheck
+                      className="h-4 w-4 mx-auto text-primary/80"
+                      aria-label="Verified"
+                    />
+                  </th>
+                  <th
+                    className="text-center px-1 py-3 border-b border-border/70"
+                    title="Starred by you"
+                  >
+                    <Star className="h-4 w-4 mx-auto text-primary/80" aria-label="Starred" />
+                  </th>
+                  <th className="text-left px-3 py-3 border-b border-border/70">Order</th>
+                  <th className="text-left px-3 py-3 border-b border-border/70">Date</th>
+                  <th className="text-left px-3 py-3 border-b border-border/70">Customer</th>
+                  <th className="text-left px-3 py-3 border-b border-border/70">Agent</th>
+                  <th className="text-left px-3 py-3 border-b border-border/70">Invoice No.</th>
+                  <th className="text-left px-2 py-3 border-b border-border/70">Type</th>
+                  <th className="text-left px-3 py-3 border-b border-border/70">Branch</th>
+                  <th className="text-right px-3 py-3 border-b border-border/70">Value</th>
+                  <th className="text-left px-3 py-3 border-b border-border/70">Status</th>
+                  <th className="px-1 py-3 border-b border-border/70"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {isLoading && (
+                  <tr>
+                    <td
+                      colSpan={12}
+                      className="text-center text-muted-foreground py-14 border-b border-border/50"
+                    >
+                      Loading…
+                    </td>
+                  </tr>
+                )}
+                {!isLoading && pageRows.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={12}
+                      className="text-center text-muted-foreground py-14 border-b border-border/50"
+                    >
+                      No orders found
+                    </td>
+                  </tr>
+                )}
+                {pageRows.map((o: any) => (
+                  <OrderRow
+                    key={o.id}
+                    order={o}
+                    editable={canEditOrder(o)}
+                    isStarred={starred.has(o.id)}
+                    canStar={canStar}
+                    highlighted={o.id === highlightedOrderId}
+                    onToggleStar={toggleStar}
+                    onUpdateStatus={updateStatus}
+                    onOpen={openOrder}
+                  />
+                ))}
+              </tbody>
+            </table>
           </div>
 
-          {/*
-            One table at every width, and **no horizontal scroll at any of
-            them**. It used to be twelve fixed columns behind `min-width: 1240`,
-            so every laptop read the list sideways.
-
-            `table-fixed` with per-column widths, and columns that appear as the
-            viewport earns them; what is not yet a column is folded into the
-            row's meta line rather than dropped (see `OrderRow`). A raw <table>
-            rather than the ui/table wrapper, because the wrapper brings its own
-            overflow container — which is the thing being removed here.
-          */}
-          <table className="w-full table-fixed caption-bottom border-separate border-spacing-0 text-sm">
-            <thead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">
-              <tr className="text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
-                <th
-                  className="w-8 border-b border-border/70 px-1 py-2.5 text-center sm:w-9"
-                  title="Invoice verification — derived from verified invoice data"
-                >
-                  <ShieldCheck className="mx-auto h-4 w-4 text-primary/80" aria-label="Verified" />
-                </th>
-                <th
-                  className="w-8 border-b border-border/70 px-0 py-2.5 text-center sm:w-9"
-                  title="Starred by you"
-                >
-                  <Star className="mx-auto h-4 w-4 text-primary/80" aria-label="Starred" />
-                </th>
-                <th className="w-auto border-b border-border/70 px-2.5 py-2.5 text-left sm:w-[124px] lg:w-[146px]">
-                  Order
-                </th>
-                <th className="hidden border-b border-border/70 px-2.5 py-2.5 text-left sm:table-cell">
-                  Customer
-                </th>
-                <th className="hidden w-[104px] border-b border-border/70 px-2.5 py-2.5 text-left xl:table-cell">
-                  Invoice
-                </th>
-                <th className="hidden w-[128px] border-b border-border/70 px-2.5 py-2.5 text-left xl:table-cell">
-                  Agent
-                </th>
-                <th className="hidden w-[96px] border-b border-border/70 px-2.5 py-2.5 text-left 2xl:table-cell">
-                  Branch
-                </th>
-                <th
-                  className="hidden w-11 border-b border-border/70 px-2 py-2.5 text-left lg:table-cell 2xl:w-[104px]"
-                  title="Delivery or pickup"
-                >
-                  <Truck className="h-4 w-4 text-primary/80 2xl:hidden" aria-label="Fulfillment" />
-                  <span className="hidden 2xl:inline">Delivery</span>
-                </th>
-                <th className="hidden w-[92px] border-b border-border/70 px-2.5 py-2.5 text-right lg:table-cell">
-                  Value (SAR)
-                </th>
-                <th className="w-[100px] border-b border-border/70 px-2 py-2.5 text-left lg:w-[120px]">
-                  Status
-                </th>
-                <th className="hidden w-[64px] border-b border-border/70 px-2 py-2.5 text-left lg:table-cell">
-                  Date
-                </th>
-                <th className="w-9 border-b border-border/70 px-0 py-2.5 sm:w-10"></th>
-              </tr>
-            </thead>
-            {/* Keyed on the request, so a new filter's rows arrive as one quiet
-                fade rather than a swap. Under `prefers-reduced-motion` the class
-                is inert (styles.css) and the rows simply appear. */}
-            <tbody
-              key={viewKey}
-              className={cn(
-                "animate-in fade-in duration-200",
-                "transition-opacity",
-                isRefreshing && "opacity-60",
-              )}
-            >
-              {isLoading && (
-                <tr>
-                  <td
-                    colSpan={COLUMN_COUNT}
-                    className="border-b border-border/50 py-14 text-center text-muted-foreground"
-                  >
-                    Loading…
-                  </td>
-                </tr>
-              )}
-              {!isLoading && pageRows.length === 0 && (
-                <tr>
-                  <td colSpan={COLUMN_COUNT} className="border-b border-border/50 py-14">
-                    {/* An empty list has two causes and one of them is fixable
-                        from here. Saying which, and offering the way out, beats
-                        three words that leave the agent to work out that the
-                        Verification dropdown they set an hour ago is still on. */}
-                    <div className="mx-auto flex max-w-sm flex-col items-center gap-2 px-4 text-center">
-                      <SearchX className="h-8 w-8 text-muted-foreground/50" aria-hidden />
-                      <p className="text-sm font-medium text-foreground">No orders found</p>
-                      <p className="text-xs text-muted-foreground">
-                        {f.searching
-                          ? `Nothing matches “${f.q.trim()}”.`
-                          : f.activeFilterCount > 0
-                            ? "No orders match the filters you have applied."
-                            : "There are no orders in this date range."}
-                      </p>
-                      {f.activeFilterCount > 0 && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="mt-1 h-8"
-                          onClick={f.resetFilters}
-                        >
-                          Reset filters
-                        </Button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              )}
-              {pageRows.map((o: any) => (
-                <OrderRow
-                  key={o.id}
-                  order={o}
-                  editable={canEditOrder(o)}
-                  isStarred={starred.has(o.id)}
-                  canStar={canStar}
-                  highlighted={o.id === highlightedOrderId}
-                  onToggleStar={toggleStar}
-                  onUpdateStatus={updateStatus}
-                  onOpen={openOrder}
-                />
-              ))}
-            </tbody>
-          </table>
-
-          <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 border-t bg-background/95 p-2.5 text-sm backdrop-blur supports-[backdrop-filter]:bg-background/80">
-            <div className="text-xs text-muted-foreground sm:text-sm">
+          <div className="sticky bottom-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 flex flex-wrap items-center justify-between gap-3 p-3 border-t text-sm">
+            <div className="text-muted-foreground">
               {total === 0 ? (
                 "No orders"
               ) : (
                 <>
                   Showing{" "}
-                  <span className="font-medium tabular-nums text-foreground">
+                  <span className="font-medium text-foreground">
                     {rangeStart}–{rangeEnd}
                   </span>{" "}
-                  of <span className="font-medium tabular-nums text-foreground">{total}</span>
+                  of <span className="font-medium text-foreground">{total}</span> orders
                 </>
               )}
             </div>
-            <div className="ml-auto flex items-center gap-2">
-              <span className="hidden text-xs text-muted-foreground sm:inline">Rows</span>
+            <div className="flex items-center gap-2 ml-auto">
+              <span className="text-xs text-muted-foreground hidden sm:inline">Rows per page</span>
               <Select value={String(f.pageSize)} onValueChange={(v) => f.setPageSize(Number(v))}>
-                <SelectTrigger className="h-8 w-[68px]">
+                <SelectTrigger className="h-8 w-[72px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -429,28 +536,26 @@ function OrdersList() {
                   ))}
                 </SelectContent>
               </Select>
-              <span className="whitespace-nowrap px-1 text-xs tabular-nums text-muted-foreground">
-                {currentPage + 1} / {totalPages}
+              <span className="text-xs text-muted-foreground px-2 whitespace-nowrap">
+                Page {currentPage + 1} of {totalPages}
               </span>
               <Button
                 size="sm"
                 variant="outline"
-                className="h-8 px-2"
                 disabled={currentPage === 0}
                 onClick={() => f.setPage((p) => Math.max(0, p - 1))}
-                aria-label="Previous page"
               >
-                <ChevronLeft className="h-4 w-4" />
+                <ChevronLeft className="h-4 w-4 sm:mr-1" />
+                <span className="hidden sm:inline">Prev</span>
               </Button>
               <Button
                 size="sm"
                 variant="outline"
-                className="h-8 px-2"
                 disabled={currentPage + 1 >= totalPages}
                 onClick={() => f.setPage((p) => Math.min(totalPages - 1, p + 1))}
-                aria-label="Next page"
               >
-                <ChevronRight className="h-4 w-4" />
+                <span className="hidden sm:inline">Next</span>
+                <ChevronRight className="h-4 w-4 sm:ml-1" />
               </Button>
             </div>
           </div>

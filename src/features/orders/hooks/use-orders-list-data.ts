@@ -12,8 +12,6 @@ interface UseOrdersListDataArgs {
   agent: string;
   status: string;
   fulfillment: string;
-  /** The Invoice Verification filter — see `features/orders/verification.ts`. */
-  verification: string;
   mineOnly: boolean;
   /**
    * Narrow to the caller's starred orders. The page fetch gets this through
@@ -27,12 +25,6 @@ interface UseOrdersListDataArgs {
   canFilterAgents: boolean;
   term: string;
   searching: boolean;
-  /**
-   * Ids of the agents whose name matches `term`, so the KPI aggregation can run
-   * the same seven-branch search the table does. Without it the cards would
-   * total the six-column match while the table listed the seven-column one.
-   */
-  searchAgentIds: readonly string[];
   filterKey: OrdersFilters;
   page: number;
   pageSize: number;
@@ -54,14 +46,12 @@ export function useOrdersListData({
   agent,
   status,
   fulfillment,
-  verification,
   mineOnly,
   starredOnly,
   userId,
   canFilterAgents,
   term,
   searching,
-  searchAgentIds,
   filterKey,
   page,
   pageSize,
@@ -107,13 +97,6 @@ export function useOrdersListData({
         _q: searching ? term : null,
         _fulfillment: fulfillment,
         _starred: starredOnly,
-        // Both appended with SQL-side defaults, so the MCP tools that call this
-        // function with the older argument list are unaffected.
-        _verification: verification,
-        // The seventh branch of the table's search OR. Sent as ids rather than a
-        // name, because the join the RPC would otherwise need is the join the
-        // client already has in memory.
-        _agent_ids: searching && searchAgentIds.length > 0 ? searchAgentIds : null,
       });
       if (error) throw error;
       return (data ?? {}) as Record<string, number>;

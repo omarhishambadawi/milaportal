@@ -66,7 +66,6 @@ export function useOrdersListFilters() {
   const [agent, setAgent] = useState<string>(initial?.agent ?? "all");
   const [status, setStatus] = useState<string>(initial?.status ?? "all");
   const [fulfillment, setFulfillment] = useState<string>(initial?.fulfillment ?? "all");
-  const [verification, setVerification] = useState<string>(initial?.verification ?? "all");
   const [mineOnly, setMineOnly] = useState<boolean>(initial?.mineOnly ?? false);
   const [starredOnly, setStarredOnly] = useState<boolean>(initial?.starredOnly ?? false);
   const [page, setPage] = useState(initial?.page ?? 0);
@@ -99,7 +98,6 @@ export function useOrdersListFilters() {
     agent,
     status,
     fulfillment,
-    verification,
     mineOnly,
     starredOnly,
     page,
@@ -139,35 +137,6 @@ export function useOrdersListFilters() {
     [agentOpts],
   );
 
-  /**
-   * The agents whose name or code matches what is being searched for.
-   *
-   * `agent_name` and `agent_code` are joined from `profiles` — there is no column
-   * on `orders` to `ilike` — so searching for a colleague's name is expressed as
-   * `agent_id.in.(…)` over ids resolved here, against the directory the page has
-   * already fetched for the filter dropdown. No extra round trip, and the same
-   * approach Complaints takes for the same reason.
-   *
-   * Sorted, so the query key is stable whichever order the directory came back
-   * in, and empty unless something is actually being searched for.
-   */
-  const searchAgentIds = useMemo(() => {
-    if (!term || !agentOpts) return [] as string[];
-    const needle = term.toLowerCase();
-    return agentOpts
-      .filter(
-        (a: any) =>
-          String(a.full_name ?? "")
-            .toLowerCase()
-            .includes(needle) ||
-          String(a.agent_code ?? "")
-            .toLowerCase()
-            .includes(needle),
-      )
-      .map((a: any) => a.id as string)
-      .sort();
-  }, [agentOpts, term]);
-
   // City lookup for branch enrichment (small table).
   const { data: cities } = useQuery({
     queryKey: queryKeys.lookups.ordersDirectory(),
@@ -184,12 +153,10 @@ export function useOrdersListFilters() {
     agent,
     status,
     fulfillment,
-    verification,
     mineOnly,
     starredOnly,
     starKey: starredOnly ? starredIds.join(",") : "",
     term,
-    agentKey: searchAgentIds.join(","),
     userId: user?.id,
   };
 
@@ -207,10 +174,8 @@ export function useOrdersListFilters() {
       agent,
       term,
       fulfillment,
-      verification,
       starredOnly,
       starredIds,
-      searchAgentIds,
     });
 
   /** Weekday and date, split so the header can emphasise the day name. */
@@ -220,42 +185,6 @@ export function useOrdersListFilters() {
   // Reset to first page when filters change
   const onFilterChange = (fn: () => void) => {
     fn();
-    setPage(0);
-  };
-
-  /**
-   * How many of the narrowing dropdowns are currently set.
-   *
-   * Counts only the controls *Clear* puts back, so the button's label and the
-   * thing it does cannot drift apart. Deliberately excluded:
-   *
-   *   * the **date range**, which is never "off" — clearing it would have to mean
-   *     picking some other range, and silently moving an agent off the day they
-   *     chose is not clearing a filter;
-   *   * the **scope** (All / My / Starred), which names the set being looked at
-   *     rather than narrowing it, and has its own visible control;
-   *   * the **search box**, which clears itself with the × inside it.
-   */
-  const activeFilterCount =
-    (team !== "all" ? 1 : 0) +
-    (agent !== "all" && canFilterAgents ? 1 : 0) +
-    (status !== "all" ? 1 : 0) +
-    (fulfillment !== "all" ? 1 : 0) +
-    (verification !== "all" ? 1 : 0);
-
-  /**
-   * Put every dropdown back to "all", in one commit.
-   *
-   * One state update per control and a single `setPage(0)` — React batches them,
-   * so the list refetches once rather than five times, and no intermediate
-   * combination is ever queried.
-   */
-  const resetFilters = () => {
-    setTeam("all");
-    setAgent("all");
-    setStatus("all");
-    setFulfillment("all");
-    setVerification("all");
     setPage(0);
   };
 
@@ -285,8 +214,6 @@ export function useOrdersListFilters() {
     setStatus,
     fulfillment,
     setFulfillment,
-    verification,
-    setVerification,
     mineOnly,
     setMineOnly,
     starredOnly,
@@ -304,10 +231,7 @@ export function useOrdersListFilters() {
     dateLabel,
     dateParts,
     onFilterChange,
-    activeFilterCount,
-    resetFilters,
     applyFilters,
-    searchAgentIds,
     // stars
     starred,
     toggleStar,
