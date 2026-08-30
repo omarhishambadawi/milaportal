@@ -34,6 +34,11 @@ export interface OrdersFilters {
   status: string;
   /** "all" | "delivery" | "pickup" — the Delivery & Pickup filter. */
   fulfillment: string;
+  /**
+   * "all" | "verified" | "pending" | "call_centre" | "non_call_centre" — the
+   * Invoice Verification filter. See `features/orders/verification.ts`.
+   */
+  verification: string;
   mineOnly: boolean;
   /** Narrow to the signed-in agent's starred orders. */
   starredOnly: boolean;
@@ -50,6 +55,18 @@ export interface OrdersFilters {
    */
   starKey: string;
   term: string;
+  /**
+   * Identity of the agent-id set the search was built from — the sorted ids of
+   * every agent whose name or code matches `term`, joined, and empty whenever
+   * nothing is being searched for.
+   *
+   * Part of the key for the same reason as `starKey`: the search is applied as
+   * an `agent_id.in.(…)` resolved from the agent directory, and that directory
+   * arrives asynchronously. Without this, the page fetched in the frame before it
+   * landed — with no agent branch in the OR — would be served from cache once it
+   * had, and searching a colleague's name would return nothing until a refetch.
+   */
+  agentKey: string;
   userId: string | undefined;
 }
 

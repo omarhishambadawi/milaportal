@@ -8,9 +8,9 @@ export const PAGE_SIZE_STORAGE_KEY = "orders.pageSize";
  *
  * Every one of these is rendered or acted on by a row: the identity columns, the
  * two `callCentreState` flags, `agent_id` for `canEditOrder` and the directory
- * lookup, `branch_no` for the city lookup. The five left out are the ones the
- * list never touches — `created_at`, `created_by`, `updated_at`, `delivery_type`
- * and, the one that matters, `notes`.
+ * lookup, `branch_no` for the city lookup, `delivery_type` for the row's
+ * Delivery/Pickup badge. The four left out are the ones the list never touches —
+ * `created_at`, `created_by`, `updated_at` and, the one that matters, `notes`.
  *
  * `notes` is unbounded free text and was being shipped for every row of every
  * page: at 100 rows a page it is routinely the largest part of the response, for
@@ -29,6 +29,10 @@ export const ORDER_LIST_COLUMNS = [
   "invoice_no",
   "order_type",
   "branch_no",
+  // Read by the row's Delivery/Pickup badge through `classifyFulfillment`. It
+  // used to be excluded because no cell rendered it; one does now, and it is a
+  // short enum-like string rather than free text, so the row cost is negligible.
+  "delivery_type",
   "invoice_value",
   "status",
   "invoices_verified",
@@ -70,3 +74,16 @@ export const ORDER_EXPORT_COLUMNS = [
  * the state that let the list and the KPI cards disagree.
  */
 export { FULFILLMENT_OPTIONS, type FulfillmentOption } from "./fulfillment";
+
+/**
+ * Invoice Verification filter.
+ *
+ * Re-exported for the same reason as the line above: the states, their labels
+ * and the predicate that decides them live in `./verification`, which is what
+ * the row's Call Centre column reads too.
+ */
+export {
+  VERIFICATION_OPTIONS,
+  type VerificationFilter,
+  type VerificationOption,
+} from "./verification";

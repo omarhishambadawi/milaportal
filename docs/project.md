@@ -1039,7 +1039,11 @@ unmodified in structure and consumed through the `@/components/ui/*` alias.
   per aggregation query that settles (eleven of them) and each panel's props are
   `useMemo`d in `use-dashboard-data` / `use-monthly-growth`.
 - **Orders:** `copyable-order-no`, `invoice-cell`, `kpi-card`, `order-row`
-  (`memo`, one table row — see Orders Module → List), `order-form` (the whole
+  (`memo`, one table row — see Orders Module → List), `orders-toolbar` (the whole
+  filter strip, including the `lg:contents` disclosure and the `FilterSelect`
+  wrapper that carries the set/unset treatment), `orders-scope-tabs`
+  (All · Mine · Starred, as one segmented control), `fulfillment-badge`
+  (Delivery / Pickup, reading `classifyFulfillment`), `order-form` (the whole
   create/edit form, shared by `/orders/new` and `/orders/$id`),
   `order-activity-timeline`, `status-badge` (also exports `ORDER_CHIP`, the one
   chip geometry the order page's states share), `team-badge`.
@@ -1941,65 +1945,85 @@ export was later reduced to PDF only for the same reason as this one.)
 
 Server-side pagination (`range` + `count`), `keepPreviousData` so a filter change
 never blanks the table, and a single `orders_kpi_summary` RPC for the KPI strip.
-Filters: date range, team, agent, status, **fulfillment**, "mine only",
-**"starred only"**, free-text search — all composable, all applied server-side
-through one `applyOrderFilters`. Page size (25/50/100) persists at
-`orders.pageSize`.
+Filters: date range, team, agent, status, **fulfillment**, **invoice
+verification**, "mine only", **"starred only"**, free-text search — all
+composable, all applied server-side through one `applyOrderFilters`. Page size
+(25/50/100) persists at `orders.pageSize`.
 
 **The page fetch names its columns** (`ORDER_LIST_COLUMNS` in
-`features/orders/constants.ts`), rather than `select("*")`. The five it leaves
-out are the five the table has no cell for — `created_at`, `created_by`,
-`updated_at`, `delivery_type` and `notes` — and `notes` is unbounded free text,
-so at 100 rows a page it was routinely the largest part of the response. Sorting
-is unaffected: the ORDER BY runs in Postgres whether or not the key is
-projected. `ORDER_EXPORT_COLUMNS` does the same for the XLSX export, which walks
-the whole filtered set in 1000-row batches.
+`features/orders/constants.ts`), rather than `select("*")`. The four it leaves
+out are the four the table has no cell for — `created_at`, `created_by`,
+`updated_at` and `notes` — and `notes` is unbounded free text, so at 100 rows a
+page it was routinely the largest part of the response. `delivery_type` used to
+be on that list and is now projected, because the row carries a Delivery/Pickup
+badge. Sorting is unaffected: the ORDER BY runs in Postgres whether or not the
+key is projected. `ORDER_EXPORT_COLUMNS` does the same for the XLSX export,
+which walks the whole filtered set in 1000-row batches.
 
-**Each row is a `memo`ised `OrderRow`.** The markup is unchanged; it is a
-component so that React can skip it. Every re-render of the page — a keystroke
-in the search box (which re-renders on every character, ahead of the 300ms
-debounce that gates the _query_), opening a filter dropdown, a background
-refetch settling, the return highlight arming and disarming — used to re-render
-all 25-100 rows, each carrying a Radix `Select`, two tooltips and a copy button.
-The memo only pays off if the props are stable, so that is enforced at the
-source: `updateStatus` / `canEditOrder` are `useCallback`ed in
-`use-orders-mutations`, `toggleStar` reads the shortlist through a ref in
-`use-starred-orders` so it does not change identity when a star is toggled, and
-`openOrder` is `useCallback`ed on the route's stable `navigate`.
+**Each row is a `memo`ised `OrderRow`.** It is a component so that React can skip
+it. Every re-render of the page — a keystroke in the search box (which re-renders
+on every character, ahead of the 300ms debounce that gates the _query_), opening
+a filter dropdown, a background refetch settling, the return highlight arming and
+disarming — used to re-render all 25-100 rows, each carrying a Radix `Select`,
+two tooltips and a copy button. The memo only pays off if the props are stable,
+so that is enforced at the source: `updateStatus` / `canEditOrder` are
+`useCallback`ed in `use-orders-mutations`, `toggleStar` reads the shortlist
+through a ref in `use-starred-orders` so it does not change identity when a star
+is toggled, and `openOrder` is `useCallback`ed on the route's stable `navigate`.
 
-**Page header**, split into two groups by a hairline divider:
+**Page header** — the title, the day being looked at, the count, and Export.
+Nothing else. It used to also carry the three scope buttons and a primary **New
+order** button; the scope moved into the toolbar (below), and New order was
+removed outright — it is one click away in the sidebar from every page including
+this one, and a second copy of it was the loudest thing on a screen whose job is
+reading a list. Creating an order is otherwise unchanged.
 
-- **Scope — All orders · My orders · Starred.** What set am I looking at.
-  All/My were one button that swapped its own label, so the state you were _not_
-  in was invisible; they are two buttons now, `variant="default"` on the active
-  one. Starred joins them because it names a set of orders rather than a
-  property to filter them by. It is a separate `aria-pressed` toggle rather than
-  a third segment of the pair: it **narrows** whichever of All/My is selected,
-  and a third segment would promise a mutual exclusivity it does not have.
-- **Actions — Export Excel, New order.** Export is here rather than in the
-  filter bar because it acts on what the filters have already selected rather
-  than being one of them, and in the bar it was the only control on a second
-  row, so the container carried a row of empty space to hold one button.
+**Toolbar** (`components/orders-toolbar.tsx`) — scope · search · date · status ·
+verification · delivery & pickup · team · agent · reset, one strip of `h-9`
+controls. The controls used to be split across two containers — scope and Export
+in the header, the dropdowns in a card below it — so the page asked "which
+orders?" in two visual languages twenty pixels apart.
 
-The header stays on one row down to 720px; the group wraps rather than
-overflowing below that.
+- **Scope** (`components/orders-scope-tabs.tsx`) is a segmented control on a
+  recessed track: the active segment is the one _lifted out_ of it, which is the
+  same "selected" language the sidebar uses and needs no colour to be obvious.
+  Three filled turquoise buttons meant the two you were **not** on shouted as
+  loudly as the one you were. Starred is still an `aria-pressed` toggle after a
+  hairline rather than a third radio segment — it narrows whichever of All/Mine
+  is selected, and a third segment would promise a mutual exclusivity it does not
+  have. Below `sm` the **glyphs** drop and the labels stay: "all orders" and "my
+  orders" differ by one silhouette at 14px, and a word never has that problem.
+- **Active filters** get a `primary/70` border, a 6% tint and a `primary-ink`
+  glyph, with the label going from `muted-foreground` to `foreground`. Four
+  redundant cues, so the state does not rest on colour alone, and no second row
+  of removable chips restating what the bar already says.
+- **Reset** appears only when something is set and carries the count. It puts the
+  five dropdowns back in one batched commit — the list refetches once, and no
+  intermediate combination is ever queried. It deliberately leaves the date range
+  (never "off"), the scope (a set, not a narrowing) and the search box (which
+  clears itself with its own ×) alone.
+- **Below `lg` the five dropdowns collapse** behind a `Filters (n)` button. They
+  are rendered **once**: the wrapper is `lg:contents`, so from `lg` it stops
+  generating a box and its children lay themselves out as direct flex items of
+  the toolbar, while below `lg` it is an ordinary row the button shows and hides.
+  One set of Radix Selects, one piece of state, two layouts. Without it the bar
+  wrapped to five rows — 230px of filter bar above the list, measured on the
+  256px sidebar this was written against — with four of them saying "all". The
+  92px rail gives `md` a row or two back; below `sm` there is no rail at all and
+  the case is unchanged.
 
-**Filter bar** — Search · Team · Agent · Status · Delivery & Pickup · Date. One
-row of `h-10` controls at ≥1150px of content width (it was ≥1280 before Starred
-moved to the header), two below that, never three; `p-2.5 sm:p-3` around them,
-since it is a strip of controls rather than content. Search is the primary
-control and is built to look it — it takes the leftover width (capped at
-`max-w-md`) and lifts its shadow on focus — while keeping the same radius,
-border and focus ring as everything beside it.
+**Search** — the box takes the bar's leftover width up to `max-w-sm`, carries its
+magnifier inside the padding, lifts its shadow on focus, and clears on **Escape**
+or its own ×. What it searches is in _Search_, below.
 
-Contrast, measured against the compiled CSS in both themes (light / dark):
-active Starred label 2.3 / 9.4, its count badge 16.3 / 16.5, inactive badge
-5.4 / 6.1, search text 16.5 / 15.1. The badge is a **solid** chip when active —
-`primary-foreground/20` on the primary fill measured 1.01:1, a count you cannot
-read. The 2.3 on the active label is the `variant="default"` pairing itself
-(white on brand turquoise), shared with New order and every other primary button
-in the app; it is recorded here rather than fixed, since changing it is an
-app-wide design-system decision, not an Orders one.
+Contrast, measured against the compiled CSS by painting each token and reading
+the pixel back (light / dark): meta line 5.97 / 6.89, table header 5.45 / 6.17,
+Delivery/Pickup label 8.37 / 9.48, its delivery glyph 6.28 / 5.72 and pickup
+glyph 8.69 / 4.42, active filter label 15.67 / 13.65, its glyph 4.71 / 7.51,
+inactive scope label 5.64 / 6.44. Two of these were fixed rather than recorded:
+the delivery glyph was `chart-1`, which measures **2.22** in light — below the
+3:1 a meaningful glyph needs — and is `chart-2` now; the active-filter glyph and
+the Filters count were `primary` (2.23 and 2.06 in light) and are `primary-ink`.
 
 ### Returning from an order
 
@@ -2055,8 +2079,59 @@ Filters, search, date, Starred and page are preserved independently, by the
 module-level filter cache in `use-orders-list-filters`, so the list the agent
 comes back to is the one they left.
 
-One twelve-column table at every width, scrolled sideways below `min-w: 1240`.
-Three of those columns carry state rather than a field:
+**One table at every width, and no horizontal scroll at any of them.** It used to
+be twelve fixed columns behind `min-width: 1240`, so every laptop read the list
+sideways — and a horizontally scrolled table is the one layout where the column
+you are reading and the row you are reading it for can be on screen at different
+times.
+
+`table-fixed`, per-column widths on the `<th>`s, and columns that appear as the
+viewport earns them. There is still exactly **one** layout — the alternative, a
+second card list for phones, is what this page had before and it drifted: a
+column added to the table never appeared in the cards. What changes with width is
+how many facts get a _column_; the rest fold into a meta line under the customer,
+in the same reading order, so nothing is ever hidden, only re-laid-out:
+
+| from  | gains its own column                           |
+| ----- | ---------------------------------------------- |
+| base  | verified · star · order · status · action      |
+| `sm`  | customer                                       |
+| `lg`  | delivery/pickup · value · date                 |
+| `xl`  | invoice · agent                                |
+| `2xl` | branch, and the delivery badge gains its label |
+
+The reveal order is the priority order in reverse, and `md` deliberately gains no
+new column: the app rail appears there and takes width out of the same row, so
+`md` is the one step that can be **narrower** than the breakpoint below it.
+
+The budget was set against the folding 256px sidebar this work was written on,
+where `md` had 480px of content against `sm`'s 608. The rail is a fixed 92px now
+(`feat(nav)`), which hands every tier from `md` up about 164px more than the
+table was sized for — `md` 644, `lg` 884, `xl` 1124, `2xl` 1380. The reveal
+points are left where they are: they are a lower bound, and one that still holds
+if the rail ever expands again. Each meta item carries the breakpoint at which
+its own column takes over, so an item is in exactly one place at any width.
+Measured with the real compiled CSS at 390 / 768 / 1024 / 1280 / 1440 / 1536,
+against the 256px sidebar: no document overflow, no table overflow, and no
+descendant wider than the viewport at any of them.
+
+Two columns were folded away rather than dropped. **Type** (Cash / Wasfaty) now
+sits under the value — it belongs to the money more than to anything else on the
+row — which bought back 76px. **Date** is `dd/MM/yy` (`fmtOrderDateShort`) rather
+than "Friday, Jul 10, 2026": the long form needed about 168px on every row to
+spell out a weekday the page header already states once for the whole range, and
+it was the widest and least-read thing in the table. The long form stays on the
+order page and in the export.
+
+**Delivery / Pickup** is a new chip (`components/fulfillment-badge`), reading
+`delivery_type` through `classifyFulfillment` so the badge, the filter, the KPI
+cards and the Dashboard mix cannot disagree about what a delivery is. The chip is
+neutral and the 12px glyph carries the hue — the row already spends its colour on
+the status pill and the verification rail, and a third coloured chip beside them
+turns a scan for "which of these is cancelled" into a hunt. An order with no
+method recorded gets an em dash, not a third badge.
+
+Three columns carry state rather than a field:
 
 - **Call Centre** (col 1) — read-only, derived, three states
   (`components/call-centre-cell`). It used to be a checkbox an agent could tick,
@@ -2136,6 +2211,110 @@ and empty whenever the filter is off — so starring an order while filtered
 refetches the narrowed page, and starring one while unfiltered refetches nothing.
 `useStarredOrders` is called inside `useOrdersListFilters` rather than the route
 because the ids must be in hand where `applyFilters` is built.
+
+### Invoice Verification — the filter
+
+`features/orders/verification.ts` is the one definition, in the same shape and
+for the same reason as `fulfillment.ts` beside it. An order carries two flags and
+neither means anything without the other — `invoices_verified` (the MIS answered)
+and `call_center_verified` (and at least one document came through the call
+centre) — and `callCentreState` was already reading that pair into the three
+states the table's first column paints. This is the same reading expressed as a
+**filter**, so the dropdown and the column cannot describe different sets.
+
+| value             | selects                                        |
+| ----------------- | ---------------------------------------------- |
+| `verified`        | `invoices_verified IS TRUE`                    |
+| `pending`         | `invoices_verified IS NOT TRUE`                |
+| `call_centre`     | `call_center_verified IS TRUE`                 |
+| `non_call_centre` | verified **and** `call_center_verified` is not |
+
+Both flags are nullable, and that is the whole trap. `NOT invoices_verified` is
+NULL — not true — for an order the MIS has never answered for, which is precisely
+the set _Not verified_ is being asked for. So every negative is written
+`not(col, is, true)` on the PostgREST side and `IS NOT TRUE` in SQL, and
+`__tests__/verification.test.ts` asserts the wrong spellings are absent from the
+migration. Same three-valued-logic bug `applyFulfillment` carries a paragraph
+about, caught before it shipped this time rather than after.
+
+`non_call_centre` needs the `invoices_verified` half too, or it sweeps in the
+entire unverified backlog — which is the exact distinction the third state was
+introduced to make.
+
+It reaches all three surfaces, like every other filter:
+
+- **The list** through `applyOrderFilters`, as an ordinary independent `AND`,
+  which is what makes it compose: Status + Branch + Delivery + Starred +
+  Verification is all of them, and clearing one leaves the rest standing.
+- **The KPI cards** through `orders_kpi_summary(_verification)`
+  (`20260830120000_orders_invoice_verification_filter.sql`). Adding it to only
+  the table would put a list and a total on one screen describing different sets
+  of orders, which is the defect `order_fulfillment()` exists to have ended.
+- **The export**, which inherits it by sharing `applyFilters`.
+
+### Search
+
+Six `ilike` branches over the order's own text, plus two conditional ones. Every
+branch is backed by a trigram index
+(`20260818120000_search_trigram_indexes.sql`); the planner can only turn the OR
+into a BitmapOr if **all** of them are, so a column added here without an index
+silently makes the whole search a sequential scan. Both extra branches exist
+because the thing an agent types is not the thing the column stores:
+
+- **The order number.** `display_no` holds `3258`; the screen, the invoice and
+  the WhatsApp message all say `CC-3258`. Pasting back what the app itself
+  printed found nothing — the most common search on this page was the one that
+  did not work. `orderNumberTerm` recovers the digits from `3258`, `c-3258`,
+  `CC-3258`, `#3258` or `ts 3258`, and adds a second `display_no` branch only
+  when the prefix actually changed the string. It is deliberately narrow: it
+  matches a term that is _only_ an order number, so "Ahmed" is never turned into
+  a number, and it keeps leading zeros because the clause is a substring test.
+- **The agent.** `agent_name` is joined from `profiles`, so there is nothing on
+  `orders` to match a colleague's name against. It is resolved to ids against the
+  agent directory the page has already loaded and sent as `agent_id.in.(…)`,
+  served by `orders_agent_idx` — the pattern Complaints already uses. The KPI RPC
+  takes the ids as `_agent_ids uuid[]` rather than re-joining, so the cards match
+  the table exactly and the aggregation stays one scan.
+
+`agentKey` (the sorted ids, joined) is part of `OrdersFilters` for the same reason
+`starKey` is: the directory arrives asynchronously, and without it the page
+fetched in the frame before it landed — with no agent branch in the OR — would be
+served from cache once it had.
+
+The 300ms debounce, the server-side querying and the pagination are all
+unchanged. A search still drops the date window on purpose: a search is for one
+specific order, not for one inside the current day.
+
+### Motion
+
+Subtle, and only where it answers something. The vocabulary is the app's existing
+`tw-animate-css` utilities, not a new dependency.
+
+- **Entrance** is the app shell's own `animate-in fade-in duration-150` on the
+  route content, keyed by pathname. Nothing on this page adds a second one.
+- **A changed view** — scope, filter, search or page — remounts the `<tbody>`
+  under a `viewKey` built from the _request_, so the incoming rows arrive as one
+  200ms fade rather than a swap. Keyed on the request rather than on the rows,
+  because `keepPreviousData` holds the old rows on screen while the new page is
+  in flight, so a row-derived key would fire after the moment it is meant to
+  cover.
+- **A refetch in flight** dims the table to 60% and runs a 2px hairline across
+  the top of the card (`.orders-progress`). A third-width segment travelling the
+  full width rather than a filling bar: progress here is genuinely unknown, and a
+  bar that fills implies a fraction someone measured. It animates `translate3d`,
+  so it cannot cost the main thread a layout while the query settles.
+- **State** — the scope segment, the active filter tint, row hover, the filter
+  disclosure chevron — transitions colour and shadow only, 150–200ms. Nothing
+  transitions a property that changes an element's size, so no control can reflow
+  the one beside it as it activates.
+
+`prefers-reduced-motion` is honoured by a `.orders-page`-scoped rule in
+`styles.css` that stops the entrances and the hairline. It is scoped rather than
+global because the app's other entrances are a separate decision, and a blanket
+override would also silence the two "here it is" flashes, which carry information
+rather than decoration. What stays is the refetch dimming and the colour
+transitions — state made visible, which reduced motion does not ask anyone to
+remove.
 
 ### Fulfillment — one definition, three surfaces
 

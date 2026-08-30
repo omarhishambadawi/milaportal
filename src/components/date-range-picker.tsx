@@ -51,12 +51,21 @@ export function DateRangePicker({
   disabled,
   align = "start",
   size = "default",
+  className,
 }: {
   range: DateRange | undefined;
   onChange: (r: DateRange | undefined) => void;
   disabled?: boolean;
   align?: "start" | "end";
   size?: "default" | "sm";
+  /**
+   * Extra classes for the trigger, appended last so they win.
+   *
+   * Additive and optional: every existing call site is unchanged. It exists
+   * because the two `size` values are the two button heights, and a toolbar that
+   * lines this control up with a row of `h-9` selects needs neither of them.
+   */
+  className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const label = useMemo(() => {
@@ -75,6 +84,7 @@ export function DateRangePicker({
             "font-normal justify-start",
             size === "default" && "h-10 min-w-[200px]",
             !range?.from && "text-muted-foreground",
+            className,
           )}
         >
           <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />

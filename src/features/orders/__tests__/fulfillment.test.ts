@@ -115,8 +115,10 @@ function filterState(fulfillment: string, overrides: Partial<OrderFilterState> =
     agent: "all",
     term: "",
     fulfillment,
+    verification: "all",
     starredOnly: false,
     starredIds: [],
+    searchAgentIds: [],
     ...overrides,
   } satisfies OrderFilterState;
 }

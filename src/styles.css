@@ -720,6 +720,56 @@ html.theme-vt * {
  */
 
 /*
+ * The Orders list's "a new page is on its way" hairline.
+ *
+ * `keepPreviousData` keeps the rows an agent is reading on screen while the next
+ * filter's page is in flight, which is the right behaviour and also means
+ * nothing on screen says anything is happening. A 2px bar sweeping the top of
+ * the table says it without a spinner, without a skeleton and without moving a
+ * single row — the list stays exactly where the eye left it.
+ *
+ * A third-width segment travelling the full width rather than a filling bar:
+ * progress here is genuinely unknown (one PostgREST round trip), and a bar that
+ * fills implies a fraction that has been measured.
+ *
+ * `translate3d` rather than `left`, so the whole thing runs on the compositor
+ * and cannot cost the main thread a layout while the query settles.
+ */
+@keyframes orders-progress {
+  0% {
+    transform: translate3d(-100%, 0, 0);
+  }
+  100% {
+    transform: translate3d(400%, 0, 0);
+  }
+}
+
+.orders-progress {
+  animation: orders-progress 1.1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/*
+ * Orders — reduced motion.
+ *
+ * Scoped to the page rather than applied globally: the app's other entrances are
+ * a separate decision, and a blanket `*` override here would also silence the
+ * two "here it is" flashes above, which carry information rather than
+ * decoration.
+ *
+ * What goes: the staged entrances, the row cross-fade on a filter change, and
+ * the travelling hairline — every one of them is a courtesy whose absence costs
+ * nothing. What stays: the dimming of the table during a refetch and the colour
+ * transitions on hover and on the active scope segment, which are state made
+ * visible, and which `prefers-reduced-motion` does not ask anyone to remove.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .orders-page .animate-in,
+  .orders-page .orders-progress {
+    animation: none !important;
+  }
+}
+
+/*
  * The branch card's "here it is" flash, played when a locator result is clicked.
  *
  * An overlay inside the card rather than a class on the card itself, for two
