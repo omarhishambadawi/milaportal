@@ -8,11 +8,14 @@ export const PAGE_SIZE_STORAGE_KEY = "orders.pageSize";
  *
  * Every one of these is rendered or acted on by a row: the identity columns, the
  * two `callCentreState` flags, `agent_id` for `canEditOrder` and the directory
- * lookup, `branch_no` for the city lookup. The five left out are the ones the
- * list never touches — `created_at`, `created_by`, `updated_at` and, the one
- * that matters, `notes`. `delivery_type` was on that list until the row started
- * showing a Delivery/Pickup badge; it is a short enum-like string, so the added
- * row cost is negligible next to what `notes` would have been.
+ * lookup, `branch_no` for the city lookup. The ones left out are those the list
+ * never touches — `created_by`, `updated_at` and, the one that matters, `notes`.
+ * `delivery_type` was on that list until the row started showing a
+ * Delivery/Pickup badge; it is a short enum-like string, so the added row cost
+ * is negligible next to what `notes` would have been. `created_at` left it for
+ * the same reason: the Date column now prints a clock time under the date, and
+ * `order_date` is a `date` with no time in it to print. A fixed-width timestamp
+ * is the same order of cost as the badge, and it is already being sorted on.
  *
  * `notes` is unbounded free text and was being shipped for every row of every
  * page: at 100 rows a page it is routinely the largest part of the response, for
@@ -25,6 +28,7 @@ export const ORDER_LIST_COLUMNS = [
   "team",
   "display_no",
   "order_date",
+  "created_at",
   "customer_name",
   "customer_phone",
   "agent_id",

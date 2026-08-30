@@ -540,7 +540,21 @@ function OrdersList() {
                   type it already showed. Every other column is untouched, the
                   table's `min-w` is unchanged, and no font or row height moved:
                   the new information is paid for by the column that was widest
-                  for the least. */}
+                  for the least.
+
+                  These are ratios, not pixels: they sum to more than the table's
+                  `min-w`, so `table-layout: auto` scales all twelve down to fit
+                  and no column ever renders at the number written here. Which is
+                  why the wider "Date and time" heading is handled by a
+                  `whitespace-nowrap` on that `th` rather than by a bigger number
+                  — a column's floor is its content's min-content width, so the
+                  heading reserves exactly the room it needs (measured: 83 →
+                  115px) and the 32px comes off the other eleven proportionally,
+                  2–6px each, none of which truncates. The header stays one line
+                  at its original 40px height. The clock time under the date
+                  costs nothing at all: it
+                  is narrower than `dd/MM/yy`, and the row's height is set by the
+                  two-line Customer, Agent and Branch cells beside it. */}
               <colgroup>
                 <col style={{ width: 44 }} />
                 <col style={{ width: 40 }} />
@@ -573,7 +587,9 @@ function OrdersList() {
                     <Star className="h-4 w-4 mx-auto text-primary/80" aria-label="Starred" />
                   </th>
                   <th className="text-left px-3 py-3 border-b border-border/70">Order</th>
-                  <th className="text-left px-3 py-3 border-b border-border/70">Date</th>
+                  <th className="whitespace-nowrap text-left px-3 py-3 border-b border-border/70">
+                    Date and time
+                  </th>
                   <th className="text-left px-3 py-3 border-b border-border/70">Customer</th>
                   <th className="text-left px-3 py-3 border-b border-border/70">Agent</th>
                   <th className="text-left px-3 py-3 border-b border-border/70">Invoice No.</th>

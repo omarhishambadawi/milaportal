@@ -1,5 +1,6 @@
 import { format, parseISO } from "date-fns";
 import { stripOrderPrefix } from "@/lib/branches";
+import { BUSINESS_TIMEZONE } from "@/lib/timezone";
 import { isFulfillmentGroup } from "./fulfillment";
 
 export const toISO = (d: Date) => format(d, "yyyy-MM-dd");
@@ -86,6 +87,44 @@ export const fmtOrderDateShort = (iso: string | null | undefined) => {
     return format(parseISO(iso), "dd/MM/yy");
   } catch {
     return String(iso);
+  }
+};
+
+/**
+ * Format a timestamp as "02:45 PM" — the clock time under the list's date.
+ *
+ * The second line of the Date and time column, and it reads `created_at`
+ * because `order_date` is a `date`: there is no time in the column the line
+ * above it shows. That makes this **when the order was entered**, which is the
+ * same day for 99.5% of orders and deliberately not claimed to be anything more
+ * for the rest — an order entered the morning after the shift it belongs to
+ * keeps its own `order_date` above and shows the hour it was actually typed.
+ *
+ * `Intl`, not date-fns, and pinned to `BUSINESS_TIMEZONE`. The date above is a
+ * plain `date` and has no zone to get wrong; a `timestamptz` does — it is stored
+ * UTC, and formatting it in the reader's local zone would print a different hour
+ * for the same order in Riyadh and Cairo. That is the exact drift `lib/timezone`
+ * exists to have ended, and the order page's activity timeline already formats
+ * its timestamps this way.
+ *
+ * Two-digit hour, where the timeline uses a bare one: this is a column, the
+ * value sits under a fixed-width `dd/MM/yy` and is rendered `tabular-nums`, so a
+ * 9 AM order should not shift the colon out of line with the 10 AM order below
+ * it.
+ */
+export const fmtOrderTimeShort = (iso: string | null | undefined) => {
+  if (!iso) return "—";
+  try {
+    const at = new Date(iso);
+    if (Number.isNaN(at.getTime())) return "—";
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: BUSINESS_TIMEZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    }).format(at);
+  } catch {
+    return "—";
   }
 };
 

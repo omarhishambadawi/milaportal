@@ -18,7 +18,7 @@ import { FulfillmentBadge } from "./fulfillment-badge";
 import { InvoiceCell } from "./invoice-cell";
 import { StatusBadge } from "./status-badge";
 import { TeamBadge } from "./team-badge";
-import { fmtOrderDateShort } from "../utils";
+import { fmtOrderDateShort, fmtOrderTimeShort } from "../utils";
 
 interface OrderRowProps {
   /** One enriched row from `useOrdersListData`. Memoised upstream. */
@@ -137,10 +137,17 @@ function OrderRowImpl({
         </div>
       </td>
 
+      {/* Date over time, one cell. The date is `order_date`, unchanged; the time
+          is `created_at`, because a `date` column has no hour in it. Stacked
+          rather than sat side by side so the column keeps its width and the two
+          read as one fact — see `fmtOrderTimeShort`. */}
       <td
         className={cn("whitespace-nowrap px-3 text-xs tabular-nums text-muted-foreground", cellCls)}
       >
-        {fmtOrderDateShort(o.order_date)}
+        <div className="leading-tight">{fmtOrderDateShort(o.order_date)}</div>
+        <div className="mt-0.5 text-[11px] leading-tight text-muted-foreground/80">
+          {fmtOrderTimeShort(o.created_at)}
+        </div>
       </td>
       <td className={cn("px-3 text-sm", cellCls)}>
         <div className="truncate font-semibold text-foreground leading-tight">

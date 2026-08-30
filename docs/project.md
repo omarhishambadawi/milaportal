@@ -2270,7 +2270,7 @@ verification rail — and the truck/storefront pair carries the distinction. An
 order with no method recorded renders nothing rather than a third badge for the
 absence of a fact.
 
-### The list's date
+### The list's date and time
 
 `fmtOrderDateShort` — `dd/MM/yy`, so "30/08/26". Display only: the stored value,
 the `order_date` sort and the date-range filter are all untouched, and
@@ -2279,6 +2279,31 @@ the `order_date` sort and the date-range filter are all untouched, and
 The list needed a narrower one. "Friday, Jul 10, 2026" spelled out a weekday the
 page header already states once for the whole range, and at 176px it was the
 widest column in the table for the least-read fact in it.
+
+Under it, on a second line, `fmtOrderTimeShort` — "02:45 PM". The two lines read
+**different columns**, and that is forced rather than chosen: `order_date` is a
+Postgres `date` and holds no hour, so the time can only be `created_at`. It is
+therefore when the order was _entered_, which is the same day for 99.5% of orders
+and deliberately not reconciled for the rest — a backdated order keeps its own
+`order_date` above and shows the hour it was actually typed. `created_at` joined
+`ORDER_LIST_COLUMNS` for this; it was already the second sort key, just not
+projected.
+
+Pinned to `BUSINESS_TIMEZONE` and to `en-US`, via `Intl`. The date above is
+zoneless and cannot be got wrong; a `timestamptz` can — stored UTC, it would
+otherwise print a different hour to a reader in Riyadh than to one in Cairo,
+which is the drift `lib/timezone` exists to have ended. Pinning both also keeps
+the string identical under SSR and hydration. Two-digit hour, where the order
+page's activity timeline uses a bare one, because this is a `tabular-nums` column
+under a fixed-width date and the colons have to line up. A missing timestamp
+renders the em dash every other absent value in the table renders.
+
+Nothing else in the table moved. The row's height is already set by the two-line
+Customer, Agent and Branch cells, so the second line is free; the wider "Date and
+time" heading takes the column from 83 → 115px through `whitespace-nowrap` on the
+`th` rather than a new `colgroup` number — those numbers sum past the table's
+`min-w` and are ratios, not pixels — and the 32px comes proportionally off the
+other eleven, 2–6px each.
 
 ### Motion
 
