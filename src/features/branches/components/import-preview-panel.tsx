@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, FileSpreadsheet, Info, XCircle } from "luc
 import { cn } from "@/lib/utils";
 import { dutyHoursLabel } from "../normalize";
 import type { ImportIssue, ImportLevelCounts, ImportPreview, IssueLevel } from "../types";
+import { DISPLAY_LOCALE } from "@/lib/branches";
 
 /** Rows of the parsed data shown before the operator commits. */
 const SAMPLE_LIMIT = 25;
@@ -26,7 +27,9 @@ function Tally({
         <Icon className="h-4 w-4" />
       </span>
       <div className="min-w-0">
-        <p className="text-xl font-bold tabular-nums leading-tight">{value.toLocaleString()}</p>
+        <p className="text-xl font-bold tabular-nums leading-tight">
+          {value.toLocaleString(DISPLAY_LOCALE)}
+        </p>
         <p className="truncate text-[11px] uppercase tracking-wide text-muted-foreground">
           {label}
         </p>

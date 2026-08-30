@@ -41,8 +41,10 @@ Cross-cutting characteristics visible in the code:
   `src/lib/timezone.ts`. Rows are stored in UTC.
 - **Currency is SAR**, formatted by `fmtSAR` in `src/lib/branches.ts`.
 - **Number formatting is pinned** to `DISPLAY_LOCALE` (`en-US`), exported from
-  `src/lib/branches.ts` and shared by `fmtSAR` and the Dashboard's
-  `formatCompactSAR` / `formatCount`. Never pass `undefined` (or no argument) to
+  `src/lib/branches.ts` and used by every formatter that prints a number —
+  `fmtSAR`, the Dashboard's `formatCompactSAR` / `formatCount`, the chart
+  tooltip, the branch directory and import tallies, and the Yeastar row counts.
+  Never pass `undefined` (or no argument) to
   `toLocaleString`: the app renders each component twice — once in the SSR
   process, once on hydration — and a Node process resolving to, say, `ar-EG`
   serves `١٬٢٩٠ SAR` under a client that renders `1,290 SAR`, which React

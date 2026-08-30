@@ -2,6 +2,7 @@ import { Bike, Building2, MapPinned, RefreshCw } from "lucide-react";
 import { BUSINESS_TIMEZONE } from "@/lib/timezone";
 import { cn } from "@/lib/utils";
 import type { BranchStats } from "../search";
+import { DISPLAY_LOCALE } from "@/lib/branches";
 
 /**
  * The directory's headline facts, on one line.
@@ -60,12 +61,14 @@ export function BranchDirectoryMeta({ stats, loading, resultCount, filtered, las
         <Building2 className="h-3.5 w-3.5 opacity-70" aria-hidden />
         {filtered ? (
           <>
-            <span className="tabular-nums">{resultCount.toLocaleString()}</span> of{" "}
-            <span className="tabular-nums">{stats.total.toLocaleString()}</span> branches
+            <span className="tabular-nums">{resultCount.toLocaleString(DISPLAY_LOCALE)}</span> of{" "}
+            <span className="tabular-nums">{stats.total.toLocaleString(DISPLAY_LOCALE)}</span>{" "}
+            branches
           </>
         ) : (
           <>
-            <span className="tabular-nums">{stats.total.toLocaleString()}</span> branches
+            <span className="tabular-nums">{stats.total.toLocaleString(DISPLAY_LOCALE)}</span>{" "}
+            branches
           </>
         )}
       </span>
@@ -75,7 +78,7 @@ export function BranchDirectoryMeta({ stats, loading, resultCount, filtered, las
       </span>
       <span className="inline-flex items-center gap-1.5">
         <MapPinned className="h-3.5 w-3.5 opacity-70" aria-hidden />
-        <span className="tabular-nums">{stats.cities.toLocaleString()}</span> cities
+        <span className="tabular-nums">{stats.cities.toLocaleString(DISPLAY_LOCALE)}</span> cities
       </span>
 
       <span aria-hidden className="opacity-40">
@@ -83,7 +86,10 @@ export function BranchDirectoryMeta({ stats, loading, resultCount, filtered, las
       </span>
       <span className="inline-flex items-center gap-1.5">
         <Bike className="h-3.5 w-3.5 opacity-70" aria-hidden />
-        <span className="tabular-nums">{stats.withScooter.toLocaleString()}</span> with scooter
+        <span className="tabular-nums">
+          {stats.withScooter.toLocaleString(DISPLAY_LOCALE)}
+        </span>{" "}
+        with scooter
       </span>
 
       {lastUpdated && (

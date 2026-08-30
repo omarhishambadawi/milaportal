@@ -33,6 +33,7 @@ import { StatusCard } from "@/features/calls/status-card";
 import { yeastarQueueOptions, getCallCenterAnalytics } from "@/lib/yeastar.functions";
 import { queryKeys } from "@/lib/query-keys";
 import { hhmmss, toISO } from "@/features/call-center/utils";
+import { DISPLAY_LOCALE } from "@/lib/branches";
 
 export const Route = createFileRoute("/_app/calls/")({
   head: () => ({ meta: [{ title: "Calls — MilaServ Portal" }] }),
@@ -157,7 +158,9 @@ function CallsOverview() {
           icon={Database}
           loading={loading}
           detail={
-            analytics ? `${analytics.cdr.fetched.toLocaleString()} CDR rows for today` : undefined
+            analytics
+              ? `${analytics.cdr.fetched.toLocaleString(DISPLAY_LOCALE)} CDR rows for today`
+              : undefined
           }
         />
         <StatusCard

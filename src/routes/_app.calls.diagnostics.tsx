@@ -28,6 +28,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatusCard } from "@/features/calls/status-card";
 import { useAuth, isAdministrator } from "@/lib/auth";
 import { queryKeys } from "@/lib/query-keys";
+import { DISPLAY_LOCALE } from "@/lib/branches";
 import {
   yeastarConfigDiagnostic,
   yeastarAuthDiagnostic,
@@ -169,7 +170,11 @@ function CallDiagnostics() {
         />
         <StatusCard
           label="CDR"
-          value={probe.data?.ok ? `${probe.data.fetched.toLocaleString()} rows` : "Not fetched"}
+          value={
+            probe.data?.ok
+              ? `${probe.data.fetched.toLocaleString(DISPLAY_LOCALE)} rows`
+              : "Not fetched"
+          }
           tone={probe.data?.ok ? "ok" : probe.data ? "bad" : "idle"}
           icon={Database}
           loading={probe.isPending}

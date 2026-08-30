@@ -5,6 +5,9 @@
  * All functions are async. Callers must `await`. Reads/writes go through
  * supabaseAdmin (service_role); there is no user-facing access to the table.
  */
+
+import { DISPLAY_LOCALE } from "@/lib/branches";
+
 export interface ProgressState {
   jobId: string;
   status: "pending" | "fetching" | "aggregating" | "done" | "error";
@@ -108,7 +111,7 @@ export async function finishJob(
 ): Promise<void> {
   await updateJob(jobId, {
     status: "done",
-    message: `Loaded ${records.toLocaleString()} records`,
+    message: `Loaded ${records.toLocaleString(DISPLAY_LOCALE)} records`,
     records,
     totalReported,
   });

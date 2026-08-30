@@ -19,6 +19,7 @@ import { z } from "zod";
 import type { DiagnosticsReport as YeastarDiagnosticsReport } from "@/lib/yeastar/diagnostics.server";
 import type { NormalizationContext } from "@/lib/yeastar/normalize";
 import type { CallReportSnapshot } from "@/lib/yeastar/call-report.server";
+import { DISPLAY_LOCALE } from "@/lib/branches";
 
 async function assertAdmin(ctx: { supabase: any; userId: string }) {
   const { data, error } = await ctx.supabase.rpc("is_administrator", { _user_id: ctx.userId });
@@ -187,8 +188,8 @@ export const callsConfiguration = createServerFn({ method: "POST" })
           syncStatusValue =
             state.lastRunAt == null
               ? "never run"
-              : `${state.lastStatus} · ${ageMin}m ago · ${state.lastRows.toLocaleString()} row(s)`;
-          syncCoverageValue = `${coverage.daysSynced} of ${coverage.days} day(s) · ${coverage.rows.toLocaleString()} row(s)`;
+              : `${state.lastStatus} · ${ageMin}m ago · ${state.lastRows.toLocaleString(DISPLAY_LOCALE)} row(s)`;
+          syncCoverageValue = `${coverage.daysSynced} of ${coverage.days} day(s) · ${coverage.rows.toLocaleString(DISPLAY_LOCALE)} row(s)`;
         } catch {
           syncStatusValue = "unavailable";
         }
