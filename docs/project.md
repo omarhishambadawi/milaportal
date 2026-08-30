@@ -1176,17 +1176,67 @@ the jump, it is not a Recharts bug, and it was rare enough at 950–1200ms on an
 idle machine to survive the first fix. Raising the band to 1200–1600ms would have
 made it routine.
 
-So the disarm is now Recharts' own `onAnimationEnd`, spread onto every series
-with the rest of the preset. It cannot fire early, it cannot fire late, and when
-it fires the static geometry is by definition the frame already on screen.
-`SETTLE_FALLBACK_MS` (3× the longest duration, plus a floor) remains only for the
-case where that signal never arrives at all — a panel whose series render
-nothing, or a tab hidden for the whole life of the entrance — where staying armed
-forever would leave a panel one `ResponsiveContainer` measurement away from
-replaying its entrance for the rest of the session.
+So the disarm is Recharts' own `onAnimationEnd`, spread onto every series with
+the rest of the preset. `SETTLE_FALLBACK_MS` (3× the longest duration, plus a
+floor) remains only for the case where that signal never arrives at all — a panel
+whose series render nothing, or a tab hidden for the whole life of the entrance —
+where staying armed forever would leave a panel one `ResponsiveContainer`
+measurement away from replaying its entrance for the rest of the session.
 
-Re-verified across repeated fresh loads: the drawn fraction is monotonic, reaches
-100%, and the static swap never precedes completion.
+#### `onAnimationEnd` also fires on unmount, which cost the page every animation
+
+Taking that signal at face value was the third glitch, and the largest: it made
+the charts render **statically**. `onAnimationEnd` does not mean "this animation
+finished". react-smooth calls it from `Animate.componentWillUnmount` too,
+unconditionally, and the callback cannot tell the two apart:
+
+```js
+componentWillUnmount() {
+  ...
+  if (onAnimationEnd) { onAnimationEnd(); }
+}
+```
+
+And an `<Animate>` here unmounts _routinely_. Recharts keys it
+`key={"bar-" + animationId}`, `animationId` is the chart's `updateId`, and
+`getDerivedStateFromProps` increments `updateId` on any **width or height**
+change. So one `ResponsiveContainer` measurement during an entrance — a window
+resize, a scrollbar arriving, a StrictMode double-mount in development —
+unmounted the running `<Animate>`, which called `onAnimationEnd`, which disarmed
+the panel **permanently**. The replacement series mounted still, and the chart
+was simply there.
+
+Measured in headless Chrome (CDP) against the real components: the daily-trend
+area's clip was 11px wide of an eventual 606px — the panel **2% drawn** — when a
+resize landed at t≈400ms. The next sample was 606px, and so was every sample for
+the following two seconds. It is the same snap the timer used to cause, reached
+from a different direction.
+
+**Telling a real end from an unmount is a question about the clock.** react-smooth
+drives its sequence as `[onAnimationStart, begin, start, duration,
+onAnimationEnd]`, so a genuine end cannot arrive before `duration` has elapsed
+since the start it belongs to — it can only ever be late. An unmount call arrives
+whenever the unmount happens, which is almost always much earlier. So the
+entrance is timestamped from Recharts' `onAnimationStart`, and an end too early
+to be one is ignored — `isGenuineAnimationEnd(startedAt, now, duration)`, pure and
+unit-tested, with one frame of slack for a timestamp taken inside a callback. The
+panel stays armed, the remounted `<Animate>` starts again from zero, and _that_
+entrance settles it. A restart also re-arms the fallback, so the backstop is never
+measured against an entrance that is no longer running.
+
+Note which direction the clock is used in, because it is the opposite of the bug
+above: it can only ever _refuse_ to settle, never settle anything by itself.
+Nothing can switch a series to its static render before Recharts says the series
+finished — exactly the property `setTimeout(longest + 300)` did not have.
+
+Verified in headless Chrome, one cold load per panel, at 1440×900: nothing is
+mounted at page load (every panel below the fold), no panel mounts before it is
+scrolled to, and all eight — daily sales trend, orders by status, sales by team,
+top agents, sales by branch, sales by city, monthly revenue trend, complaints by
+city — draw across 15–21 sampled geometry steps, monotonically, ending at full.
+The revenue trend across three fresh loads: `stroke-dasharray` 0 → 593 of a
+593px path, monotonic, then the attribute disappears as the static render takes
+over at full length. No collapse, no redraw, no restart.
 
 `buildChartMotion` stays a pure function of two booleans — the callback is added
 in the hook — so the contract remains assertable without a renderer.
@@ -1423,15 +1473,27 @@ of axes labelled 0 to 0, which reads as a panel that failed rather than as a
 period with no orders in it. The panel keeps its height, so a filter that empties
 one card does not resize the row it shares.
 
-`DashKpiCard` leads with **two co-equal figures** — total sales, then completed
-sales in the positive tone, each with its own label and both at the display size.
-Completed sales used to be twelve pixels of green on the right of a caption under
-a twenty-four pixel revenue figure, which is a footnote about the number
-management is actually judged on. They are stacked rather than side by side
-because two SAR figures at 24px need ~370px between them and three cards share
-the page; the display size itself steps in at `md:` rather than `sm:`, because
-between 640 and 768 the grid is already three across and
-"1,247,820.55 SAR" needs 188px at 24px in a 160px column.
+`DashKpiCard` leads with **one primary figure and one ranked under it** — total
+sales at the display size, then completed sales in the positive tone. Both have
+been wrong in turn: completed sales was once twelve pixels of green on the right
+of a caption, a footnote about the number management is judged on; the correction
+overshot and set the two identically, at the same 24px, weight and uppercase 10px
+label, so the card opened with two headline numbers competing for the same job.
+Two primaries is no primary.
+
+The ranking is now stated four ways, none of them decoration: **size** (24px
+against 18px — enough that the eye lands on revenue first, still larger than every
+order count below it), **label** (revenue keeps the tracked uppercase micro-label
+the page's other KPI strips use, completed takes a sentence-case caption, so case
+alone says "supporting"), **colour** (completed keeps the full `--positive`, which
+is the one thing it does not give up), and **grouping** (10px under revenue rather
+than in its own block, so the two read as a figure and its outcome).
+
+Stacked rather than side by side because two SAR figures need ~370px between them
+and three cards share the page. The primary steps to 24px at `md:` rather than
+`sm:`, because between 640 and 768 the grid is already three across and
+"1,247,820.55 SAR" needs 188px at 24px in a 160px column; the secondary steps
+16px → 18px at the same breakpoint, holding the ratio at every width.
 
 `DashKpiCard`'s `loading` swaps each **figure** for a tinted bar drawn inside the
 element the figure would occupy — not a parallel skeleton tree, which is a second

@@ -130,47 +130,65 @@ export function DashKpiCard({
         </span>
       </div>
 
-      {/* Two figures, both primary.
-          Completed sales used to be twelve pixels of green on the right of a
-          caption, under a twenty-four pixel revenue figure — a footnote about
-          the number management is actually judged on. It now gets its own label,
-          its own line and the same type as revenue, ranked directly under it:
-          what was taken, then what of it landed.
+      {/* The money, ranked.
 
-          Stacked rather than side by side, and that is a responsiveness
-          decision. Two SAR figures at 24px need about 370px between them; the
-          three cards share the page, so on a 1024px viewport there is not that
-          much and one of them would truncate. Stacked, each gets the card's full
-          width at every breakpoint.
+          Both figures matter and both belong on the card — what was wrong was
+          that they were set identically. Total sales and completed sales were
+          the same 24px, the same weight and the same uppercase 10px label, one
+          above the other, so the card opened with two headline numbers
+          competing for the same job and the reader had to compare digits to
+          work out which was which. Two primaries is no primary.
+
+          So the ranking is stated four ways at once, and none of them is
+          decoration:
+
+            - **Size.** 24px against 18px. Enough that the eye lands on revenue
+              first from across the room, not so much that completed reads as
+              metadata — it is still larger than every order count below it.
+            - **Label.** Revenue keeps the tracked uppercase micro-label the
+              other KPI strips on this page use; completed takes a sentence-case
+              caption. Case alone says "supporting" before a single figure is
+              read.
+            - **Colour.** Completed keeps the full `--positive`, which is the
+              one thing it does *not* give up. It is the number the month is
+              judged on, and green is what makes it findable in a card that is
+              otherwise foreground and muted.
+            - **Grouping.** It sits 10px under revenue rather than in its own
+              12px-spaced block, so the two read as one figure and its outcome
+              rather than as two entries in a list.
+
+          Not made smaller than this. Completed sales was once twelve pixels of
+          green on the right of a caption, and that was a footnote about the
+          number management is actually judged on — this is a deliberate step
+          back from the correction that overshot, not a return to it.
+
+          Still stacked rather than side by side, for the reason it always was:
+          two SAR figures need about 370px between them, three cards share the
+          page, and at 1024px there is not that much. Stacked, each gets the
+          card's full width at every breakpoint.
+
+          24px from `md:` and not from `sm:`. Between 640 and 768 the grid is
+          already three across, which leaves each figure about 160px — and
+          "1,247,820.55 SAR" needs 188 of them at 24px, so it truncated. One
+          step down over that band fits it exactly; above 768 there is room for
+          the display size.
 
           The `print:` sizes are the A4 column, not a second design: three of
-          these cards share 186mm of paper, about 60mm each, and
-          "1,247,820.55 SAR" at 24px does not fit 60mm. */}
-      {/* 24px from `md:` and not from `sm:`.
-          Between 640 and 768 the grid is already three across, which leaves each
-          figure about 160px — and "1,247,820.55 SAR" needs 188 at 24px. It
-          truncated. One step down at that band fits it exactly, and above 768
-          there is room for the display size. */}
-      {/* 24px from `md:` and not from `sm:`. Between 640 and 768 the grid is
-          already three across, which leaves each figure about 160px — and
-          "1,247,820.55 SAR" needs 188 of them at 24px, so it truncated. One step
-          down over that band fits it exactly; above 768 there is room for the
-          display size. */}
-      <div className="mt-4 space-y-3 print:mt-2 print:space-y-1.5">
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground print:text-[7px]">
-            Total sales
-          </div>
-          <div className="mt-0.5 truncate text-xl font-semibold leading-tight tabular-nums md:text-2xl print:mt-0 print:text-[13px]">
-            {figure(fmtSAR(s.totalSales), "w-40")}
-          </div>
+          these cards share 186mm of paper, about 60mm each, and the ratio
+          between the two figures is held there too. */}
+      <div className="mt-4 print:mt-2">
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground print:text-[7px]">
+          Total sales
         </div>
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground print:text-[7px]">
+        <div className="mt-0.5 truncate text-xl font-semibold leading-tight tabular-nums md:text-2xl print:mt-0 print:text-[13px]">
+          {figure(fmtSAR(s.totalSales), "w-40")}
+        </div>
+        <div className="mt-2.5 print:mt-1.5">
+          <div className="text-[11px] font-medium text-muted-foreground print:text-[7px]">
             Completed sales
           </div>
-          <div className="mt-0.5 truncate text-xl font-semibold leading-tight tabular-nums text-[var(--positive)] md:text-2xl print:mt-0 print:text-[13px]">
-            {figure(fmtSAR(s.completedSales), "w-40")}
+          <div className="mt-0.5 truncate text-base font-semibold leading-tight tabular-nums text-[var(--positive)] md:text-lg print:mt-0 print:text-[11px]">
+            {figure(fmtSAR(s.completedSales), "w-32")}
           </div>
         </div>
       </div>

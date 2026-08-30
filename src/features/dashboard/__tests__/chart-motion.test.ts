@@ -7,7 +7,12 @@
  * `forceStill`, so the contract is assertable without a renderer.
  */
 import { describe, it, expect } from "vitest";
-import { buildChartMotion, __motionTiming, type ChartMotion } from "../chart-motion";
+import {
+  buildChartMotion,
+  isGenuineAnimationEnd,
+  __motionTiming,
+  type ChartMotion,
+} from "../chart-motion";
 
 const SERIES = ["line", "area", "bar", "pie"] as const;
 
@@ -133,5 +138,62 @@ describe("the disarm fallback", () => {
     // Unbounded arming would leave every panel one `ResponsiveContainer`
     // measurement away from replaying its entrance for the rest of the session.
     expect(__motionTiming.SETTLE_FALLBACK_MS).toBeLessThanOrEqual(10_000);
+  });
+});
+
+describe("isGenuineAnimationEnd", () => {
+  /**
+   * The line the whole scroll-triggered reveal rests on.
+   *
+   * `onAnimationEnd` is not only a completion signal: react-smooth calls it from
+   * `Animate.componentWillUnmount` as well, and Recharts unmounts that
+   * `<Animate>` on any width or height change, because it keys it by the chart's
+   * `updateId`. So a single `ResponsiveContainer` measurement during an entrance
+   * used to disarm the panel permanently — measured in headless Chrome, the
+   * daily-trend area was 2% drawn when a resize landed and every sample after it
+   * was the final frame.
+   *
+   * The only thing separating a real end from an unmount is how long the
+   * entrance actually ran, so these assertions are about the clock.
+   */
+  const { END_TOLERANCE_MS, DURATION } = __motionTiming;
+
+  it("believes an end that arrives after the series has had its full budget", () => {
+    expect(isGenuineAnimationEnd(1000, 1000 + DURATION.line, DURATION.line)).toBe(true);
+    expect(isGenuineAnimationEnd(1000, 1000 + DURATION.line + 500, DURATION.line)).toBe(true);
+  });
+
+  it("refuses an end from an <Animate> that unmounted mid-draw", () => {
+    // The measured case: 400ms into a 1500ms area entrance.
+    expect(isGenuineAnimationEnd(0, 400, DURATION.area)).toBe(false);
+    // And the pathological one — a double-mount, ended in the same frame.
+    expect(isGenuineAnimationEnd(0, 0, DURATION.area)).toBe(false);
+  });
+
+  it("refuses an end for an animation that never started", () => {
+    // No `onAnimationStart` has been seen, so there is nothing for this to be
+    // the end of. The panel stays armed and `SETTLE_FALLBACK_MS` covers the case
+    // where a start never comes at all.
+    expect(isGenuineAnimationEnd(null, 10_000, DURATION.bar)).toBe(false);
+  });
+
+  it("allows one frame of slack, and not a whole entrance of it", () => {
+    // The timestamp is taken inside a callback rather than by the animation
+    // manager, and a frame is 16.7ms at best. The tolerance is slack for that —
+    // it must stay far smaller than the gap it is separating, which is the
+    // entrance itself.
+    expect(END_TOLERANCE_MS).toBeGreaterThan(0);
+    expect(END_TOLERANCE_MS).toBeLessThan(Math.min(...Object.values(DURATION)) / 10);
+    expect(isGenuineAnimationEnd(0, DURATION.bar - END_TOLERANCE_MS, DURATION.bar)).toBe(true);
+    expect(isGenuineAnimationEnd(0, DURATION.bar - END_TOLERANCE_MS - 1, DURATION.bar)).toBe(false);
+  });
+
+  it("judges each series against its own budget, not the longest on the page", () => {
+    // A pie finishing at 1200ms is finished; a line at 1200ms is 400ms short of
+    // it. Sharing one deadline would settle the trend panel mid-draw, which is
+    // the bug this file already carries a fallback test for.
+    const t = 1200;
+    expect(isGenuineAnimationEnd(0, t, DURATION.pie)).toBe(true);
+    expect(isGenuineAnimationEnd(0, t, DURATION.line)).toBe(false);
   });
 });

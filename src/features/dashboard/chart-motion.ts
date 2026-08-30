@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type RefObject,
@@ -111,8 +112,18 @@ export interface ChartMotion {
    * Absent from the still presets, and from `buildChartMotion`, which stays a
    * pure function of two booleans. `useSettledChartMotion` adds it — see the
    * long note there for why a timer could not do this job.
+   *
+   * It is **not** only a completion signal, which is the trap that cost this
+   * page its animations; see `isGenuineAnimationEnd`.
    */
   onAnimationEnd?: () => void;
+  /**
+   * Recharts' "this series has begun" signal, paired with the one above.
+   *
+   * Only there to timestamp the entrance, so the end signal can be told apart
+   * from the identical call react-smooth makes when an `<Animate>` unmounts.
+   */
+  onAnimationStart?: () => void;
 }
 
 /**
@@ -212,6 +223,54 @@ export function useChartMotion(
   return useMemo(() => buildChartMotion(reduced, forceStill), [reduced, forceStill]);
 }
 
+/**
+ * How early a completion signal may still be believed, in milliseconds.
+ *
+ * Nominally zero would do: react-smooth runs `onAnimationStart`, then waits
+ * `begin`, then the animation, then `duration`, then `onAnimationEnd`, so a
+ * genuine end is never early. This is slack for the clock itself — a timestamp
+ * taken inside a callback rather than by the animation manager, and a frame
+ * budget that is 16.7ms at best.
+ *
+ * Small on purpose. It only has to be smaller than the gap this is separating,
+ * and that gap is the whole entrance: an unmount is typically hundreds of
+ * milliseconds early, never one frame.
+ */
+const END_TOLERANCE_MS = 32;
+
+/** `performance.now()` where there is one; monotonic matters more than the epoch. */
+const clock = (): number =>
+  typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+
+/**
+ * Did this `onAnimationEnd` come from an animation that actually ran?
+ *
+ * The signal is ambiguous — react-smooth fires it both when a tween completes
+ * and from `Animate.componentWillUnmount` — and the difference between the two
+ * is only ever visible in the timing. See `useSettledChartMotion` for what an
+ * unmount mid-entrance did to this page.
+ *
+ * Pure, and exported, because it is the load-bearing line of the whole reveal:
+ * get it wrong in the permissive direction and every panel snaps to its final
+ * frame on the first resize; get it wrong in the strict direction and panels
+ * stay armed and replay their entrance on a later one.
+ *
+ * @param startedAt When the entrance began, or null if none has started — in
+ *                  which case there is no animation for this to be the end of.
+ * @param now       The reading to compare against, on the same clock.
+ * @param duration  The budget the series was given.
+ */
+export function isGenuineAnimationEnd(
+  startedAt: number | null,
+  now: number,
+  duration: number,
+): boolean {
+  if (startedAt === null) return false;
+  return now - startedAt >= duration - END_TOLERANCE_MS;
+}
+
 /** Longest entrance on the page. */
 const LONGEST_MS = Math.max(...Object.values(DURATION));
 
@@ -270,11 +329,57 @@ const SETTLE_FALLBACK_MS = LONGEST_MS * SETTLE_FALLBACK_FACTOR + SETTLE_FALLBACK
  * was not visible at 950-1200ms on an idle machine, which is why it survived the
  * first fix; raising the durations to 1200-1600ms would have made it routine.
  *
- * So the disarm is now Recharts' own completion signal, spread onto every series
- * with the rest of the preset. It cannot fire early, it cannot fire late, and
- * when it fires the static geometry is by definition the frame already on
- * screen. `SETTLE_FALLBACK_MS` remains only for the case where the signal never
- * comes at all.
+ * So the disarm is Recharts' own completion signal, spread onto every series
+ * with the rest of the preset. `SETTLE_FALLBACK_MS` remains only for the case
+ * where that signal never comes at all.
+ *
+ * ---------------------------------------------------------------------------
+ * Why the completion signal is not, on its own, enough
+ * ---------------------------------------------------------------------------
+ * `onAnimationEnd` does not mean "this animation finished". react-smooth also
+ * calls it from `Animate.componentWillUnmount`, unconditionally, and the
+ * callback cannot tell the two apart:
+ *
+ *     componentWillUnmount() {
+ *       ...
+ *       if (onAnimationEnd) { onAnimationEnd(); }
+ *     }
+ *
+ * And an `<Animate>` here unmounts *routinely*. Recharts keys it
+ * `key={"bar-" + animationId}`, `animationId` is the chart's `updateId`, and
+ * `getDerivedStateFromProps` increments `updateId` on any **width or height**
+ * change. So a single `ResponsiveContainer` measurement during an entrance — a
+ * window resize, a scrollbar arriving, React 19's StrictMode double-mount in
+ * development — unmounted the running `<Animate>`, which called
+ * `onAnimationEnd`, which disarmed the panel **permanently**. The replacement
+ * series mounted still, and the chart was simply *there*.
+ *
+ * Measured in headless Chrome against these components: the daily-trend area's
+ * clip was 11px wide of an eventual 606px — the panel **2% drawn** — when a
+ * resize landed at t≈400ms. The next sample was 606px, and so was every sample
+ * for the following two seconds. It is the same snap the timer used to cause,
+ * reached from a different direction, and it is why the page read as having no
+ * chart animation at all.
+ *
+ * ---------------------------------------------------------------------------
+ * Telling a real end from an unmount
+ * ---------------------------------------------------------------------------
+ * By how long the entrance actually ran. react-smooth drives its sequence as
+ * `[onAnimationStart, begin, start, duration, onAnimationEnd]`, so a *genuine*
+ * end cannot arrive before `duration` has elapsed since the start it belongs
+ * to — it can only ever be late. An unmount call arrives whenever the unmount
+ * happens, which is almost always much earlier.
+ *
+ * So the entrance is timestamped from Recharts' `onAnimationStart`, and an end
+ * that arrives too early to be one is ignored (`isGenuineAnimationEnd`). The
+ * panel stays armed, the remounted `<Animate>` starts again from zero, and
+ * *that* entrance is the one allowed to settle it.
+ *
+ * Note which direction the clock is used in, because it is the opposite of the
+ * bug above. It can only ever *refuse* to settle; it can never settle anything
+ * by itself. Nothing here can switch a series to its static render before
+ * Recharts has said the series finished — which is exactly the property
+ * `setTimeout(longest + 300)` did not have.
  *
  * @param identity The data this panel draws. Compared by reference, so it must
  *                 be the memoised array the chart is handed — a fresh literal
@@ -291,42 +396,78 @@ export function useSettledChartMotion(
   const motion = useChartMotion(forceStill);
   const [armed, setArmed] = useState(true);
 
-  // Stable, so adding it to the presets below cannot hand Recharts a new prop
-  // object on every render — which would be a new `<Animate>` and a restart.
-  const settle = useCallback(() => setArmed(false), []);
+  /** When the entrance now on screen began. Null until one has started. */
+  const startedAt = useRef<number | null>(null);
+  const fallback = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearFallback = useCallback(() => {
+    if (fallback.current !== null) {
+      clearTimeout(fallback.current);
+      fallback.current = null;
+    }
+  }, []);
+
+  const armFallback = useCallback(() => {
+    clearFallback();
+    fallback.current = setTimeout(() => setArmed(false), SETTLE_FALLBACK_MS);
+  }, [clearFallback]);
+
+  /*
+   * Both stable, so attaching them to the presets below cannot hand Recharts a
+   * new prop object on every render — which would be a new `<Animate>`, and a
+   * restart.
+   */
+  const handleStart = useCallback(() => {
+    startedAt.current = clock();
+    // A restart is a new entrance, so the backstop restarts with it. Without
+    // this, a series that remounted late could be disarmed mid-draw by a window
+    // opened against an entrance that is no longer the one running.
+    armFallback();
+  }, [armFallback]);
+
+  const handleEnd = useCallback(
+    (duration: number) => {
+      if (!isGenuineAnimationEnd(startedAt.current, clock(), duration)) return;
+      clearFallback();
+      setArmed(false);
+    },
+    [clearFallback],
+  );
 
   useEffect(() => {
     if (!gate) return;
     // Re-arming on mount is a no-op: React bails out of a set to the same value.
+    startedAt.current = null;
     setArmed(true);
-    const timer = setTimeout(settle, SETTLE_FALLBACK_MS);
-    return () => clearTimeout(timer);
-  }, [identity, gate, settle]);
+    armFallback();
+    return clearFallback;
+  }, [identity, gate, armFallback, clearFallback]);
 
   /**
-   * The moving presets with the completion signal attached.
+   * The moving presets with both lifecycle signals attached.
    *
    * Built here rather than in `buildChartMotion` so that function stays a pure
    * function of two booleans and its contract stays assertable without a
-   * renderer. Memoised on the two things it depends on, for the reason in
-   * `settle` above.
+   * renderer. Memoised on what it depends on, for the reason above.
    */
   const listening = useMemo(() => {
-    const withEnd = (preset: ChartMotion): ChartMotion => ({
+    const listen = (preset: ChartMotion): ChartMotion => ({
       ...preset,
-      onAnimationEnd: settle,
+      onAnimationStart: handleStart,
+      // The duration is closed over per series type, so a bar's end is judged
+      // against a bar's budget rather than against the longest on the page.
+      onAnimationEnd: () => handleEnd(preset.animationDuration),
     });
     return {
-      line: withEnd(motion.line),
-      area: withEnd(motion.area),
-      bar: withEnd(motion.bar),
-      pie: withEnd(motion.pie),
+      line: listen(motion.line),
+      area: listen(motion.area),
+      bar: listen(motion.bar),
+      pie: listen(motion.pie),
     };
-  }, [motion, settle]);
+  }, [motion, handleStart, handleEnd]);
 
   return gate && armed ? listening : ALL_STILL;
 }
-
 /**
  * Has this element been on screen yet?
  *
@@ -472,4 +613,5 @@ export const __motionTiming = {
   SETTLE_FALLBACK_FLOOR_MS,
   LONGEST_MS,
   DURATION,
+  END_TOLERANCE_MS,
 };
