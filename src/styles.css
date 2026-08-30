@@ -846,6 +846,82 @@ html.theme-vt * {
   }
 }
 
+/* ---------------------------------------------------------------------------
+ * Dashboard entrance
+ * ---------------------------------------------------------------------------
+ * Two animations, and deliberately only two. A dashboard is a wall of cards; if
+ * every one of them arrives with its own gesture the page reads as a consumer
+ * feed rather than as a report, so the whole system is: sections rise a little
+ * as they arrive, and a chart's chrome fades up under the series Recharts is
+ * already drawing.
+ *
+ * `transform` and `opacity` only — both composited, neither affects layout, so
+ * nothing on the page moves while these run and no card can shift under a
+ * pointer that is already reaching for it.
+ * ------------------------------------------------------------------------- */
+
+/*
+ * 10px, not 24. The distance is what separates "settling into place" from
+ * "flying in", and at this size the movement is felt more than watched — which
+ * is the whole brief for a corporate surface.
+ */
+@keyframes dash-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/*
+ * `both` so the element is already invisible before its delay elapses —
+ * without it a staggered section would flash at full opacity and then start.
+ *
+ * The delay is a custom property rather than a set of `.delay-1` classes: the
+ * order of the Dashboard's sections is the route's business, and a stagger
+ * expressed in CSS class names has to be renumbered every time a section moves.
+ */
+.dash-enter {
+  animation: dash-enter 520ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation-delay: var(--dash-delay, 0ms);
+}
+
+/*
+ * A chart's axes, grid and legend are not animated by Recharts — they simply
+ * appear the instant the panel mounts, which against a series that spends a
+ * second drawing itself read as the frame arriving before the picture. This
+ * fades the frame up under it. Shorter than the series animation on purpose:
+ * the chrome should be settled before the data finishes.
+ */
+@keyframes chart-reveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.chart-reveal {
+  animation: chart-reveal 320ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+/*
+ * Reduced motion removes the movement, not the content. `animation: none`
+ * discards the `both` fill with it, so the element renders at its natural
+ * opacity immediately — which is the correct outcome and not the same as
+ * holding the final keyframe.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .dash-enter,
+  .chart-reveal {
+    animation: none;
+  }
+}
+
 .theme-icon-sun {
   opacity: calc(1 - var(--theme-dark));
   transform: rotate(calc(var(--theme-dark) * 90deg)) scale(calc(1 - 0.5 * var(--theme-dark)));

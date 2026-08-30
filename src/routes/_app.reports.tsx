@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { endOfMonth, format, startOfMonth } from "date-fns";
 import { Printer, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -16,11 +16,12 @@ import { useAuth } from "@/lib/auth";
 import { hasPerm } from "@/lib/permissions";
 import { DailyReportPrintTable, DailyReportView } from "@/features/reports/components/daily-report";
 import { MonthlyReportView } from "@/features/reports/components/monthly-report";
-import { ReportPrintFooter, ReportPrintHeader } from "@/features/reports/components/print-chrome";
+import { ReportPrintFooter, ReportPrintHeader } from "@/components/print-chrome";
 import { useDailyReport } from "@/features/reports/hooks/use-daily-report";
 import { useMonthlyReport } from "@/features/reports/hooks/use-monthly-report";
 import { BASIS_LABEL, type ReportBasis } from "@/features/reports/daily";
-import { PRINT_WIDTH_PX } from "@/features/reports/print-width";
+import { PRINT_WIDTH_PX } from "@/lib/print-width";
+import { usePrintExport } from "@/lib/print-export";
 
 /**
  * Management reports.
@@ -108,30 +109,12 @@ function Reports() {
   /**
    * The monthly PDF: lay the report out at the page's width, then print.
    *
-   * The two frames are the whole fix. `ResponsiveContainer` learns its size from
-   * a `ResizeObserver`, whose callback is delivered before the *next* frame's
-   * paint, and `window.print()` is synchronous — so narrowing the container and
-   * printing in the same tick hands the writer an SVG that still carries the
-   * screen's dimensions. One frame lets React commit the width, the second lets
-   * the observer fire and Recharts re-render at it. Only then is the page worth
-   * printing.
-   *
-   * `printing` stays true across the call so the dialog previews the same
-   * geometry, and is released in `finally` because `print()` throws on a
-   * cancelled dialog in some browsers and a report stuck at 703px would be a
-   * worse bug than the one this fixes.
+   * The frame wait and the reason for it now live in `usePrintExport`, which the
+   * Dashboard's own PDF export shares. It was two copies of the same paragraph
+   * about `ResizeObserver` timing, which is one copy too many for a rule that
+   * has to hold on both pages or neither.
    */
-  const [printing, setPrinting] = useState(false);
-  const printMonthly = useCallback(async () => {
-    setPrinting(true);
-    try {
-      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-      window.print();
-    } finally {
-      setPrinting(false);
-    }
-  }, []);
+  const { printing, print: printMonthly } = usePrintExport();
 
   if (!loading && !canView) {
     return (

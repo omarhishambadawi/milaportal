@@ -50,6 +50,11 @@ export function AnalyticsCard({
         // of cards; anything faster reads as the page twitching as the pointer
         // crosses it.
         "shadow-sm transition-shadow duration-300 hover:shadow-md",
+        // On paper, a panel split across a sheet boundary is the "awkwardly cut"
+        // failure — half a chart at the foot of page two and its axis at the top
+        // of page three. Every card opts out of the break; `styles.css` covers
+        // the table primitives underneath them.
+        "print:break-inside-avoid",
         className,
       )}
     >
@@ -81,7 +86,10 @@ export function AnalyticsCard({
             )}
           </div>
         </div>
-        {actions && <div className="shrink-0">{actions}</div>}
+        {/* Card actions are controls — a scope toggle, a tab strip. On paper
+            they are a set of dead buttons where the exported report should carry
+            the state they were left in, which the panel below already shows. */}
+        {actions && <div className="shrink-0 print:hidden">{actions}</div>}
       </CardHeader>
       <CardContent
         className={cn(

@@ -23,6 +23,7 @@ import {
   GRID_STROKE,
   LEGEND_STYLE,
   POINT_CURSOR,
+  TOOLTIP_MOTION,
   TOOLTIP_WRAPPER,
   legendText,
 } from "../chart-theme";
@@ -31,6 +32,7 @@ import { InViewChart } from "./in-view-chart";
 import { formatCompactSAR, formatCount, formatGrowth } from "../format";
 import type { MonthRow } from "../monthly-growth";
 import { AnalyticsCard } from "./analytics-card";
+import { ChartEmpty } from "./chart-empty";
 import { CHART_PANEL_HEIGHT } from "./sales-charts-skeleton";
 
 /**
@@ -73,20 +75,32 @@ const fmtAxisPct = (value: number | string) => {
 
 const fmtAxisCount = (value: number | string) => formatCount(finite(value));
 
+/**
+ * `empty` is the panel's business, not each chart's: an empty Recharts chart is
+ * a pair of axes labelled 0 to 0, which reads as a failure rather than as a
+ * timeline with nothing in it yet. Height is unchanged either way, so the grid
+ * does not reflow when one panel has data and its neighbour does not.
+ */
 function ChartPanel({
   title,
   subtitle,
   icon,
+  empty,
+  emptyHint,
   children,
 }: {
   title: string;
   subtitle?: string;
   icon?: React.ComponentProps<typeof AnalyticsCard>["icon"];
+  empty?: boolean;
+  emptyHint?: string;
   children: React.ReactNode;
 }) {
   return (
     <AnalyticsCard title={title} subtitle={subtitle} icon={icon}>
-      <div className={`w-full ${CHART_PANEL_HEIGHT}`}>{children}</div>
+      <div className={`w-full ${CHART_PANEL_HEIGHT}`}>
+        {empty ? <ChartEmpty label="No months to compare yet" hint={emptyHint} /> : children}
+      </div>
     </AnalyticsCard>
   );
 }
@@ -131,6 +145,8 @@ function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
         title="Monthly revenue trend"
         subtitle="Completed revenue per team, month by month"
         icon={TrendingUp}
+        empty={data.length === 0}
+        emptyHint="Completed revenue appears here once a month has closed."
       >
         <InViewChart identity={data}>
           {(motion) => (
@@ -162,6 +178,7 @@ function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
                   content={<ChartTooltip format={fmtTooltipSAR} footerKey="note" />}
                   cursor={POINT_CURSOR}
                   wrapperStyle={TOOLTIP_WRAPPER}
+                  {...TOOLTIP_MOTION}
                 />
                 <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
                 {/* Dots small and unfilled-looking at rest, decisive on hover. A
@@ -204,6 +221,8 @@ function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
         title="Revenue mix"
         subtitle="Cash against Wasfaty, both teams combined"
         icon={Layers}
+        empty={data.length === 0}
+        emptyHint="The Cash and Wasfaty split appears once a month has closed."
       >
         <InViewChart identity={data}>
           {(motion) => (
@@ -235,6 +254,7 @@ function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
                   content={<ChartTooltip format={fmtTooltipSAR} footerKey="note" />}
                   cursor={BAR_CURSOR}
                   wrapperStyle={TOOLTIP_WRAPPER}
+                  {...TOOLTIP_MOTION}
                 />
                 <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
                 <Bar
@@ -277,6 +297,8 @@ function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
         title="Month-over-month growth"
         subtitle="Combined completed revenue against the previous month"
         icon={ChartColumnIncreasing}
+        empty={growthData.length === 0}
+        emptyHint="Growth needs two closed months to compare."
       >
         <InViewChart identity={growthData}>
           {(motion) => (
@@ -308,6 +330,7 @@ function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
                   content={<ChartTooltip format={fmtTooltipPct} footerKey="growthNote" />}
                   cursor={BAR_CURSOR}
                   wrapperStyle={TOOLTIP_WRAPPER}
+                  {...TOOLTIP_MOTION}
                 />
                 {/* The zero line is the whole point of this panel: it is what makes
                   a bar below it read as a contraction rather than as a short bar. */}
@@ -346,6 +369,8 @@ function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
         title="Order volume"
         subtitle="Completed orders per team, month by month"
         icon={Coins}
+        empty={data.length === 0}
+        emptyHint="Completed order counts appear once a month has closed."
       >
         <InViewChart identity={data}>
           {(motion) => (
@@ -386,6 +411,7 @@ function MonthlyGrowthChartsImpl({ rows }: { rows: readonly MonthRow[] }) {
                   content={<ChartTooltip format={fmtTooltipCount} unit="orders" footerKey="note" />}
                   cursor={BAR_CURSOR}
                   wrapperStyle={TOOLTIP_WRAPPER}
+                  {...TOOLTIP_MOTION}
                 />
                 <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
                 <Bar

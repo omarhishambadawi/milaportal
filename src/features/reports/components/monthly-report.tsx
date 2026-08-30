@@ -34,7 +34,7 @@ import type { useMonthlyReport } from "../hooks/use-monthly-report";
  * meant the layout being measured and the layout being printed could differ, and
  * a chart measured against one and rendered into the other is how the first
  * version came out clipped. See `@media print` in `styles.css` for the page
- * geometry and `print-width.ts` for why the width is applied before printing.
+ * geometry and `lib/print-width.ts` for why the width is applied before printing.
  */
 
 const MonthlyCharts = lazy(() =>

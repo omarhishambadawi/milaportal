@@ -29,12 +29,14 @@ import {
   LEGEND_STYLE,
   PIE_LABEL,
   POINT_CURSOR,
+  TOOLTIP_MOTION,
   TOOLTIP_WRAPPER,
   legendText,
 } from "../chart-theme";
 import { fmtAxisSAR } from "../chart-format";
 import { InViewChart } from "./in-view-chart";
 import { AnalyticsCard } from "./analytics-card";
+import { ChartEmpty } from "./chart-empty";
 import { HorizontalBarPanel } from "./horizontal-bar-panel";
 import { CHART_PANEL_HEIGHT } from "./sales-charts-skeleton";
 
@@ -74,21 +76,35 @@ export interface SalesChartsData {
   cityData: (Named & { sales: number })[];
 }
 
-/** A fixed-height panel, for the charts whose height does not follow row count. */
+/**
+ * A fixed-height panel, for the charts whose height does not follow row count.
+ *
+ * `empty` is handled here rather than at each call site because an empty
+ * Recharts chart is not an empty panel — it is a set of axes labelled 0 to 0
+ * with nothing between them, which reads as a chart that failed rather than as a
+ * period with no orders in it. The panel keeps its height either way, so a
+ * filter that empties one card does not resize the row it shares.
+ */
 function ChartPanel({
   title,
   subtitle,
   icon,
+  empty,
+  emptyHint,
   children,
 }: {
   title: string;
   subtitle?: string;
   icon?: LucideIcon;
+  empty?: boolean;
+  emptyHint?: string;
   children: React.ReactNode;
 }) {
   return (
     <AnalyticsCard title={title} subtitle={subtitle} icon={icon}>
-      <div className={`w-full ${CHART_PANEL_HEIGHT}`}>{children}</div>
+      <div className={`w-full ${CHART_PANEL_HEIGHT}`}>
+        {empty ? <ChartEmpty hint={emptyHint} /> : children}
+      </div>
     </AnalyticsCard>
   );
 }
@@ -145,6 +161,7 @@ function TeamBarChart({ data }: { data: (Named & { sales: number })[] }) {
               content={<ChartTooltip format={fmtSAR} />}
               cursor={BAR_CURSOR}
               wrapperStyle={TOOLTIP_WRAPPER}
+              {...TOOLTIP_MOTION}
             />
             <Bar
               dataKey="sales"
@@ -188,6 +205,8 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
         title="Daily sales trend"
         subtitle="All orders against completed"
         icon={ChartColumn}
+        empty={data.dailyData.length === 0}
+        emptyHint="No orders were logged in the selected range."
       >
         <InViewChart identity={data.dailyData}>
           {(motion) => (
@@ -229,6 +248,7 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
                   content={<ChartTooltip format={fmtSAR} />}
                   cursor={POINT_CURSOR}
                   wrapperStyle={TOOLTIP_WRAPPER}
+                  {...TOOLTIP_MOTION}
                 />
                 <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
                 <Area
@@ -257,7 +277,13 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
         </InViewChart>
       </ChartPanel>
 
-      <ChartPanel title="Orders by status" subtitle="Share of orders in the period" icon={ChartPie}>
+      <ChartPanel
+        title="Orders by status"
+        subtitle="Share of orders in the period"
+        icon={ChartPie}
+        empty={data.statusData.length === 0}
+        emptyHint="No orders were logged in the selected range."
+      >
         <InViewChart identity={data.statusData}>
           {(motion) => (
             <ResponsiveContainer width="100%" height="100%">
@@ -266,7 +292,17 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
                   data={data.statusData}
                   dataKey="value"
                   nameKey="name"
+                  // A donut rather than a full pie. The centre of a pie carries
+                  // no information — every slice's angle is already readable at
+                  // the rim — while the wedges converging on a point is what
+                  // makes a small slice a sliver too thin to hold its own
+                  // colour. The ring reads the same and gives every category a
+                  // band of even thickness.
+                  innerRadius={52}
                   outerRadius={80}
+                  // A degree and a half of air between neighbours, so the
+                  // boundary is a gap rather than a seam painted in card colour.
+                  paddingAngle={1.5}
                   label={PIE_LABEL}
                   // Separates a slice from its neighbour with the card colour rather
                   // than the default black hairline, which is a visible seam on dark.
@@ -286,14 +322,24 @@ function SalesChartsImpl({ data }: { data: SalesChartsData }) {
                 <Legend iconType="circle" wrapperStyle={LEGEND_STYLE} formatter={legendText} />
                 {/* No heading: a pie tooltip's label and its single row name the same
                 slice, so the heading was the word repeated twice. */}
-                <Tooltip content={<ChartTooltip hideLabel />} wrapperStyle={TOOLTIP_WRAPPER} />
+                <Tooltip
+                  content={<ChartTooltip hideLabel />}
+                  wrapperStyle={TOOLTIP_WRAPPER}
+                  {...TOOLTIP_MOTION}
+                />
               </PieChart>
             </ResponsiveContainer>
           )}
         </InViewChart>
       </ChartPanel>
 
-      <ChartPanel title="Sales by team" subtitle="Completed sales per team" icon={Users}>
+      <ChartPanel
+        title="Sales by team"
+        subtitle="Completed sales per team"
+        icon={Users}
+        empty={data.teamData.length === 0}
+        emptyHint="No completed sales were recorded in the selected range."
+      >
         <TeamBarChart data={data.teamData} />
       </ChartPanel>
 

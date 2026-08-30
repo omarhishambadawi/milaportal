@@ -28,13 +28,26 @@ const RANKED_PANEL_HEIGHT = 396;
 
 const PANEL_HEIGHTS = [256, 256, 256, RANKED_PANEL_HEIGHT, RANKED_PANEL_HEIGHT, 300];
 
+/**
+ * One placeholder panel — the card chrome `AnalyticsCard` already knows how to
+ * draw, over a plot-shaped block of the height the real panel will take.
+ *
+ * Exported because the Complaints chart is behind its own lazy boundary and was
+ * otherwise going to grow a fourth copy of these two lines.
+ */
+export function ChartCardSkeleton({ height = 256 }: { height?: number }) {
+  return (
+    <AnalyticsCard title="" loading>
+      <div className="w-full animate-pulse rounded-lg bg-muted/50" style={{ height }} />
+    </AnalyticsCard>
+  );
+}
+
 export function SalesChartsSkeleton() {
   return (
     <div className="grid min-w-0 gap-3 sm:gap-4 lg:grid-cols-2">
       {PANEL_HEIGHTS.map((height, index) => (
-        <AnalyticsCard key={index} title="" loading>
-          <div className="w-full animate-pulse rounded-lg bg-muted/50" style={{ height }} />
-        </AnalyticsCard>
+        <ChartCardSkeleton key={index} height={height} />
       ))}
     </div>
   );

@@ -174,7 +174,7 @@ A **feature module** consistently contains: `components/`, `hooks/`,
 
 `--primary` and `--success` are **fills**. They are chosen to be sat on — a
 button, a chip, a tint — with `--primary-foreground` on top, and at L 0.72 / 0.62
-they do that well. Set as *text* on a card in light mode they measure **2.35:1**
+they do that well. Set as _text_ on a card in light mode they measure **2.35:1**
 and **3.39:1**, and the portal uses both as text constantly: every link, every
 "Verified" mark, every automated caption.
 
@@ -184,10 +184,10 @@ extra tokens rather than a change to the originals. Same hue, lower lightness,
 and slightly lower chroma so the colour stays inside sRGB instead of clipping its
 red channel to zero and drifting off-hue:
 
-| Token           | Light                    | Dark                    |
-| --------------- | ------------------------ | ----------------------- |
-| `--primary-ink` | `oklch(0.535 0.09 194)`  | `oklch(0.76 0.13 194)`  |
-| `--success-ink` | `oklch(0.525 0.13 155)`  | `oklch(0.7 0.15 155)`   |
+| Token           | Light                   | Dark                   |
+| --------------- | ----------------------- | ---------------------- |
+| `--primary-ink` | `oklch(0.535 0.09 194)` | `oklch(0.76 0.13 194)` |
+| `--success-ink` | `oklch(0.525 0.13 155)` | `oklch(0.7 0.15 155)`  |
 
 **They differ from the fills in light mode only.** On a dark card the fills
 already measure 8.31:1 and 6.76:1, so the dark values are the dark values of
@@ -478,7 +478,7 @@ yourself a temporary password; an Agent Code is refused for non-agent roles.
 ### Auditor: allowed is wider than defaults
 
 Every other role's `_allowed` and `_defaults` differ only where a permission is
-grantable but off by default. The auditor's two lists used to be the *same*
+grantable but off by default. The auditor's two lists used to be the _same_
 array, which made "an administrator may grant this to one auditor" impossible to
 express — anything grantable was automatic.
 
@@ -535,7 +535,7 @@ first.
 (→ `auth.users`, `ON DELETE RESTRICT`), `order_type`, `branch_no`
 (→ `branches.branch_no`), `delivery_type`, `invoice_no`, `invoice_value`,
 `status`, `customer_name`, `customer_phone`, `notes`, `call_center_verified`,
-`created_by` (→ `auth.users`, `DEFAULT auth.uid()` — who *entered* the order, as
+`created_by` (→ `auth.users`, `DEFAULT auth.uid()` — who _entered_ the order, as
 opposed to `agent_id`, who owns it), `created_at`, `updated_at`.
 
 Indexes include `orders_team_date_idx (team, order_date) INCLUDE (agent_id,
@@ -984,9 +984,12 @@ unmodified in structure and consumed through the `@/components/ui/*` alias.
 ### Feature components (selection)
 
 - **Dashboard:** `stat-card`, `dash-kpi-card`, `analytics-card`,
-  `analytics-table` (+ `Thead/Tbody/Th/Td/EmptyRow`), `delivery-matrix`,
-  `horizontal-bar-panel`, `sales-charts` (lazy) + `sales-charts-skeleton`,
-  `section-title`. The four heavy panels — `delivery-matrix`,
+  `analytics-table` (+ `Thead/Tbody/Th/Td/EmptyRow`), `chart-empty`,
+  `delivery-matrix`, `horizontal-bar-panel`, `sales-charts` (lazy) +
+  `sales-charts-skeleton` (+ `ChartCardSkeleton`), `complaints-charts` (lazy),
+  `in-view-chart`, `reveal`, `section-title`. Ranked-panel geometry — measured
+  axis width, row rhythm, panel height — lives in `hooks/use-ranked-axis.ts` and
+  is shared by `horizontal-bar-panel` and `complaints-charts`. The four heavy panels — `delivery-matrix`,
   `horizontal-bar-panel`, `sales-charts`, `monthly-growth-section`, plus the
   shared `saudi-sales-map` — are `memo`ised, because the route re-renders once
   per aggregation query that settles (eleven of them) and each panel's props are
@@ -1144,11 +1147,12 @@ Provider-agnostic and pure. `index.ts` is the only import surface.
 
 ### Chart motion (`chart-motion.ts`)
 
-One module owns every Dashboard chart's enter animation: `ease-out`, 550–700ms,
-`animationBegin: 0`, nothing looping, bouncing or scaling. `buildChartMotion` is
-a pure function of `(reduced, forceStill)` so the contract is unit-tested rather
-than checked by eye; `usePrefersReducedMotion` makes reduced-motion still, and
-`forceStill` does the same for the PDF export.
+One module owns every Dashboard chart's enter animation: one shared
+`cubic-bezier(0.4, 0, 0.2, 1)`, 950–1200ms per series type, `animationBegin: 0`,
+nothing looping, bouncing or scaling. `buildChartMotion` is a pure function of
+`(reduced, forceStill)` so the contract is unit-tested rather than checked by
+eye; `usePrefersReducedMotion` makes reduced-motion still, and `forceStill` does
+the same for the PDF export.
 
 `animationBegin` is carried explicitly because **Recharts defaults it to 400 for
 `Pie` and 0 for everything else**. A preset that set only the duration therefore
@@ -1164,7 +1168,7 @@ chart's internal `updateId`, which `generateCategoricalChart` increments on any
 window edge blinked ten panels out and redrew them. `updateId` is internal and
 there is no prop to disable it.
 
-Instead, animation is treated as a property of *having just received data*. The
+Instead, animation is treated as a property of _having just received data_. The
 presets are armed for one entrance after `identity` changes and then go still;
 once still, Recharts takes its static render path and draws the series at full
 size on every subsequent render, so a resize, a hover, a tooltip or a parent
@@ -1173,6 +1177,51 @@ re-arms it, and because Recharts keeps the previous series as `prevData` that
 second animation interpolates old → new rather than from zero. `identity` must be
 the memoised series array — a fresh literal each render would re-arm every render
 and defeat the whole mechanism.
+
+#### `useChartReveal` — why a deferred panel must not render early
+
+`useInViewOnce` holds a panel's entrance until it scrolls into view, and the
+first cut of that rendered the chart immediately with `isAnimationActive: false`
+and armed it afterwards. **That is the "Monthly revenue trend jumps" defect**,
+and it is a Recharts lifecycle trap rather than a timing one:
+
+- `Line.componentDidMount` returns early when `isAnimationActive` is false, so
+  `state.totalLength` — the path length its draw-on animation interpolates
+  towards — is never measured and stays `0`.
+- With the flag off, `renderCurve` takes `renderCurveStatically`, so the line is
+  painted **complete**.
+- When the flag flips true, `renderCurve` switches to the animated path with
+  `prevPoints` still undefined, react-smooth runs `t: 0 → 1` from the start, and
+  `strokeDasharray` is computed against `totalLength = 0`. `componentDidUpdate`
+  measures the real length a frame later, and the fully-drawn line **collapses to
+  a stub and redraws itself**.
+
+`Bar` and `Area` fail the same way for the same reason — their animated paths
+interpolate from zero height and zero clip width when there is no `prevData` — so
+a bar panel blinked out and grew back.
+
+The fix is not a slower animation or no animation: it is to stop rendering a
+finished chart that we intend to animate. `useChartReveal(identity, ref)` returns
+`{ ready, motion }`, `ready` gates the chart's very existence, and what mounts
+then has animation active from its first frame — the one arrangement Recharts'
+lifecycle is built for, with the measurement happening in `componentDidMount`
+before the browser paints. The wrapper keeps the panel's height throughout, so
+nothing reflows. Verified in a browser: the line now mounts at
+`stroke-dasharray: 0px 576.29px` (real length, undrawn) and ends with no
+dasharray at all (settled, static) — never the `0px 0px` that produced the jump.
+
+`useChartReveal` also reads `ChartPrintContext`, which the route provides. See
+the PDF export below.
+
+#### Page entrance (`components/reveal.tsx`, `.dash-enter` in `styles.css`)
+
+Two animations on the whole page, and deliberately only two: sections rise 10px
+and fade in on a `DASH_DELAY` ladder (header → KPI cards → charts → secondary
+content, about 70ms a step, topping out inside the first viewport), and a
+chart's chrome — axes, grid, legend, none of which Recharts animates — fades up
+under the series with `.chart-reveal`. Both are `opacity` and `transform` only,
+so neither can shift the layout, and both drop to nothing under
+`prefers-reduced-motion` and under `@media print`.
 
 Eleven independent aggregation queries plus an on-demand export dataset, all
 keyed under `queryKeys.dashboard.*` so one `dashboard.all()` invalidation sweeps
@@ -1198,9 +1247,82 @@ Filters: date range (presets + custom), team, agent. `restrictAgentIdentity`
 anonymises other agents' names for roles without `view_all_agents`, while the
 ranking, the values and the chart layout stay exactly as they are.
 
-`sales-charts.tsx` is `lazy()`-loaded behind `SalesChartsSkeleton`. Export
-(`features/dashboard/export.ts`) writes a multi-sheet XLSX from a query with
-`enabled: false`, fetched only when the button is pressed.
+`sales-charts.tsx`, `monthly-growth-charts.tsx` and `complaints-charts.tsx` are
+each `lazy()`-loaded behind a skeleton, so Recharts stays out of the route's own
+chunk.
+
+### Export — two documents, one button
+
+The Export control is a menu with two items, because the two answer different
+needs and neither replaces the other:
+
+- **Excel workbook** — `features/dashboard/export.ts`, a multi-sheet XLSX built
+  from a query with `enabled: false` and fetched only when the item is chosen.
+  Ten sheets of underlying rows, meant to be filtered and pivoted. Unchanged.
+- **PDF report** — `window.print()` over the real DOM, the same mechanism the
+  Reports and Calls pages use. No PDF library, no canvas rasteriser, nothing
+  added to the bundle: the browser's own writer renders the live document at
+  print resolution, so text stays selectable and charts stay vector.
+
+Three things make the PDF a report rather than a photograph of a web page, and
+none of them touches the screen layout:
+
+1. **The page is laid out at A4's printable width first.** The route pins its
+   content to `PRINT_WIDTH_PX` (703px — 210mm less the 12mm `@page` margins) for
+   the duration, so every `ResponsiveContainer` measures the sheet rather than
+   the monitor. `usePrintExport` (`src/lib/print-export.ts`, shared with
+   Reports) waits four animation frames before calling `print()`, because both
+   the width change and the newly mounted charts settle on frames, not on a
+   timer.
+2. **Every chart is mounted and made still**, through `ChartPrintContext`.
+   Panels are otherwise deferred until they scroll into view and a sheet of
+   paper does not scroll, so without this the export would carry empty cards for
+   everything below the first screen — and an animated panel would print
+   whichever frame it was part-way through, which for a bar growing from the
+   baseline is no bar at all.
+3. **Controls drop out.** The filter row, the export menu and every
+   `AnalyticsCard` `actions` slot are `print:hidden`; the state they were left in
+   is stated in the report's masthead instead.
+
+Masthead and running footer come from `src/components/print-chrome.tsx` (moved
+out of `features/reports` when the Dashboard began sharing it), so a Dashboard
+export and a Monthly Report leave the building looking like two documents from
+one organisation. Page geometry — A4, margins, break rules, table density — is
+the `@media print` block in `styles.css`; `AnalyticsCard` carries
+`print:break-inside-avoid` so no panel is cut across a sheet boundary. KPI cards
+carry `print:` type sizes because three of them share 186mm of paper and
+`1,247,820.55 SAR` at 24px does not fit 60mm.
+
+### Complaints visualisation
+
+`complaints-charts.tsx` draws **Complaints by branch — resolved against open**,
+a stacked horizontal bar over the top 10 branches by volume. The shape is
+constrained by what the data actually contains and no RPC was added to widen it:
+`complaints_locations` returns total / resolved / open / rate per branch and per
+city, and `complaints_kpis` the same four for the period. There is **no complaint
+date series, no category, no channel and no source**, so a trend line, a reason
+breakdown or a channel split could only be invented. What the data does support
+is the composition that matters — each branch's volume split by whether it has
+been dealt with — where the bar's length is the ranking the table gives and the
+amber portion is the backlog. Colours are the page's own `--positive` /
+`--attention` semantics, the same pair the tables under it use.
+
+The KPI strip and both tables are unchanged and still carry the exact figures;
+the chart sits between them, so the section reads summary → picture → detail.
+
+### Empty and loading states
+
+`components/chart-empty.tsx` is the one "nothing to plot" state for every chart
+panel: a muted glyph, the fact, and the reason. An empty Recharts chart is a pair
+of axes labelled 0 to 0, which reads as a panel that failed rather than as a
+period with no orders in it. The panel keeps its height, so a filter that empties
+one card does not resize the row it shares.
+
+`DashKpiCard`'s `loading` swaps each **figure** for a tinted bar drawn inside the
+element the figure would occupy — not a parallel skeleton tree, which is a second
+set of heights to keep in step with the first and had already drifted 22px. The
+icon, the label and the row captions stay, so the card says what it is while its
+numbers arrive, and the measured layout shift on load is zero.
 
 ### Delivery methods
 
@@ -1514,7 +1636,7 @@ cropping and overflow that used to come out of the Monthly Report. See the
 - **Dark mode does not reach paper.** The `.dark` palette block is scoped to
   `@media screen`, so a PDF exported from a dark session falls back to the `:root`
   light values rather than needing all fifty-two tokens restated.
-- **Branding.** `components/print-chrome.tsx` adds a masthead on the first sheet
+- **Branding.** `src/components/print-chrome.tsx` adds a masthead on the first sheet
   and a footer at the end of the report. The footer was `position: fixed` so the
   renderer would repeat it per sheet; Chromium does repeat fixed elements, but it
   resolves their offsets against the first page box, so it landed across the
@@ -1535,12 +1657,17 @@ item — those were the giant circles over the plot area. And scaling a chart la
 out at 1400px into a 703px page halves its axis labels with it. **There is now no
 chart CSS in the print block at all.** Instead:
 
-- `features/reports/print-width.ts` states the printable width — A4 less the
-  `@page` side margins, 703 CSS px.
-- The export handler pins the report to that width, waits two animation frames so
-  React can commit and the observer can fire, and only then calls `print()`. The
-  chart is already the right size when the page is handed over, so nothing needs
-  correcting afterwards.
+- `lib/print-width.ts` states the printable width — A4 less the `@page` side
+  margins, 703 CSS px. (Moved out of `features/reports` when the Dashboard began
+  printing through the same mechanism.)
+- `lib/print-export.ts`'s `usePrintExport` pins the page to that width, waits
+  four animation frames so React can commit, the observer can fire and any chart
+  mounted for the export can re-render at the new size, and only then calls
+  `print()`. The chart is already the right size when the page is handed over, so
+  nothing needs correcting afterwards. Both the Reports and the Dashboard export
+  go through this one hook — it was two copies of the same paragraph about
+  `ResizeObserver` timing, which is one copy too many for a rule that has to hold
+  on both pages or neither.
 - Print therefore has **no second layout**. At 703px the responsive classes
   already give one-column grids and a two-across KPI strip, so what is measured is
   what is printed. Print-only column counts were removed for exactly that reason:
@@ -1602,7 +1729,7 @@ the whole filtered set in 1000-row batches.
 **Each row is a `memo`ised `OrderRow`.** The markup is unchanged; it is a
 component so that React can skip it. Every re-render of the page — a keystroke
 in the search box (which re-renders on every character, ahead of the 300ms
-debounce that gates the *query*), opening a filter dropdown, a background
+debounce that gates the _query_), opening a filter dropdown, a background
 refetch settling, the return highlight arming and disarming — used to re-render
 all 25-100 rows, each carrying a Radix `Select`, two tooltips and a copy button.
 The memo only pays off if the props are stable, so that is enforced at the
@@ -1705,7 +1832,7 @@ Three of those columns carry state rather than a field:
 - **Call Centre** (col 1) — read-only, derived, three states
   (`components/call-centre-cell`). It used to be a checkbox an agent could tick,
   which made a claim the row cannot support: the channel is a property of the
-  *document*, and since `record_invoice_verification` re-derives the flag on
+  _document_, and since `record_invoice_verification` re-derives the flag on
   every reconciliation a disagreeing tick would be silently overwritten. The
   cell is a `span` with a tooltip now — nothing to press.
 
@@ -1713,17 +1840,18 @@ Three of those columns carry state rather than a field:
   checked yet" and "checked, and it is a walk-in invoice", and those want
   opposite treatments; `invoices_verified` separates them:
 
-  | State      | Condition                                     | Row                             |
-  | ---------- | --------------------------------------------- | ------------------------------- |
-  | `pending`  | `!invoices_verified`                          | muted dash, no tint             |
-  | `verified` | `call_center_verified`                        | success tick, success rail      |
-  | `walk_in`  | `invoices_verified && !call_center_verified`  | warning icon, rail, faint tint  |
+  | State      | Condition                                    | Row                            |
+  | ---------- | -------------------------------------------- | ------------------------------ |
+  | `pending`  | `!invoices_verified`                         | muted dash, no tint            |
+  | `verified` | `call_center_verified`                       | success tick, success rail     |
+  | `walk_in`  | `invoices_verified && !call_center_verified` | warning icon, rail, faint tint |
 
   Only the warning case tints the row, at ~5.5% destructive. The old positive
   tint (`--tint-row`, 15% turquoise across every verified row) is gone: on a
   page where most orders are verified it lit up most of the table at once, which
   made the one row worth looking at harder to find rather than easier. The tick
   carries the positive state.
+
 - **Star** (col 2) — `useStarredOrders`, below. Per agent, in `order_stars`.
 - **Invoice No.** — every invoice on the order, one per line
   (`components/invoice-cell`). It used to show the first with a "+2" pill, which
@@ -1833,7 +1961,7 @@ The payload itself is built by **`buildOrderPayload`** (pure, in
 changing only its value failed with
 `delivery_type: "Delivery / pickup method is required"` — on orders that have
 one; all 4344 rows do, and the column is granted to `authenticated`, so the
-value was never missing from the *order*, only from form state at submit. That
+value was never missing from the _order_, only from form state at submit. That
 can happen for more than one reason (a save before the fetch resolved, a stale
 `setForm({...form})` closure captured on an earlier render), so the rule is about
 shape rather than any one field: **a required field left blank is never a user's
@@ -1849,11 +1977,11 @@ hands back a new one per refetch, so a verification landing mid-edit used to
 rebuild the form under the agent), and every `setForm` in the route is a
 functional update. `call_center_verified` is re-applied on its own, raise-only.
 
-#### The same rule governs what the form *shows*
+#### The same rule governs what the form _shows_
 
 The fallback above covered the **write** and left the **screen** alone, and that
 gap was its own reported bug: an AlShrouq order reopened for editing showed
-"Delivery & pickup — *Select a method…*" even though the column held `AlShrouq`
+"Delivery & pickup — _Select a method…_" even though the column held `AlShrouq`
 (byte-exact, `len 8`, matching `DELIVERY_TYPES[0]`) and the delivery had already
 been accepted by the courier. Nothing was wrong with the data — every save had
 been falling back correctly — so the order never lost its method; only the
@@ -1878,7 +2006,7 @@ back to and must answer for itself.
 
 The last two schema fields are optional so they can be **omitted rather than sent as a default**:
 an absent column keeps whatever the row holds. `call_center_verified` is sent
-only when the caller may verify *and* is not about to write `false` over a flag a
+only when the caller may verify _and_ is not about to write `false` over a flag a
 verified call-centre invoice has set — a save carrying stale form state must not
 untick an automated verification, and raising the flag to `true` from the invoice
 is not this path's job either (that transition belongs to
@@ -1918,7 +2046,7 @@ while the form's two-up fields swam in whitespace opposite. Measured at 1440px:
 
 #### Visual hierarchy — the page's type, weight and border budget
 
-The layout above decided *where* things sit. This decides how much ink each of
+The layout above decided _where_ things sit. This decides how much ink each of
 them gets, and it is the answer to a page that had grown into a grid of boxes:
 seven cards at full border strength, a header whose facts were drawn with six
 icons, and three status pills that were three different shapes.
@@ -1934,7 +2062,7 @@ column is flat (`shadow-none`) and a shade denser at `p-4`, stacked at
 `space-y-4` against the workflow's `space-y-5`. The context column is present and
 plainly secondary without any of its content changing. `BranchPreviewPanel` is
 shared with the complaint form, so it is not edited — the order page passes it
-`className="shadow-none"` to flatten it alongside its neighbours, and *only* the
+`className="shadow-none"` to flatten it alongside its neighbours, and _only_ the
 elevation, because a `border-*` override in that slot would silently replace the
 attention border the panel uses to say a code is not a pharmacy.
 
@@ -1953,8 +2081,8 @@ a gap the reader cannot see. The header carries **one** border, a hairline
 underneath: not a surface, which is what the earlier sticky bar got wrong, but a
 line that closes the header and opens the workspace.
 
-**Three actions, three weights.** *Update order* is filled, *Cancel* is outlined,
-*Delete* is `variant="ghost"` in the destructive colour — it keeps the colour,
+**Three actions, three weights.** _Update order_ is filled, _Cancel_ is outlined,
+_Delete_ is `variant="ghost"` in the destructive colour — it keeps the colour,
 which is what makes it read as dangerous, and loses the outline, which is what
 was giving a rarely-pressed action the same weight as the two beside it. Nothing
 about their behaviour changed; the submit still reaches the form by id.
@@ -1991,17 +2119,17 @@ bordered box — a card inside a card inside a column of cards — spending a bo
 and a fill to announce something the figure already says. It is a plain block
 now: a small ticked label, the money at a size nothing else in the panel reaches,
 and `N of M verified` under it. That count used to live in a chip beside the
-panel's *name*, and only when the order had more than one invoice; it is stated
+panel's _name_, and only when the order had more than one invoice; it is stated
 for every order now, including `0 of 2`. Each document is a row of a divided list
 rather than an outlined block, so a single-invoice order — the common one — stops
-having a box drawn around the only thing in it. The fold, the fetch and *Check
-again* are untouched.
+having a box drawn around the only thing in it. The fold, the fetch and _Check
+again_ are untouched.
 
 **The dispatch card puts the point above the link.** `Lat`/`Lng` were the
 quietest thing in the delivery-location block, under the customer's map link;
 they are 13px foreground mono now, with the link beneath them as provenance. The
 link is where the point came from — the coordinates are what a courier routes to.
-*Open tracking* is the card's filled primary rather than the third of three
+_Open tracking_ is the card's filled primary rather than the third of three
 outline buttons, which is what it always was in intent.
 
 **The branch panel joins the shell.** It read `PANEL_CONTEXT` for itself now, so
@@ -2014,7 +2142,7 @@ warehouse rather than a pharmacy, is untouched and still wins over the shell.
 **The timeline folds.** It was the tallest panel in the column and the least
 urgent thing on the page: an order verified, synced, flagged, scheduled,
 dispatched and accepted carries a dozen entries within the hour, at three to five
-lines each. It shows six and offers *View full activity*; nothing is dropped and
+lines each. It shows six and offers _View full activity_; nothing is dropped and
 nothing is fetched differently. Measured on an eleven-event order: 763px → 498px,
 a 35% cut, with the panel at 28% of the column instead of 40%.
 
@@ -2035,9 +2163,9 @@ own fill 5.66 / 6.59, the timeline's fold 16.51 / 15.1. The fold is `foreground`
 with `hover:text-primary` for that last number: `text-primary` on a card measures
 **2.35 / 8.31**, which is thin for a 12px label and thinner still for a panel's
 only affordance — and the control reads as one without colour, being full width,
-under a rule, centred and chevroned. The 2.35 still applies to *Location shared by
-the customer*, which is a genuine external link and shares the colour with
-*Add invoice*, *Retry* and the timeline's *Open tracking*; it is recorded here
+under a rule, centred and chevroned. The 2.35 still applies to _Location shared by
+the customer_, which is a genuine external link and shares the colour with
+_Add invoice_, _Retry_ and the timeline's _Open tracking_; it is recorded here
 rather than fixed, since `--primary` as link text is an app-wide decision and not
 an Orders one. No horizontal overflow and no overflowing descendant at 1440, 1280
 (the narrowest the column ever gets, 472px), 1024, 820, 640, 420 or 375.
@@ -2045,7 +2173,7 @@ an Orders one. No horizontal overflow and no overflowing descendant at 1440, 128
 #### The workflow column — five groups, four steps, and no box for a checkbox
 
 The context column was made to state its answers first. This is its counterpart:
-the side an agent *edits*, which had ended up as four cards of continuous form
+the side an agent _edits_, which had ended up as four cards of continuous form
 where every control carried the same weight as every other one.
 
 **One form type** (`FORM_FIELD`, beside `PANEL_FIELD` in `src/lib/panel.ts`).
@@ -2058,9 +2186,9 @@ same card: the form's `Field` at `text-xs font-semibold`, the AlShrouq
 requirements at `text-xs font-medium`, its coordinates at `text-[11px]
 font-medium` and muted.
 
-**Five named groups, no nested cards.** Order details is *Order basics*
-(date, type), *Fulfillment* (method, branch) and *Customer* (name, phone);
-`AlShrouqOrderRequirements` adds *Delivery* and *Payment & collection*. What
+**Five named groups, no nested cards.** Order details is _Order basics_
+(date, type), _Fulfillment_ (method, branch) and _Customer_ (name, phone);
+`AlShrouqOrderRequirements` adds _Delivery_ and _Payment & collection_. What
 separates them is not a border but the card grid's own `gap-y-4` against the
 tighter `gap-y-3.5` inside a group — fields that belong together sit closer to
 each other than to the fields that do not, which is the whole of the effect and
@@ -2076,10 +2204,10 @@ sequence — take the order, price it, assign it, annotate it — and a step num
 is the mark that says where in it you are. Muted and 20px rather than tinted and
 28px: a navigation cue that outweighs its own heading has stopped being one.
 
-**Assignment answers its own question first.** *Created by* was the first thing
+**Assignment answers its own question first.** _Created by_ was the first thing
 in the card and held a full labelled row with an `h-9` value, which gave the
-person who typed the order the same weight as the person who owns it. *Assigned
-to* and *Team* lead now, and the creator is one quiet line beneath them — still
+person who typed the order the same weight as the person who owns it. _Assigned
+to_ and _Team_ lead now, and the creator is one quiet line beneath them — still
 separate from the assignee, because they are different people whenever a
 supervisor takes an order down and conflating them is what put non-agents into
 agent workload, but separate no longer has to mean equal. That is 45px back.
@@ -2101,15 +2229,15 @@ other half of the row empty. The invoices follow under a rule.
 Density, measured against the Phase 2 form at 1440px: the workflow column goes
 **1517px → 1584px, +4.4%**. Order details carries +75 for its five group labels,
 Invoicing +17 for the rule, Notes +20 for a third textarea row (two rows left a
-56px box under a 62px header), and Assignment gives back −45. The *page* is no
+56px box under a 62px header), and Assignment gives back −45. The _page_ is no
 taller at `xl`, because the context column is 1772px and still sets the height;
 below `xl`, where the columns stack, the page grows by those 67px.
 
 Contrast, light / dark: field labels 16.51 / 15.1, group labels and the
-*Created by* line 5.97 / 6.89, the step numeral on its chip 5.42 / 6.13, the
+_Created by_ line 5.97 / 6.89, the step numeral on its chip 5.42 / 6.13, the
 collection values 16.51 / 15.1, the required marker 4.79 / 4.77. Two figures
-inherit `--success` as *text* and measure **3.39 / 6.76** — the zero-collection
-amount and *Verified location*. Both predate this phase and keep their colour;
+inherit `--success` as _text_ and measure **3.39 / 6.76** — the zero-collection
+amount and _Verified location_. Both predate this phase and keep their colour;
 like the 2.35 on `text-primary` links, moving `--success` is an app-wide decision
 rather than an Orders one. No horizontal overflow, no overflowing descendant and
 no label/control collision at 1440, 1280, 1024, 820, 640, 420 or 375; the field
@@ -2130,7 +2258,7 @@ belonged to the column on its right.
 
 The fix is one utility, and the reasoning is the whole of it: keep `dir="auto"`,
 because the text must still shape, order and punctuate as Arabic — and pin the
-*box* with `text-left`, because the field column is a layout fact rather than a
+_box_ with `text-left`, because the field column is a layout fact rather than a
 linguistic one. **`text-left`, never `text-start`**: `start` resolves against the
 element's own direction, which is exactly the `rtl` that caused this.
 
@@ -2162,7 +2290,7 @@ four section headers are one component and measure identically — 20×20 numera
 10.5px against a 14px title, one header padding across all four.
 
 `OrderInvoicePanel` gives each document a compact header (number, state, total,
-customer) over branch, channel, document date, *Verified by MilaPortal* and the
+customer) over branch, channel, document date, _Verified by MilaPortal_ and the
 item lines. Every document **starts open** — folding was for the old capped
 column, and the items are what a pharmacist opens the panel for.
 
@@ -2973,7 +3101,7 @@ GET  /api/v2/product/...  Authorization: Bearer <token>
 ```
 
 **Two endpoints, two purposes — do not conflate them.** `POST /api/v2/auth/login`
-is the MIS *portal user's* login; it returns a profile and UI nav permissions and
+is the MIS _portal user's_ login; it returns a profile and UI nav permissions and
 issues no API token. MilaServ never calls it, and no MIS username/password is
 configured.
 
@@ -2993,7 +3121,7 @@ out (`errcode 60002`), which is evidenced. Nothing evidences a rate limit here,
 and an L2 tier would mean a migration plus a table holding a live bearer token.
 If Shams turns out to throttle `/auth/token`, that is when to add one.
 
-MilaServ's own gate still governs *portal* users: every read sits behind
+MilaServ's own gate still governs _portal_ users: every read sits behind
 `requireSupabaseAuth` plus a permission check. `shamsStatus` (administrator only)
 forces a real token exchange and reports lifetime and type — never the
 identifier, key or token.
@@ -3032,8 +3160,8 @@ rendered, and MIS `product/stock` remains the only stock number on screen.
 every row of an unbounded result set would be up to 100 upstream requests per
 search, so `shamsGetOfferScopes` accepts at most **12** item codes, fans them out
 server-side at 4 concurrent against the existing 60 s offer cache, and returns
-one browser response. Above 12 the list says *"Offers not checked — narrow to 12
-results or fewer"* rather than rendering blanks that would read as "no offer".
+one browser response. Above 12 the list says _"Offers not checked — narrow to 12
+results or fewer"_ rather than rendering blanks that would read as "no offer".
 An item the CRM could not answer for is absent from the result, never reported
 as having none.
 
@@ -3078,7 +3206,7 @@ fills the dates. Purchases are sorted **newest first in the normalization layer*
 (`sortSalesNewestFirst`) rather than in a component, and grouped into month
 headings by `lib/shams/crm-history.ts`, which preserves that order instead of
 sorting again. The honest limit: the API exposes no sort parameter, so ordering
-is guaranteed *within a page* — with the default 100-row page a year usually
+is guaranteed _within a page_ — with the default 100-row page a year usually
 fits in one. Month grouping is per page for the same reason; a month spanning a
 page boundary gets a heading on both, and no row appears twice.
 
@@ -3098,7 +3226,7 @@ number: on the captured document they hold `Customer_Name: "CASH IN BOX-"` (a
 till) and `Customer_Code: "14-00-0052"` (a ledger account), while the CRM knows
 that same sale's buyer as `SAMI / 0555555555`. There is no key to join on.
 
-The relationship the API *does* establish runs the other way: a `crm/data` row
+The relationship the API _does_ establish runs the other way: a `crm/data` row
 names the document its line was sold on (`InvNo` + branch). So opening an invoice
 from a customer's history records that pairing in
 `src/features/shams/invoice-customer-link.ts` — an in-memory, tab-local map keyed
@@ -3186,9 +3314,9 @@ Phase 1 could not verify what `POST /stock/sync` does while a run is already
 active, and the scheduler must not be the thing that finds out unattended.
 
 1. `shams_sync_runs_active_key` — a partial unique index on `(sync_type) WHERE
-   status IN ('triggered','running')`. Two MilaPortal executions cannot both hold
+status IN ('triggered','running')`. Two MilaPortal executions cannot both hold
    a claim; the loser's insert fails with `23505` and it stops. The claim is
-   written *before* the CRM is contacted, so the window in which both could
+   written _before_ the CRM is contacted, so the window in which both could
    decide to trigger does not exist.
 2. The CRM's own `is_running`, read immediately before every trigger — this
    catches a run started by the Desktop, an operator, or the CRM's own scheduler.
@@ -3206,10 +3334,10 @@ reintroduced here.
 
 Two jobs, because they have different frequencies and different risk:
 
-| job | schedule | what it does |
-| --- | --- | --- |
-| `shams-sync-trigger` | `0 22 * * *` (01:00 Riyadh) | starts both syncs |
-| `shams-sync-reconcile` | `*/5 * * * *` | reads status and closes rows — **cannot trigger anything** |
+| job                    | schedule                    | what it does                                               |
+| ---------------------- | --------------------------- | ---------------------------------------------------------- |
+| `shams-sync-trigger`   | `0 22 * * *` (01:00 Riyadh) | starts both syncs                                          |
+| `shams-sync-reconcile` | `*/5 * * * *`               | reads status and closes rows — **cannot trigger anything** |
 
 The reconcile job makes no HTTP request at all unless a run is open, so it costs
 nothing on an idle day. 01:00 Riyadh is off-peak, the observed runs took 24 and
@@ -3245,10 +3373,10 @@ UTC reported a run starting at 20:24:31 — and `assessTimestamp` checks that sa
 contradiction on every response rather than carrying a hardcoded "promotions is
 broken" flag:
 
-* a value plausible as UTC is believed, so stock is never touched;
-* a value that could only be Riyadh local is corrected, and the row is stamped
+- a value plausible as UTC is believed, so stock is never touched;
+- a value that could only be Riyadh local is corrected, and the row is stamped
   `source_timestamps_corrected` so the correction is visible rather than hidden;
-* a value the Riyadh offset does **not** explain is left exactly as sent and
+- a value the Riyadh offset does **not** explain is left exactly as sent and
   flagged, because "wrong in a way I do not understand" must not be quietly
   rewritten into something plausible.
 
@@ -3365,7 +3493,7 @@ and `buildOrderPayload`, so the courier code is kept without an edge into them.
 
 Counts, booleans and an error kind cross the boundary — never the credentials,
 the session token, a header, the webhook auth value or the raw response.
-`missingSecrets` carries the *names* of absent configuration, never a value.
+`missingSecrets` carries the _names_ of absent configuration, never a value.
 
 The branch mapping is **not** stored. `branch_options` is the CRM's to publish,
 and it is the only source that also carries `covered`.
@@ -3387,7 +3515,7 @@ can fix by typing.
 contract and the read model disagree about this one key. `POST
 /integrations/alshrouq/orders` takes `value` — the key the Desktop's
 `_collect_alshrouq_payload` builds, disassembled from the PharmacyCRM Desktop
-build — while `GET /integrations/alshrouq/orders` *returns* the same figure as
+build — while `GET /integrations/alshrouq/orders` _returns_ the same figure as
 `order_value`. This builder was originally written from the GET's 127 stored
 deliveries and so sent `order_value`, a key the create endpoint does not
 recognise. It is ignored rather than refused: the request returns 2xx and the
@@ -3454,12 +3582,12 @@ probe uses, cached 5 minutes and single-flight, and returns **only** the branch
 and payment lists — `webhook_auth_value` is never read.
 
 **Why the dialog exists.** A courier needs to know who to call, where to go, and
-how the customer pays. The Portal is an order *log* and collects none of it: of
+how the customer pays. The Portal is an order _log_ and collects none of it: of
 2,823 AlShrouq orders in the last 30 days, **7** carry both a customer name and a
 phone, and payment type has no UI at all. Requiring those on the order form would
 change the daily workflow for all 2,823 to serve the few that are dispatched —
 and conditional-required rules in `orderFormSchema` are exactly what broke order
-saving last time. So none of it is *required*, and what an agent must supply
+saving last time. So none of it is _required_, and what an agent must supply
 before a **handover** is enforced by `alshrouqRequirements`, which gates the send
 rather than the save.
 
@@ -3469,7 +3597,7 @@ rather than the save.
 live database. Nothing wrote them: they lived in `useAlShrouqOrder`'s own
 `useState`, so they reached the dispatch request and nowhere else. An agent who
 filled in a location, its coordinates and a payment method, saved the order and
-reopened it found all three gone, the card offering *"Select at dispatch"*, and
+reopened it found all three gone, the card offering _"Select at dispatch"_, and
 **Send to AlShrouq** reporting the details incomplete — asked again for what they
 had already given. Delivery type, branch, customer and phone survived for the
 only reason that mattered: they were already fields of the form, and so of the
@@ -3502,13 +3630,13 @@ empty location.
 `ALSHROUQ_LIVE_DISPATCH_ENABLED` off an immediate handover returns `prepared` and
 persists no dispatch row, deliberately — a dry run must not take the order's slot
 and block the real send. No state was invented to represent the intent. It does
-not need one: the *configuration* is now on the order, so a reopened order is a
+not need one: the _configuration_ is now on the order, so a reopened order is a
 complete AlShrouq order reading **Ready to send**, and nothing anywhere claims a
 courier was contacted.
 
 **Whether it renders at all is decided from persisted data, not from the form.**
 `showAlShrouqSection` in `features/alshrouq/dispatch-selection.ts` is pure and
-shows the card when *any* of three hold: the stored `orders.delivery_type` is
+shows the card when _any_ of three hold: the stored `orders.delivery_type` is
 `"AlShrouq"`, the order has **any** `alshrouq_dispatches` row (cancelled and
 resolved ones included), or `form.delivery_type` is `"AlShrouq"` — the last
 covering a draft, where there is nothing persisted yet.
@@ -3518,7 +3646,7 @@ whole of the "card disappears when the order is reopened" bug. `form` is React
 state seeded by an effect in `useOrderForm` that runs once per order id after the
 `orders` fetch resolves, so it is empty on the first render of every page load
 and stays empty whenever that hydration does not run. The order timeline sits in
-the same column reading the *persisted* dispatch rows, so it went on narrating a
+the same column reading the _persisted_ dispatch rows, so it went on narrating a
 scheduled delivery beside no card at all — two surfaces describing one delivery
 from two different sources. The dispatch rows now come from
 `useOrderAlShrouqDispatch` under the query key the card and the timeline already
@@ -3540,7 +3668,7 @@ below). There is no fake "Sent" or "Delivered".
 **No delivery fee is displayed, deliberately.** `GET /integrations/alshrouq/config`
 publishes `branch_options`, `payment_options`, webhook settings and
 `missing_secrets` — and no fee, price, charge, cost, tariff or rate of any kind.
-The "3 SAR" that read as an unexplained charge was a misread branch *name*: the
+The "3 SAR" that read as an unexplained charge was a misread branch _name_: the
 CRM's names carry digits (`Arid 3 RDHN`, `SHUBRA 2 TIF`), so `P0304 — fayzia 3
 BUR` was branch code and branch name. Labelling each value in the grid is the
 fix; a fee panel would have been a fiction. `alshrouqDispatchContext` gates on the same rule
@@ -3582,7 +3710,7 @@ fabricated reference.
 
 **The reference never comes from the POST body.** That response has never been
 captured, so `dispatched` is populated from
-`findAlshrouqOrderByClientOrderId` — the GET whose shape *is* evidence-backed.
+`findAlshrouqOrderByClientOrderId` — the GET whose shape _is_ evidence-backed.
 
 **An indeterminate result never re-POSTs.** A timeout, 5xx or 401 after
 transmission means the courier may already be moving, so the answer is a read.
@@ -3624,7 +3752,7 @@ sessions so a long-lived isolate cannot leak — the service session is never th
 one evicted.
 
 **A missing agent credential fails closed.** It raises `not_configured` naming
-the *agent* rather than the deployment, and never falls back to the service
+the _agent_ rather than the deployment, and never falls back to the service
 account, because sending under the wrong identity is the one outcome this design
 exists to prevent.
 
@@ -3642,7 +3770,7 @@ Vault under `shams_crm_agent_<user_id>`, and the table stores only that name in
 `vault_key`.
 
 Three `SECURITY DEFINER` functions are the only way to it —
-`shams_crm_store_agent_secret` (returns the *name*, never the value),
+`shams_crm_store_agent_secret` (returns the _name_, never the value),
 `shams_crm_agent_secret` (returns NULL for an absent or inactive link rather
 than raising, so "no CRM account" is distinguishable from "the database failed")
 and `shams_crm_forget_agent_secret`. All three are revoked from `anon` and
@@ -3675,7 +3803,7 @@ case — before the CRM is contacted for that row. The outcome is `skipped`, whi
 is a success and not a milder failure: the mapping the row describes is already
 in force.
 
-The reason is not economy. Verifying a row *is* attempting a login, so a run that
+The reason is not economy. Verifying a row _is_ attempting a login, so a run that
 re-verifies everyone spends a **failed** login on every agent whose password the
 workbook no longer carries — against the real CRM accounts of the agents who
 currently work, and repeated on every run. The seven rows above are exactly that
@@ -3683,7 +3811,7 @@ case: their `crm_password` column was scrubbed before the file was committed, so
 re-verification could only refuse. Adding an eighth agent (`547b7af`) must not
 knock on the seven's accounts to do it.
 
-Because of the skip, the username and password columns are checked *after* it,
+Because of the skip, the username and password columns are checked _after_ it,
 not before: an agent whose link already works is not reported `not_configured`
 merely because the sheet's credential columns have since been emptied. The
 cross-checks against `full_name` and `agent_code` are skipped along with it,
@@ -3736,7 +3864,7 @@ fixes the link. A due row naming no agent at all is blocked for the same reason.
 
 The sentence an agent sees names the order's agent rather than "your account",
 since the reader is often the supervisor handing the order over and getting
-*their* account linked is neither possible nor the fix.
+_their_ account linked is neither possible nor the fix.
 
 What the CRM receives is unchanged: the ordinary create payload. Tests assert
 the outgoing body carries no `scheduled_by`, `dispatched_by`, `agent_id`,
@@ -3754,17 +3882,17 @@ The tests assert both halves: zero POSTs before the due time, and no scheduling
 key (`scheduled_for`, `scheduled_at`, `dispatch_status`, `payload_snapshot`, …)
 anywhere inside the frozen payload or in the `AlShrouqCreatePayload` contract
 itself. The snapshot is checked field-by-field against what the immediate path
-would have sent, so the two journeys differ only in *when* the POST happens.
+would have sent, so the two journeys differ only in _when_ the POST happens.
 
 #### The gate is reported to the UI, one way
 
 The gate is read in `alshrouq-dispatch.server.ts` and nowhere else, and it is
-still not an argument. But its *answer* is now reported to the screen, because
+still not an argument. But its _answer_ is now reported to the screen, because
 not reporting it produced the worst sequence this feature had: with the gate
 shut an immediate handover returns `prepared` and writes **no row**, so the card
 fell back to readiness and showed **"Ready to send"** beside a **Send to
 AlShrouq** button — and the agent learned the deployment could not call a courier
-only from a toast, *after* committing. Everything it said was true; it was said
+only from a toast, _after_ committing. Everything it said was true; it was said
 too late.
 
 Two server functions therefore carry a read-only boolean:
@@ -3786,7 +3914,7 @@ What the surfaces do with it:
 
 - The card gains a readiness, `prepared_only`, badged **"Prepared — dispatch
   unavailable"**. It is distinct from `unavailable`, which is a fact about the
-  *branch*: this order could be delivered, and this installation cannot ask.
+  _branch_: this order could be delivered, and this installation cannot ask.
 - The card withholds the send control (`covered && canContactCourier`).
 - The dialog disables the dispatch action, labels it **"AlShrouq dispatch
   unavailable"**, and states the reason above the buttons.
@@ -3808,8 +3936,8 @@ every edit submits exactly as it always has. There is no second dispatch button
 anywhere.
 
 The dialog offers **Create order only** and **Create order and send** — the
-second changing verb to *schedule delivery* when the chosen time is in the
-future, because "send" reads as *sent* to someone in a hurry and nothing is sent
+second changing verb to _schedule delivery_ when the chosen time is in the
+future, because "send" reads as _sent_ to someone in a hurry and nothing is sent
 at all on that path.
 
 **Sequencing, and why the partial states are safe.** There is no transaction
@@ -3819,17 +3947,17 @@ state the Portal already understands, via an `afterCreate` hook on
 `useOrderForm` that mirrors the `recordInvoiceVerification` follow-up already
 there:
 
-| | |
-|---|---|
-| order insert fails | nothing else runs — no dispatch, no navigation |
+|                         |                                                                                                                                  |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| order insert fails      | nothing else runs — no dispatch, no navigation                                                                                   |
 | created, approval fails | an ordinary saved order, **no dispatch row**, no courier. Identical to "Create order only"; approvable later from the order page |
-| created + scheduled | order + a `scheduled` row holding a frozen snapshot. Still no courier |
-| created + immediate | order + whatever the server's one POST achieved |
+| created + scheduled     | order + a `scheduled` row holding a frozen snapshot. Still no courier                                                            |
+| created + immediate     | order + whatever the server's one POST achieved                                                                                  |
 
 The dangerous inverse — a dispatch with no order — cannot occur: approving one
 requires an order id only a successful insert produces.
 
-**The client never decides whether to send.** The approval carries a *time*, not
+**The client never decides whether to send.** The approval carries a _time_, not
 a permission. `alshrouqDispatchOrder` compares it to the **server's** clock to
 route between scheduling and immediate dispatch, and the safety gate sits behind
 both. Its input schema is an order id, eight form strings and an optional
@@ -3837,7 +3965,7 @@ both. Its input schema is an order id, eight form strings and an optional
 changes nothing.
 
 **Nothing claims success without evidence.** With the gate shut the agent is told
-*"AlShrouq dispatch is switched off, so no courier was contacted."* An
+_"AlShrouq dispatch is switched off, so no courier was contacted."_ An
 indeterminate result says so and says it has **not** been retried. Only a
 reconciled `dispatched` reports a reference.
 
@@ -3849,7 +3977,7 @@ make a resolved location **mandatory** before "send" is enabled.
 ### AlShrouq customer location
 
 **The customer's own Google Maps link is the authoritative location.** A customer
-sends a link over WhatsApp and the agent pastes it; that link *is* the delivery
+sends a link over WhatsApp and the agent pastes it; that link _is_ the delivery
 address, not a retyped street address and not a geocoder's guess at what one
 meant. It is preserved verbatim and goes on the wire as `customer_address` —
 which is what the CRM's own records do, 104 of 126 real deliveries carrying an
@@ -3897,12 +4025,12 @@ browser, a clock or a network.
 not: customer name, phone, location, latitude, longitude. **Deliberately not in
 `orderFormSchema`.** The reverted integration put its conditional rules inside
 that schema, which is the mechanism behind the "agents cannot save orders"
-outage: anything there is on the save path for *every* delivery method, so a
+outage: anything there is on the save path for _every_ delivery method, so a
 mistake in an AlShrouq branch failed orders unrelated to AlShrouq.
 
 Living outside it buys three properties, each pinned by a test:
 `validateAlShrouqOrderFields` returns `[]` immediately for every other delivery
-method, so the ordinary path is unchanged in *shape* and not merely in
+method, so the ordinary path is unchanged in _shape_ and not merely in
 behaviour; it returns errors rather than throwing, so nothing can escape into a
 submit handler; and deleting the file would restore previous behaviour exactly.
 `orderFormSchema` is byte-identical to the baseline, and a test asserts an
@@ -3948,7 +4076,7 @@ reproducible: a job that exists only because somebody once ran `cron.schedule` i
 a console is one nobody can rebuild, review, or notice the absence of.
 
 > **Correction (Phase 10H).** An earlier version of this paragraph said the
-> database had *lost* its `process-email-queue` job in the Lovable revert — 54
+> database had _lost_ its `process-email-queue` job in the Lovable revert — 54
 > runs ending 2026-08-20 23:15:19Z — and that outbound email had been dead since.
 > That was verified wrong against the live database on 2026-08-22.
 > `email_queue_dispatch()` **unschedules itself** when both pgmq queues are
@@ -3967,7 +4095,7 @@ that version.
 dispatch_status='scheduled'`), so two workers, or a cron firing twice, dispatch
 each order once. The unique index `alshrouq_dispatches_live_order_key` remains
 the backstop — and because a `scheduled` row is not cancelled, scheduling an
-order *reserves its slot* against a second schedule or a manual send.
+order _reserves its slot_ against a second schedule or a manual send.
 
 **States:** `scheduled → processing → accepted | failed | indeterminate |
 cancelled`. `processing` is a claim, not a report. `indeterminate` is terminal
@@ -3989,8 +4117,8 @@ against `SUPABASE_SERVICE_ROLE_KEY` through `isScheduler()`.
 
 This is not a bespoke scheme. It is exactly what `public.email_queue_dispatch()`
 and `/lovable/email/queue/process` already do — the platform's own generated
-comment states the contract, *"the pg_cron job sends the service role key as a
-Bearer token"* — and that path returns 200 in production.
+comment states the contract, _"the pg_cron job sends the service role key as a
+Bearer token"_ — and that path returns 200 in production.
 
 **Both halves are issued and rotated by the same system, so they cannot drift.**
 That is the entire reason for the change: the previous credential was one string
@@ -4010,11 +4138,11 @@ Only `alshrouq_scheduler_url` remains as scheduler-specific configuration. The
 Scheduling used to have **three** pieces of configuration, and any one missing
 stopped every scheduled delivery:
 
-| Piece                                       | Lives in            |
-| ------------------------------------------- | ------------------- |
-| `ALSHROUQ_SCHEDULER_SECRET`                 | the deployment      |
-| vault `alshrouq_scheduler_url`              | Supabase Vault      |
-| vault `alshrouq_scheduler_secret` (matching)| Supabase Vault      |
+| Piece                                        | Lives in       |
+| -------------------------------------------- | -------------- |
+| `ALSHROUQ_SCHEDULER_SECRET`                  | the deployment |
+| vault `alshrouq_scheduler_url`               | Supabase Vault |
+| vault `alshrouq_scheduler_secret` (matching) | Supabase Vault |
 
 Only the first was ever set. Verified against the live database on 2026-08-26:
 `cron.job` held `alshrouq-dispatch-due` on `* * * * *`, active, with **5,769
@@ -4100,14 +4228,14 @@ One dispatch row per order is the whole state model. `dispatch_status` is the
 lifecycle — `scheduled → processing → accepted | failed | indeterminate |
 cancelled` — and the timestamps beside it are the history:
 
-| Column            | Written by                          | Means                          |
-| ----------------- | ----------------------------------- | ------------------------------ |
-| `scheduled_at`    | `scheduleAlShrouqDispatch`'s insert | the agent approved a slot      |
-| `scheduled_for`   | the same insert                     | when the courier is due        |
-| `last_attempt_at` | the worker's compare-and-swap       | a worker claimed the row       |
-| `dispatched_at`   | the insert / the accepted update    | the send completed             |
-| `cancelled_at`    | a cancellation                      | the delivery was called off    |
-| `last_error`      | the failed / indeterminate update, the blocked update, and `alshrouq_dispatch_due()` | a fixed, safe sentence |
+| Column            | Written by                                                                           | Means                       |
+| ----------------- | ------------------------------------------------------------------------------------ | --------------------------- |
+| `scheduled_at`    | `scheduleAlShrouqDispatch`'s insert                                                  | the agent approved a slot   |
+| `scheduled_for`   | the same insert                                                                      | when the courier is due     |
+| `last_attempt_at` | the worker's compare-and-swap                                                        | a worker claimed the row    |
+| `dispatched_at`   | the insert / the accepted update                                                     | the send completed          |
+| `cancelled_at`    | a cancellation                                                                       | the delivery was called off |
+| `last_error`      | the failed / indeterminate update, the blocked update, and `alshrouq_dispatch_due()` | a fixed, safe sentence      |
 
 `last_error` is read back two ways, because it is written in two situations.
 `failureReason` is it on a `failed` row — the dispatch is over. `waitingProblem`
@@ -4168,29 +4296,29 @@ made two reads of one row that could show different things.
 
 The badge and the timeline use one vocabulary, and it is not the database's:
 
-| `dispatch_status` | On screen |
-| --- | --- |
-| `scheduled` | Scheduled |
-| `processing` | Sending to AlShrouq |
-| `accepted` | Accepted by AlShrouq |
-| `failed` | Dispatch failed |
-| `indeterminate` | Delivery status unavailable |
-| `cancelled` | Scheduled delivery cancelled |
-| anything unrecognised | Dispatch recorded |
+| `dispatch_status`     | On screen                    |
+| --------------------- | ---------------------------- |
+| `scheduled`           | Scheduled                    |
+| `processing`          | Sending to AlShrouq          |
+| `accepted`            | Accepted by AlShrouq         |
+| `failed`              | Dispatch failed              |
+| `indeterminate`       | Delivery status unavailable  |
+| `cancelled`           | Scheduled delivery cancelled |
+| anything unrecognised | Dispatch recorded            |
 
 `accepted` used to show `row.status` — AlShrouq's own word, e.g. "Order Created".
-It is more specific, but it is not a status *this* system defines, and a courier
+It is more specific, but it is not a status _this_ system defines, and a courier
 word an agent has never seen reads as a fault. The verbatim value is still shown
 on the timeline event beside the reference, where it is context rather than a
 label; the summary carries it as `courierStatus`.
 
 Two states get a sentence rather than a badge, in a bordered band on the card:
 
-* **indeterminate** — fixed copy: *"AlShrouq response could not be confirmed.
-  The order has not been automatically retried."* The second sentence is the one
+- **indeterminate** — fixed copy: _"AlShrouq response could not be confirmed.
+  The order has not been automatically retried."_ The second sentence is the one
   an agent must not miss, because reading this as a failure is what makes someone
   send it again.
-* **failed** — the persisted `last_error`, but only through `safeFailureReason`,
+- **failed** — the persisted `last_error`, but only through `safeFailureReason`,
   which drops anything shaped like a URL, a header, a token or a stack trace and
   falls back to a generic sentence.
 
@@ -4205,8 +4333,8 @@ and it is **true for `indeterminate` as well as `accepted`** — an unconfirmed
 send is exactly where a second attempt does the most damage, because the courier
 may already be moving.
 
-The card says so in as many words: *"AlShrouq submission completed. Changes made
-in MilaPortal after submission are not sent to AlShrouq."* There is no AlShrouq
+The card says so in as many words: _"AlShrouq submission completed. Changes made
+in MilaPortal after submission are not sent to AlShrouq."_ There is no AlShrouq
 order-update endpoint in this integration, so there is no "Update AlShrouq"
 control and no "Syncing" state — a test asserts the card contains no such
 wording. The page's primary action for a saved order is **Update order**; the
@@ -4220,7 +4348,7 @@ cannot disagree, because they use the same predicate:
 2. `prepareAlShrouqDispatch` returns `already_dispatched` before anything is
    built or sent,
 3. the unique index `alshrouq_dispatches_live_order_key` (`UNIQUE (order_id)
-   WHERE cancelled_at IS NULL`).
+WHERE cancelled_at IS NULL`).
 
 **Editing a dispatched order changes nothing about the delivery.** The order save
 path and the dispatch path share no code and no table: `payload.ts`,
@@ -4242,12 +4370,12 @@ column appears in no update's argument, including the worker's four.
 `shams-crm/alshrouq-dispatch-state.ts` is pure and dependency-free, and it owns
 the rules the rest of the integration asks about a stored `dispatch_status`:
 
-| Question | Answer |
-| --- | --- |
-| `ownsDispatchSlot` / `blocksNewDispatch` | everything except `cancelled` |
-| `canCancelDispatch` | `scheduled` only |
-| `isWorkerClaimable` | `scheduled` only |
-| `isTerminalDispatchStatus` | `accepted`, `failed`, `indeterminate`, `cancelled` |
+| Question                                 | Answer                                             |
+| ---------------------------------------- | -------------------------------------------------- |
+| `ownsDispatchSlot` / `blocksNewDispatch` | everything except `cancelled`                      |
+| `canCancelDispatch`                      | `scheduled` only                                   |
+| `isWorkerClaimable`                      | `scheduled` only                                   |
+| `isTerminalDispatchStatus`               | `accepted`, `failed`, `indeterminate`, `cancelled` |
 
 These rules used to be spread across a duplicate check, a worker query, a claim
 predicate and a piece of UI, each stating the lifecycle in its own words — and
@@ -4286,17 +4414,17 @@ page must re-read the row so the card stops offering to send.
 
 ### Resend policy, state by state
 
-| State | A second POST? | Why |
-| --- | --- | --- |
-| `scheduled` | blocked | already owns the slot; a schedule reserves it |
-| `processing` | blocked | a worker has claimed it and may be mid-request |
-| `accepted` | blocked | the courier has it |
-| `indeterminate` | blocked | the courier may have it, and nobody can say |
-| `failed` | blocked | existing scheduler semantics, preserved — no retry policy was invented |
-| `cancelled` | allowed | see below |
+| State           | A second POST? | Why                                                                    |
+| --------------- | -------------- | ---------------------------------------------------------------------- |
+| `scheduled`     | blocked        | already owns the slot; a schedule reserves it                          |
+| `processing`    | blocked        | a worker has claimed it and may be mid-request                         |
+| `accepted`      | blocked        | the courier has it                                                     |
+| `indeterminate` | blocked        | the courier may have it, and nobody can say                            |
+| `failed`        | blocked        | existing scheduler semantics, preserved — no retry policy was invented |
+| `cancelled`     | allowed        | see below                                                              |
 
 **`cancelled` is the one state that frees the slot, and that is safe only
-because of what cancellation refuses.** A dispatch can be cancelled *only* while
+because of what cancellation refuses.** A dispatch can be cancelled _only_ while
 `scheduled`, so a cancelled row is always one that contacted nobody. If an
 `indeterminate` row could be cancelled its slot would be released and the order
 would become sendable again — the exact hole this phase closed — so the
@@ -4334,8 +4462,8 @@ for a concurrent transaction to slip between.
 
 If cancellation wins, the worker's claim finds nothing — and an unclaimed row is
 never sent, even by a run that had already selected it as due. If the worker
-wins, cancellation returns `{ kind: "conflict" }` carrying *"Dispatch is already
-being processed and cannot be cancelled."* It does not retry and it does not
+wins, cancellation returns `{ kind: "conflict" }` carrying _"Dispatch is already
+being processed and cannot be cancelled."_ It does not retry and it does not
 overwrite a `processing` row, which may be mid-request.
 
 Every other state is refused with a sentence naming it —
@@ -4366,7 +4494,7 @@ editing. No new permission key.
 `dispatch_status` is written explicitly by every application insert, never left
 to the column's `DEFAULT 'accepted'`. The default remains for the four rows that
 predate scheduling; it is a poor way for code to express intent, and defaulting
-an *uncertain* dispatch to `accepted` would be the worst possible mislabel.
+an _uncertain_ dispatch to `accepted` would be the worst possible mislabel.
 `attempt_count` and `last_attempt_at` are stated on the same insert — one attempt
 was made, and there is never a second.
 
@@ -4376,7 +4504,7 @@ was made, and there is never a second.
 kind**, deliberately: a row must never be able to claim a dispatch that did not
 happen, so every write comes from the code that actually called the CRM.
 
-`requireSupabaseAuth` supplies the *caller's* RLS-bound client, so the inserts
+`requireSupabaseAuth` supplies the _caller's_ RLS-bound client, so the inserts
 `alshrouqDispatchOrder` needs were being refused by Postgres and no dispatch
 record could ever be written — silently, because the unit tests use a fake
 client. That silence was the danger rather than the failure: an uncertain
@@ -4384,7 +4512,7 @@ dispatch whose row never lands is an order that still looks sendable.
 
 The dispatch and cancellation writes therefore use `supabaseAdmin`, the pattern
 `admin.functions.ts` uses throughout and the client the scheduled worker already
-runs on — and, as there, only *after* the handler's permission check has passed.
+runs on — and, as there, only _after_ the handler's permission check has passed.
 The order read and the `has_permission` RPCs stay on the caller's client, where
 RLS is exactly what should decide them. No RLS policy was added or weakened.
 
@@ -4433,7 +4561,7 @@ installed.
 `alshrouq_scheduler_url` / `alshrouq_scheduler_secret` are absent — only
 `email_queue_service_role_key` exists — and the runtime
 `ALSHROUQ_SCHEDULER_SECRET` is unset. Nothing was invented to fill them. Until
-they are configured the waker returns `0` even when work *is* due, so a scheduled
+they are configured the waker returns `0` even when work _is_ due, so a scheduled
 dispatch would sit in `scheduled` rather than being attempted. That is the
 intended fail-closed behaviour, and it is the next deployment step rather than a
 defect.
@@ -4497,7 +4625,7 @@ qualified by the order's own visibility — and none for `INSERT`, `UPDATE` or
 `DELETE`. Under RLS a command with no permissive policy is denied, which is what
 refuses a write from the caller's own client.
 
-It is *not* the table grant. `authenticated` and `anon` both hold
+It is _not_ the table grant. `authenticated` and `anon` both hold
 INSERT/UPDATE/DELETE grants here, because Supabase issues them by default on new
 public-schema tables and the migration's `GRANT SELECT` is additive rather than
 restrictive. The `20260820180000` comment claiming there is "no grant" describes
@@ -4525,9 +4653,9 @@ the courier may already be moving — and both leave a row a person has to settl
 
 **It is reconciliation, never resending.** `alshrouq-resolve.server.ts` has no
 transport in its import graph and no outcome has a branch that sends anything.
-Tests replace `globalThis.fetch` and assert zero requests for *all three*
-outcomes, including "confirmed not delivered". The action is called *resolve* and
-never *retry*, and a test asserts no outcome label contains "retry", "resend" or
+Tests replace `globalThis.fetch` and assert zero requests for _all three_
+outcomes, including "confirmed not delivered". The action is called _resolve_ and
+never _retry_, and a test asserts no outcome label contains "retry", "resend" or
 "send again".
 
 **Allowed source states:** `indeterminate`, `failed` — and only while no answer
@@ -4536,11 +4664,11 @@ has been recorded. Everything else is refused with a sentence naming why
 
 **The three answers**, from `alshrouq-resolution.ts`:
 
-| Outcome | Means |
-| --- | --- |
-| `delivered` — "Confirmed delivered" | AlShrouq confirmed the delivery exists and was completed |
-| `not_delivered` — "Confirmed not delivered" | AlShrouq confirmed no delivery was created |
-| `undetermined` — "Unable to determine" | the outcome could not be established even after checking |
+| Outcome                                     | Means                                                    |
+| ------------------------------------------- | -------------------------------------------------------- |
+| `delivered` — "Confirmed delivered"         | AlShrouq confirmed the delivery exists and was completed |
+| `not_delivered` — "Confirmed not delivered" | AlShrouq confirmed no delivery was created               |
+| `undetermined` — "Unable to determine"      | the outcome could not be established even after checking |
 
 **Three vocabularies that must not merge.** `status` is AlShrouq's own word,
 verbatim — courier truth. `dispatch_status` is this system's lifecycle — machine
@@ -4556,12 +4684,12 @@ own CHECK listing only operator values.
 `alshrouq_dispatches_live_order_key` and `blocksNewDispatch` still refuses a
 second send — for every outcome, "confirmed not delivered" included. That reads
 backwards at first: an operator saying no courier exists sounds like it should
-release the order. But releasing it *is* authorising a second courier, and
+release the order. But releasing it _is_ authorising a second courier, and
 recording what happened and re-authorising a delivery are different decisions
 that deserve to be made separately by someone who can see the consequences of
 each. A resend workflow, if one is ever wanted, is its own explicit thing.
 
-**Authorization: `admin_access`**, the narrowest *existing* permission that fits.
+**Authorization: `admin_access`**, the narrowest _existing_ permission that fits.
 Resolving a dispatch is supervisory rather than order editing — it overrides an
 uncertain courier outcome with a person's judgement, and an agent who may edit
 their own orders should not be able to declare a delivery settled. `owner`,
@@ -4574,7 +4702,7 @@ fields — a dispatch id, an outcome from a closed enum, and a note.
 `resolved_by` comes from the verified session's claims and `resolved_at` from the
 server clock; there is no field through which a browser could attribute a
 resolution to someone else, backdate one, or request a lifecycle transition. The
-visibility check runs on the *caller's* RLS-bound client, so a dispatch they may
+visibility check runs on the _caller's_ RLS-bound client, so a dispatch they may
 not see is reported absent rather than forbidden; the write then runs as the
 service role, the same pattern as every other write to this table.
 
@@ -4582,7 +4710,7 @@ service role, the same pattern as every other write to this table.
 "resolvable" — `.in(dispatch_status, ['indeterminate','failed'])` and
 `.is(resolution_outcome, null)`. Two operators resolving at once produce exactly
 one resolution, one audit event and one honest `already_resolved`; the second is
-never allowed to overwrite the first operator's account. The guard is *disjoint*
+never allowed to overwrite the first operator's account. The guard is _disjoint_
 from the worker's claim and from cancellation, both of which key on `scheduled`,
 so a row is either still in play or given up on and the two workflows cannot
 collide at all.
@@ -4591,7 +4719,7 @@ collide at all.
 (`alshrouq_dispatch_resolved`) carrying the outcome, the operator's note and the
 lifecycle state it was resolved from — and nothing else. No payload snapshot, no
 courier response body, no customer identity; the service reads none of them. This
-is a *person's* action, so it belongs on the order's own history beside every
+is a _person's_ action, so it belongs on the order's own history beside every
 other human act, which does not weaken the worker's invariant — the worker is not
 what runs this code and still touches only `alshrouq_dispatches`.
 
@@ -4599,9 +4727,9 @@ The timeline renders it as **"AlShrouq dispatch resolved by operator"**, worded
 that way because it is the one entry that could be mistaken for a courier status
 and is not one. AlShrouq's own events read "Accepted by AlShrouq"; this reads as
 a decision, because that is what it is. The card shows the same distinction:
-*"Resolved by operator: … This is a reviewed decision, not a courier update."*
+_"Resolved by operator: … This is a reviewed decision, not a courier update."_
 
-**The note is required**, 3–280 characters, because the note *is* the evidence —
+**The note is required**, 3–280 characters, because the note _is_ the evidence —
 "Confirmed by phone with AlShrouq operations" is the whole content of the
 decision, and a resolution with no account of how it was reached is an unsourced
 claim in an audit trail. It is stored as written and rendered on the timeline, so
@@ -4622,7 +4750,7 @@ anything, create a dispatch, change an order, or alter the state machine.
 ### Tracking URL provenance
 
 `tracking_url` comes from `findAlshrouqOrderByClientOrderId` — the reconciliation
-GET whose shape *is* evidence-backed — and from nowhere else. Nothing constructs
+GET whose shape _is_ evidence-backed — and from nowhere else. Nothing constructs
 one, no format is assumed, and no URL is derived from the external reference.
 
 When the column is null the link is simply absent: no disabled button, no
@@ -4649,7 +4777,7 @@ that dominates the panel.
 
 Reaching zero changes a label to **"Awaiting dispatch"** and nothing else. That
 wording is load-bearing: the moment has passed and the worker has not reported,
-so the delivery has *not* been sent, and a screen that said otherwise on the
+so the delivery has _not_ been sent, and a screen that said otherwise on the
 strength of a clock would be claiming something no row supports. The
 hook has no network call, no mutation and no server function; its only effect is
 a `setInterval` that re-renders. The dispatch is performed by `pg_cron` → the
@@ -4679,7 +4807,7 @@ is the only place either journey chooses what the agent is told — so the same
 server result cannot be reported two different ways depending on which screen it
 came from. Neither builds the object inline any more, and a test asserts it.
 
-The approval still carries a *time*, not a permission: the server compares it to
+The approval still carries a _time_, not a permission: the server compares it to
 its own clock to route between scheduling and immediate dispatch, and the safety
 gate sits behind both. There is no `live` field anywhere in the plan, the input
 or the request.
@@ -4743,7 +4871,7 @@ changed is what an agent reads.
 **`features/alshrouq/dispatch-presentation.ts` is the vocabulary and the
 palette.** Pure, no React, so it is asserted the way the rest of this feature is
 — over values, in Node, with nothing rendered. It holds three things:
-`explainAlShrouqState` (what a state *means*, one sentence), `alshrouqToneStyle`
+`explainAlShrouqState` (what a state _means_, one sentence), `alshrouqToneStyle`
 (tone → the portal's own utility classes) and `describeApprovalAction` (what
 pressing the button will do). The card, the approval dialog and the tests read
 one source for all three, so they cannot drift into three accounts of one row.
@@ -4753,7 +4881,7 @@ nothing from anybody and "Delivery status unavailable" needs a phone call, and
 nothing on the old card distinguished them except a colour an agent had to have
 been taught. Each state now carries a line beneath the badge saying whether a
 courier was contacted — the only fact that changes what the agent should do.
-Tests pin the three that must never merge: `scheduled` says AlShrouq has *not*
+Tests pin the three that must never merge: `scheduled` says AlShrouq has _not_
 been contacted, `cancelled` says nobody was, and `indeterminate` says it is not
 known and has not been sent again, in words that are neither "failed" nor
 "rejected".
@@ -4769,7 +4897,7 @@ so light and dark are the theme's problem and not this feature's.
 
 **Two corrections the phase found, both by looking at the rendered card.**
 
-1. *The handover notice was appearing on deliveries nobody had been told about.*
+1. _The handover notice was appearing on deliveries nobody had been told about._
    "AlShrouq submission completed. Changes made in MilaPortal after submission
    are not sent to AlShrouq" was gated on `handedOver`, which is true for
    `scheduled` — a state that reserves the slot without transmitting anything.
@@ -4778,7 +4906,7 @@ so light and dark are the theme's problem and not this feature's.
    learn to skip, including on `indeterminate`, where it is the most important
    sentence on the card.
 
-2. *A cancelled delivery had disappeared from the card entirely.*
+2. _A cancelled delivery had disappeared from the card entirely._
    `useOrderAlShrouqDispatch` defines `current` as the row that is **not**
    cancelled, so a cancelled dispatch reaches the card as no dispatch at all —
    correct about what may happen next, and silent about what just happened. The
@@ -4800,24 +4928,24 @@ fails it is shown as the text it is.
 **Timing is a choice.** "Leave the date and time blank to send now" was the
 rule, and it is a rule an agent has to be told: a blank field is not an answer,
 and here the unanswered question is whether a driver leaves in a minute or
-tomorrow. It is two radio options now — *As soon as possible* and *At a set
-time* — over the same `parseScheduleInput`, the same validation and the same
+tomorrow. It is two radio options now — _As soon as possible_ and _At a set
+time_ — over the same `parseScheduleInput`, the same validation and the same
 server-side decision. Choosing "now" sends no instant, exactly as two blank
 boxes did.
 
 **The dialog says what the button will do, in the button's own words.** A
 `What happens when you confirm` block heads each outcome with the exact label on
-its control — so on the create journey *Create order only* and *Create order and
-send* are explained side by side rather than being two verbs at the bottom of a
+its control — so on the create journey _Create order only_ and _Create order and
+send_ are explained side by side rather than being two verbs at the bottom of a
 scroll. The scheduled wording names the instant, adds how far away it is, and
 says **no courier is contacted now**; a test asserts it never reads "straight
 away", "immediately" or "on its way".
 
 **A draft is told where its action lives.** The card used to end in a
-permanently disabled *Send to AlShrouq* beside an order that cannot be sent,
+permanently disabled _Send to AlShrouq_ beside an order that cannot be sent,
 which invites a click that can never work. It now points at the page's own
 **Create order** button, which is where the create journey's approval actually
-is. The send control remains *absent, not disabled*, once a dispatch exists —
+is. The send control remains _absent, not disabled_, once a dispatch exists —
 that rule is unchanged.
 
 **Choosing AlShrouq explains itself where the choice is made.** The delivery
@@ -4854,7 +4982,7 @@ and the agent had no way to know, while taking the order, that three more
 answers were coming.
 
 **So the questions moved to where the order is taken.**
-`AlShrouqOrderRequirements` renders inside the *Order details* card the moment
+`AlShrouqOrderRequirements` renders inside the _Order details_ card the moment
 the delivery method is AlShrouq, and asks for the three things a courier needs
 that no order column holds: where the customer is, how they pay, and — read
 rather than asked — the point a driver routes to. Customer name and phone gain a
@@ -4862,7 +4990,7 @@ required marker in the same moment.
 
 **The dialog is a read-only summary and one choice.** Customer, phone, branch,
 order value, payment, location and the delivery it is about to arrange; then
-*when*; then the delivery note; then **Create order only** or **Create order +
+_when_; then the delivery note; then **Create order only** or **Create order +
 AlShrouq delivery**. Tests assert it contains no `<Input>`, no `useQuery`, no
 `useMutation`, no `useServerFn`, exactly one `<Textarea>` (the note), exactly
 three `<Select>`s (hour, minute, AM/PM) and no `paymentOptions` or
@@ -4910,7 +5038,7 @@ and nothing about the principle was given up:
   WhatsApp copy carries — while the confirmation summary,
   `validateAlShrouqOrderFields` and the dispatch payload all re-read the raw text
   with a bare `Number()`, which is NaN for every one of them. The two disagreed:
-  the box showed a valid `24.53738` (it was rendering the *parsed* value) while
+  the box showed a valid `24.53738` (it was rendering the _parsed_ value) while
   the confirmation read **NaN, 46.64555** and the validator reported the latitude
   missing. `canonicalCoordinate` closes it — consumers read the value the
   location system already parsed, and the boxes bind to `latitudeText`/
@@ -4929,14 +5057,14 @@ The resolver's own failure sentences (`describeLocationResult`) gained the same
 fallback clause, so no outcome ends on "could not" with nothing to do next.
 
 **Branch coverage is answered before the order exists.** It could not be:
-`alshrouqDispatchContext` needs an order id, so a *new* AlShrouq order got no
+`alshrouqDispatchContext` needs an order id, so a _new_ AlShrouq order got no
 coverage feedback until after it was saved. `alshrouqPaymentOptions` became
 `alshrouqDeliveryOptions` and now returns both lists that
 `fetchAlShrouqDispatchOptions` already computed — same endpoint, same five-minute
 cache, same single flight, same `create_orders` gate, and `webhook_auth_value`
 still never read. A covered branch gets a quiet success line; an uncovered one
-gets a warning that names the consequence — *this order cannot be handed over to
-AlShrouq from here — choose another delivery method* — because "not covered"
+gets a warning that names the consequence — _this order cannot be handed over to
+AlShrouq from here — choose another delivery method_ — because "not covered"
 alone reads as something the agent typed wrong, and it is not.
 
 **On the workbook.** `Shams-alshrouq mapping.xlsx` was read for this phase. It
@@ -4969,13 +5097,13 @@ returns.
 
 **Every hour, minute and meridiem is always selectable.** The picker briefly
 judged one unit at a time — at 10:15 PM the hours 01–09 went dead — which closed
-the route to *9 PM tomorrow*: an agent could not touch the hour first. An hour is
+the route to _9 PM tomorrow_: an agent could not touch the hour first. An hour is
 not in the past; only a whole datetime is. `earliestMinutesOn`, `isSelectionPast`
 and `clampSelection` are gone, nothing snaps the selection forward as it is made,
 and `parseScheduleInput` — over the complete `{date, time}` pair, unchanged — is
 the only thing that decides validity. A past combination disables the primary
-action and says *"That time has already passed. Pick a later time, or another
-day."*
+action and says _"That time has already passed. Pick a later time, or another
+day."_
 
 The one thing still refused outright is the **day**: the calendar disables days
 before today, because a day that has ended cannot contain a future minute under
@@ -4988,12 +5116,12 @@ both sides, because `react-day-picker` compares days locally and a UTC-midnight
 asserted from the source — content height against the element's own cap, and
 `scrollWidth === clientWidth` on both the dialog and the document:
 
-| Viewport  | ASAP    | Scheduled | Vertical scroll | Horizontal |
-| --------- | ------- | --------- | --------------- | ---------- |
-| 1280×800  | 517×492 | 517×568   | none            | none       |
-| 1440×900  | 517×492 | 517×568   | none            | none       |
-| 390×844   | 340×556 | 340×632   | none            | none       |
-| 375×812   | 326×556 | 326×632   | none            | none       |
+| Viewport | ASAP    | Scheduled | Vertical scroll | Horizontal |
+| -------- | ------- | --------- | --------------- | ---------- |
+| 1280×800 | 517×492 | 517×568   | none            | none       |
+| 1440×900 | 517×492 | 517×568   | none            | none       |
+| 390×844  | 340×556 | 340×632   | none            | none       |
+| 375×812  | 326×556 | 326×632   | none            | none       |
 
 Checked in light and dark at each size. On the tightest of them the scheduled
 content is 664px against an 85vh cap of 690.
@@ -5010,7 +5138,7 @@ of three exactly as before; and the dialog's own gaps tighten a step below `sm`.
 
 The row is `flex`, not a two-column grid — the phone-layout contract requires
 every unprefixed column rule in this flow to be a single column, and splitting a
-*form* into two columns on a phone is what that rule exists to prevent. Two
+_form_ into two columns on a phone is what that rule exists to prevent. Two
 equal-basis flex children holding one control each are a different thing.
 
 `max-h-[85vh]`/`overflow-y-auto` stay as a last resort for a viewport shorter
@@ -5028,7 +5156,7 @@ popover open, updates the trigger and updates the summary's Delivery row.
 
 A reopened AlShrouq order reported **"Not available — this order cannot be
 delivered by AlShrouq — choose a branch to check AlShrouq coverage"** beside a
-branch that was plainly filled in, on an order the agent had just created *with*
+branch that was plainly filled in, on an order the agent had just created _with_
 a handover, with the send button dead. Two separate things, and only the second
 was a defect.
 
@@ -5038,14 +5166,14 @@ pipeline and stops at the safety gate: it returns `prepared` and writes **no
 row**, deliberately — a dry run must not take the order's dispatch slot and
 block the real send later. So in this deployment "as soon as possible" leaves the
 same persisted state as "Create order only", the create toast says so
-(*"AlShrouq dispatch is switched off, so no courier was contacted"*), and the
+(_"AlShrouq dispatch is switched off, so no courier was contacted"_), and the
 reopened page has no dispatch to report. A **scheduled** handover is different
 and always was: it persists a `scheduled` row with a frozen snapshot, contacts
 nobody, and survives a reload on any deployment. `handover-persistence.test.ts`
 pins both, including that a second immediate approval still writes nothing.
 
 **The defect was what the card did with that.** With no dispatch row it falls
-back to *readiness*, and readiness read `alshrouq.coverage` — which
+back to _readiness_, and readiness read `alshrouq.coverage` — which
 `useAlShrouqOrder` short-circuits to `{ kind: "no_branch" }` the moment
 `form.delivery_type` is not AlShrouq. Transient form state was being reported as
 a fact about the order, so a saved AlShrouq order whose form had not put the
@@ -5059,7 +5187,7 @@ see coverage follow — and otherwise `ctx.branch`, the same resolution
 state, no new source of truth. The branch, customer and phone rows fall back the
 same way, to `ctx.prefill`, which the approval dialog already read. And
 `optionsPending` only counts while the form is active — React Query reports a
-*disabled* query as pending, so on a saved order it had the card stuck on
+_disabled_ query as pending, so on a saved order it had the card stuck on
 "Checking…" waiting for a request nobody had made.
 
 **The card no longer disappears when an order is reopened.**
@@ -5073,7 +5201,7 @@ new row, no new column, no new query — the history was already in the same
 result.
 
 **The horizontal scrollbar had a cause.** `DialogContent` is a `grid` with an
-implicit `auto` column, so its single track was sized to the *max-content* width
+implicit `auto` column, so its single track was sized to the _max-content_ width
 of its widest child: one long value widened the track, every sibling stretched
 to match, and the dialog overflowed its own `max-width` by 35px.
 `grid-cols-[minmax(0,1fr)]` lets the track shrink, which is what lets
@@ -5096,7 +5224,7 @@ persisting them would mean adding fields to `orderFormSchema` and
 `buildOrderPayload` — the save path, and the exact mechanism behind the "agents
 cannot save orders" outage. They travel to the courier the way they always have:
 through `AlShrouqApprovalPlan` → `alshrouqDispatchOrder` → the frozen
-`payload_snapshot`. The consequence is that an AlShrouq order saved *without*
+`payload_snapshot`. The consequence is that an AlShrouq order saved _without_
 being handed over does not remember its location or payment method, which is
 what the previous build did too.
 
@@ -5129,7 +5257,7 @@ already records having removed. The summary follows the reader instead.
 
 **Payment and collection are one panel.** The method picker and the money were
 separated by the width of the page — the picker in the AlShrouq requirements, the
-figure two cards below in *Invoicing*. They are one decision: the method is what
+figure two cards below in _Invoicing_. They are one decision: the method is what
 decides whether the figure is collected at all. `AlShrouqOrderRequirements` now
 takes `invoiceValue` and renders the picker beside two readouts, **Order value**
 and **Collected by AlShrouq**, the second from `alshrouqOrderValue` — the same
@@ -5147,7 +5275,7 @@ printing an integer. The fallback table is the PharmacyCRM Desktop's
 `1 Cash on Delivery (COD)`, `2 Span Machine`, `3 Paid`, `4 AlshrouqPay`.
 `alshrouqPaymentOptions` gives the picker a list that always contains the stored
 value, because a Radix `Select` whose value matches no item renders its
-placeholder — which is how a reopened order read *"How does the customer pay?"*.
+placeholder — which is how a reopened order read _"How does the customer pay?"_.
 
 This is presentation only. The payload still sends the CRM's integer, and
 `isPaidPaymentType` still decides the collect amount from the live labels.
@@ -5156,7 +5284,7 @@ This is presentation only. The payload still sends the CRM's integer, and
 three sources in order: the form, then `orders.alshrouq_payment_type`, then the
 live dispatch row's `payment_type`. The third is the repair. Handing an order to
 AlShrouq writes `payment_type` onto the dispatch row and does **not** write the
-order column — that is only written by pressing *Update order*, which nobody does
+order column — that is only written by pressing _Update order_, which nobody does
 after arranging a delivery. Production bears this out: dispatched AlShrouq orders
 overwhelmingly carry `payment_type = 3` on the delivery and `NULL` on the order.
 `OrderForm` feeds the resolved value to `useAlShrouqOrder` and writes it back
@@ -5168,7 +5296,7 @@ is internal — the Notes card, the export's "Notes" — and the delivery note i
 instruction handed to a driver. Merging them put internal remarks in front of a
 courier, and it did not work on the journey deliveries are arranged from: the
 dialog's note box was rendered only when an `onDetailsChange` prop was supplied,
-and only the *create* journey supplied one, so on an existing order the note
+and only the _create_ journey supplied one, so on an existing order the note
 showed read-only and a note typed at dispatch time reached nobody.
 
 `AlShrouqApprovalDialog` now owns the note as its own state, editable on both
@@ -5176,7 +5304,7 @@ journeys, and hands it back in the plan. It persists on `alshrouq_dispatches.det
 and the frozen approval snapshot — the delivery's own row, which has carried the
 value all along. No new column, no new table, no schema change. The dispatch card
 shows `shown?.details` only, with no fallback to `orders.notes`, so nothing is
-ever labelled *Delivery note* that a courier was not given.
+ever labelled _Delivery note_ that a courier was not given.
 
 The wire key is **`details`**, and it is not inferred from the GET — which
 disagrees with the POST about names, as `value` vs `order_value` established. It
@@ -5191,13 +5319,13 @@ Reported from production: on the **Create order** confirmation the panel read
 **"AlShrouq delivery is not available yet"** with **"Checking AlShrouq coverage
 for this branch…"** underneath it, and the check never resolved — while
 **Create order + AlShrouq delivery** was still on offer below. Separately, a
-saved order sent to AlShrouq came back as *"AlShrouq refused the delivery. No
-courier was sent."* with nothing to act on.
+saved order sent to AlShrouq came back as _"AlShrouq refused the delivery. No
+courier was sent."_ with nothing to act on.
 
 **Two independent causes, both about a state that did not exist.**
 
 `useAlShrouqOrder` derived coverage from one fact — whether `options` had
-arrived — so `{ kind: "unknown" }`, which renders as *"Checking…"*, meant both
+arrived — so `{ kind: "unknown" }`, which renders as _"Checking…"_, meant both
 "the answer has not arrived yet" and "the answer is never arriving". With
 `retry: false`, one transient failure (a dropped connection, a session
 refreshing under the query, a refused permission check) was permanent for the
@@ -5209,8 +5337,8 @@ order form's critical path, and safe because it is a GET.
 The quieter half: `alshrouqDeliveryOptions` caught an unreachable CRM and
 returned **empty lists with no error marker**, which is indistinguishable from a
 successful read. Resolving any branch against an empty list yields `not_in_crm`,
-so during a CRM outage every agent was told *"This branch is not in AlShrouq's
-list… Report it to whoever maintains the branch list"* — false about the branch,
+so during a CRM outage every agent was told _"This branch is not in AlShrouq's
+list… Report it to whoever maintains the branch list"_ — false about the branch,
 and an errand for somebody who cannot fix it. `AlShrouqOrderFormOptions` now
 carries `optionsError`, the same field `AlShrouqDispatchContext` already had.
 
@@ -5230,7 +5358,7 @@ remembered for five minutes.
 
 The confirmation dialog no longer heads a check in progress with a verdict: while
 coverage is genuinely being checked it shows the spinner and that sentence alone,
-and *"AlShrouq delivery is not available yet"* appears only once the answer is in.
+and _"AlShrouq delivery is not available yet"_ appears only once the answer is in.
 `coverageAllowsDispatch` is unchanged — still `covered` only — so every one of
 these states fails closed, and **Create order only** is untouched throughout.
 
@@ -5240,7 +5368,7 @@ these states fails closed, and **Create order only** is untouched throughout.
 CRM's own answer with a constant sentence. `createAlshrouqOrder` had already
 received the body and sanitized it — `sanitizeResponseBody` strips
 credential-shaped and identity-shaped keys — and that was the only copy. Nothing
-was logged and nothing persisted, so *"AlShrouq refused the delivery"* could not
+was logged and nothing persisted, so _"AlShrouq refused the delivery"_ could not
 be diagnosed after the fact by any means short of reproducing it.
 
 `alshrouq-rejection.ts` reads the reason back out: FastAPI's `detail` in both its
@@ -5251,8 +5379,8 @@ reason is ever invented. **The create endpoint's error shape has never been
 captured from the real endpoint**; these are the shapes an HTTP JSON API uses, and
 that is stated rather than implied.
 
-The reason reaches the agent (*"AlShrouq refused the delivery (422):
-customer_phone: invalid phone number. No courier was sent."*), the scheduler's
+The reason reaches the agent (_"AlShrouq refused the delivery (422):
+customer_phone: invalid phone number. No courier was sent."_), the scheduler's
 `last_error`, and a `[alshrouq] dispatch rejected` log line carrying the order id,
 `client_order_id`, branch, payment type, HTTP status and operation id — and never
 the customer's name, phone, address, coordinates or note, never the payload, never
@@ -5283,7 +5411,7 @@ The sentence the agent saw is produced only for `kind: "rejected"`, which
 order; the branch resolved against the CRM's live `branch_options` **and
 covered**; the payload built without a single field error; `liveEnabled()` true;
 an `orderAgentId` present; the agent's CRM credential resolved from Vault; and a
-CRM login that succeeded, because a login failure throws *before* the POST. So in
+CRM login that succeeded, because a login failure throws _before_ the POST. So in
 production `ALSHROUQ_LIVE_DISPATCH_ENABLED` is `true`, `SHAMS_CRM_*` are present
 and valid, **P0205 is covered and has an AlShrouq id**, payment id 3 is in the
 CRM's live list, and the agent's Vault credential works. None of that is missing,
@@ -5384,7 +5512,7 @@ but nothing depends on the server honouring it until that is observed.
 The create response has never been captured, so no `AlshrouqCreateResponse`
 interface exists. The body is passed through `sanitizeResponseBody`, which keeps
 shape while redacting credential- and identity-shaped keys and capping depth,
-array length and string length. The reconciliation record *is* evidence-backed
+array length and string length. The reconciliation record _is_ evidence-backed
 and is typed — minus customer and driver identity, which reconciliation does not
 need.
 
@@ -5396,7 +5524,7 @@ both or neither, mirroring the `orders` CHECK. Payment ids arrive in
 id the CRM does not offer is refused by name rather than rewritten.
 
 **Credentials are `SHAMS_CRM_USERNAME` / `SHAMS_CRM_PASSWORD`, server-only.**
-Temporary and deliberately flagged as such: they are a *person's* Desktop login,
+Temporary and deliberately flagged as such: they are a _person's_ Desktop login,
 used with the account holder's authorization until Shams issues a machine
 credential, so every request is attributed to that person. Never `VITE_`, never
 logged, never persisted to Supabase — the session token lives in isolate memory
@@ -5411,15 +5539,15 @@ adapter belongs there.
 a copy, so a caller cannot sort or splice the catalog out from under every other
 caller in the isolate. A cold-cache failure throws `ShamsCrmError` rather than
 returning an empty list: an outage and an empty catalog lead to opposite
-decisions. A *stale* catalog is not a failure — a failed refresh keeps serving
+decisions. A _stale_ catalog is not a failure — a failed refresh keeps serving
 the previous rows.
 
 **Product discovery is the CRM's; operational data stays on the MIS.** That split
 is the whole point:
 
-| Concern | Source |
-| --- | --- |
-| Catalog, names, item codes, retail price, **search** | Shams CRM |
+| Concern                                                        | Source    |
+| -------------------------------------------------------------- | --------- |
+| Catalog, names, item codes, retail price, **search**           | Shams CRM |
 | Stock, branch availability, invoices, order/transactional data | Shams MIS |
 
 `searchProducts()` in `src/lib/shams/catalog.server.ts` now matches over
@@ -5501,7 +5629,7 @@ The rule lives in one place, `normalize.ts:isCallCentreCustomer`, and is a
 **suffix** test: `/-\s*call\s+centre\s*$/i`. Case, whitespace around the hyphen
 and trailing whitespace are tolerated; the hyphen and the terminal position are
 not negotiable. That narrowness is the point — `CALL CENTER SALES` is a walk-in
-account whose *name* mentions a call center, while `CALL CENTER SALES-Call
+account whose _name_ mentions a call center, while `CALL CENTER SALES-Call
 Centre` is the call-centre account, and a substring match would merge the two.
 An absent or blank customer is not Call Centre.
 
@@ -5556,7 +5684,7 @@ screen-share.
 
 **All three tabs stay mounted** (`forceMount` on every `TabsContent`). Radix
 unmounts an inactive tab by default, and that unmount was throwing away every
-`useState` in the tab *and* every React Query observer with it — so switching to
+`useState` in the tab _and_ every React Query observer with it — so switching to
 Invoices and back re-ran the Branch Stock search from zero. Held mounted, a
 return is instant and costs no request. Nothing about refetching is disabled:
 `staleTime` still governs freshness, an explicit search or Retry still goes to
@@ -5602,7 +5730,7 @@ orders.branch_no   ────────────────────�
 
 **The order's branch is a lead, not an answer.** `orders.branch_no` is what an
 agent picked while taking the call; nothing guarantees the invoice was raised
-there. So it is used as the *first place to look* — one `sales/details` request,
+there. So it is used as the _first place to look_ — one `sales/details` request,
 against a branch that is right most of the time — and the branch is reported as
 the invoice's only because Shams returned the document for it. When it does not,
 the panel says "Not at P0221, the branch on this order" and offers the
@@ -5618,7 +5746,7 @@ tell an agent something false, which is why this is a named type rather than
 `number | null`.
 
 **Request budget.** Opening an order with one invoice costs **one** upstream
-request when the order's branch holds it, plus one per *distinct* item code
+request when the order's branch holds it, plus one per _distinct_ item code
 (`invoiceItemCodes` dedupes lines; `getStockForItems` runs them 6 at a time,
 capped at 40). Both halves read caches that already existed: `getInvoices`
 answers from `sweptDocuments` when discovery has run, so picking a branch off a
@@ -5640,7 +5768,7 @@ depends on Shams.
 MIS when the order is taken.** It can land an hour or two later. So a lookup
 that comes back empty is `pending`, never "no such invoice" — the order stays
 valid, nothing is marked failed, and when the document appears it attaches
-itself to the *existing* order. Nothing has to be recreated.
+itself to the _existing_ order. Nothing has to be recreated.
 
 `features/orders/invoice-verification.ts` (pure) holds the state model. Three
 states, and the distinction between the last two is the point: `verified` (Shams
@@ -5656,13 +5784,13 @@ branch stays pending rather than triggering a sweep on page open.
 
 #### One order, many invoices
 
-`orders.invoice_no` holds one *or many* numbers, so nothing models "the"
+`orders.invoice_no` holds one _or many_ numbers, so nothing models "the"
 invoice. Identity is the number with leading zeros stripped (`invoiceKey`,
 matching `stripLeadingZeros` and the SQL's `ltrim(…, '0')`), which is what stops
 `022138` and `22138` counting as two documents. **Order value is the sum of the
 distinct verified totals** — never the first found, never a guess for a pending
 one. While any invoice is outstanding the panel labels the figure "Verified so
-far — n of m"; the field on the form carries a *Verified* badge only while it
+far — n of m"; the field on the form carries a _Verified_ badge only while it
 still equals that sum, so an agent who types over it is not told a number is
 verified when it is not.
 
@@ -5679,9 +5807,10 @@ and because the three writes have to agree. Idempotence lives in the database,
 not the client: the guard is `CONTINUE WHEN EXISTS (… details->>'invoice_key' =
 key)`, and the total is recomputed from the log rather than accumulated, so a
 repeated call cannot inflate it. `is_active` + the UPDATE policy's own predicate
-+ `view_shams_mis` are re-checked inside, since RLS does not run for a definer
-function. The flag is only ever **set**: a later MIS outage cannot un-verify an
-order.
+
+- `view_shams_mis` are re-checked inside, since RLS does not run for a definer
+  function. The flag is only ever **set**: a later MIS outage cannot un-verify an
+  order.
 
 The Call Center checkbox is checked only when Shams actually returned a
 document — never because a number was typed, a lookup ran, one failed, or the
@@ -5689,7 +5818,7 @@ order exists. `invoicesToRecord` filters to `verified` alone, and the client ski
 the call entirely when the timeline already holds every key.
 
 **And only when that document is a call-centre document** (`20260814190000`).
-The first cut set the flag for *any* verified invoice without reading what the
+The first cut set the flag for _any_ verified invoice without reading what the
 invoice said, so verifying a walk-in ticked the box — the one thing it is not
 allowed to mean. The flag is now decided from the log:
 `COUNT(*) WHERE (details->>'is_call_centre')::boolean IS TRUE`, i.e. the MIS's
@@ -5735,7 +5864,7 @@ the next open reconciles it.
 
 `authoritativeValue(summary, typed)` is the rule itself, in one pure function:
 **a verified total overwrites a manually entered value**, and a typed figure only
-survives while nothing is verified. It is applied at the point of *writing*, not
+survives while nothing is verified. It is applied at the point of _writing_, not
 only in the box — that was the missing half, since the form could show a verified
 figure while saving whatever the field happened to hold, putting a manual 100.00
 straight back over a verified 212.60 on the next save.
@@ -5748,18 +5877,18 @@ recording. `record_invoice_verification` wrote `orders.invoice_value` only
 not already hold. So the value was written on exactly one render — the first
 where an invoice became verified — and never again. If that single write did not
 land, the order kept a verified invoice of SAR 212.60 beside an order value of
-0.00 **permanently**: every later visit correctly found nothing *new* to record
+0.00 **permanently**: every later visit correctly found nothing _new_ to record
 and therefore asked for nothing.
 
 Both halves now reconcile instead. `needsValueSync` (pure) is the second reason
-to call the server — *the order's stored figures disagree with what has been
-verified* — and the function brings any order holding a verified invoice into
+to call the server — _the order's stored figures disagree with what has been
+verified_ — and the function brings any order holding a verified invoice into
 line on whatever call notices, not only when something is new. The `WHERE` guard
 means an order already in agreement is not written to at all, so opening one
 costs nothing and raises no spurious `edited` row. A failure is surfaced in the
 panel with a retry rather than swallowed.
 
-#### The total is the order's *current* invoices — `20260814210000`
+#### The total is the order's _current_ invoices — `20260814210000`
 
 The reconciliation summed `SUM(total)` over every `invoice_verified` row the
 order had ever collected, which is its history, not its state. Order #8724
@@ -5781,7 +5910,7 @@ Two changes fix it, both inside `record_invoice_verification`:
 
 - **Current, not historical.** `orders.invoice_no` is parsed in SQL — the
   separators `parseInvoiceNumbers` splits on, the zero-stripping `invoiceKey`
-  applies — and only invoices keyed on the order *today* contribute to the
+  applies — and only invoices keyed on the order _today_ contribute to the
   total, the flag or the events. `WITH current_keys … JOIN` is the whole
   mechanism. Remove a number and it stops counting; the log keeps the history.
 - **Latest, not first.** A document the MIS reprices used to be skipped by the
@@ -5834,7 +5963,7 @@ and then a Customer Care agent was possible and filed the order under a team its
 agent is not in. `OrderAssignment` picks the **agent**, and `teamForAgent` reads
 the team off their `user_roles.role` — the same enum `orders.team` takes, so
 there is nothing to map. `isAssignableAgent` keeps Owner, Admin, Supervisor and
-Auditor out of the picker entirely: having a team *is* the test for being able to
+Auditor out of the picker entirely: having a team _is_ the test for being able to
 hold a caseload.
 
 Owner and Admin may reassign on edit (`isAdministrator`); at creation the gate is
@@ -5857,7 +5986,7 @@ Two consequences worth knowing. Its first statement is
 connection without a JWT can update `orders` at all** — including a migration
 running as `postgres`, which is why `20260814160000`'s `created_by` backfill has
 to disable it for that one statement. And because the reconciling UPDATE in
-`record_invoice_verification` changes `invoice_value` *and*
+`record_invoice_verification` changes `invoice_value` _and_
 `call_center_verified` together, it does not qualify as a "verification-only"
 diff: a caller holding `verify_all_orders` but not `edit_all_orders` would be
 refused by the trigger even though the function's own check admits them. No
@@ -5886,7 +6015,7 @@ sent upstream as three literal characters.
 
 This matches PharmacyCRM Desktop, the client Shams staff use, which matches its
 wildcard against the item **name** only. Its rule is anchored — `^…$` with `*`
-as `.*` — so `nan*op` means "starts nan, *ends* op" there and finds nothing,
+as `.*` — so `nan*op` means "starts nan, _ends_ op" there and finds nothing,
 while here it reads as "these pieces, in this order, anywhere" and returns the
 ten NAN OPTIPRO/SCOOP products. The portal is deliberately the looser of the two:
 a superset of the desktop's answer, never a different one.
@@ -5913,7 +6042,7 @@ everything it matched. It exposes no `limit`, `page` or `offset` (the whole
 signature is `?q=`), so a server-side cap cannot be ruled out from the client,
 and a truncated superset is not a superset: the wanted product can be cut off
 before local matching sees it. Several probes mean a product only has to survive
-*one* probe's truncation. The union is de-duplicated by item code, filtered, then
+_one_ probe's truncation. The union is de-duplicated by item code, filtered, then
 ranked. A plain query still costs exactly **one** request.
 
 Results are ranked (`rankProducts`), not returned in API order: exact name, then
@@ -5945,7 +6074,7 @@ band: the application defines no threshold.
 
 #### Invoice lookup — number first, branch discovered
 
-`Invoice number` → *find matching branches* → `agent picks` → `invoice details`.
+`Invoice number` → _find matching branches_ → `agent picks` → `invoice details`.
 One match skips the chooser; none is an empty state, not an error.
 
 A document number is unique only within a warehouse, and **the MIS has no
@@ -5998,13 +6127,13 @@ request.
   10-minute React Query window. Two agents looking up the same document cost one
   sweep. A total failure is never cached.
 - **The sweep keeps the documents it downloads** (`sweptDocuments`, same 5 min).
-  `sales/details` answers a probe with the *whole* document — header and item
+  `sales/details` answers a probe with the _whole_ document — header and item
   lines — and discovery used to keep only the chooser summary, so opening the
   document sent the identical request again: same path, same `doc_no_start`,
   same `wh_cd`, seconds apart. For the common single-match lookup that second
   round trip was the last thing between the agent and the invoice, and it is now
   a cache read. Only the sweep writes there, only for branches that answered with
-  a document, and only a *bare* single-document query reads it — a range or a
+  a document, and only a _bare_ single-document query reads it — a range or a
   date window was never swept and always goes to the network.
 
 It still runs **only on submit**, never per keystroke.
@@ -6037,7 +6166,7 @@ Decisions worth keeping:
 - **`totalCost` / `profit` are not rendered.** Margin is not needed to read a
   document. Patient identifiers never reach the client at all — they are dropped
   in `normalize.ts`.
-- **An invoice shows its `Customer` label *and* its Call Centre status**, never
+- **An invoice shows its `Customer` label _and_ its Call Centre status**, never
   the badge alone. The suffix the rule turns on sits at the end of the label, so
   hiding the label hides the evidence. The label is not truncated.
 - **Failure copy is chosen by `kind`, not printed from the server**, so no
@@ -6072,7 +6201,7 @@ below — so a phone never scrolls sideways. Branch labels come from
 9. Completion rate and sales totals count `status = 'Completed'` rows only — the
    Dashboard fulfillment mix included.
 10. **A verified invoice total is authoritative.** Once Shams has returned a
-    document, `invoice_value` is the sum of the *distinct* verified totals and a
+    document, `invoice_value` is the sum of the _distinct_ verified totals and a
     manually entered figure does not survive it — at creation, on save, and on
     every later reconciliation. Nothing verified yet means the typed value
     stands: an invoice may still be an hour away. One rule,
@@ -6081,7 +6210,7 @@ below — so a phone never scrolls sideways. Branch labels come from
     known totals — never accumulated onto the previous value, and never counting
     a number since removed or a document's superseded price.
 11. **`call_center_verified` means the call centre raised the invoice.** It is
-    set automatically only from a *verified* document whose MIS channel says
+    set automatically only from a _verified_ document whose MIS channel says
     Call Centre, never from a typed number, an attempted lookup, a failed one or
     a pending one. It is **derived, not latched**
     (`call_center_verified = (call_centre_cnt > 0)`, `20260815170000`): replace a
@@ -6092,12 +6221,12 @@ below — so a phone never scrolls sideways. Branch labels come from
     document's channel, so the flag was decided from the first answer ever
     received about it. It was set-only until then, so a replaced invoice left
     the order claiming a verification its own documents no longer supported.
-    Clearing needs *current* evidence — the recompute sits inside
+    Clearing needs _current_ evidence — the recompute sits inside
     `IF verified_cnt > 0`, so a pending replacement or an unreachable MIS leaves
     the flag exactly as it was rather than deriving it from an absence.
 
     That guard left one gap, closed by `20260815190000`: the recompute ran only
-    when the *order page* called it, so **changing `invoice_no` did not
+    when the _order page_ called it, so **changing `invoice_no` did not
     re-derive anything**. Create did (`submit` calls the RPC after the insert);
     the edit path is a plain `UPDATE` and had no equivalent, so an agent who
     replaced a walk-in invoice with a call-centre one, saved, and went back to
@@ -6138,7 +6267,7 @@ below — so a phone never scrolls sideways. Branch labels come from
     (reconcile as normal). Absence of evidence is not evidence of a walk-in.
 
     **Both derivations read channel corrections** (`20260816120000`). A document
-    recorded as a walk-in used to stay one for ever unless its *price* moved, so
+    recorded as a walk-in used to stay one for ever unless its _price_ moved, so
     the Orders list and the order page could disagree about the same invoice: the
     page reads the live Shams answer and said Call Centre, the list reads
     `call_center_verified` derived from a log that had never been told. The RPC
@@ -6151,6 +6280,7 @@ below — so a phone never scrolls sideways. Branch labels come from
     It is **not** manually tickable from the Orders list any more; the order form
     still offers it to `verify_*` holders, for a document raised outside the
     call centre that operationally belongs to it.
+
 12. **An order completes itself when nothing is left to do.**
     `record_invoice_verification` moves `status` to `Completed` in the same
     statement that reconciles the value, and only when all of: the order has at
@@ -6166,6 +6296,7 @@ below — so a phone never scrolls sideways. Branch labels come from
     `> 0` in `20260815120000` and corrected in `20260815140000`; one live order
     (#8328) was auto-completed under the ANY rule and stays Completed, since the
     automation never reverses a status.
+
 13. **Cancelled is terminal for the automation.** Cancellation is a manual
     decision an agent takes when a pharmacist reports one, and no amount of
     later invoice verification may undo it. The same clause makes a re-check
@@ -6276,9 +6407,9 @@ configured" and every read falls back to the live PBX path.
 
 ### Shams Pharmacy MIS
 
-| Variable                                     | Notes                                                                                                                                                                                                                                                                                              |
-| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SHAMS_MIS_BASE_URL`                         | **Server only.** Origin of the MIS API, no trailing slash or path. Absent → the Shams module reports "not configured" and every server function returns an empty result; nothing else breaks.                                                                                                     |
+| Variable                                             | Notes                                                                                                                                                                                                                                                                                               |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SHAMS_MIS_BASE_URL`                                 | **Server only.** Origin of the MIS API, no trailing slash or path. Absent → the Shams module reports "not configured" and every server function returns an empty result; nothing else breaks.                                                                                                       |
 | `SHAMS_MIS_ACCOUNT_IDENTIFIER` / `SHAMS_MIS_API_KEY` | **Server only, and REQUIRED.** The machine credentials exchanged at `POST /api/v2/auth/token` for the Bearer token every data request carries. The API key is a secret — treat it like `SUPABASE_SERVICE_ROLE_KEY`: never `VITE_`-prefixed, never logged, never committed, never sent to a browser. |
 
 All three Shams variables are required **together**; any one missing is treated

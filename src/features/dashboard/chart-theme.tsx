@@ -81,7 +81,29 @@ export const POINT_CURSOR = {
  */
 export const TOOLTIP_WRAPPER: CSSProperties = { zIndex: 40, outline: "none" };
 
-export const LEGEND_STYLE: CSSProperties = { fontSize: 12, paddingTop: 4 };
+/**
+ * The tooltip's own motion.
+ *
+ * Recharts defaults a tooltip to a 400ms `ease` transition on its position, so
+ * the box visibly trails the pointer across a chart and is still catching up
+ * when the reader has moved to the next bar — which reads as lag, not as
+ * polish. Short enough to feel attached to the cursor, long enough not to
+ * snap; the curve is the page's own (`chart-motion`), stated here because a
+ * Recharts tooltip takes its easing as a prop and not from a class.
+ */
+export const TOOLTIP_MOTION = {
+  animationDuration: 180,
+  animationEasing: "ease-out",
+} as const;
+
+/**
+ * Legend text and the gap above it.
+ *
+ * 10px rather than 4: the legend sits directly under the plot area, and at 4px
+ * a "Customer Care" swatch was closer to the x-axis labels it is not part of
+ * than to the chart it names.
+ */
+export const LEGEND_STYLE: CSSProperties = { fontSize: 12, paddingTop: 10, lineHeight: 1.2 };
 
 /**
  * Legend labels in body colour rather than the series colour.

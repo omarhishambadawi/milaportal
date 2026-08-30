@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useState, useSyncExternalStore, type RefObject } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+  type RefObject,
+} from "react";
 
 /**
  * Enter animation for the Dashboard's charts, in one place.
@@ -277,11 +285,25 @@ export function useSettledChartMotion(
  * Returns true immediately where `IntersectionObserver` is unavailable — a
  * chart that cannot be observed must animate, never stay frozen.
  */
-export function useInViewOnce(target: RefObject<HTMLElement | null>): boolean {
+export function useInViewOnce(
+  target: RefObject<HTMLElement | null>,
+  /**
+   * Count the panel as seen without waiting for the viewport.
+   *
+   * For the PDF export: a printed sheet has no scroll, so a panel that is four
+   * screens down has never intersected anything and would print as an empty
+   * card. Forcing it renders every panel for the writer.
+   */
+  force = false,
+): boolean {
   const [seen, setSeen] = useState(false);
 
   useEffect(() => {
     if (seen) return;
+    if (force) {
+      setSeen(true);
+      return;
+    }
     const el = target.current;
     if (!el) return;
     if (typeof IntersectionObserver === "undefined") {
@@ -295,29 +317,78 @@ export function useInViewOnce(target: RefObject<HTMLElement | null>): boolean {
           observer.disconnect();
         }
       },
-      { rootMargin: "0px 0px -8% 0px", threshold: 0 },
+      // Expanded downwards rather than inset. The panel is not mounted until
+      // this fires (see `useChartReveal`), so triggering *after* its top edge
+      // had arrived meant the reader watched an empty card for a beat before
+      // anything appeared. A little under a tenth of a viewport ahead is enough
+      // for the entrance to already be underway as the card comes into view.
+      { rootMargin: "0px 0px 8% 0px", threshold: 0 },
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [target, seen]);
+  }, [target, seen, force]);
 
   return seen;
 }
 
 /**
- * The whole lifecycle for one panel: still until seen, one entrance, then stable.
+ * Whether charts inside this subtree are being laid out for the PDF writer.
  *
- * Bundled because the three parts are only correct together — an observer whose
- * result does not gate the presets is just a state update, and presets that arm
- * on mount animate to an empty room.
+ * Read by every panel, provided once by the Dashboard route around its content.
+ * Two things follow from it and they are only correct together: the panel is
+ * rendered whether or not it has been scrolled to, and it is rendered still.
  */
-export function useInViewChartMotion(
+export const ChartPrintContext = createContext(false);
+
+/** True while this subtree is being laid out for print. */
+export function useChartPrintMode(): boolean {
+  return useContext(ChartPrintContext);
+}
+
+/**
+ * The whole lifecycle for one panel: absent until seen, one entrance, then stable.
+ *
+ * ---------------------------------------------------------------------------
+ * Why `ready` exists — the entrance that played twice
+ * ---------------------------------------------------------------------------
+ * This used to return presets only, and the panel rendered its chart from the
+ * first frame with `isAnimationActive: false` until the observer fired. That is
+ * a Recharts trap, and it is the "Monthly revenue trend jumps" report:
+ *
+ *   - `Line.componentDidMount` returns early when `isAnimationActive` is false,
+ *     so `state.totalLength` — the path length its draw-on animation
+ *     interpolates towards — is never measured and stays 0.
+ *   - With the flag off, `renderCurve` takes `renderCurveStatically`, so the
+ *     line is painted complete.
+ *   - When the flag flips true, `renderCurve` switches to the animated path with
+ *     `prevPoints` still undefined, so react-smooth runs `t: 0 → 1` from the
+ *     start and `strokeDasharray` is computed against `totalLength = 0`.
+ *     `componentDidUpdate` then measures the real length a frame later and the
+ *     fully-drawn line **collapses to a stub and redraws itself**.
+ *
+ * `Bar` and `Area` fail the same way for the same reason — their animated paths
+ * interpolate from zero height and zero clip width when there is no `prevData`
+ * — so a bar panel blinked out and grew back.
+ *
+ * The fix is not to slow the animation or to hide it: it is to stop rendering a
+ * finished chart that we intend to animate. Nothing mounts until the panel is
+ * seen, and what mounts then has animation active from its very first frame —
+ * which is the one arrangement Recharts' lifecycle is built for, and the
+ * measurement happens in `componentDidMount` before the browser paints.
+ *
+ * @returns `ready` — mount the chart — and the presets to spread onto its series.
+ */
+export function useChartReveal(
   identity: unknown,
   target: RefObject<HTMLElement | null>,
+  /** Force stillness for this panel alone; the print context does it for all. */
   forceStill = false,
-): ChartMotionSet {
-  const seen = useInViewOnce(target);
-  return useSettledChartMotion(identity, forceStill, seen);
+): { ready: boolean; motion: ChartMotionSet } {
+  const printing = useChartPrintMode();
+  const still = forceStill || printing;
+  const seen = useInViewOnce(target, printing);
+  const motion = useSettledChartMotion(identity, still, seen);
+  return { ready: seen, motion };
 }
 
 /** Test seam — the settle window and the per-series budget. */

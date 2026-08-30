@@ -81,7 +81,11 @@ export function useDashboardData({
   // Headline KPI cards now come from the orders_kpis RPC (server-side
   // aggregation) instead of the client-side cash/wasfaty/total reduction.
   // Scoped by the same effective team/agent filters; RLS applies.
-  const { data: kpiRows } = useQuery({
+  // `isLoading` and not `isPending`: with `enabled: false` a query is pending
+  // forever, and a viewer whose sections list omits "kpis" would sit under a
+  // permanent skeleton. This is true only while the first fetch is actually in
+  // flight.
+  const { data: kpiRows, isLoading: kpiLoading } = useQuery({
     queryKey: queryKeys.dashboard.kpis(dashFilters),
     queryFn: async () => {
       const { data, error } = await supabase.rpc("orders_kpis" as any, {
@@ -492,6 +496,10 @@ export function useDashboardData({
 
   return {
     kpiByBucket,
+    /** First load of `orders_kpis`. The headline cards render placeholders on it
+     *  rather than three cards of zeroes, which a reader cannot tell from a
+     *  period that genuinely had no sales. */
+    kpiLoading,
     dailyData,
     statusData,
     teamData,
