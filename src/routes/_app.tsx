@@ -3,23 +3,23 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "r
 import { useAuth, isAdministrator, isOwnerRole } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import {
+  Activity,
+  Building2,
+  ChartColumn,
+  ClipboardList,
+  ClipboardPlus,
+  Headphones,
   LayoutDashboard,
-  FileText,
-  ListOrdered,
-  Plus,
-  Users,
-  MapPin,
+  LayoutList,
+  MessageSquareWarning,
+  PackageSearch,
+  Phone,
+  PhoneOutgoing,
+  Search,
+  Settings2,
   ShieldAlert,
   ShieldCheck,
-  MessageSquareWarning,
-  Headphones,
-  PhoneOutgoing,
-  Stethoscope,
-  Phone,
-  Settings2,
-  LayoutList,
-  Search,
-  PackageSearch,
+  Users,
 } from "lucide-react";
 import { hasPerm, canViewCallCenter } from "@/lib/permissions";
 import { callsTeamForRole } from "@/lib/calls-access";
@@ -33,31 +33,19 @@ export const Route = createFileRoute("/_app")({
   component: AppLayout,
 });
 
-const SIDEBAR_PREF_KEY = "milaserv.sidebar.expanded";
+/**
+ * The rail is a fixed 92px and no longer has an expanded state, so the width it
+ * publishes is a constant. Kept as a custom property because fixed-position
+ * overlays inside routes (the Branch Locator's sticky bar) position against it.
+ */
+const SIDEBAR_WIDTH = "92px";
 
 function AppLayout() {
   const { session, profile, role, loading, signOut, refresh } = useAuth();
   const navigate = useNavigate();
   const { location } = useRouterState();
 
-  // Compact-by-default: sidebar starts collapsed (icons + label under icon).
-  // Preference persisted to localStorage and hydrated after mount to avoid SSR mismatch.
-  // Compact-by-default: sidebar starts collapsed (icons + label under icon).
-  const [expanded, setExpanded] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-
-  useEffect(() => {
-    try {
-      const v = localStorage.getItem(SIDEBAR_PREF_KEY);
-      if (v === "1") setExpanded(true);
-    } catch {}
-  }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(SIDEBAR_PREF_KEY, expanded ? "1" : "0");
-    } catch {}
-  }, [expanded]);
 
   useEffect(() => {
     if (!loading && !session) navigate({ to: "/auth", replace: true });
@@ -71,7 +59,6 @@ function AppLayout() {
   // arrow here would hand it a fresh callback on every layout render, turning
   // every unrelated update (avatar load, notifications) into a sidebar
   // reconcile.
-  const toggleSidebar = useCallback(() => setExpanded((v) => !v), []);
   const closeMobileSidebar = useCallback(() => setMobileOpen(false), []);
 
   const canDashboard = hasPerm(role, profile?.permissions as any, "view_dashboard");
@@ -102,9 +89,9 @@ function AppLayout() {
   const nav = useMemo(
     () => [
       ...(canDashboard ? [{ to: "/dashboard", label: "Dashboard", icon: LayoutDashboard }] : []),
-      ...(canReports ? [{ to: "/reports", label: "Reports", icon: FileText }] : []),
-      ...(canOrders ? [{ to: "/orders", label: "Orders", icon: ListOrdered }] : []),
-      ...(canCreate ? [{ to: "/orders/new", label: "New Order", icon: Plus }] : []),
+      ...(canReports ? [{ to: "/reports", label: "Reports", icon: ChartColumn }] : []),
+      ...(canOrders ? [{ to: "/orders", label: "Orders", icon: ClipboardList }] : []),
+      ...(canCreate ? [{ to: "/orders/new", label: "New Order", icon: ClipboardPlus }] : []),
       ...(canComplaints
         ? [{ to: "/complaints", label: "Complaints", icon: MessageSquareWarning }]
         : []),
@@ -149,7 +136,7 @@ function AppLayout() {
                       {
                         to: "/calls/diagnostics",
                         label: "Diagnostics",
-                        icon: Stethoscope,
+                        icon: Activity,
                         separatorBefore: true,
                       },
                     ]
@@ -171,10 +158,10 @@ function AppLayout() {
        * keep the link they have always had.
        */
       ...(isAdministrator(role)
-        ? [{ to: "/admin", label: "Administration", icon: ShieldCheck }]
+        ? [{ to: "/admin", label: "Administration", shortLabel: "Admin", icon: ShieldCheck }]
         : []),
       ...(canUsers ? [{ to: "/admin/users", label: "Users", icon: Users }] : []),
-      ...(canBranches ? [{ to: "/branches", label: "Branches", icon: MapPin }] : []),
+      ...(canBranches ? [{ to: "/branches", label: "Branches", icon: Building2 }] : []),
     ],
     [
       canDashboard,
@@ -260,19 +247,13 @@ function AppLayout() {
       className="min-h-screen flex bg-muted/30"
       // Published so fixed-position overlays inside routes (e.g. the Branch
       // Locator's sticky bar) can sit beside the sidebar instead of over it.
-      style={{ "--app-sidebar-w": expanded ? "16rem" : "76px" } as CSSProperties}
+      style={{ "--app-sidebar-w": SIDEBAR_WIDTH } as CSSProperties}
     >
       <AppSidebar
         nav={nav}
         activePath={activePath}
-        expanded={expanded}
-        onToggle={toggleSidebar}
         mobileOpen={mobileOpen}
         onMobileClose={closeMobileSidebar}
-        name={profile?.full_name ?? session.user.email ?? "Account"}
-        role={role}
-        avatarUrl={profile?.avatar_url}
-        onSignOut={() => signOut().then(() => navigate({ to: "/auth", replace: true }))}
       />
 
       {/* `main` must NOT establish a scroll container: an `overflow-x-hidden`

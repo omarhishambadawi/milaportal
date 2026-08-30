@@ -965,19 +965,61 @@ storage RLS would otherwise stop an admin signing someone else's).
 
 ### App shell (`src/components/`)
 
-| Component               | Notes                                                                                                                                                                                                                                                                                                              |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `app-sidebar.tsx`       | Collapsible rail (76px ↔ 16rem), preference in `localStorage` under `milaserv.sidebar.expanded`, published as the `--app-sidebar-w` CSS variable so fixed overlays inside routes can sit beside it. Exports `resolveActivePath`, which resolves against children as well as top-level items.                       |
-| `nav-flyout.tsx`        | Sub-menu rendered through a **portal to `document.body`**, positioned from the trigger's measured rect — the sidebar's `overflow-x-hidden` (required for the width animation) clips any `left-full` panel. Desktop = floating panel, mobile (`lg:hidden`) = inline accordion. Forgiving close with a grace period. |
-| `app-header.tsx`        | Sticky title/icon, mobile menu trigger, account dropdown.                                                                                                                                                                                                                                                          |
-| `brand-logo.tsx`        | Both light and dark marks stay mounted and cross-fade on `--theme-dark`, so the logo lands on the same frame as everything else.                                                                                                                                                                                   |
-| `theme-toggle.tsx`      | Icons interpolate off `--theme-dark` rather than running their own transition.                                                                                                                                                                                                                                     |
-| `role-badge.tsx`        | The single way a role is displayed. Owner gets a filled badge with a crown so it is never mistaken for an ordinary admin.                                                                                                                                                                                          |
-| `user-avatar.tsx`       | Signed-URL avatar with initials fallback, five sizes.                                                                                                                                                                                                                                                              |
-| `notification-bell.tsx` | Unread notifications with relative timestamps.                                                                                                                                                                                                                                                                     |
-| `date-range-picker.tsx` | Presets: today, yesterday, last 7 days, this month, last month.                                                                                                                                                                                                                                                    |
-| `password-input.tsx`    | One show/hide field used by all three password forms; real `<button>` with `aria-pressed` and a flipping `aria-label`.                                                                                                                                                                                             |
-| `saudi-sales-map.tsx`   | Inline SVG heat map, no dependencies; collision-aware labels, reduced-motion aware. Shares the country outline with `src/lib/ksa-geo.ts`.                                                                                                                                                                          |
+| Component               | Notes                                                                                                                                                                                                                                                                                            |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `app-sidebar.tsx`       | Fixed 92px rail — icon over label, centred — published as the `--app-sidebar-w` CSS variable so fixed overlays inside routes can sit beside it. No expanded state: see below. Exports `resolveActivePath`, which resolves against children as well as top-level items.                           |
+| `nav-flyout.tsx`        | Sub-menu rendered through a **portal to `document.body`**, positioned from the trigger's measured rect — the sidebar's `overflow-x-hidden` clips any `left-full` panel. `variant` picks the presentation: rail = floating panel, drawer = inline accordion. Forgiving close with a grace period. |
+| `app-header.tsx`        | Sticky title/icon, mobile menu trigger, account dropdown.                                                                                                                                                                                                                                        |
+| `brand-logo.tsx`        | Both light and dark marks stay mounted and cross-fade on `--theme-dark`, so the logo lands on the same frame as everything else.                                                                                                                                                                 |
+| `theme-toggle.tsx`      | Icons interpolate off `--theme-dark` rather than running their own transition.                                                                                                                                                                                                                   |
+| `role-badge.tsx`        | The single way a role is displayed. Owner gets a filled badge with a crown so it is never mistaken for an ordinary admin.                                                                                                                                                                        |
+| `user-avatar.tsx`       | Signed-URL avatar with initials fallback, five sizes.                                                                                                                                                                                                                                            |
+| `notification-bell.tsx` | Unread notifications with relative timestamps.                                                                                                                                                                                                                                                   |
+| `date-range-picker.tsx` | Presets: today, yesterday, last 7 days, this month, last month.                                                                                                                                                                                                                                  |
+| `password-input.tsx`    | One show/hide field used by all three password forms; real `<button>` with `aria-pressed` and a flipping `aria-label`.                                                                                                                                                                           |
+| `saudi-sales-map.tsx`   | Inline SVG heat map, no dependencies; collision-aware labels, reduced-motion aware. Shares the country outline with `src/lib/ksa-geo.ts`.                                                                                                                                                        |
+
+#### The rail has no expanded state
+
+It used to be 76px that animated to 16rem and back, with the preference in
+`localStorage` under `milaserv.sidebar.expanded`. Removed entirely: the width
+transition, the footer toggle, the `data-state`/`group/rail` marker and the
+dozen `group-data-[state=collapsed]/rail:` variants that drove labels, headings
+and the section divider through it, the `expanded` state in `_app` and its
+persistence, and the four props (`name`, `role`, `avatarUrl`, `onSignOut`) the
+sidebar accepted and never read.
+
+A width animation is layout-bound by nature — every frame re-lays out the rail
+_and_ the whole main column — so it was never going to match the rest of the
+app's motion, whatever the clock. The rail is now designed as a rail: the label
+sits under the icon rather than being clipped to zero width beside it, so every
+destination is readable without hovering, and the `title` tooltips that existed
+only to compensate for hidden labels went with them. 92px is what holds the
+longest label at 11px; `Administration` is the one that does not fit (75px
+against 68px of room) and carries `shortLabel: "Admin"`, with the full label
+still on the header, the drawer and its `title`.
+
+Two presentations, now stated rather than implied by breakpoint: the rail is
+vertical, the mobile drawer keeps horizontal rows and the section headings. The
+old `hidden lg:block` / `lg:hidden` split in `nav-flyout` was wrong between 768
+and 1024 — the rail starts at `md:`, so in that band it rendered the _accordion_,
+whose full-width rows the rail's `overflow-x-hidden` clipped to nothing.
+`variant` fixes that, and also scopes hover-to-open to the rail: a tap dispatches
+`mouseover` before `click`, so in the drawer hover opened the accordion and the
+tap's own click closed it again — the toggle needed two presses.
+
+Motion is one curve and one duration — `200ms cubic-bezier(0.4, 0, 0.2, 1)`, the
+Dashboard's curve — and **colours only**. Nothing in the rail moves, scales or
+lifts under the pointer. The active state is three things, not the previous
+five: a tinted panel, the icon in the brand colour, and the label a weight
+heavier; the filled primary chip and the left-edge accent bar are gone, the
+latter being meaningless against a centred item. `motion-reduce:` variants take
+the transitions and the drawer's entrance out for `prefers-reduced-motion`.
+
+The drawer gained `role="dialog"`, `aria-modal`, Escape-to-close and initial
+focus on its close button. None of that existed: it could only be dismissed by
+pointer, and opening it left focus on the header button, so a keyboard user
+tabbed through the page underneath the overlay.
 
 `src/components/ui/` holds 46 shadcn/ui primitives (accordion → tooltip),
 unmodified in structure and consumed through the `@/components/ui/*` alias.

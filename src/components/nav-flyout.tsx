@@ -8,16 +8,23 @@ import type { NavItemData } from "./app-sidebar";
  * Right-hand flyout for a nav item with children.
  *
  * Rendered through a PORTAL, which is the whole point. The sidebar's scrolling
- * `<nav>` carries `overflow-x-hidden` (it has to — the rail collapses by
- * animating widths), so a panel positioned at `left-full` inside it is clipped
- * away the instant it appears. That is why the first CSS-only attempt showed a
- * chevron and nothing else. Escaping to `document.body` and positioning from
- * the trigger's measured rect is the only reliable fix.
+ * `<nav>` carries `overflow-x-hidden` — a 92px rail has to contain its own
+ * content — so a panel positioned at `left-full` inside it is clipped away the
+ * instant it appears. That is why the first CSS-only attempt showed a chevron
+ * and nothing else. Escaping to `document.body` and positioning from the
+ * trigger's measured rect is the only reliable fix.
  *
- * One `open` state drives both presentations:
- *   - Desktop: the portal panel. Hover opens, click toggles, focus opens.
- *   - Mobile: an inline accordion (`lg:hidden`), because a floating panel on a
- *     narrow touch screen has nowhere to go.
+ * One `open` state drives both presentations, and `variant` picks which:
+ *   - `rail`: the portal panel. Hover opens, click toggles, focus opens.
+ *   - `drawer`: an inline accordion, because a floating panel anchored to a
+ *     full-width overlay on a narrow touch screen has nowhere to go.
+ *
+ * That used to be decided by breakpoint (`hidden lg:block` against
+ * `lg:hidden`), which was wrong in the 768–1024 band: the desktop rail starts
+ * at `md:`, so between those two widths the rail rendered the *accordion*, and
+ * an accordion of full-width child rows inside a rail is clipped to nothing by
+ * the `overflow-x-hidden` above. The container knows which shape it is; it now
+ * says so.
  *
  * Closing is deliberately forgiving. Leaving the trigger starts a short grace
  * period rather than closing immediately, so the diagonal mouse path from the
@@ -56,11 +63,14 @@ export function clampFlyoutTop(
 export function NavFlyout({
   item,
   activePath,
+  variant,
   trigger,
   onNavigate,
 }: {
   item: NavItemData;
   activePath: string;
+  /** Which presentation the container wants. See the note above. */
+  variant: "rail" | "drawer";
   /** The parent link itself, rendered by the caller so styling stays in one place. */
   trigger: ReactNode;
   /** Called after a child is chosen, so the mobile drawer can close. */
@@ -191,8 +201,15 @@ export function NavFlyout({
     <div
       ref={wrapRef}
       className="relative"
-      onMouseEnter={openNow}
-      onMouseLeave={scheduleClose}
+      /* Hover-to-open is the rail's, not the drawer's.
+         A tap on a touch screen dispatches `mouseover` before `click`, so with
+         hover opening on both, the tap opened the accordion and its own click
+         closed it again in the same batch: the toggle looked dead until you hit
+         it twice. Measured at 390px — first click `grid-template-rows: 0px`,
+         second `226px`. The drawer is only ever reached by touch or keyboard,
+         and focus still opens it either way, so it has nothing to lose. */
+      onMouseEnter={variant === "rail" ? openNow : undefined}
+      onMouseLeave={variant === "rail" ? scheduleClose : undefined}
       onFocusCapture={() => {
         if (suppressFocusOpen.current) return;
         openNow();
@@ -236,8 +253,9 @@ export function NavFlyout({
         {trigger}
       </div>
 
-      {/* Desktop: portal panel, escaping the sidebar's overflow clipping. */}
-      {open &&
+      {/* Rail: portal panel, escaping the sidebar's overflow clipping. */}
+      {variant === "rail" &&
+        open &&
         rect &&
         typeof document !== "undefined" &&
         createPortal(
@@ -250,9 +268,10 @@ export function NavFlyout({
             onMouseLeave={scheduleClose}
             style={{ top, left: rect.left }}
             className={cn(
-              "fixed z-50 hidden min-w-56 lg:block",
+              "fixed z-50 min-w-56",
               "rounded-xl border border-border/60 bg-popover p-1.5 shadow-lg",
-              "animate-in fade-in-0 zoom-in-95 slide-in-from-left-1 duration-150",
+              "animate-in fade-in-0 slide-in-from-left-1 duration-150",
+              "ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:animate-none",
             )}
           >
             {children.map((c) => (
@@ -265,25 +284,28 @@ export function NavFlyout({
           document.body,
         )}
 
-      {/* Mobile / narrow: inline accordion. No floating panel on touch. */}
-      <div
-        className={cn(
-          "grid lg:hidden",
-          "transition-[grid-template-rows,opacity] duration-200 ease-out",
-          open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
-        )}
-      >
-        <div className="overflow-hidden">
-          <div className="mt-0.5 space-y-0.5 pl-3">
-            {children.map((c) => (
-              <div key={c.to}>
-                {c.separatorBefore && <div className="my-1.5 ml-2.5 border-t border-border/60" />}
-                {childLink(c, true)}
-              </div>
-            ))}
+      {/* Drawer: inline accordion. No floating panel on touch. */}
+      {variant === "drawer" && (
+        <div
+          className={cn(
+            "grid",
+            "transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(0.4,0,0.2,1)]",
+            "motion-reduce:transition-none",
+            open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+          )}
+        >
+          <div className="overflow-hidden">
+            <div className="mt-0.5 space-y-0.5 pl-3">
+              {children.map((c) => (
+                <div key={c.to}>
+                  {c.separatorBefore && <div className="my-1.5 ml-2.5 border-t border-border/60" />}
+                  {childLink(c, true)}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

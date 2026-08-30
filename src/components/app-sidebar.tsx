@@ -1,6 +1,6 @@
-import { memo, useMemo, type ComponentType } from "react";
+import { memo, useEffect, useMemo, useRef, type ComponentType } from "react";
 import { Link } from "@tanstack/react-router";
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { ChevronRight, X } from "lucide-react";
 import { BrandLogo } from "@/components/brand-logo";
 import { NavFlyout } from "@/components/nav-flyout";
 import { cn } from "@/lib/utils";
@@ -9,6 +9,16 @@ export type NavItemData = {
   to: string;
   label: string;
   icon: ComponentType<{ className?: string }>;
+  /**
+   * What the rail shows under the icon, when the full label does not fit.
+   *
+   * One word of about ten characters is what a 92px rail holds at 11px; only
+   * "Administration" exceeds it, at 75px against 68px of room. The full `label`
+   * is still what the header names the page and what the drawer and the `title`
+   * attribute say, so nothing is lost — the rail is simply not the place to
+   * spell it out.
+   */
+  shortLabel?: string;
   /**
    * Sub-items shown in a right-hand flyout. The parent stays a real link, so
    * the menu is never the only way to reach it and keyboard users can tab
@@ -22,52 +32,62 @@ export type NavItemData = {
 type SidebarProps = {
   nav: NavItemData[];
   activePath: string;
-  expanded: boolean;
-  onToggle: () => void;
   mobileOpen: boolean;
   onMobileClose: () => void;
-  name: string;
-  role?: string | null;
-  avatarUrl?: string | null;
-  onSignOut: () => void;
 };
 
-/*
- * Collapse is CSS-only.
+/**
+ * The navigation rail, and the mobile drawer that stands in for it.
  *
- * The rail used to unmount every label, group heading, the brand text and the
- * footer caption on collapse (`{!collapsed && …}`), so a toggle began with a
- * synchronous React commit that removed ~15 DOM nodes — reconcile, DOM
- * mutation and a full layout on the very frame the 300ms width animation was
- * trying to start. That first dropped frame is what read as stutter.
+ * ---------------------------------------------------------------------------
+ * There is no expanded state any more
+ * ---------------------------------------------------------------------------
+ * The rail used to be 76px that animated to 16rem and back, with the preference
+ * in `localStorage`. All of it is gone: the width transition, the toggle button
+ * in the footer, `data-state`/`group/rail` and the dozen
+ * `group-data-[state=collapsed]/rail:` variants that drove labels, headings and
+ * the divider through it, and the `expanded` state and its persistence in the
+ * `_app` route.
  *
- * Now the desktop <aside> carries `data-state="expanded|collapsed"` and a
- * named group (`group/rail`), and every collapse affordance is a
- * `group-data-[state=collapsed]/rail:` variant on an element that stays
- * mounted:
+ * A width animation is layout-bound by nature — the browser re-lays out the
+ * rail *and* the whole main column on every frame — so it was never going to be
+ * as smooth as the rest of the app, and no amount of tuning the clock changes
+ * that. Removing the state removes the animation, and removing the animation is
+ * what makes the sidebar calm.
  *
- *   - text collapses via max-width + opacity inside overflow-hidden — with
- *     border-box sizing, max-w-0 closes the box (padding included) to exactly
- *     0, so the icons land in the same place the old conditional layout put
- *     them;
- *   - group headings collapse via a fixed height;
- *   - the divider that replaces a heading in rail mode fades in via
- *     border-color, from transparent;
- *   - everything rides the same 300ms/cubic-bezier clock as the aside's own
- *     width, so icons, labels and content arrive together.
+ * What is left is a rail that was designed as one rather than as a squeezed
+ * sidebar: the label lives under the icon instead of being clipped to zero
+ * width beside it, so every destination is readable without a hover, and the
+ * `title` tooltips that only existed to compensate for hidden labels are gone
+ * with them.
  *
- * The mobile drawer renders the same inner tree WITHOUT the group/rail marker,
- * so none of the collapsed variants can ever apply there — it is always the
- * expanded rendering, as before.
- *
- * A width animation is layout-bound by nature; the point here is that the
- * browser now runs exactly one layout per frame (the width tween), instead of
- * layout plus a React commit on frame one, and the per-frame style work is
- * opacity/max-width on a handful of small boxes.
+ * ---------------------------------------------------------------------------
+ * Two presentations, stated rather than implied
+ * ---------------------------------------------------------------------------
+ * The rail is vertical (icon over label, centred); the mobile drawer is a
+ * full-width overlay where horizontal rows are the right shape. That used to be
+ * one tree plus CSS variants keyed off an ancestor's `data-state`; it is now a
+ * `variant` prop, which is the same rendering with the branch written down.
  */
 
-/** Every collapse affordance shares the aside's width clock. */
-const RAIL_CLOCK = "duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]";
+/**
+ * One easing curve and one duration for everything in here.
+ *
+ * The same `cubic-bezier(0.4, 0, 0.2, 1)` the Dashboard's entrances use, so a
+ * hover in the rail and a chart arriving on the page are visibly the same
+ * product. 200ms is quick enough to feel like a response to the pointer rather
+ * than an animation of it.
+ *
+ * Only colours ride this clock. Nothing in the rail moves, scales or lifts on
+ * hover: persistent chrome that shifts under a pointer already reaching for it
+ * is the single most irritating thing navigation can do.
+ */
+const NAV_MOTION =
+  "transition-colors duration-200 ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:transition-none";
+
+/** Focus ring, identical on every interactive element in the sidebar. */
+const NAV_FOCUS =
+  "outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-card";
 
 /**
  * Presentational grouping of the (already permission-filtered) nav items into
@@ -128,99 +148,92 @@ export function groupNav(nav: NavItemData[]) {
   return groups;
 }
 
+type Variant = "rail" | "drawer";
+
 /**
- * Memoized, and no longer told about collapse at all: its rendering is
- * identical in both states and the collapsed appearance comes entirely from
- * the group-data variants. On a toggle these elements are not reconciled —
- * memo sees the same props and React never enters them.
+ * One navigation entry, in whichever of the two shapes its container needs.
  *
- * `title` is now unconditional (it used to appear only when collapsed). The
- * tooltip is the only label a collapsed rail has, and browsers only surface it
- * on a deliberate hover pause, so carrying it in the expanded state too is
- * harmless — that trade is what lets `collapsed` disappear from the props.
+ * The active state is three things and deliberately not more: a tinted panel,
+ * the icon in the brand colour, and the label a weight heavier. The version
+ * before this had those plus a filled primary chip behind the icon plus a rail
+ * sliding in from the left edge — five treatments competing to say one thing,
+ * and the left-edge rail is meaningless against a centred item anyway.
  */
 const NavItem = memo(function NavItem({
   item,
   active,
   activePath,
+  variant,
   onNavigate,
 }: {
   item: NavItemData;
   active: boolean;
   activePath?: string;
+  variant: Variant;
   onNavigate?: () => void;
 }) {
   const Icon = item.icon;
   const children = item.children ?? [];
+  const rail = variant === "rail";
+  // The rail shortens exactly one label, so the tooltip is worth carrying for
+  // exactly that one. Anywhere the label is shown in full a `title` would
+  // repeat text already on screen, which is noise on a pointer pause.
+  const shown = rail ? (item.shortLabel ?? item.label) : item.label;
 
   const link = (
     <Link
       to={item.to}
-      title={item.label}
+      title={shown === item.label ? undefined : item.label}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "group relative flex items-center overflow-hidden rounded-xl px-2 py-1.5 outline-none transition-[background-color,box-shadow] duration-200 ease-out",
-        "focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
-        active
-          ? "bg-primary/10 shadow-sm shadow-primary/5 dark:bg-primary/15"
-          : "hover:bg-accent/60 dark:hover:bg-accent/40",
+        "group relative flex rounded-lg",
+        NAV_MOTION,
+        NAV_FOCUS,
+        rail
+          ? "flex-col items-center gap-1.5 px-1 py-2.5"
+          : "items-center gap-3 overflow-hidden px-2.5 py-2",
+        active ? "bg-primary/10 dark:bg-primary/15" : "hover:bg-accent/60 dark:hover:bg-accent/40",
       )}
     >
-      {/* Active rail — animates in from the left edge; fades away in rail mode
-          instead of unmounting. */}
-      {active && (
-        <span
-          aria-hidden
-          className={cn(
-            "absolute left-0 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-primary animate-in fade-in slide-in-from-left-1 duration-300",
-            "transition-opacity group-data-[state=collapsed]/rail:opacity-0",
-          )}
-        />
-      )}
-      {/* Icon container — the core of the visual language */}
-      <span
+      <Icon
         className={cn(
-          // Narrowed from `transition-all`: this element only ever changes
-          // colours, its shadow, and `scale` on press. Listing them keeps the
-          // press feedback on the compositor without animating the layout
-          // properties that shift when the sidebar collapses.
-          "grid h-9 w-9 shrink-0 place-items-center rounded-lg transition-[color,background-color,box-shadow,transform] duration-200 ease-out",
-          active
-            ? "bg-primary text-primary-foreground shadow-sm shadow-primary/30"
-            : "text-foreground/70 group-hover:bg-background group-hover:text-foreground group-active:scale-90",
+          "shrink-0",
+          NAV_MOTION,
+          rail ? "h-5 w-5" : "h-[18px] w-[18px]",
+          active ? "text-primary" : "text-foreground/70 group-hover:text-foreground",
         )}
-      >
-        <Icon className="h-[18px] w-[18px]" />
-      </span>
-      {/* pl-3 replaces the parent's old gap-3, so the whole spacing collapses
-          with the box: border-box max-w-0 closes padding and content together,
-          leaving the 36px icon exactly centred in the 52px collapsed slot. */}
+      />
       <span
         className={cn(
-          "min-w-0 truncate pl-3 text-sm tracking-tight",
-          "max-w-40 transition-[max-width,opacity,color]",
-          RAIL_CLOCK,
-          "group-data-[state=collapsed]/rail:max-w-0 group-data-[state=collapsed]/rail:opacity-0",
+          "truncate",
+          NAV_MOTION,
+          rail ? "w-full text-center text-[11px] leading-tight" : "min-w-0 flex-1 text-sm",
           active
             ? "font-semibold text-foreground"
             : "font-medium text-foreground/70 group-hover:text-foreground",
         )}
       >
-        {item.label}
+        {shown}
       </span>
       {children.length > 0 && (
+        /* The submenu affordance. Hover and focus already open the panel, so
+           this exists for the deliberate click and for touch — which is also
+           why it stays a corner mark in the rail rather than a chevron parked
+           in the middle of a centred item. */
         <span
           data-flyout-toggle
           role="button"
           tabIndex={-1}
           aria-label={`Toggle ${item.label} menu`}
           className={cn(
-            "ml-auto grid h-5 w-5 shrink-0 place-items-center rounded transition-opacity",
-            RAIL_CLOCK,
-            "group-data-[state=collapsed]/rail:opacity-0",
+            "grid shrink-0 place-items-center rounded",
+            rail ? "absolute right-0.5 top-0.5 h-4 w-4" : "ml-auto h-5 w-5",
           )}
         >
-          <ChevronRight aria-hidden className="h-3.5 w-3.5 text-muted-foreground/70" />
+          <ChevronRight
+            aria-hidden
+            className={cn("text-muted-foreground/70", rail ? "h-3 w-3" : "h-3.5 w-3.5")}
+          />
         </span>
       )}
     </Link>
@@ -231,69 +244,83 @@ const NavItem = memo(function NavItem({
   // The panel has to escape the sidebar's `overflow-x-hidden`, so it lives in a
   // portal — see NavFlyout.
   return (
-    <NavFlyout item={item} activePath={activePath ?? ""} trigger={link} onNavigate={onNavigate} />
+    <NavFlyout
+      item={item}
+      activePath={activePath ?? ""}
+      variant={variant}
+      trigger={link}
+      onNavigate={onNavigate}
+    />
   );
 });
 
-/** Shared inner shell used by both the desktop rail and the mobile drawer. */
+/**
+ * The rail's brand block and the drawer's, which differ only in whether the
+ * wordmark is there to be read.
+ */
+function Brand({ variant, onClose }: { variant: Variant; onClose?: () => void }) {
+  return (
+    <div
+      className={cn(
+        "flex h-16 shrink-0 items-center border-b border-border/60",
+        variant === "rail" ? "justify-center px-2" : "px-3.5",
+      )}
+    >
+      <BrandLogo />
+      {variant === "drawer" && (
+        <div className="min-w-0 pl-2.5">
+          <div className="truncate text-sm font-bold leading-tight tracking-tight text-foreground">
+            MilaServ
+          </div>
+          <div className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80">
+            Portal
+          </div>
+        </div>
+      )}
+      {onClose && (
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close menu"
+          data-sidebar-close
+          className={cn(
+            "ml-auto grid h-9 w-9 place-items-center rounded-lg text-muted-foreground",
+            NAV_MOTION,
+            NAV_FOCUS,
+            "hover:bg-accent hover:text-foreground",
+          )}
+        >
+          <X className="h-[18px] w-[18px]" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** The shared inner shell, in one of its two shapes. */
 const SidebarInner = memo(function SidebarInner({
   nav,
   activePath,
-  collapsed,
-  onToggle,
+  variant,
   onMobileClose,
 }: {
   nav: NavItemData[];
   activePath: string;
-  /** Consumed ONLY by the footer button's title/aria-expanded. Every visual
-   *  collapse affordance is a group-data variant, so on toggle the DOM diff of
-   *  this whole tree is two attributes on one <button>. */
-  collapsed: boolean;
-  onToggle?: () => void;
+  variant: Variant;
   onMobileClose?: () => void;
 }) {
-  // Rebuilt on every render before this — including every frame-adjacent render
-  // during a collapse — even though it depends only on `nav`.
   const groups = useMemo(() => groupNav(nav), [nav]);
+  const rail = variant === "rail";
 
   return (
     <div className="flex h-full flex-col">
-      {/* Brand */}
-      <div className="flex h-16 shrink-0 items-center border-b border-border/60 px-3.5">
-        <div className="flex min-w-0 items-center">
-          <BrandLogo />
-          <div
-            className={cn(
-              "min-w-0 overflow-hidden pl-2.5",
-              "max-w-36 transition-[max-width,opacity]",
-              RAIL_CLOCK,
-              "group-data-[state=collapsed]/rail:max-w-0 group-data-[state=collapsed]/rail:opacity-0",
-            )}
-          >
-            <div className="truncate text-sm font-bold leading-tight tracking-tight text-foreground">
-              MilaServ
-            </div>
-            <div className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80">
-              Portal
-            </div>
-          </div>
-        </div>
-        {onMobileClose && (
-          <button
-            type="button"
-            onClick={onMobileClose}
-            aria-label="Close menu"
-            className="ml-auto grid h-9 w-9 place-items-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-card active:scale-95"
-          >
-            <X className="h-[18px] w-[18px]" />
-          </button>
-        )}
-      </div>
+      <Brand variant={variant} onClose={onMobileClose} />
 
-      {/* Navigation */}
       <nav
+        aria-label="Primary"
         className={cn(
-          "flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-4",
+          "flex-1 overflow-y-auto overflow-x-hidden",
+          rail ? "px-2 py-3" : "px-2.5 py-4",
           "[&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent",
           "[&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-transparent",
           "hover:[&::-webkit-scrollbar-thumb]:bg-border/70",
@@ -302,36 +329,25 @@ const SidebarInner = memo(function SidebarInner({
         {groups.map((g, gi) => (
           <div
             key={g.id}
-            className={cn(
-              gi > 0 && [
-                // The hairline that stands in for the heading in rail mode
-                // fades in from transparent instead of appearing on a class
-                // swap.
-                "mt-5 border-t border-transparent transition-[margin,padding,border-color]",
-                RAIL_CLOCK,
-                "group-data-[state=collapsed]/rail:mt-3 group-data-[state=collapsed]/rail:pt-3 group-data-[state=collapsed]/rail:border-border/60",
-              ],
-            )}
+            /* A section heading needs a line of prose the rail does not have —
+               "Administration" as a heading is wider than the rail is. So the
+               rail states the same grouping as a hairline and the drawer keeps
+               the words. */
+            className={cn(gi > 0 && (rail ? "mt-3 border-t border-border/60 pt-3" : "mt-5"))}
           >
-            <div
-              className={cn(
-                // Fixed height (not `auto`) so the collapse to h-0 is
-                // animatable; 10px type sits comfortably inside 16px.
-                "mb-1.5 h-4 overflow-hidden whitespace-nowrap px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70",
-                "transition-[height,margin,opacity]",
-                RAIL_CLOCK,
-                "group-data-[state=collapsed]/rail:mb-0 group-data-[state=collapsed]/rail:h-0 group-data-[state=collapsed]/rail:opacity-0",
-              )}
-            >
-              {g.label}
-            </div>
-            <div className="space-y-1">
+            {!rail && (
+              <div className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">
+                {g.label}
+              </div>
+            )}
+            <div className={rail ? "space-y-0.5" : "space-y-1"}>
               {g.items.map((it) => (
                 <NavItem
                   key={it.to}
                   item={it}
                   active={isBranchActive(it, activePath)}
                   activePath={activePath}
+                  variant={variant}
                   onNavigate={onMobileClose}
                 />
               ))}
@@ -339,87 +355,68 @@ const SidebarInner = memo(function SidebarInner({
           </div>
         ))}
       </nav>
-
-      {/* Footer — sidebar toggle only. Profile & sign out live in the header. */}
-      {onToggle && (
-        <div className="mt-auto border-t border-border/60 p-2">
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-expanded={!collapsed}
-            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className="flex h-9 w-full items-center rounded-lg px-2.5 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-card"
-          >
-            <ChevronLeft
-              className={cn(
-                "h-4 w-4 shrink-0 transition-transform",
-                RAIL_CLOCK,
-                "group-data-[state=collapsed]/rail:rotate-180",
-              )}
-            />
-            <span
-              className={cn(
-                "overflow-hidden whitespace-nowrap pl-2",
-                "max-w-24 transition-[max-width,opacity]",
-                RAIL_CLOCK,
-                "group-data-[state=collapsed]/rail:max-w-0 group-data-[state=collapsed]/rail:opacity-0",
-              )}
-            >
-              Collapse
-            </span>
-          </button>
-        </div>
-      )}
     </div>
   );
 });
 
-export function AppSidebar({
-  nav,
-  activePath,
-  expanded,
-  onToggle,
-  mobileOpen,
-  onMobileClose,
-}: SidebarProps) {
+export function AppSidebar({ nav, activePath, mobileOpen, onMobileClose }: SidebarProps) {
+  const drawerRef = useRef<HTMLElement | null>(null);
+
+  /**
+   * Escape closes the drawer, and opening it puts focus inside.
+   *
+   * Neither existed before: the overlay could only be dismissed by pointing at
+   * the backdrop or the X, and opening it left focus behind on the header's
+   * menu button, so a keyboard user tabbed through the page *underneath* the
+   * overlay. Focus goes to the close button because it is the drawer's first
+   * control and its escape hatch.
+   */
+  useEffect(() => {
+    if (!mobileOpen) return;
+    drawerRef.current?.querySelector<HTMLElement>("[data-sidebar-close]")?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onMobileClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [mobileOpen, onMobileClose]);
+
   return (
     <>
-      {/* Desktop rail */}
+      {/* Desktop rail. One fixed width, no transition on it, nothing to toggle.
+          `print:hidden`: the rail is app chrome. On paper it took a sixth of
+          every page and narrowed the report column to match, which is what
+          cropped the Monthly Report's charts and its widest table. */}
       <aside
-        data-state={expanded ? "expanded" : "collapsed"}
         className={cn(
-          // `print:hidden`: the rail is app chrome. On paper it took a sixth of
-          // every page and narrowed the report column to match, which is what
-          // cropped the Monthly Report's charts and its widest table.
-          "group/rail z-20 hidden shrink-0 flex-col md:flex print:hidden",
-          "sticky top-0 h-screen bg-card border-r border-border/70",
-          // `will-change-[width]` was here and has been removed. will-change is a
-          // hint to promote an element to its own compositor layer, which only
-          // helps properties the compositor can animate by itself — transform and
-          // opacity. `width` is a layout property: the browser still runs full
-          // layout for this element and the main content beside it on every
-          // frame, so the hint bought nothing while permanently holding an extra
-          // layer (and its memory) for an animation that runs for 300ms.
-          "transition-[width] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]",
-          expanded ? "w-64" : "w-[76px]",
+          "z-20 hidden w-[92px] shrink-0 flex-col md:flex print:hidden",
+          "sticky top-0 h-screen border-r border-border/70 bg-card",
         )}
       >
-        <SidebarInner nav={nav} activePath={activePath} collapsed={!expanded} onToggle={onToggle} />
+        <SidebarInner nav={nav} activePath={activePath} variant="rail" />
       </aside>
 
-      {/* Mobile drawer — no group/rail marker, so the collapsed variants can
-          never apply here; it always renders expanded. */}
+      {/* Mobile drawer. */}
       {mobileOpen && (
         <div className="fixed inset-0 z-50 md:hidden">
           <div
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200 motion-reduce:animate-none"
             onClick={onMobileClose}
           />
-          <aside className="absolute inset-y-0 left-0 flex w-[min(17rem,84vw)] flex-col border-r border-border bg-card shadow-2xl animate-in slide-in-from-left duration-300 ease-out">
+          <aside
+            ref={drawerRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Navigation menu"
+            className={cn(
+              "absolute inset-y-0 left-0 flex w-[min(17rem,84vw)] flex-col border-r border-border bg-card shadow-2xl",
+              "animate-in slide-in-from-left duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:animate-none",
+            )}
+          >
             <SidebarInner
               nav={nav}
               activePath={activePath}
-              collapsed={false}
+              variant="drawer"
               onMobileClose={onMobileClose}
             />
           </aside>
