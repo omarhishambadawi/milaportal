@@ -1,4 +1,32 @@
 import { z } from "zod";
+import { coordinateNumber } from "@/lib/geo/coordinates";
+
+/**
+ * The delivery point, read by the one reader the whole app uses.
+ *
+ * `Number(v)` was here, and it is the second half of the bug the green
+ * **Verified location** line hid: the form checked the pair with the tolerant
+ * reader in `lib/geo/coordinates`, said it was good, and then handed the *raw*
+ * text to `Number()` on save. A latitude carrying a trailing comma from a
+ * pasted `"24.53738, 46.64555"`, or the invisible bidi mark a WhatsApp copy
+ * brings, became `NaN` here and the save failed with a message about neither
+ * the field nor the character.
+ *
+ * `coordinateNumber` returns `null` for blank and a number for anything it can
+ * read. Anything it cannot read is passed **through untouched**, so it fails the
+ * `z.number()` below and the agent is told which coordinate is wrong — rather
+ * than being silently dropped, which would save an AlShrouq order with no
+ * delivery point on it.
+ */
+function coordinateValue(raw: unknown): unknown {
+  if (raw === "" || raw == null) return null;
+  return coordinateNumber(raw) ?? raw;
+}
+
+const LATITUDE_ERROR =
+  "The latitude is not a usable coordinate. Enter it as decimal degrees between -90 and 90 — for example 24.71360.";
+const LONGITUDE_ERROR =
+  "The longitude is not a usable coordinate. Enter it as decimal degrees between -180 and 180 — for example 46.67530.";
 
 /** Validation schema for the order create/edit form. */
 export const orderFormSchema = z.object({
@@ -64,12 +92,16 @@ export const orderFormSchema = z.object({
    * neither, which is what `orders_alshrouq_point_complete` requires.
    */
   alshrouq_lat: z.preprocess(
-    (v) => (v === "" || v == null ? null : Number(v)),
-    z.number().min(-90).max(90).nullable(),
+    (v) => coordinateValue(v),
+    z.number({ error: LATITUDE_ERROR }).min(-90, LATITUDE_ERROR).max(90, LATITUDE_ERROR).nullable(),
   ),
   alshrouq_lng: z.preprocess(
-    (v) => (v === "" || v == null ? null : Number(v)),
-    z.number().min(-180).max(180).nullable(),
+    (v) => coordinateValue(v),
+    z
+      .number({ error: LONGITUDE_ERROR })
+      .min(-180, LONGITUDE_ERROR)
+      .max(180, LONGITUDE_ERROR)
+      .nullable(),
   ),
   /**
    * The CRM's numeric payment id. Not an enum: the list belongs to the CRM, and

@@ -71,8 +71,8 @@ export interface CoordinateParse {
  * note there for why an out-of-range pair is a swap rather than a typo.
  */
 export function parseCoordinatePair(latRaw: unknown, lngRaw: unknown): CoordinateParse {
-  const lat = toNumber(latRaw);
-  const lng = toNumber(lngRaw);
+  const lat = coordinateNumber(latRaw);
+  const lng = coordinateNumber(lngRaw);
   if (lat == null || lng == null) return { point: null, outOfRange: false };
 
   const point = { lat, lng };
@@ -85,17 +85,107 @@ export function parseCoordinatePair(latRaw: unknown, lngRaw: unknown): Coordinat
   };
 }
 
-function toNumber(raw: unknown): number | null {
+/**
+ * Characters a copy/paste carries that mean nothing to a number.
+ *
+ * Bidi marks and isolates (a WhatsApp copy out of an Arabic conversation brings
+ * a right-to-left mark along, invisibly, and it is what makes an otherwise
+ * perfect `24.53738` fail `Number()`), zero-width joiners, the byte-order mark,
+ * the soft hyphen and the Arabic letter mark. Ordinary whitespace is separate
+ * because JavaScript's `\s` already covers the non-breaking and en/em spaces.
+ */
+const INVISIBLE = /[\u00AD\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g;
+
+/** Arabic-Indic and Extended Arabic-Indic digits, folded to ASCII. */
+function foldDigits(text: string): string {
+  return text
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0));
+}
+
+/** A signed decimal and nothing else. */
+const DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/;
+
+/**
+ * One coordinate, out of whatever a person or a spreadsheet supplied.
+ *
+ * ---------------------------------------------------------------------------
+ * The one reader
+ * ---------------------------------------------------------------------------
+ * This is the single definition of "what counts as a coordinate" in the app,
+ * and everything that reads one goes through it: the pair parser below, the
+ * AlShrouq field validator, the order form's schema and the payload it builds.
+ *
+ * That is the point. The form used to say **Verified location** in green over a
+ * pair that had been through the tolerant reader here, then save the *raw* text
+ * through a bare `Number()` in `orderFormSchema` — so a latitude pasted as
+ * `"24.53738,"`, with the comma left over from splitting `"24.53738, 46.64555"`,
+ * verified on screen and then failed the save with a validation error naming
+ * neither the field nor the character. Two readers disagreeing about one value.
+ *
+ * ---------------------------------------------------------------------------
+ * What it repairs, and what it refuses
+ * ---------------------------------------------------------------------------
+ * It repairs damage that carries no meaning: surrounding whitespace, the
+ * invisible characters a copy brings with it, a separator left at either end by
+ * splitting a pair, a degree mark, a compass letter, the thousands separators a
+ * locale-formatted sheet writes.
+ *
+ * It refuses everything else, and that is as important. What is left after the
+ * cleaning must be a signed decimal on its own — so `"24,5"` (a European
+ * decimal comma, which is 24.5 or 245 depending on who typed it) and
+ * `"near 24.5"` are rejected rather than guessed at. The previous
+ * implementation stripped every character that was not a digit, a dot or a
+ * minus, which turned both of those into confident, wrong numbers.
+ *
+ * Range is deliberately **not** checked here: latitude and longitude have
+ * different bounds and this function is not told which it is holding. The
+ * callers apply them — `parseCoordinatePair` against the globe and the country,
+ * `orderFormSchema` against ±90 and ±180.
+ */
+export function coordinateNumber(raw: unknown): number | null {
   if (raw == null) return null;
   if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
-  const text = String(raw).trim();
+  if (typeof raw !== "string") return null;
+
+  let text = foldDigits(raw).replace(INVISIBLE, "").replace(/\s+/g, "");
   if (!text) return null;
-  // Strip everything that is not part of a signed decimal: degree marks,
-  // N/S/E/W suffixes, thousands separators pasted in from a locale-formatted
-  // sheet. Arabic-Indic digits are handled upstream by foldText.
-  const cleaned = text.replace(/[^\d.-]/g, "");
-  if (!cleaned || cleaned === "-" || cleaned === ".") return null;
-  const value = Number(cleaned);
+
+  // A separator left at either end by splitting "24.53738, 46.64555", or a
+  // trailing full stop from a sentence. An interior one is not touched: it is
+  // either a thousands separator (handled below) or a genuine ambiguity.
+  text = text.replace(/^[,;]+/, "").replace(/[,;]+$/, "");
+  // Degree marks, and the minute/second primes a whole-degree value sometimes
+  // carries. Decorative here — this reader takes decimal degrees only.
+  text = text.replace(/[°º'"′″]/g, "");
+  if (!text) return null;
+
+  /*
+   * A compass letter, as a sign.
+   *
+   * Previously stripped and discarded, which read `"24.53738 S"` as +24.53738 —
+   * the northern hemisphere, and a real place — instead of the southern point
+   * the agent typed. One letter, at one end, and never alongside an explicit
+   * sign: `"-24.5S"` says two contradictory things and is refused rather than
+   * resolved in somebody's favour.
+   */
+  let sign = 1;
+  const compass = text.match(/^([nsew])|([nsew])$/i);
+  if (compass) {
+    const letter = (compass[1] ?? compass[2]).toLowerCase();
+    if (letter === "s" || letter === "w") sign = -1;
+    text = text.replace(/^[nsew]|[nsew]$/i, "");
+    if (/[+-]/.test(text)) return null;
+  }
+  // Any letter still present means this was never a coordinate.
+  if (/[a-z\u0600-\u06FF]/i.test(text)) return null;
+
+  // Thousands separators, and only where the grouping is real: `1,234.5`, never
+  // `24,5`.
+  text = text.replace(/,(?=\d{3}(?:\D|$))/g, "");
+
+  if (!DECIMAL.test(text)) return null;
+  const value = Number(text) * sign;
   return Number.isFinite(value) ? value : null;
 }
 

@@ -1350,8 +1350,9 @@ nothing reflows. Verified in a browser: the line now mounts at
 `stroke-dasharray: 0px 576.29px` (real length, undrawn) and ends with no
 dasharray at all (settled, static) — never the `0px 0px` that produced the jump.
 
-`useChartReveal` also reads `ChartPrintContext`, which the route provides. See
-the PDF export below.
+`useChartReveal` also reads `ChartPrintContext`, which the route provides, and
+reports the panel's `ready` state to `ChartPrintReadyContext` so the export can
+wait for it. See the PDF export below.
 
 #### Page entrance (`components/reveal.tsx`, `.dash-enter` in `styles.css`)
 
@@ -1429,9 +1430,10 @@ none of them touches the screen layout:
    content to `PRINT_WIDTH_PX` (703px — 210mm less the 12mm `@page` margins) for
    the duration, so every `ResponsiveContainer` measures the sheet rather than
    the monitor. `usePrintExport` (`src/lib/print-export.ts`, shared with
-   Reports) waits four animation frames before calling `print()`, because both
-   the width change and the newly mounted charts settle on frames, not on a
-   timer.
+   Reports) waits for every deferred panel to report that it has rendered, and
+   then four animation frames, before calling `print()` — the width change and
+   the observer settle on frames, not on a timer. See "Printing a chart nobody
+   scrolled to" below.
 2. **Every chart is mounted and made still**, through `ChartPrintContext`.
    Panels are otherwise deferred until they scroll into view and a sheet of
    paper does not scroll, so without this the export would carry empty cards for
@@ -1900,14 +1902,59 @@ chart CSS in the print block at all.** Instead:
 - `lib/print-width.ts` states the printable width — A4 less the `@page` side
   margins, 703 CSS px. (Moved out of `features/reports` when the Dashboard began
   printing through the same mechanism.)
-- `lib/print-export.ts`'s `usePrintExport` pins the page to that width, waits
-  four animation frames so React can commit, the observer can fire and any chart
-  mounted for the export can re-render at the new size, and only then calls
-  `print()`. The chart is already the right size when the page is handed over, so
-  nothing needs correcting afterwards. Both the Reports and the Dashboard export
-  go through this one hook — it was two copies of the same paragraph about
-  `ResizeObserver` timing, which is one copy too many for a rule that has to hold
-  on both pages or neither.
+- `lib/print-export.ts`'s `usePrintExport` pins the page to that width, waits for
+  every deferred panel to report that it has rendered and then four animation
+  frames so the observer can fire and each chart can re-render at the new size,
+  and only then calls `print()`. The chart is already the right size when the
+  page is handed over, so nothing needs correcting afterwards. Both the Reports
+  and the Dashboard export go through this one hook — it was two copies of the
+  same paragraph about `ResizeObserver` timing, which is one copy too many for a
+  rule that has to hold on both pages or neither.
+
+#### Printing a chart nobody scrolled to — 2026-09-01
+
+Opening the Monthly Report and pressing **Export PDF** without scrolling produced
+a sheet with a _Revenue by city_ card and a _Top branches_ card containing
+nothing. Those two are the report's only `HorizontalBarPanel`s, and
+`HorizontalBarPanel` is the only chart on the page that defers its mount until it
+comes into view. Every other panel renders immediately, which is exactly the set
+of charts that printed correctly.
+
+**The report route never provided `ChartPrintContext`.** The Dashboard did; the
+Reports page threaded `printing` only as far as `MonthlyCharts`, where it forces
+stillness, so the viewport gate was never released and the four-frame wait was
+waiting for a mount that was never going to happen.
+
+Both pages now wrap their content in `ChartExportProvider`
+(`features/dashboard/chart-export.tsx`), which provides both contexts at once.
+One wrapper rather than two providers per page, because the two are only correct
+together: released panels that nothing waits for, and a wait for panels nothing
+released, are each wrong in their own way, and a page that remembers one and
+forgets the other is exactly how this shipped.
+
+Releasing the gate is a React state change, though, and the frames after it were
+a guess. So the export now waits on the fact rather than on a count:
+
+- `features/dashboard/chart-print-ready.ts` holds a small registry.
+  `usePrintReadyGate(ready)` is called from inside `useChartReveal`, so every
+  deferred panel in the app participates without its component knowing an export
+  exists. A panel registers **when it mounts** — the card is in the DOM the whole
+  time; it is the chart inside it that is deferred — so at the moment the button
+  is pressed the tracker already knows how many panels there are and which have
+  rendered.
+- `usePrintExport` returns a `readyTracker` the route provides through
+  `ChartPrintReadyContext`, and `print()` awaits `whenAllReady()` before the
+  frame wait. A page with nothing deferred resolves immediately; a page whose
+  panels are four screens down waits exactly as long as they take.
+- The 3s timeout inside `whenAllReady` is a floor under the failure, not the
+  mechanism: a panel that can never render must not leave a person in front of a
+  disabled button. Reaching it prints a page that may carry an empty card, which
+  is what the old behaviour did unconditionally.
+
+**On-screen lazy rendering is unchanged.** `printing` is false for every ordinary
+page view, the panel is still absent until it is seen, and the entrance
+animations are untouched.
+
 - Print therefore has **no second layout**. At 703px the responsive classes
   already give one-column grids and a two-across KPI strip, so what is measured is
   what is printed. Print-only column counts were removed for exactly that reason:
@@ -4542,9 +4589,11 @@ point of scheduling is that nobody is watching.
 
 **With the gate closed the run claims nothing**, sends nothing and invents no
 status; rows stay `scheduled` and are picked up whenever it opens.
-`alshrouq_dispatch_due()` is also a no-op while the vault secrets
-`alshrouq_scheduler_url` / `alshrouq_scheduler_secret` are absent, so applying
-the migration to an unconfigured environment does nothing.
+`alshrouq_dispatch_due()` sends nothing either while the vault entries
+`alshrouq_scheduler_url` / `email_queue_service_role_key` are absent, so applying
+the migration to an unconfigured environment contacts nobody — but it is no
+longer _silent_ about it: it warns, records `unconfigured`, stamps the waiting
+deliveries and returns `-1`. See "The configuration failure it replaced".
 
 #### How the poll authenticates
 
@@ -4626,6 +4675,44 @@ SELECT last_poll_at, last_outcome, last_error
   FROM public.alshrouq_scheduler_state;
 ```
 
+#### The definition that replaced itself — 2026-09-01
+
+Two migrations dated 2026-08-26 both defined `public.alshrouq_dispatch_due()`:
+`20260826100000`, carrying everything in the list above, and `20260826170000`,
+carrying a simpler body. Which one a database runs is decided by filename order
+alone, and `170000` sorts last — so a fresh `db push` silently discarded the
+health record, the "Not sent yet" explanation and the stale-claim count, while
+production, having applied only one of the two, held a third answer.
+
+`20260826170000` was edited to stop defining the function. **That fixed nothing
+already deployed.** A migration is recorded by version, not by content: an
+environment that had run it kept the downgraded body and will never run that file
+again. The edit made a fresh database correct and left every deployed one wrong —
+the same divergence, pointing the other way.
+
+The repair is therefore a new migration, `20260901120000_alshrouq_scheduler_canonical.sql`,
+which is the **canonical definition** from here on. It restates
+`20260826100000`'s function body byte-for-byte, plus the state table, the two
+partial indexes and the cron registration, all idempotently — so it corrects a
+database that ran the downgrade, fills in one that skipped `100000` entirely, and
+sorts last on a fresh install. Nothing about the behaviour is new.
+
+Two guards keep it that way, one on each side of the mistake:
+
+- **In the migration.** A `DO` block reads the installed definition back through
+  `pg_get_functiondef` and raises unless it still contains the health-state
+  write, the "not connected" sentence and the `processing` stale-claim query.
+  `db push` fails rather than a courier silently going unsent.
+- **In the repository.** `alshrouq-scheduler-canonical.test.ts` fails the build
+  if the canonical file stops being the last migration to define the function, or
+  if any of the behaviours above disappears from it. That is the half that would
+  have caught the original fault, which was visible in the branch and in no
+  database at all.
+
+If a future migration needs to change the poll, it becomes the canonical file —
+updating the test's `CANONICAL` constant with it. What must never happen again is
+two files competing for the last word.
+
 #### Abandoned claims
 
 `processing` had no exit. The due query looks only for `scheduled` and
@@ -4660,11 +4747,51 @@ is settled by evidence: if `findAlshrouqOrderByClientOrderId` returns the
 delivery, the row is `accepted`; if it returns nothing, the refusal was real and
 the row is `failed`. Still exactly one POST — the evidence comes from a GET.
 
+#### Cancel, then send again — 2026-09-01
+
+`alshrouq_dispatches` carried two unique indexes that were meant to say the same
+thing and did not:
+
+| Index                                  | Definition                                     |
+| -------------------------------------- | ---------------------------------------------- |
+| `alshrouq_dispatches_live_order_key`   | `UNIQUE (order_id) WHERE cancelled_at IS NULL` |
+| `alshrouq_dispatches_client_order_key` | `UNIQUE (client_order_id)` — **no predicate**  |
+
+`client_order_id` is derived from the order's own display number and is
+deliberately never invented per attempt, so the second index said "one dispatch
+per order **ever**" — which makes the table incapable of holding the history the
+first index was designed around, and its own comment ("a cancelled one no longer
+counts, so a mistaken dispatch can be cancelled and re-sent") describes.
+
+The reproduction: schedule an order, cancel it, send it again. The duplicate
+check passes (the cancelled row is not live), the branch resolves, the payload
+builds, **AlShrouq books a courier** — and the insert that records it collides
+with the cancelled row's `client_order_id`. The agent was shown "this order
+already has an AlShrouq delivery", and the order carried no record of the driver
+that was on the way.
+
+`20260901130000_alshrouq_dispatch_history.sql` gives the identity index the
+predicate its sibling already had. **Duplicate protection is scoped, not
+weakened**: while an uncancelled row exists — `scheduled`, `processing`,
+`accepted`, `failed` or `indeterminate` — a second row for that order is still
+refused by both indexes, and `blocksNewDispatch` says the same thing in the
+application. Only cancelled history stops blocking, and it stays in the table as
+history. A `DO` block re-reads both predicates from the catalog and refuses the
+migration if they ever disagree again.
+
+The application half: a unique violation that leaves **no live row** is no longer
+reported as `already_dispatched`. On the immediate path that would be a false
+statement about a courier just booked, so the reference is reported and the
+failure to record it is logged (`[alshrouq] a booked delivery could not be
+recorded`) rather than swallowed; on the scheduling path — which contacts nobody
+— it is an honest save failure.
+
 ### The dispatch state model, and the order timeline
 
-One dispatch row per order is the whole state model. `dispatch_status` is the
-lifecycle — `scheduled → processing → accepted | failed | indeterminate |
-cancelled` — and the timestamps beside it are the history:
+One **live** dispatch row per order is the whole state model — an order may carry
+several rows over its life, but at most one that is not cancelled.
+`dispatch_status` is the lifecycle — `scheduled → processing → accepted | failed
+| indeterminate | cancelled` — and the timestamps beside it are the history:
 
 | Column            | Written by                                                                           | Means                       |
 | ----------------- | ------------------------------------------------------------------------------------ | --------------------------- |
@@ -5481,9 +5608,52 @@ and nothing about the principle was given up:
   missing. `canonicalCoordinate` closes it — consumers read the value the
   location system already parsed, and the boxes bind to `latitudeText`/
   `longitudeText`, the stored text verbatim, so what is displayed is what is
-  held. It is conservative by construction: text that already parses is returned
-  byte-for-byte, so a link-supplied coordinate still reaches the courier exactly
-  as `parseMapsUrl` read it.
+  held.
+
+#### The save read it differently — 2026-09-01
+
+The reader above did not reach the **save**. `orderFormSchema` preprocessed both
+coordinates with a bare `Number(v)`, so a latitude carrying one stray character
+showed a green **Verified location** on the form and then failed
+`orders.insert` with a `NaN` type error naming neither the field nor the
+character — and the order could not be created at all until the agent worked out
+which character to delete. Two representations of one field, again, one step
+further down.
+
+There is now exactly one reader, `coordinateNumber` in `lib/geo/coordinates.ts`,
+and everything that reads a coordinate goes through it: `parseCoordinatePair`
+(and so the **Verified location** line), `validateAlShrouqOrderFields`,
+`canonicalCoordinate`, `buildAlshrouqOrderPayload` and `orderFormSchema`. **The
+number that passed validation is the number that is saved.**
+
+What it repairs is damage that carries no meaning — surrounding and Unicode
+whitespace, the invisible characters a copy brings (bidi marks and isolates,
+zero-width joiners, the BOM, the soft hyphen), a separator left at either end by
+splitting a pair, a degree mark, Arabic-Indic digits, a real thousands separator.
+
+What it **refuses** matters as much. What is left after the cleaning must be a
+signed decimal on its own, so `24,5` (a European decimal comma: 24.5 or 245,
+depending who typed it) and `near 24.5` are rejected rather than guessed at. The
+previous reader stripped every character that was not a digit, a dot or a minus,
+which turned both into confident, wrong numbers.
+
+Compass letters are a **sign** rather than something to discard: `24.53738 S` is
+−24.53738, where it used to read as the northern hemisphere. A letter that
+contradicts an explicit sign (`-24.5S`), two letters, or any other letter is
+refused.
+
+Range is checked where the axis is known — `validateAlShrouqOrderFields` at ±90 /
+±180, `orderFormSchema` the same — and a value that cannot be read is passed
+through to fail `z.number()` with a sentence a person can act on, never dropped:
+silently discarding it would save an AlShrouq order with no delivery point on it,
+which is the same bug more quietly.
+
+`canonicalCoordinate` now returns the canonical form of the number it read rather
+than the raw keystrokes. Numerically it still only ever repairs a value that
+would have become NaN — a link-supplied coordinate round-trips to the same digits
+`parseMapsUrl` produced — but no consumer is left holding a second
+representation of the field the green line was speaking about.
+
 - **A typed pair survives a later failed parse.** `useAlShrouqOrder` keeps one
   piece of genuinely local state — `manualCoordinates`, provenance only, never an
   order column — so editing the link box no longer discards coordinates a person

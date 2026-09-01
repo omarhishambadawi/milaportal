@@ -9,6 +9,7 @@ import {
   useSyncExternalStore,
   type RefObject,
 } from "react";
+import { usePrintReadyGate } from "./chart-print-ready";
 
 /**
  * Enter animation for the Dashboard's charts, in one place.
@@ -603,6 +604,15 @@ export function useChartReveal(
   const still = forceStill || printing;
   const seen = useInViewOnce(target, printing);
   const motion = useSettledChartMotion(identity, still, seen);
+  /*
+   * Tell the export whether this panel has anything in it yet.
+   *
+   * `seen` is exactly the question a PDF has to have answered before the writer
+   * is called: false means this card is empty. Reported from here rather than
+   * from each panel so a component that uses this reveal is covered by the
+   * export without knowing one exists. See `chart-print-ready.ts`.
+   */
+  usePrintReadyGate(seen);
   return { ready: seen, motion };
 }
 

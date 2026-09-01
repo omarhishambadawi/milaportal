@@ -209,16 +209,31 @@ export async function scheduleAlShrouqDispatch(
         .eq("order_id", request.orderId)
         .is("cancelled_at", null)
         .maybeSingle();
-      return {
-        kind: "already_dispatched",
-        dispatch: {
-          externalOrderId: data?.external_order_id ?? null,
-          localId: data?.local_id ?? null,
-          status: data?.status ?? null,
-          trackingUrl: data?.tracking_url ?? null,
-          dispatchedAt: data?.dispatched_at ?? null,
-        },
-      };
+      /*
+       * Only a *live* row makes "already dispatched" true.
+       *
+       * Both unique indexes on this table are partial on `cancelled_at IS
+       * NULL`, so a collision means one exists and its record is the answer.
+       * With no live row the collision was with something else — cancelled
+       * history, before `20260901130000` scoped the `client_order_id` index the
+       * way its sibling was already scoped — and reporting "already
+       * dispatched" would leave an agent looking at a dispatch that is not
+       * there, with no way to schedule the one they asked for. Nothing has been
+       * sent on this path (scheduling contacts nobody), so the honest answer is
+       * that the save failed.
+       */
+      if (data) {
+        return {
+          kind: "already_dispatched",
+          dispatch: {
+            externalOrderId: data.external_order_id ?? null,
+            localId: data.local_id ?? null,
+            status: data.status ?? null,
+            trackingUrl: data.tracking_url ?? null,
+            dispatchedAt: data.dispatched_at ?? null,
+          },
+        };
+      }
     }
     throw new Error("The scheduled dispatch could not be saved.");
   }

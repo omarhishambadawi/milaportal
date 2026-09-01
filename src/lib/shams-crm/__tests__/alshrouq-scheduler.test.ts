@@ -77,6 +77,16 @@ function fakeSupabase(
   opts: {
     due?: any[];
     existing?: any;
+    /**
+     * What the live-dispatch lookup finds *after* an insert has been attempted.
+     *
+     * The duplicate check and the post-conflict read are the same query against
+     * the same fake, and they must be able to disagree: "nothing live when we
+     * looked, something live by the time we wrote" is exactly the race the
+     * unique index exists for, and a fake that cannot express it cannot tell
+     * that race apart from a collision with a row that is not live at all.
+     */
+    existingAfterInsert?: any;
     insertError?: any;
     claimFails?: boolean;
     /** Rows the reap sweep finds still claimed past the stale cutoff. */
@@ -87,6 +97,7 @@ function fakeSupabase(
   const updates: { id: string; patch: any }[] = [];
   const tablesRead: string[] = [];
   let claimed = false;
+  let inserted = false;
 
   const api = {
     inserts,
@@ -128,6 +139,9 @@ function fakeSupabase(
             updates.push({ id: state.eqs.id as string, patch: state.patch });
             return { data: { id: state.eqs.id }, error: null };
           }
+          if (inserted && opts.existingAfterInsert !== undefined) {
+            return { data: opts.existingAfterInsert, error: null };
+          }
           return { data: opts.existing ?? null, error: null };
         },
         update: (patch: any) => {
@@ -141,6 +155,7 @@ function fakeSupabase(
         },
         insert: async (row: any) => {
           inserts.push(row);
+          inserted = true;
           return { data: null, error: opts.insertError ?? null };
         },
       };
@@ -269,7 +284,11 @@ describe("scheduleAlShrouqDispatch", () => {
   });
 
   it("treats a unique violation as the order already being spoken for", async () => {
-    const supabase = fakeSupabase({ insertError: { code: "23505" } });
+    const supabase = fakeSupabase({
+      insertError: { code: "23505" },
+      // The row that won the race, found by the read that follows the conflict.
+      existingAfterInsert: { external_order_id: "6099196" },
+    });
     const r = await scheduleAlShrouqDispatch(
       request(),
       new Date("2026-08-21T20:30:00Z"),
@@ -277,6 +296,57 @@ describe("scheduleAlShrouqDispatch", () => {
       deps(),
     );
     expect(r.kind).toBe("already_dispatched");
+  });
+
+  /**
+   * The cancel-and-reschedule case, from the reported incident.
+   *
+   * A collision that leaves **no live row** is not "already dispatched": there
+   * is nothing there, and saying so would show the agent a delivery that does
+   * not exist while quietly declining to schedule the one they asked for. It is
+   * a failed save, and it says so.
+   *
+   * With `20260901130000` applied it does not happen at all — the identity index
+   * is scoped to live rows, so cancelled history no longer collides — but the
+   * honest report is what stops a future constraint from lying on its behalf.
+   */
+  it("does not report a dispatch that is not there when the collision is not a live row", async () => {
+    const supabase = fakeSupabase({ insertError: { code: "23505" } });
+    await expect(
+      scheduleAlShrouqDispatch(
+        request(),
+        new Date("2026-08-21T20:30:00Z"),
+        supabase as any,
+        deps(),
+      ),
+    ).rejects.toThrow("The scheduled dispatch could not be saved.");
+  });
+
+  /**
+   * The acceptance criterion, end to end: cancelled history does not block a
+   * fresh schedule for the same order.
+   *
+   * `existing: null` is what the database reports once the previous row carries
+   * `cancelled_at` — both unique indexes are partial on `cancelled_at IS NULL`,
+   * so a cancelled row is invisible to the duplicate check and to the
+   * constraint alike. The new row is written and carries its own snapshot.
+   */
+  it("schedules again after the previous dispatch was cancelled", async () => {
+    const supabase = fakeSupabase({ existing: null });
+    const r = await scheduleAlShrouqDispatch(
+      request(),
+      new Date("2026-08-21T20:30:00Z"),
+      supabase as any,
+      deps(),
+    );
+
+    expect(r.kind).toBe("scheduled");
+    expect(supabase.inserts).toHaveLength(1);
+    // The same identity as the cancelled one, deliberately: it is derived from
+    // the order and is never invented per attempt.
+    expect(supabase.inserts[0].client_order_id).toBe("9540");
+    expect(supabase.inserts[0].dispatch_status).toBe("scheduled");
+    expect(posts()).toBe(0);
   });
 });
 

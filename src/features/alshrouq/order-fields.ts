@@ -34,6 +34,7 @@
 
 /** The AlShrouq delivery method, as `orders.delivery_type` stores it. */
 export { ALSHROUQ } from "./constants";
+import { coordinateNumber } from "@/lib/geo/coordinates";
 import { ALSHROUQ } from "./constants";
 
 /** One problem, named by the field an agent would go and fix. */
@@ -70,11 +71,26 @@ function blank(value: string | null | undefined): boolean {
   return typeof value !== "string" || value.trim().length === 0;
 }
 
-/** A finite number, or null. `Number("")` is 0, which is why this is explicit. */
-function coordinate(value: string): number | null {
+/**
+ * A usable coordinate, or null.
+ *
+ * `Number(value.trim())` was here, and it disagreed with the reader the rest of
+ * the location system uses: a latitude pasted as `"24.53738,"` — the comma left
+ * over from splitting `"24.53738, 46.64555"` — or carrying the invisible mark a
+ * WhatsApp copy brings, showed as a **Verified location** on the form and was
+ * reported *missing* by this function at the same moment. `coordinateNumber` is
+ * that same reader, so there is one answer to "is this a coordinate" and one
+ * only.
+ *
+ * The bound is applied here rather than left to the database. A latitude of 95
+ * is not a delivery location and the agent should hear so from the field they
+ * typed it into, not from a constraint violation on save.
+ */
+function coordinate(value: string, limit: number): number | null {
   if (blank(value)) return null;
-  const n = Number(value.trim());
-  return Number.isFinite(n) ? n : null;
+  const n = coordinateNumber(value);
+  if (n === null || n < -limit || n > limit) return null;
+  return n;
 }
 
 /**
@@ -114,18 +130,20 @@ export function validateAlShrouqOrderFields(fields: AlShrouqOrderFields): AlShro
    * the payload builder applies. Half a point is not a location, and the message
    * names the half that is missing so the agent knows which one to look at.
    */
-  const lat = coordinate(fields.latitude);
-  const lng = coordinate(fields.longitude);
+  const lat = coordinate(fields.latitude, 90);
+  const lng = coordinate(fields.longitude, 180);
   if (lat === null) {
     issues.push({
       field: "customer_lat",
-      message: "The delivery location has no latitude — reselect the location.",
+      message:
+        "The delivery location has no usable latitude — reselect the location or correct it.",
     });
   }
   if (lng === null) {
     issues.push({
       field: "customer_lng",
-      message: "The delivery location has no longitude — reselect the location.",
+      message:
+        "The delivery location has no usable longitude — reselect the location or correct it.",
     });
   }
 

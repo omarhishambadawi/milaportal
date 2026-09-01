@@ -54,6 +54,7 @@
  */
 
 import { stripOrderPrefix } from "@/lib/branches";
+import { coordinateNumber } from "@/lib/geo/coordinates";
 
 /**
  * Exactly the keys the CRM's stored orders carry. Optional keys are **omitted**
@@ -207,6 +208,26 @@ function numeric(value: number | string | null | undefined): number | null {
 }
 
 /**
+ * A coordinate, read the way every other part of the app reads one.
+ *
+ * Separate from `numeric` above because a coordinate arrives from places an
+ * order value does not — a link, a paste, a phone keyboard — and carries the
+ * damage those bring: a trailing comma from splitting a pair, a compass letter,
+ * the invisible bidi mark a WhatsApp copy adds. `numeric` reads all three as
+ * `NaN`, which is how a pin the form had shown as a **Verified location**
+ * arrived at this builder as a missing coordinate.
+ *
+ * The bound is the globe's, because that is what this payload can carry;
+ * whether the point is in the country is the form's question, and asking it
+ * again here would refuse a delivery the CRM would have accepted.
+ */
+function coordinatePart(value: number | string | null | undefined, limit: number): number | null {
+  const parsed = coordinateNumber(value ?? null);
+  if (parsed === null || parsed < -limit || parsed > limit) return null;
+  return parsed;
+}
+
+/**
  * Build the create payload, or say why it cannot be built.
  *
  * Never throws and never mutates its arguments. Every problem is returned, so a
@@ -281,8 +302,8 @@ export function buildAlshrouqOrderPayload(
    * `CHECK ((alshrouq_lat IS NULL) = (alshrouq_lng IS NULL))`. Absent is fine;
    * half a point is not, and nothing is manufactured to complete it.
    */
-  const lat = numeric(order.alshrouq_lat);
-  const lng = numeric(order.alshrouq_lng);
+  const lat = coordinatePart(order.alshrouq_lat, 90);
+  const lng = coordinatePart(order.alshrouq_lng, 180);
   if ((lat === null) !== (lng === null)) {
     fail("customer_lat", "A delivery location needs both a latitude and a longitude.");
   }

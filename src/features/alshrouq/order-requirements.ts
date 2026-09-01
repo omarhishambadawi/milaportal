@@ -26,7 +26,7 @@
  * payment method and a resolvable location — and the branch's coverage.
  */
 
-import { parseCoordinatePair } from "@/lib/geo/coordinates";
+import { coordinateNumber, parseCoordinatePair } from "@/lib/geo/coordinates";
 import { parseMapsUrl } from "@/lib/geo/maps-url";
 import type { AlShrouqBranchResolution } from "@/lib/shams-crm/alshrouq-branches";
 import { ALSHROUQ } from "./constants";
@@ -126,10 +126,12 @@ export function readCoordinates(
  * `validateAlShrouqOrderFields` reported the latitude missing. Two readers
  * disagreeing about one field.
  *
- * Deliberately conservative: text that already parses on its own is returned
- * untouched, so this can only ever repair a value that would have become NaN and
- * can never alter one that would not have. A link-supplied coordinate is passed
- * through exactly as it was parsed, down to the last digit.
+ * There is one reader now, and this returns what it read: the number, written
+ * out. Numerically it can only ever repair a value that would have become NaN —
+ * a link-supplied coordinate round-trips to the same digits it was parsed as —
+ * but it returns a *canonical* form of it rather than the raw text, so no
+ * consumer downstream is left holding a second representation of the field the
+ * green **Verified location** line was speaking about.
  */
 export function canonicalCoordinate(
   raw: string,
@@ -137,7 +139,23 @@ export function canonicalCoordinate(
   axis: "latitude" | "longitude",
 ): string {
   const text = raw.trim();
-  if (text === "" || Number.isFinite(Number(text))) return raw;
+  if (text === "") return raw;
+  /*
+   * The number the reader saw, written out.
+   *
+   * Not the raw text: that is the whole of the reported defect. The green
+   * **Verified location** line is `readCoordinates` having read this value, and
+   * what leaves here is what the confirmation quotes, what the dispatch request
+   * carries and what the order is saved with. Returning `raw` meant those were
+   * a *different* representation of the same field — one that had been through
+   * the tolerant reader, one that had not — and the two disagreed for exactly
+   * the inputs a paste produces.
+   *
+   * Numerically identical for anything that already parsed, so a link-supplied
+   * coordinate still travels as the parser produced it, down to the last digit.
+   */
+  const value = coordinateNumber(text);
+  if (value !== null) return String(value);
   return location.kind === "resolved" ? String(location[axis]) : raw;
 }
 

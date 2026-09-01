@@ -1308,20 +1308,48 @@ describe("reading a location out of a link", () => {
   });
 
   /**
-   * Conservative by construction: it repairs only what would have been NaN.
+   * Numerically conservative: it repairs only what would have been NaN.
    *
-   * A value that already parses is returned byte-for-byte, so a link-supplied
-   * coordinate reaches the courier exactly as `parseMapsUrl` read it — no
-   * rounding, no reformatting, nothing about the working path touched.
+   * A value that already parses reaches the courier as the same number
+   * `parseMapsUrl` read — no rounding and no lost digits. What it *does* return
+   * is the canonical form of that number rather than the raw keystrokes, so the
+   * value the confirmation quotes, the value the dispatch carries and the value
+   * the order is saved with are one string. Two representations of one field is
+   * the whole of the defect this exists for.
    */
-  it("returns text that already parses completely untouched", () => {
+  it("returns the number it read, canonically, for text that already parses", () => {
     const location = readCoordinates("21.5558662", "39.2905617");
     expect(canonicalCoordinate("21.5558662", location, "latitude")).toBe("21.5558662");
     expect(canonicalCoordinate("39.2905617", location, "longitude")).toBe("39.2905617");
-    // A half-typed decimal point is left alone rather than reformatted.
-    expect(canonicalCoordinate("24.", readCoordinates("24.", "46.6"), "latitude")).toBe("24.");
+    // A half-typed decimal point is a number, and comes back written as one.
+    expect(canonicalCoordinate("24.", readCoordinates("24.", "46.6"), "latitude")).toBe("24");
     // And with no point to fall back on, the raw text stands as it is.
     expect(canonicalCoordinate("abc", { kind: "invalid_pair" }, "latitude")).toBe("abc");
+  });
+
+  /**
+   * The pasted values from the report, all the way through.
+   *
+   * Each of these showed **Verified location** on the form and then failed the
+   * save, because the green line came from the tolerant reader and the save came
+   * from a bare `Number()`. What leaves here is now the same number in every
+   * case, and the AlShrouq field validator — the other reader that used to
+   * disagree — accepts it.
+   */
+  it("carries a pasted coordinate through as the number the form verified", () => {
+    const cases = [
+      "24.53738",
+      " 24.53738 ",
+      "24.53738,",
+      "24.53738\n",
+      // The bidi marks a WhatsApp copy wraps a number in.
+      "\u200F24.53738\u200E",
+    ];
+    for (const raw of cases) {
+      const location = readCoordinates(raw, "46.64555");
+      expect(location.kind).toBe("resolved");
+      expect(canonicalCoordinate(raw, location, "latitude")).toBe("24.53738");
+    }
   });
 });
 

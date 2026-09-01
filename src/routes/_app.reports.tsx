@@ -22,6 +22,7 @@ import { useMonthlyReport } from "@/features/reports/hooks/use-monthly-report";
 import { BASIS_LABEL, type ReportBasis } from "@/features/reports/daily";
 import { PRINT_WIDTH_PX } from "@/lib/print-width";
 import { usePrintExport } from "@/lib/print-export";
+import { ChartExportProvider } from "@/features/dashboard/chart-export";
 
 /**
  * Management reports.
@@ -107,14 +108,22 @@ function Reports() {
   });
 
   /**
-   * The monthly PDF: lay the report out at the page's width, then print.
+   * The monthly PDF: mount every chart, lay the report out at the page's width,
+   * then print.
    *
-   * The frame wait and the reason for it now live in `usePrintExport`, which the
+   * The wait and the reason for it live in `usePrintExport`, which the
    * Dashboard's own PDF export shares. It was two copies of the same paragraph
    * about `ResizeObserver` timing, which is one copy too many for a rule that
    * has to hold on both pages or neither.
+   *
+   * `ChartExportProvider` below is what this page was missing, and it is the
+   * whole of the reported bug: the Dashboard wrapped its content and this page
+   * did not, so *Revenue by city* and *Top branches* — the only two charts here
+   * that defer their mount until they are scrolled to — stayed gated for the
+   * export and printed as empty cards for any manager who pressed Export PDF
+   * without scrolling to them first.
    */
-  const { printing, print: printMonthly } = usePrintExport();
+  const { printing, print: printMonthly, readyTracker } = usePrintExport();
 
   if (!loading && !canView) {
     return (
@@ -296,13 +305,15 @@ function Reports() {
 
           {/* Pinned to the printable width for the duration of the export, so
               every chart inside measures the page rather than the monitor. */}
-          <div style={printing ? { width: PRINT_WIDTH_PX } : undefined}>
-            <ReportPrintHeader title="Monthly Report" period={monthRange.label} />
+          <ChartExportProvider printing={printing} tracker={readyTracker}>
+            <div style={printing ? { width: PRINT_WIDTH_PX } : undefined}>
+              <ReportPrintHeader title="Monthly Report" period={monthRange.label} />
 
-            <MonthlyReportView data={monthly} label={monthRange.label} printing={printing} />
+              <MonthlyReportView data={monthly} label={monthRange.label} printing={printing} />
 
-            <ReportPrintFooter label={`Monthly Report — ${monthRange.label}`} />
-          </div>
+              <ReportPrintFooter label={`Monthly Report — ${monthRange.label}`} />
+            </div>
+          </ChartExportProvider>
         </TabsContent>
       </Tabs>
     </div>

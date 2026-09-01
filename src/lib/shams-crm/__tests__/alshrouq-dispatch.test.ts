@@ -73,8 +73,23 @@ function request(over: Partial<Parameters<typeof dispatchOrderToAlShrouq>[0]> = 
 }
 
 /** A Supabase stand-in: records inserts, answers the live-dispatch lookup. */
-function fakeSupabase(opts: { existing?: Record<string, unknown> | null; insertError?: any } = {}) {
+function fakeSupabase(
+  opts: {
+    existing?: Record<string, unknown> | null;
+    /**
+     * What the live-dispatch lookup finds *after* the insert was attempted.
+     *
+     * The duplicate check and the post-conflict read are the same query, and
+     * they have to be able to disagree: "nothing live when we looked, something
+     * live by the time we wrote" is the race the unique index is for, and it is
+     * a different situation from a collision with a row that is not live at all.
+     */
+    existingAfterInsert?: Record<string, unknown> | null;
+    insertError?: any;
+  } = {},
+) {
   const inserts: Record<string, unknown>[] = [];
+  let inserted = false;
   /** `order_activity` rows — where a refusal is recorded, since no dispatch row is. */
   const activity: Record<string, unknown>[] = [];
   const api = {
@@ -96,9 +111,16 @@ function fakeSupabase(opts: { existing?: Record<string, unknown> | null; insertE
         select: () => chain,
         eq: () => chain,
         is: () => chain,
-        maybeSingle: async () => ({ data: opts.existing ?? null, error: null }),
+        maybeSingle: async () => ({
+          data:
+            inserted && opts.existingAfterInsert !== undefined
+              ? opts.existingAfterInsert
+              : (opts.existing ?? null),
+          error: null,
+        }),
         insert: (row: Record<string, unknown>) => {
           inserts.push(row);
+          inserted = true;
           return {
             select: () => ({
               maybeSingle: async () =>
@@ -345,12 +367,59 @@ describe("dispatchOrderToAlShrouq — duplicate protection", () => {
   });
 
   it("treats a unique violation as the other request having won", async () => {
-    const supabase = fakeSupabase({ insertError: { code: "23505" } });
+    const supabase = fakeSupabase({
+      insertError: { code: "23505" },
+      // The row that won, read back after the conflict.
+      existingAfterInsert: { external_order_id: "6099196", status: "Order Created" },
+    });
     const r = await dispatchOrderToAlShrouq(request(), supabase as any, deps({ live: true }));
     // The index is the backstop; the agent is told it is already sent, not
     // shown a database error.
     expect(r.kind).toBe("already_dispatched");
     expect(posts()).toBe(1);
+  });
+
+  /**
+   * The reported incident, at the point it did its damage.
+   *
+   * AlShrouq has booked a courier. The insert that records it collides with
+   * something that is **not** a live dispatch — which is what a total unique
+   * index on `client_order_id` did after a cancel-and-resend, before
+   * `20260901130000` scoped it to live rows the way its sibling already was.
+   *
+   * Reporting `already_dispatched` there was the worst available answer: it told
+   * the agent nothing had been sent, while a driver was on the way and the order
+   * carried no record of it. The reference is reported instead, and the failure
+   * to record it is logged rather than swallowed.
+   */
+  it("never reports a booked courier as an existing dispatch it cannot find", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const supabase = fakeSupabase({ insertError: { code: "23505" } });
+    const r = await dispatchOrderToAlShrouq(request(), supabase as any, deps({ live: true }));
+
+    expect(r.kind).not.toBe("already_dispatched");
+    expect(posts()).toBe(1);
+    expect(error.mock.calls.some(([m]) => String(m).includes("could not be recorded"))).toBe(true);
+  });
+
+  /**
+   * The acceptance criterion: a cancelled dispatch does not block the next one.
+   *
+   * `existing: null` is the database's answer once the previous row carries
+   * `cancelled_at` — it is invisible to the duplicate check and, after
+   * `20260901130000`, to both unique indexes. The new dispatch is sent once and
+   * persisted with the same `client_order_id`, which is derived from the order
+   * and never invented per attempt.
+   */
+  it("dispatches again after the previous dispatch was cancelled", async () => {
+    const supabase = fakeSupabase({ existing: null });
+    const r = await dispatchOrderToAlShrouq(request(), supabase as any, deps({ live: true }));
+
+    expect(r.kind).toBe("dispatched");
+    expect(posts()).toBe(1);
+    expect(supabase.inserts).toHaveLength(1);
+    expect(supabase.inserts[0].client_order_id).toBe("9540");
+    expect(supabase.inserts[0].dispatch_status).toBe("accepted");
   });
 });
 

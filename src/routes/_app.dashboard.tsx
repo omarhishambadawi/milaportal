@@ -47,7 +47,7 @@ import { DateRangePicker } from "@/components/date-range-picker";
 import { ReportPrintFooter, ReportPrintHeader } from "@/components/print-chrome";
 import { PRINT_WIDTH_PX } from "@/lib/print-width";
 import { usePrintExport } from "@/lib/print-export";
-import { ChartPrintContext } from "@/features/dashboard/chart-motion";
+import { ChartExportProvider } from "@/features/dashboard/chart-export";
 import {
   ChartCardSkeleton,
   SalesChartsSkeleton,
@@ -177,7 +177,7 @@ function Dashboard() {
    * table density — is the `@media print` block in `styles.css`, which every
    * printable page in the portal shares.
    */
-  const { printing, print } = usePrintExport();
+  const { printing, print, readyTracker } = usePrintExport();
 
   if (!f.canViewDashboard) {
     return (
@@ -197,7 +197,7 @@ function Dashboard() {
 
   return (
     /* Every chart panel below reads this. See the export note above. */
-    <ChartPrintContext.Provider value={printing}>
+    <ChartExportProvider printing={printing} tracker={readyTracker}>
       {/* Pinned to the printable width for the duration of the export, so every
           chart inside measures the page rather than the monitor. `undefined`
           otherwise: the screen layout is never touched by the export. */}
@@ -529,6 +529,6 @@ function Dashboard() {
 
         <ReportPrintFooter label={`Dashboard · ${scopeLabel} · ${f.dateLabel}`} />
       </div>
-    </ChartPrintContext.Provider>
+    </ChartExportProvider>
   );
 }

@@ -783,13 +783,43 @@ async function persist(
   if (error) {
     if ((error as { code?: string }).code === UNIQUE_VIOLATION) {
       const winner = await liveDispatch(supabase, request.orderId);
-      return {
-        kind: "conflict",
-        dispatch: winner ?? { ...emptyView(), externalOrderId: row.external_order_id },
-      };
+      /*
+       * A unique violation means another *live* dispatch owns this order, and
+       * its record is the honest answer. Both indexes on this table are partial
+       * on `cancelled_at IS NULL`, so a live row is what a collision implies —
+       * and reading it back is how the caller learns whose courier won.
+       *
+       * When there is no live row the collision was with something else, and
+       * `already_dispatched` would then be a false statement about a courier
+       * that has just been booked: it would tell the agent nothing was sent
+       * while a driver was being assigned. That was the state a total unique
+       * index on `client_order_id` produced after a cancel-and-resend, before
+       * `20260901130000` gave it the same predicate as its sibling. It is
+       * reported as written instead — the reference is real and is the only
+       * thing that can find the delivery again — and logged, because a booking
+       * the database refused to record is the one thing here nobody may find
+       * out about later.
+       */
+      if (winner) return { kind: "conflict", dispatch: winner };
+      console.error("[alshrouq] a booked delivery could not be recorded", {
+        at: new Date().toISOString(),
+        orderId: request.orderId,
+        clientOrderId: row.client_order_id,
+        externalOrderId: row.external_order_id,
+        code: UNIQUE_VIOLATION,
+      });
+      return { kind: "written", dispatch: { ...emptyView(), ...fromRow(row) } };
     }
     // The courier exists whatever the database says, so the reference is still
-    // reported rather than swallowed behind a write failure.
+    // reported rather than swallowed behind a write failure — and said out loud,
+    // so the delivery can be reconciled by hand.
+    console.error("[alshrouq] a booked delivery could not be recorded", {
+      at: new Date().toISOString(),
+      orderId: request.orderId,
+      clientOrderId: row.client_order_id,
+      externalOrderId: row.external_order_id,
+      code: (error as { code?: string }).code ?? null,
+    });
     return { kind: "written", dispatch: { ...emptyView(), ...fromRow(row) } };
   }
 
