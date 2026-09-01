@@ -6797,7 +6797,8 @@ below — so a phone never scrolls sideways. Branch labels come from
 **Routes:** `/telesales` (agent queue), `/telesales/$id` (lead), `/telesales/import`
 (import & generate), `/telesales/management` (team lead board).
 **Permissions:** `view_telesales`, `work_telesales`, `manage_telesales`.
-**Tables:** ten, all prefixed `telesales_`.
+**Tables:** eleven, all prefixed `telesales_` — ten for the CRM, plus
+`telesales_scheduler_state` alongside the cron job.
 **Scheduled job:** `telesales-generation-tick`, hourly.
 
 The module replaces the Excel workflow the Shams Pharmacies telesales desk ran
