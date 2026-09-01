@@ -16,6 +16,7 @@ import {
   Phone,
   PhoneOutgoing,
   Search,
+  PhoneCall,
   Settings2,
   ShieldAlert,
   ShieldCheck,
@@ -82,6 +83,11 @@ function AppLayout() {
    * Auditors do not hold it by default but can be granted it individually.
    */
   const canShams = hasPerm(role, profile?.permissions as any, "view_shams_mis");
+  /**
+   * The Telesales CRM. `view_telesales` is the same key its RLS policies check,
+   * so the entry appears exactly when the queue would have rows to show.
+   */
+  const canTelesales = hasPerm(role, profile?.permissions as any, "view_telesales");
   // Team agents get one Calls page and no module landing page, so the parent
   // entry points straight at it and the sibling pages are never rendered.
   const callsTeam = callsTeamForRole(role);
@@ -150,6 +156,10 @@ function AppLayout() {
         : []),
       // Shams MIS reads the pharmacy's own system, behind its own page-level
       // permission so it can be granted or withdrawn on its own.
+      // The Telesales queue. Named for the work, not for the client: Shams
+      // Pharmacies is the account whose desk it runs, and a second account would
+      // add rows here rather than a second menu entry.
+      ...(canTelesales ? [{ to: "/telesales", label: "Telesales", icon: PhoneCall }] : []),
       ...(canShams ? [{ to: "/shams", label: "Shams MIS", icon: PackageSearch }] : []),
       /*
        * The administration area. Its own rail carries the pages inside it, so
@@ -171,6 +181,7 @@ function AppLayout() {
       canComplaints,
       canCallCenter,
       callsTeam,
+      canTelesales,
       canShams,
       canUsers,
       canBranches,

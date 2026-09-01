@@ -54,6 +54,11 @@ export const AUDIT_ACTION_LABEL = {
   "shams_sync.schedule_saved": "Saved a Shams schedule",
   "shams_sync.schedule_deleted": "Removed a Shams schedule",
   "shams_sync.manual_run": "Started a Shams sync manually",
+  "telesales.imported": "Imported a telesales source file",
+  "telesales.generated": "Ran telesales lead generation",
+  "telesales.settings_saved": "Changed the telesales date windows",
+  "telesales.product_eligibility_changed": "Changed a telesales product's eligibility",
+  "telesales.retention_backlog_seeded": "Seeded the retention backlog",
 } as const satisfies Record<AuditAction, string>;
 
 /**

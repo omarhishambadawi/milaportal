@@ -10,6 +10,7 @@ export type PermissionGroup =
   | "Invoice Verification"
   | "Branches"
   | "Shams MIS"
+  | "Telesales"
   | "Administration";
 
 export interface PermissionDef {
@@ -49,6 +50,28 @@ export const ALL_PERMISSIONS: PermissionDef[] = [
   // the pharmacy's own system; splitting it per tab would gate parts of one
   // screen against each other for no operational reason.
   { key: "view_shams_mis", label: "View Shams MIS", group: "Shams MIS" },
+  /*
+   * Telesales CRM — three keys, because the module has three audiences.
+   *
+   * `view_` is also the RLS read boundary on every telesales table, so the page
+   * appears exactly when the data would load. `work_` is the verbs an agent
+   * performs, split out so a manager or an auditor can hold the board without
+   * becoming a caller on it. `manage_` is everything whose blast radius is the
+   * whole desk — importing, generating, reassigning somebody else's lead, and
+   * editing the product catalogue or the date windows.
+   *
+   * `manage_telesales` is absent from the telesales role's *allowed* ceiling as
+   * well as its defaults, so it cannot be granted per user: an agent who could
+   * reassign leads to themselves is the ownership problem the module exists to
+   * remove.
+   */
+  { key: "view_telesales", label: "View Telesales CRM", group: "Telesales" },
+  { key: "work_telesales", label: "Work Telesales Leads", group: "Telesales" },
+  {
+    key: "manage_telesales",
+    label: "Manage Telesales (import, generate, assign)",
+    group: "Telesales",
+  },
   // Administration
   { key: "view_reports", label: "View All Reports", group: "Administration" },
   { key: "manage_users", label: "Manage Users", group: "Administration" },
@@ -103,6 +126,7 @@ const AUDITOR_SAFE_READ_PERMS: PermKey[] = [
   "export_reports",
   "view_branches",
   "view_shams_mis",
+  "view_telesales",
 ];
 
 /**
@@ -153,6 +177,9 @@ const SUPERVISOR_ALLOWED_PERMS: PermKey[] = [
   "manage_users",
   "admin_access",
   "view_shams_mis",
+  "view_telesales",
+  "work_telesales",
+  "manage_telesales",
 ];
 
 const SUPERVISOR_DEFAULT_PERMS: PermKey[] = [
@@ -179,6 +206,9 @@ const SUPERVISOR_DEFAULT_PERMS: PermKey[] = [
   "manage_users",
   "admin_access",
   "view_shams_mis",
+  "view_telesales",
+  "work_telesales",
+  "manage_telesales",
 ];
 
 const ROLE_ALLOWED_PERMS: Record<Exclude<AppRole, "admin" | "owner">, PermKey[]> = {
@@ -198,6 +228,7 @@ const ROLE_ALLOWED_PERMS: Record<Exclude<AppRole, "admin" | "owner">, PermKey[]>
     "view_branches",
     "export_reports",
     "view_shams_mis",
+    "view_telesales",
   ],
   telesales: [
     "view_orders",
@@ -210,6 +241,8 @@ const ROLE_ALLOWED_PERMS: Record<Exclude<AppRole, "admin" | "owner">, PermKey[]>
     "view_branches",
     "export_reports",
     "view_shams_mis",
+    "view_telesales",
+    "work_telesales",
   ],
   auditor: AUDITOR_SAFE_READ_PERMS,
 };
@@ -240,6 +273,8 @@ const ROLE_DEFAULTS: Record<AppRole, PermKey[]> = {
     "verify_own_orders",
     "view_branches",
     "view_shams_mis",
+    "view_telesales",
+    "work_telesales",
   ],
   auditor: AUDITOR_PERMS,
 };

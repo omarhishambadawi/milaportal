@@ -53,6 +53,21 @@ export const AUDIT_ACTIONS = {
    * browser start work on a third-party production system.
    */
   shamsManualRun: "shams_sync.manual_run",
+  /** A telesales source workbook was imported. */
+  telesalesImported: "telesales.imported",
+  /** Lead generation was run by hand rather than by the scheduler. */
+  telesalesGenerated: "telesales.generated",
+  /** The Cash / Wasfaty / retention date windows were changed. */
+  telesalesSettingsSaved: "telesales.settings_saved",
+  /**
+   * A product's telesales eligibility was changed.
+   *
+   * Audited because it silently changes tomorrow's queue for the whole desk, and
+   * there is no single lead whose timeline it belongs on.
+   */
+  telesalesProductChanged: "telesales.product_eligibility_changed",
+  /** The Retention workbook backlog was seeded into the CRM. */
+  telesalesBacklogSeeded: "telesales.retention_backlog_seeded",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

@@ -51,6 +51,8 @@ const TELESALES_DEFAULTS = [
   "verify_own_orders",
   "view_branches",
   "view_shams_mis",
+  "view_telesales",
+  "work_telesales",
 ];
 
 /** Read-only by construction: nothing here creates, edits, resolves or deletes. */
@@ -92,21 +94,32 @@ const SUPERVISOR_SET = [
   "manage_users",
   "admin_access",
   "view_shams_mis",
+  "view_telesales",
+  "work_telesales",
+  "manage_telesales",
 ];
 
 /**
  * The auditor is the one role whose ceiling is wider than its defaults.
  *
- * `view_shams_mis` is grantable to an individual auditor but held by none of
- * them automatically — the mechanism behind "this auditor may see Shams MIS,
- * auditors may not".
+ * `view_shams_mis` and `view_telesales` are grantable to an individual auditor
+ * but held by none of them automatically — the mechanism behind "this auditor may
+ * see Shams MIS, auditors may not".
  */
-const AUDITOR_CEILING = [...AUDITOR_SET, "view_shams_mis"];
+const AUDITOR_CEILING = [...AUDITOR_SET, "view_shams_mis", "view_telesales"];
 
 const EXPECTED: Record<Exclude<AppRole, "owner" | "admin">, RoleExpectation> = {
   supervisor: { allowed: SUPERVISOR_SET, defaults: SUPERVISOR_SET },
   customer_care: {
-    allowed: [...CUSTOMER_CARE_DEFAULTS, "view_invoice_analytics", "export_reports"],
+    allowed: [
+      ...CUSTOMER_CARE_DEFAULTS,
+      "view_invoice_analytics",
+      "export_reports",
+      // Grantable, off by default: the two agent teams cover for one another on
+      // the phones, and reading a lead history without being able to act on it
+      // is the right shape for that.
+      "view_telesales",
+    ],
     defaults: CUSTOMER_CARE_DEFAULTS,
   },
   telesales: {

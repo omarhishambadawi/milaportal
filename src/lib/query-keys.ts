@@ -75,6 +75,27 @@ export interface ComplaintsFilters {
   userId: string | undefined;
 }
 
+/**
+ * Filter set identifying a telesales queue query.
+ *
+ * `userId` is part of it because two of the filters — "mine only" and the
+ * agent picker's "me" — resolve against the signed-in user, so the same
+ * nominal filter selects different rows for different people. A shared machine
+ * must not serve the previous agent's queue out of the cache.
+ */
+export interface TelesalesQueueFilters {
+  leadType: string;
+  status: string;
+  agent: string;
+  branch: string;
+  family: string;
+  followup: string;
+  term: string;
+  mineOnly: boolean;
+  unassignedOnly: boolean;
+  userId: string | undefined;
+}
+
 /** Filter set identifying a call-center analytics query. */
 export interface CallCenterFilters {
   from: string;
@@ -298,6 +319,43 @@ export const queryKeys = {
      * just asked about.
      */
     offerScopes: (itemCodesKey: string) => ["shams", "offer-scopes", itemCodesKey] as const,
+  },
+
+  /**
+   * Telesales CRM.
+   *
+   * `all()` is a real invalidation boundary and every write uses it, because the
+   * writes are cross-cutting by nature: recording one outcome changes the
+   * queue's counts, the lead's timeline, its follow-up and the management
+   * board's figures. Invalidating them individually would mean four call sites
+   * that each have to remember the other three.
+   *
+   * The exception is `products` and `settings`, which are configuration: they
+   * are nested here so a settings change sweeps the queue that depends on it,
+   * but nothing about working a lead touches them.
+   */
+  telesales: {
+    all: () => ["telesales"] as const,
+    /** One page of the agent queue. */
+    queue: (filters: TelesalesQueueFilters, page: number, pageSize: number) =>
+      ["telesales", "queue", filters, { page, pageSize }] as const,
+    /** One lead, its activity and its follow-ups — three leaves off one id, so
+     *  opening a lead does not refetch the two the panel is not showing. */
+    detail: (id: string | undefined) => ["telesales", "detail", id] as const,
+    activity: (leadId: string | undefined) => ["telesales", "activity", leadId] as const,
+    followups: (leadId: string | undefined) => ["telesales", "followups", leadId] as const,
+    /** A Wasfaty patient's phone history, keyed by patient rather than by lead:
+     *  the number belongs to the patient and every prescription shares it. */
+    patientContacts: (patientId: string | undefined) =>
+      ["telesales", "patient-contacts", patientId] as const,
+    /** The management board, keyed by the day it is reporting on. */
+    management: (day: string) => ["telesales", "management", day] as const,
+    workload: (day: string) => ["telesales", "workload", day] as const,
+    /** Import history and generation runs — the operations surface. */
+    imports: (limit: number) => ["telesales", "imports", limit] as const,
+    runs: (limit: number) => ["telesales", "runs", limit] as const,
+    products: () => ["telesales", "products"] as const,
+    settings: () => ["telesales", "settings"] as const,
   },
 
   /**

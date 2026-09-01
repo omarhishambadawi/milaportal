@@ -312,6 +312,10 @@ Conventions are documented in `src/routes/README.md` (`$id` dynamic, `$` splat,
 | `/calls/diagnostics`                                | `isAdministrator(role)`                                                |
 | `/calls/configuration`                              | `isOwnerRole(role)`                                                    |
 | `/branches`, `/branches/import`                     | `view_branches` / `admin_access`                                       |
+| `/telesales`                                        | `view_telesales` (in-page)                                             |
+| `/telesales/$id`                                    | `view_telesales`; acting needs `work_telesales` + ownership            |
+| `/telesales/import`                                 | `manage_telesales`                                                     |
+| `/telesales/management`                             | `view_telesales`; runs panel needs `manage_telesales`                  |
 | `/admin/users`                                      | `manage_users`                                                         |
 | `/profile`                                          | any signed-in user                                                     |
 
@@ -438,6 +442,7 @@ retired values for everyone, including the Owner.
 | Dashboard            | `view_dashboard`, `view_team_analytics`, `view_all_agents`, `view_call_center`, `export_reports`                                                      |
 | Invoice Verification | `verify_own_orders`, `verify_all_orders`, `view_invoice_analytics`                                                                                    |
 | Branches             | `view_branches`                                                                                                                                       |
+| Telesales            | `view_telesales`, `work_telesales`, `manage_telesales`                                                                                                |
 | Administration       | `view_reports`, `manage_users`, `admin_access`                                                                                                        |
 
 `manage_roles` was **removed**: it rendered a checkbox but was enforced nowhere,
@@ -515,7 +520,7 @@ It runs in CI between lint and tests.
 
 ## Database Schema
 
-PostgreSQL on Supabase, `public` schema, PostGIS 3.3.x enabled. 91 migrations in
+PostgreSQL on Supabase, `public` schema, PostGIS 3.3.x enabled. 130 migrations in
 `supabase/migrations/`.
 
 ### `profiles`
@@ -6784,6 +6789,263 @@ Tables render twice — a real `<table>` from `md` up, the same rows as cards
 below — so a phone never scrolls sideways. Branch labels come from
 `branches.branch_no` via the portal's own directory, because the MIS's
 `branchName` only ever duplicates its `branchCode`.
+
+---
+
+## Telesales CRM Module
+
+**Routes:** `/telesales` (agent queue), `/telesales/$id` (lead), `/telesales/import`
+(import & generate), `/telesales/management` (team lead board).
+**Permissions:** `view_telesales`, `work_telesales`, `manage_telesales`.
+**Tables:** ten, all prefixed `telesales_`.
+**Scheduled job:** `telesales-generation-tick`, hourly.
+
+The module replaces the Excel workflow the Shams Pharmacies telesales desk ran
+on. Shams Pharmacies is the **client account** whose process this is; the module
+itself is a native MilaPortal feature and is named for the work, not the client.
+
+### What the workbooks actually said
+
+Three files were read before any schema was written — `July Leads.xlsx`,
+`Retention Leads.xlsx`, `Wasfaty Leads.xlsx` — and four things in them are not
+what their column headers claim. Each one is a decision recorded in the schema.
+
+**1. "Days to refill" is not a refill interval.** All three workbooks compute it
+as `=TODAY()-<date to be called>`, behind a number format that prints "Overdue"
+for positives and "Remaining" for negatives. It is a countdown to a _scheduled
+callback_. The `46266 Days Overdue` filling most rows is that subtraction against
+an empty cell — and 46266 decodes as the Excel serial for 2026-09-01, the day the
+files were saved, which is the confirmation. Nothing imports that column; the
+callback date behind it becomes a real `telesales_followups` row.
+
+**2. The source tab is overwritten; the working sheets are not.** `Main Database`
+holds 173,008 rows covering 21–31 July, while the twelve working sheets beside it
+cover 3–31 July. Nothing in the file can say which extract produced a given lead.
+That is the argument for `telesales_imports` + `telesales_source_records`: the raw
+drop is kept, and every lead points at the row that created it.
+
+**3. `Id` is not a person.** 83,634 of the 173,008 rows share the single customer
+id `437745`, named `REFUSED TO GET MOBILE NUMBER` and phoned `0000` — the walk-in
+placeholder. Across the whole extract 88,096 rows have no usable number and carry
+just 139 distinct ids between them. Deduplication therefore keys on the **phone**,
+not the id (see below).
+
+**4. Wasfaty carries three column generations across eight sheets** — a per-city
+layout, a "Riyadh" layout and the current "Wasfaty Aug"/"Wasfaty Sep" layout.
+Dates appear as `dd/mm/yy`, `mm/dd/yyyy`, ISO, Excel serials, and the strings
+`" "`, `"N/A"`, `"no record"` and `"زSAR 150.0"`. Column _position_ is never used;
+everything resolves by header name.
+
+### Layering
+
+```
+src/lib/telesales/types.ts        PURE: lead types, statuses, the outcome table
+src/lib/telesales/dates.ts        PURE: the three windows, Riyadh arithmetic, sheet dates
+src/lib/telesales/products.ts     PURE: eligibility — catalogue first, then name rules
+src/lib/telesales/dedup.ts        PURE: the deduplication keys
+src/lib/telesales/status.ts       PURE: the state machine, ownership, follow-up proposals
+src/lib/telesales/generation.ts   PURE: source rows -> lead drafts
+src/lib/telesales/parse.ts        PURE grid parser + the thin xlsx wrapper
+src/lib/telesales/import.server.ts    stores an upload and its rows
+src/lib/telesales/generate.server.ts  fetches candidates, calls the projection, writes
+src/lib/telesales/actions.server.ts   the agent write path
+src/lib/telesales.functions.ts        TanStack server functions (every write)
+src/features/telesales/               queue, lead row, outcome dialog, hooks
+src/routes/api/telesales-generate.ts  the endpoint pg_cron pokes
+```
+
+Everything that decides _which customers get called_ is pure and unit tested;
+the server modules are transport, batching and bookkeeping. 156 tests cover the
+business rules, including every edge case the brief enumerates.
+
+### The three windows
+
+All date arithmetic goes through `Date.UTC` over `YYYY-MM-DD` strings and never
+through a `Date` constructor, because the same component renders in a Cloudflare
+Worker (UTC) and a Riyadh browser (UTC+3); a window computed with either
+constructor changes shape depending on where it was computed.
+
+| Pipeline  | Field                                   | Window (default)                      |
+| --------- | --------------------------------------- | ------------------------------------- |
+| Cash      | invoice date                            | the 3 days ending 1 day before anchor |
+| Wasfaty   | next dispense date (fill date fallback) | anchor and the day after              |
+| Retention | follow-up due date                      | anchor back to anchor − 14 days       |
+
+**Cash is parameterised rather than hardcoded**, and this is the module's one
+genuinely contested rule. The brief says that on 1 August the desk checks 1–3
+July; the workbook says each working sheet covers at most three _consecutive_
+invoice dates (`3-4`, `15-17`, `24-26`, `27-29`). Both are true, and they
+reconcile because the extract arrives monthly — through August the team was
+walking a three-day window across July. The invariant is the _shape_, so
+`cash_window_days` and `cash_window_lag_days` carry it and a run may be anchored
+to any date. That is also how a backfill is run.
+
+**Retention is deliberately not the spreadsheet's rule.** `Days to refill = 0`
+means "exactly today", which drops a lead permanently the first time a working
+day is missed. The window runs backward to a configurable grace period; past it
+the follow-up still shows as overdue on the board, but the generator stops
+re-raising it and a person decides.
+
+### Deduplication
+
+One rule per pipeline, because identity differs per pipeline. The key is composed
+in `dedup.ts` and enforced by `UNIQUE (lead_type, dedup_key)` — the generator does
+not check-then-insert (that is a race), it inserts and lets the index refuse.
+
+| Lead type       | Key                                     |
+| --------------- | --------------------------------------- |
+| Cash            | phone + product + branch + invoice date |
+| Cash (no phone) | + customer + invoice number — see below |
+| Wasfaty         | Patient ID + Prescription No            |
+| Retention       | phone + product + **cycle number**      |
+
+**The discriminator is the phone, not the customer id**, for the reason in point
+3 above. Validated against the real extract: customer 69732 (عبداللطيف, 0508626771) bought Mounjaro 12.5 MG at P0202 on 30 July under invoices 271460 and
+271474 — one person, one call, correctly merged. Id 437745 at P0027 on 31 July
+under invoices 86954 and 86981 is two different walk-ins, neither callable,
+correctly kept apart. A row with no usable number has no telesales identity to
+merge on, so its transaction is identified by its document number instead.
+
+**The invoice number is otherwise excluded**: it is what an operator reaches for
+first and it makes the key unstable across extracts, since a purchase can be
+re-issued under a corrected document number.
+
+**Wasfaty excludes the date**, which is the deliberate difference from Cash: a
+prescription's next-dispense date moves as it is refilled, and a key that changed
+with it would resurrect the lead on every refresh.
+
+**Retention includes the cycle number**, which is what stops cycle 3 colliding
+with cycle 2 — the failure mode of a spreadsheet row edited in place.
+
+### Product eligibility
+
+Configuration, not code: `telesales_products` (explicit SKUs) and
+`telesales_product_patterns` (ordered name rules, exclusions first). 25 eligible
+SKUs across six families are seeded from the workbooks, with the counts that
+justify each row in the `notes` column.
+
+**The two most important seeded rows are switched off.** `FREESTYLE OPTIUM STRIPS`
+and `FREESTYLE OPTIUM GLUCOSE METER` occur 42 and 39 times in the July extract and
+**zero** times in any working sheet — they are fingerstick products, while Libre
+and Dexcom are continuous glucose monitors. Deciding eligibility by asking whether
+a name contains "FREESTYLE" puts 81 wrong rows a month into the queue. They are
+seeded explicitly ineligible, and a priority-10 exclusion pattern outranks the
+FreeStyle Libre rule, so the mistake is recorded as a decision.
+
+Three insulins (NOVORAPID, RYZODEG, TOUJEO) appear in the working sheets 19 times
+but are outside the briefed product list; they are seeded known-and-disabled so
+the discrepancy is visible and re-enabling is a checkbox.
+
+Eligibility is asked per lead type: a FreeStyle Libre _reader_ is a legitimate
+Cash lead and a meaningless retention one, since hardware is bought once.
+
+### Retention as a lifecycle, not a table
+
+A retention lead is the next cycle of a conversion, so the chain is a
+self-reference (`parent_lead_id`, `cycle_number`) rather than a separate
+`retention_cycles` table. That keeps one activity log, one follow-up table and one
+queue, and makes "never overwrite the previous cycle" structural: a new cycle is a
+new row pointing at the old one, which is untouched.
+
+`source_type` also accepts `retention` for a **one-time backlog import**. On
+cutover the Retention workbook holds 745 live rows, 327 of them with a callback
+already promised to a customer; dropping those would lose every person the team
+had said it would ring back.
+
+### The Wasfaty phone workflow
+
+2,774 of 3,952 rows in `Wasfaty Aug` have no phone, and the five per-city sheets
+have none at all. **No Wasfaty API is assumed and none is used.** The agent looks
+the patient up in the Wasfaty portal by Patient ID and Prescription No — both shown
+prominently on the lead — and records the number once. It is stored against the
+_patient_ in `telesales_patient_contacts`, back-filled onto every open lead for
+them, and reused by the generator, so the next prescription arrives dialable. A
+correction supersedes rather than overwrites, so "the number we called last month"
+stays answerable. The table is the seam an API would later replace.
+
+### Reading a workbook: `raw: true, cellDates: false`
+
+Not a detail — it was worth 327 callbacks and 1,178 phone numbers. The two
+alternatives both lose data:
+
+- `raw: false` renders each cell through its **display** format, so the Retention
+  callback column arrives as `"Thursday, August 20"` — prose, no year, unparseable.
+  Only 1 of 328 callbacks survived.
+- `cellDates: true` builds a `Date` at **local** midnight, which reads back a day
+  early anywhere east of Greenwich.
+
+Serials carry no timezone and no locale. The same change also recovered the
+Wasfaty phone column, whose `9.66555E+11` is a narrow-column _display_ artifact
+over the full-precision integer `966555389897`.
+
+### Access model
+
+Reads are RLS-bounded and go straight from the browser; every write is a
+TanStack server function running as `service_role`. The split is the same one
+`alshrouq_dispatches` uses and for the same reason: recording an outcome updates
+the lead, settles a follow-up, may open another and appends to an append-only
+timeline, and a client that managed three of those four would leave a lead whose
+state disagrees with its own history.
+
+There is consequently **no INSERT/UPDATE/DELETE policy anywhere in the module**.
+Each server function performs its own `has_permission()` check against the same
+keys the SELECT policies use.
+
+Two invariants live in the database rather than in convention:
+`telesales_lead_activities` refuses UPDATE and DELETE by trigger, and
+`telesales_followups` permits at most one open row per lead by partial unique
+index — two would mean two agents each told to call the same customer on a
+different day.
+
+Source records and imports are gated on `manage_telesales`, not `view_telesales`:
+the raw extract is every customer in the pharmacy's month, and an agent needs the
+150 opportunities rather than the 173,008 purchases.
+
+### Ownership
+
+`canActOnLead` is the rule that replaces the "Agent Name" column. A manager may
+act on anything; an agent may act on their own lead or claim an unassigned one,
+and is refused somebody else's. Dialling a lead claims it implicitly, which is
+what keeps the queue to one click per call. In the workbook an agent typed their
+name into a row a colleague had already claimed and the second name overwrote the
+first.
+
+### Scheduled generation
+
+`pg_cron` runs `telesales_generation_tick()` hourly; it pokes
+`/api/telesales-generate` at most once per Riyadh day, only when
+`automation_enabled` is on and `generation_hour` has arrived. Hourly rather than a
+fixed daily entry because the hour is operator-editable configuration, and a fixed
+cron expression would mean a migration every time the desk changes its start time.
+
+Authentication is the platform's service role key from the same vault entry the
+email, AlShrouq and Shams jobs read — not a second hand-maintained secret, which
+is the exact mechanism that left the AlShrouq scheduler reporting 5,769
+consecutive successes while sending nothing.
+
+Generation is idempotent by construction, so running it twice is safe and the
+second run reports the duplicates the index refused.
+
+**One manual step per deployment:** the vault entry `telesales_generation_url`
+must be created with the deployment's own host. Until it exists the tick records
+`unconfigured` in `telesales_scheduler_state.last_error`, in those words, and
+generation remains available from the Import screen.
+
+### Validation against the live workbooks
+
+The pure logic was run over the operator's actual files at full volume:
+
+| Check                     | Result                                                        |
+| ------------------------- | ------------------------------------------------------------- |
+| Cash parse                | 173,008 rows → 170,397 records                                |
+| Cash window, anchor 1 Aug | 29–31 Jul → 150 drafts, 149 distinct keys                     |
+| The one collapse          | a reachable customer's two invoices — correct                 |
+| Month boundary            | anchors 24 Jul–3 Aug reach every date 21–31 Jul, none lost    |
+| FreeStyle Optium in queue | 0                                                             |
+| Wasfaty, all six layouts  | parsed; 100% date coverage on current sheets, 96% on `Jeddah` |
+| Wasfaty window, 1 Sep     | 242 drafts → 208 distinct; 34 duplicate prescriptions refused |
+| Retention backlog         | 745 rows → 739 leads, 327 promised callbacks carried across   |
+| Re-run determinism        | identical keys, so a second run creates nothing               |
 
 ---
 

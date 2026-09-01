@@ -1,0 +1,519 @@
+import { createFileRoute, Link, useParams } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import {
+  ArrowLeft,
+  ClipboardList,
+  Loader2,
+  Phone,
+  PhoneOff,
+  ShieldAlert,
+  UserPlus,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/lib/auth";
+import { fmtSAR } from "@/lib/branches";
+import { hasPerm } from "@/lib/permissions";
+import { BUSINESS_TIMEZONE } from "@/lib/timezone";
+import { cn } from "@/lib/utils";
+import { businessToday, describeDue, formatBusinessDate } from "@/lib/telesales/dates";
+import { familyLabel } from "@/lib/telesales/products";
+import {
+  ACTIVITY_LABELS,
+  LEAD_STATUS_LABELS,
+  LEAD_TYPE_LABELS,
+  OUTCOME_BY_KEY,
+  type ActivityType,
+} from "@/lib/telesales/types";
+import { OutcomeDialog } from "@/features/telesales/components/outcome-dialog";
+import {
+  DUE_TONE_STYLES,
+  LEAD_STATUS_STYLES,
+  formatPhone,
+  telHref,
+} from "@/features/telesales/constants";
+import {
+  useLeadActivity,
+  useLeadDetail,
+  useLeadFollowups,
+  useLeadMutations,
+  usePatientContacts,
+} from "@/features/telesales/hooks/use-lead-detail";
+
+export const Route = createFileRoute("/_app/telesales/$id")({
+  head: () => ({ meta: [{ title: "Lead — MilaServ Portal" }] }),
+  component: LeadDetailPage,
+});
+
+function ts(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: BUSINESS_TIMEZONE,
+    }).format(new Date(iso));
+  } catch {
+    return iso;
+  }
+}
+
+/**
+ * One lead, everything about it, and everything that can be done to it.
+ *
+ * The layout answers three questions in order, because that is the order an
+ * agent asks them: **who am I calling and about what**, **what happened last
+ * time**, and **what do I do now**.
+ */
+function LeadDetailPage() {
+  const { id } = useParams({ from: "/_app/telesales/$id" });
+  const { profile, role, session } = useAuth();
+  const userId = session?.user?.id;
+  const perms = profile?.permissions as string[] | null | undefined;
+
+  const canView = hasPerm(role, perms, "view_telesales");
+  const canWork = hasPerm(role, perms, "work_telesales");
+  const canManage = hasPerm(role, perms, "manage_telesales");
+
+  const lead = useLeadDetail(canView ? id : undefined);
+  const activity = useLeadActivity(canView ? id : undefined);
+  const followups = useLeadFollowups(canView ? id : undefined);
+  const contacts = usePatientContacts(lead.data?.patient_id);
+  const mutations = useLeadMutations(id);
+
+  const [recording, setRecording] = useState(false);
+  const [note, setNote] = useState("");
+  const [phone, setPhone] = useState("");
+  const today = businessToday();
+
+  /**
+   * The product's refill interval, for the outcome dialog's proposed next date.
+   *
+   * Read here rather than denormalised onto the lead: a lead is a snapshot of an
+   * opportunity, but the refill cycle is current configuration — if the desk
+   * changes a sensor from 14 days to 10, the next conversion should propose 10.
+   */
+  const product = useQuery<number | null>({
+    queryKey: ["telesales", "product-refill", lead.data?.item_code],
+    enabled: canView && Boolean(lead.data?.item_code),
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const { data } = await (supabase as any)
+        .from("telesales_products")
+        .select("refill_days")
+        .eq("item_code", lead.data!.item_code)
+        .maybeSingle();
+      return (data as { refill_days: number | null } | null)?.refill_days ?? null;
+    },
+  });
+
+  if (!canView) {
+    return (
+      <div className="py-16 text-center">
+        <ShieldAlert className="mx-auto h-10 w-10 text-destructive" />
+        <p className="mt-2 text-sm font-medium">Telesales is restricted</p>
+      </div>
+    );
+  }
+
+  if (lead.isLoading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading the lead…
+      </div>
+    );
+  }
+
+  const l = lead.data;
+  if (!l) {
+    return (
+      <div className="py-16 text-center">
+        <p className="text-sm font-medium">This lead no longer exists</p>
+        <Button asChild className="mt-4" variant="outline" size="sm">
+          <Link to="/telesales">Back to the queue</Link>
+        </Button>
+      </div>
+    );
+  }
+
+  const isMine = Boolean(userId && l.assigned_to === userId);
+  const isClosed = l.status.startsWith("closed") || l.status === "converted";
+  const canAct = canWork && (canManage || isMine || !l.assigned_to);
+  const openFollowup = (followups.data ?? []).find((f) => f.status === "scheduled");
+  const due = describeDue(openFollowup?.due_on ?? null, today);
+  const tel = telHref(l.phone_e164);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Button asChild variant="ghost" size="sm">
+          <Link to="/telesales">
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Queue
+          </Link>
+        </Button>
+        <div className="flex items-center gap-2">
+          {canWork && !l.assigned_to ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={mutations.assign.isPending}
+              onClick={() => mutations.assign.mutate({ leadId: l.id, assigneeId: userId ?? null })}
+            >
+              <UserPlus className="mr-2 h-4 w-4" />
+              Claim
+            </Button>
+          ) : null}
+          {canManage && l.assigned_to ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={mutations.assign.isPending}
+              onClick={() => mutations.assign.mutate({ leadId: l.id, assigneeId: null })}
+            >
+              Unassign
+            </Button>
+          ) : null}
+          {canManage && isClosed ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                mutations.reopen.mutate({ leadId: l.id, reason: "Reopened by a team lead" })
+              }
+            >
+              Reopen
+            </Button>
+          ) : null}
+          {canAct && !isClosed ? (
+            <Button size="sm" onClick={() => setRecording(true)}>
+              Record outcome
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        {/* Who and what */}
+        <Card className="lg:col-span-2">
+          <CardHeader className="pb-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <CardTitle className="text-lg">
+                {l.customer_name || (l.lead_type === "wasfaty" ? "Wasfaty patient" : "No name")}
+              </CardTitle>
+              <span
+                className={cn(
+                  "rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                  LEAD_STATUS_STYLES[l.status],
+                )}
+              >
+                {LEAD_STATUS_LABELS[l.status]}
+              </span>
+              <span className="rounded-full border border-border bg-secondary px-2 py-0.5 text-[11px] text-secondary-foreground">
+                {LEAD_TYPE_LABELS[l.lead_type]}
+                {l.cycle_number > 1 ? ` · cycle ${l.cycle_number}` : ""}
+              </span>
+            </div>
+            {/*
+             * Why this lead exists, in the lead's own words.
+             *
+             * The single most-requested thing the spreadsheets could not answer:
+             * an agent looking at a row had no way to know which filter put it
+             * there, and neither did the person who built the sheet.
+             */}
+            {l.generation_reason ? (
+              <p className="text-sm text-muted-foreground">{l.generation_reason}</p>
+            ) : null}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
+              <Field label="Phone">
+                {tel ? (
+                  <a href={tel} className="inline-flex items-center gap-1.5 hover:underline">
+                    <Phone className="h-3.5 w-3.5" />
+                    {formatPhone(l.phone_e164)}
+                  </a>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                    <PhoneOff className="h-3.5 w-3.5" />
+                    Not on file
+                  </span>
+                )}
+              </Field>
+              <Field label="Branch">{l.branch_no ?? "—"}</Field>
+              <Field label="City">{l.city ?? "—"}</Field>
+              <Field label="Product">{l.item_name ?? "—"}</Field>
+              <Field label="Family">{familyLabel(l.product_family)}</Field>
+              <Field label="Strength">{l.product_strength ?? "—"}</Field>
+              <Field label="Source date">{formatBusinessDate(l.source_date)}</Field>
+              <Field label="Created">{ts(l.created_at)}</Field>
+              <Field label="Value">{l.total_value != null ? fmtSAR(l.total_value) : "—"}</Field>
+              {l.lead_type === "wasfaty" ? (
+                <>
+                  <Field label="Patient ID">
+                    <span className="font-mono text-xs">{l.patient_id ?? "—"}</span>
+                  </Field>
+                  <Field label="Prescription No">
+                    <span className="font-mono text-xs">{l.prescription_no ?? "—"}</span>
+                  </Field>
+                  <Field label="Facility">{l.facility ?? "—"}</Field>
+                </>
+              ) : (
+                <>
+                  <Field label="Invoice">{l.document_no ?? "—"}</Field>
+                  <Field label="Channel">{l.channel ?? "—"}</Field>
+                  <Field label="Quantity">{l.quantity ?? "—"}</Field>
+                </>
+              )}
+            </div>
+
+            {/*
+             * The Wasfaty phone workflow.
+             *
+             * 2,774 of 3,952 rows in the August file have no number, and the
+             * agent gets it by looking the patient up in the Wasfaty portal with
+             * the two identifiers above. There is no Wasfaty API here and none is
+             * assumed — this is that manual lookup, recorded once, so the next
+             * prescription for this patient arrives dialable.
+             */}
+            {l.lead_type === "wasfaty" && !l.phone_e164 && canWork ? (
+              <div className="rounded-md border border-dashed border-border p-3">
+                <p className="text-sm font-medium">Add the phone number</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Look the patient up in the Wasfaty system using the Patient ID and Prescription No
+                  above. The number is saved against the patient, so every other prescription for
+                  them gets it too.
+                </p>
+                <div className="mt-2 flex flex-wrap items-end gap-2">
+                  <div className="min-w-[200px] flex-1 space-y-1.5">
+                    <Label htmlFor="ts-phone" className="sr-only">
+                      Phone number
+                    </Label>
+                    <Input
+                      id="ts-phone"
+                      value={phone}
+                      inputMode="tel"
+                      placeholder="05XXXXXXXX"
+                      onChange={(e) => setPhone(e.target.value)}
+                    />
+                  </div>
+                  <Button
+                    size="sm"
+                    disabled={!phone.trim() || !l.patient_id || mutations.setPhone.isPending}
+                    onClick={() =>
+                      mutations.setPhone.mutate(
+                        {
+                          patientId: l.patient_id!,
+                          phone: phone.trim(),
+                          leadId: l.id,
+                          prescriptionNo: l.prescription_no,
+                        },
+                        { onSuccess: () => setPhone("") },
+                      )
+                    }
+                  >
+                    Save number
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            {(contacts.data ?? []).length > 1 ? (
+              <div className="rounded-md border border-border p-3">
+                <p className="text-xs font-medium">Number history for this patient</p>
+                <ul className="mt-1.5 space-y-1 text-xs text-muted-foreground">
+                  {(contacts.data ?? []).map((c) => (
+                    <li key={c.id} className="flex flex-wrap items-center gap-2">
+                      <span className={cn("font-mono", c.superseded_at && "line-through")}>
+                        {formatPhone(c.phone_e164)}
+                      </span>
+                      <span>· {c.source === "agent" ? "found by an agent" : "from the file"}</span>
+                      <span>· {ts(c.added_at)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {canWork ? (
+              <div className="space-y-2">
+                <Label htmlFor="ts-note">Add a note</Label>
+                <Textarea
+                  id="ts-note"
+                  rows={2}
+                  value={note}
+                  placeholder="Anything the next person on this lead should know."
+                  onChange={(e) => setNote(e.target.value)}
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!note.trim() || mutations.addNote.isPending}
+                  onClick={() =>
+                    mutations.addNote.mutate(
+                      { leadId: l.id, note: note.trim() },
+                      { onSuccess: () => setNote("") },
+                    )
+                  }
+                >
+                  Add note
+                </Button>
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+
+        {/* Ownership and the next step */}
+        <div className="space-y-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Next step</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              <p className={cn(DUE_TONE_STYLES[due.tone])}>{due.label}</p>
+              {openFollowup ? (
+                <p className="text-xs text-muted-foreground">
+                  {formatBusinessDate(openFollowup.due_on)}
+                  {openFollowup.due_time ? ` at ${openFollowup.due_time.slice(0, 5)}` : ""}
+                  {openFollowup.reason ? ` — ${openFollowup.reason}` : ""}
+                </p>
+              ) : null}
+              <div className="pt-1 text-xs text-muted-foreground">
+                <p>Owner: {l.assigned_to ? (isMine ? "you" : "another agent") : "unassigned"}</p>
+                <p>
+                  Attempts: {l.contact_attempts}
+                  {l.last_contacted_at ? ` · last ${ts(l.last_contacted_at)}` : ""}
+                </p>
+                {l.last_outcome ? (
+                  <p>Last outcome: {OUTCOME_BY_KEY.get(l.last_outcome)?.label ?? l.last_outcome}</p>
+                ) : null}
+                {l.converted_at ? (
+                  <p>
+                    Converted {ts(l.converted_at)}
+                    {l.converted_value != null ? ` · ${fmtSAR(l.converted_value)}` : ""}
+                  </p>
+                ) : null}
+                {l.closed_at ? (
+                  <p>
+                    Closed {ts(l.closed_at)} — {l.closed_reason}
+                  </p>
+                ) : null}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Provenance. Manager-only, because it names the import. */}
+          {canManage ? (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Provenance</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1 text-xs text-muted-foreground">
+                <p className="break-all">
+                  <span className="font-medium text-foreground">Dedup key: </span>
+                  <span className="font-mono">{l.dedup_key}</span>
+                </p>
+                <p>
+                  <span className="font-medium text-foreground">Source row: </span>
+                  {l.source_record_id ? (
+                    <span className="font-mono">{l.source_record_id.slice(0, 8)}…</span>
+                  ) : (
+                    "generated from a previous lead"
+                  )}
+                </p>
+                {l.parent_lead_id ? (
+                  <p>
+                    <span className="font-medium text-foreground">Previous cycle: </span>
+                    <Link
+                      to="/telesales/$id"
+                      params={{ id: l.parent_lead_id }}
+                      className="hover:underline"
+                    >
+                      open cycle {l.cycle_number - 1}
+                    </Link>
+                  </p>
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
+        </div>
+      </div>
+
+      {/* History */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <ClipboardList className="h-4 w-4" />
+            History
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {activity.isLoading ? (
+            <p className="px-4 py-8 text-center text-sm text-muted-foreground">Loading…</p>
+          ) : (activity.data ?? []).length === 0 ? (
+            <p className="px-4 py-8 text-center text-sm text-muted-foreground">
+              Nothing has happened on this lead yet.
+            </p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {(activity.data ?? []).map((a) => (
+                <li
+                  key={a.id}
+                  className="flex flex-wrap items-baseline gap-x-2 gap-y-1 px-4 py-2.5"
+                >
+                  <span className="text-sm font-medium">
+                    {ACTIVITY_LABELS[a.activity_type as ActivityType] ?? a.activity_type}
+                  </span>
+                  {a.outcome ? (
+                    <span className="text-sm text-muted-foreground">
+                      — {OUTCOME_BY_KEY.get(a.outcome)?.label ?? a.outcome}
+                    </span>
+                  ) : null}
+                  {a.note ? (
+                    <span className="w-full text-sm text-muted-foreground">{a.note}</span>
+                  ) : null}
+                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                    {a.actor_name ?? "System"} · {ts(a.created_at)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      <OutcomeDialog
+        open={recording}
+        onOpenChange={setRecording}
+        leadType={l.lead_type}
+        refillDays={product.data ?? null}
+        customerLabel={[l.customer_name, l.item_name].filter(Boolean).join(" · ") || "This lead"}
+        submitting={mutations.recordOutcome.isPending}
+        onSubmit={(input) =>
+          mutations.recordOutcome.mutate(
+            { leadId: l.id, ...input },
+            { onSuccess: () => setRecording(false) },
+          )
+        }
+      />
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <div className="mt-0.5">{children}</div>
+    </div>
+  );
+}

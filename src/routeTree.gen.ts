@@ -14,6 +14,7 @@ import { Route as McpRouteImport } from './routes/mcp'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiTelesalesGenerateRouteImport } from './routes/api/telesales-generate'
 import { Route as ApiShamsSyncRunRouteImport } from './routes/api/shams-sync-run'
 import { Route as ApiCspReportRouteImport } from './routes/api/csp-report'
 import { Route as ApiCdrSyncRouteImport } from './routes/api/cdr-sync'
@@ -25,11 +26,15 @@ import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
 import { Route as AppCallCenterRouteImport } from './routes/_app.call-center'
 import { Route as Char91DotwellKnownChar93OauthProtectedResourceRouteImport } from './routes/[.well-known]/oauth-protected-resource'
 import { Route as Char91DotmcpChar93ListToolsRouteImport } from './routes/[.mcp]/list-tools'
+import { Route as AppTelesalesIndexRouteImport } from './routes/_app.telesales.index'
 import { Route as AppOrdersIndexRouteImport } from './routes/_app.orders.index'
 import { Route as AppComplaintsIndexRouteImport } from './routes/_app.complaints.index'
 import { Route as AppCallsIndexRouteImport } from './routes/_app.calls.index'
 import { Route as AppBranchesIndexRouteImport } from './routes/_app.branches.index'
 import { Route as AppAdminIndexRouteImport } from './routes/_app.admin.index'
+import { Route as AppTelesalesManagementRouteImport } from './routes/_app.telesales.management'
+import { Route as AppTelesalesImportRouteImport } from './routes/_app.telesales.import'
+import { Route as AppTelesalesIdRouteImport } from './routes/_app.telesales.$id'
 import { Route as AppOrdersNewRouteImport } from './routes/_app.orders.new'
 import { Route as AppOrdersIdRouteImport } from './routes/_app.orders.$id'
 import { Route as AppComplaintsNewRouteImport } from './routes/_app.complaints.new'
@@ -76,6 +81,11 @@ const AppRoute = AppRouteImport.update({
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiTelesalesGenerateRoute = ApiTelesalesGenerateRouteImport.update({
+  id: '/api/telesales-generate',
+  path: '/api/telesales-generate',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiShamsSyncRunRoute = ApiShamsSyncRunRouteImport.update({
@@ -135,6 +145,11 @@ const Char91DotmcpChar93ListToolsRoute =
     path: '/.mcp/list-tools',
     getParentRoute: () => rootRouteImport,
   } as any)
+const AppTelesalesIndexRoute = AppTelesalesIndexRouteImport.update({
+  id: '/telesales/',
+  path: '/telesales/',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppOrdersIndexRoute = AppOrdersIndexRouteImport.update({
   id: '/orders/',
   path: '/orders/',
@@ -158,6 +173,21 @@ const AppBranchesIndexRoute = AppBranchesIndexRouteImport.update({
 const AppAdminIndexRoute = AppAdminIndexRouteImport.update({
   id: '/admin/',
   path: '/admin/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppTelesalesManagementRoute = AppTelesalesManagementRouteImport.update({
+  id: '/telesales/management',
+  path: '/telesales/management',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppTelesalesImportRoute = AppTelesalesImportRouteImport.update({
+  id: '/telesales/import',
+  path: '/telesales/import',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppTelesalesIdRoute = AppTelesalesIdRouteImport.update({
+  id: '/telesales/$id',
+  path: '/telesales/$id',
   getParentRoute: () => AppRoute,
 } as any)
 const AppOrdersNewRoute = AppOrdersNewRouteImport.update({
@@ -297,6 +327,7 @@ export interface FileRoutesByFullPath {
   '/api/cdr-sync': typeof ApiCdrSyncRoute
   '/api/csp-report': typeof ApiCspReportRoute
   '/api/shams-sync-run': typeof ApiShamsSyncRunRoute
+  '/api/telesales-generate': typeof ApiTelesalesGenerateRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
   '/admin/branches': typeof AppAdminBranchesRoute
@@ -316,11 +347,15 @@ export interface FileRoutesByFullPath {
   '/complaints/new': typeof AppComplaintsNewRoute
   '/orders/$id': typeof AppOrdersIdRoute
   '/orders/new': typeof AppOrdersNewRoute
+  '/telesales/$id': typeof AppTelesalesIdRoute
+  '/telesales/import': typeof AppTelesalesImportRoute
+  '/telesales/management': typeof AppTelesalesManagementRoute
   '/admin/': typeof AppAdminIndexRoute
   '/branches/': typeof AppBranchesIndexRoute
   '/calls/': typeof AppCallsIndexRoute
   '/complaints/': typeof AppComplaintsIndexRoute
   '/orders/': typeof AppOrdersIndexRoute
+  '/telesales/': typeof AppTelesalesIndexRoute
   '/api/public/cdr-progress/$jobId': typeof ApiPublicCdrProgressJobIdRoute
   '/lovable/email/auth/preview': typeof LovableEmailAuthPreviewRoute
   '/lovable/email/auth/webhook': typeof LovableEmailAuthWebhookRoute
@@ -342,6 +377,7 @@ export interface FileRoutesByTo {
   '/api/cdr-sync': typeof ApiCdrSyncRoute
   '/api/csp-report': typeof ApiCspReportRoute
   '/api/shams-sync-run': typeof ApiShamsSyncRunRoute
+  '/api/telesales-generate': typeof ApiTelesalesGenerateRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
   '/admin/branches': typeof AppAdminBranchesRoute
@@ -361,11 +397,15 @@ export interface FileRoutesByTo {
   '/complaints/new': typeof AppComplaintsNewRoute
   '/orders/$id': typeof AppOrdersIdRoute
   '/orders/new': typeof AppOrdersNewRoute
+  '/telesales/$id': typeof AppTelesalesIdRoute
+  '/telesales/import': typeof AppTelesalesImportRoute
+  '/telesales/management': typeof AppTelesalesManagementRoute
   '/admin': typeof AppAdminIndexRoute
   '/branches': typeof AppBranchesIndexRoute
   '/calls': typeof AppCallsIndexRoute
   '/complaints': typeof AppComplaintsIndexRoute
   '/orders': typeof AppOrdersIndexRoute
+  '/telesales': typeof AppTelesalesIndexRoute
   '/api/public/cdr-progress/$jobId': typeof ApiPublicCdrProgressJobIdRoute
   '/lovable/email/auth/preview': typeof LovableEmailAuthPreviewRoute
   '/lovable/email/auth/webhook': typeof LovableEmailAuthWebhookRoute
@@ -389,6 +429,7 @@ export interface FileRoutesById {
   '/api/cdr-sync': typeof ApiCdrSyncRoute
   '/api/csp-report': typeof ApiCspReportRoute
   '/api/shams-sync-run': typeof ApiShamsSyncRunRoute
+  '/api/telesales-generate': typeof ApiTelesalesGenerateRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
   '/_app/admin/branches': typeof AppAdminBranchesRoute
@@ -408,11 +449,15 @@ export interface FileRoutesById {
   '/_app/complaints/new': typeof AppComplaintsNewRoute
   '/_app/orders/$id': typeof AppOrdersIdRoute
   '/_app/orders/new': typeof AppOrdersNewRoute
+  '/_app/telesales/$id': typeof AppTelesalesIdRoute
+  '/_app/telesales/import': typeof AppTelesalesImportRoute
+  '/_app/telesales/management': typeof AppTelesalesManagementRoute
   '/_app/admin/': typeof AppAdminIndexRoute
   '/_app/branches/': typeof AppBranchesIndexRoute
   '/_app/calls/': typeof AppCallsIndexRoute
   '/_app/complaints/': typeof AppComplaintsIndexRoute
   '/_app/orders/': typeof AppOrdersIndexRoute
+  '/_app/telesales/': typeof AppTelesalesIndexRoute
   '/api/public/cdr-progress/$jobId': typeof ApiPublicCdrProgressJobIdRoute
   '/lovable/email/auth/preview': typeof LovableEmailAuthPreviewRoute
   '/lovable/email/auth/webhook': typeof LovableEmailAuthWebhookRoute
@@ -436,6 +481,7 @@ export interface FileRouteTypes {
     | '/api/cdr-sync'
     | '/api/csp-report'
     | '/api/shams-sync-run'
+    | '/api/telesales-generate'
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
     | '/admin/branches'
@@ -455,11 +501,15 @@ export interface FileRouteTypes {
     | '/complaints/new'
     | '/orders/$id'
     | '/orders/new'
+    | '/telesales/$id'
+    | '/telesales/import'
+    | '/telesales/management'
     | '/admin/'
     | '/branches/'
     | '/calls/'
     | '/complaints/'
     | '/orders/'
+    | '/telesales/'
     | '/api/public/cdr-progress/$jobId'
     | '/lovable/email/auth/preview'
     | '/lovable/email/auth/webhook'
@@ -481,6 +531,7 @@ export interface FileRouteTypes {
     | '/api/cdr-sync'
     | '/api/csp-report'
     | '/api/shams-sync-run'
+    | '/api/telesales-generate'
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
     | '/admin/branches'
@@ -500,11 +551,15 @@ export interface FileRouteTypes {
     | '/complaints/new'
     | '/orders/$id'
     | '/orders/new'
+    | '/telesales/$id'
+    | '/telesales/import'
+    | '/telesales/management'
     | '/admin'
     | '/branches'
     | '/calls'
     | '/complaints'
     | '/orders'
+    | '/telesales'
     | '/api/public/cdr-progress/$jobId'
     | '/lovable/email/auth/preview'
     | '/lovable/email/auth/webhook'
@@ -527,6 +582,7 @@ export interface FileRouteTypes {
     | '/api/cdr-sync'
     | '/api/csp-report'
     | '/api/shams-sync-run'
+    | '/api/telesales-generate'
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
     | '/_app/admin/branches'
@@ -546,11 +602,15 @@ export interface FileRouteTypes {
     | '/_app/complaints/new'
     | '/_app/orders/$id'
     | '/_app/orders/new'
+    | '/_app/telesales/$id'
+    | '/_app/telesales/import'
+    | '/_app/telesales/management'
     | '/_app/admin/'
     | '/_app/branches/'
     | '/_app/calls/'
     | '/_app/complaints/'
     | '/_app/orders/'
+    | '/_app/telesales/'
     | '/api/public/cdr-progress/$jobId'
     | '/lovable/email/auth/preview'
     | '/lovable/email/auth/webhook'
@@ -569,6 +629,7 @@ export interface RootRouteChildren {
   ApiCdrSyncRoute: typeof ApiCdrSyncRoute
   ApiCspReportRoute: typeof ApiCspReportRoute
   ApiShamsSyncRunRoute: typeof ApiShamsSyncRunRoute
+  ApiTelesalesGenerateRoute: typeof ApiTelesalesGenerateRoute
   DotlovableOauthConsentRoute: typeof DotlovableOauthConsentRoute
   Char91DotmcpChar93InvokeToolToolRoute: typeof Char91DotmcpChar93InvokeToolToolRoute
   ApiPublicCdrProgressJobIdRoute: typeof ApiPublicCdrProgressJobIdRoute
@@ -612,6 +673,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/telesales-generate': {
+      id: '/api/telesales-generate'
+      path: '/api/telesales-generate'
+      fullPath: '/api/telesales-generate'
+      preLoaderRoute: typeof ApiTelesalesGenerateRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/shams-sync-run': {
@@ -691,6 +759,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof Char91DotmcpChar93ListToolsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/telesales/': {
+      id: '/_app/telesales/'
+      path: '/telesales'
+      fullPath: '/telesales/'
+      preLoaderRoute: typeof AppTelesalesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/orders/': {
       id: '/_app/orders/'
       path: '/orders'
@@ -724,6 +799,27 @@ declare module '@tanstack/react-router' {
       path: '/admin'
       fullPath: '/admin/'
       preLoaderRoute: typeof AppAdminIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/telesales/management': {
+      id: '/_app/telesales/management'
+      path: '/telesales/management'
+      fullPath: '/telesales/management'
+      preLoaderRoute: typeof AppTelesalesManagementRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/telesales/import': {
+      id: '/_app/telesales/import'
+      path: '/telesales/import'
+      fullPath: '/telesales/import'
+      preLoaderRoute: typeof AppTelesalesImportRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/telesales/$id': {
+      id: '/_app/telesales/$id'
+      path: '/telesales/$id'
+      fullPath: '/telesales/$id'
+      preLoaderRoute: typeof AppTelesalesIdRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/orders/new': {
@@ -913,11 +1009,15 @@ interface AppRouteChildren {
   AppComplaintsNewRoute: typeof AppComplaintsNewRoute
   AppOrdersIdRoute: typeof AppOrdersIdRoute
   AppOrdersNewRoute: typeof AppOrdersNewRoute
+  AppTelesalesIdRoute: typeof AppTelesalesIdRoute
+  AppTelesalesImportRoute: typeof AppTelesalesImportRoute
+  AppTelesalesManagementRoute: typeof AppTelesalesManagementRoute
   AppAdminIndexRoute: typeof AppAdminIndexRoute
   AppBranchesIndexRoute: typeof AppBranchesIndexRoute
   AppCallsIndexRoute: typeof AppCallsIndexRoute
   AppComplaintsIndexRoute: typeof AppComplaintsIndexRoute
   AppOrdersIndexRoute: typeof AppOrdersIndexRoute
+  AppTelesalesIndexRoute: typeof AppTelesalesIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -943,11 +1043,15 @@ const AppRouteChildren: AppRouteChildren = {
   AppComplaintsNewRoute: AppComplaintsNewRoute,
   AppOrdersIdRoute: AppOrdersIdRoute,
   AppOrdersNewRoute: AppOrdersNewRoute,
+  AppTelesalesIdRoute: AppTelesalesIdRoute,
+  AppTelesalesImportRoute: AppTelesalesImportRoute,
+  AppTelesalesManagementRoute: AppTelesalesManagementRoute,
   AppAdminIndexRoute: AppAdminIndexRoute,
   AppBranchesIndexRoute: AppBranchesIndexRoute,
   AppCallsIndexRoute: AppCallsIndexRoute,
   AppComplaintsIndexRoute: AppComplaintsIndexRoute,
   AppOrdersIndexRoute: AppOrdersIndexRoute,
+  AppTelesalesIndexRoute: AppTelesalesIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
@@ -965,6 +1069,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiCdrSyncRoute: ApiCdrSyncRoute,
   ApiCspReportRoute: ApiCspReportRoute,
   ApiShamsSyncRunRoute: ApiShamsSyncRunRoute,
+  ApiTelesalesGenerateRoute: ApiTelesalesGenerateRoute,
   DotlovableOauthConsentRoute: DotlovableOauthConsentRoute,
   Char91DotmcpChar93InvokeToolToolRoute: Char91DotmcpChar93InvokeToolToolRoute,
   ApiPublicCdrProgressJobIdRoute: ApiPublicCdrProgressJobIdRoute,
