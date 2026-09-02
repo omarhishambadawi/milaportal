@@ -708,3 +708,71 @@ export function daysUntilRefill(rec: Recommendation, today: BusinessDate): numbe
   if (!rec.dueOn || !isBusinessDate(rec.dueOn)) return null;
   return daysBetween(today, rec.dueOn);
 }
+
+/* ------------------------------------------------------------------------- */
+/* Resolving a lead's refill cycle                                           */
+/* ------------------------------------------------------------------------- */
+
+/** Collapse whitespace and upper-case, so two spellings of one name match. */
+function normalizeProductName(name: string | null | undefined): string {
+  return String(name ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+}
+
+/**
+ * Which refill cycle applies to each item code a lead might carry.
+ *
+ * Keyed by code, because that is what a lead has. The interesting part is the
+ * fallback.
+ *
+ * ### Why a name fallback exists
+ *
+ * The retention workbook uses **two code systems for the same medicines**. Of
+ * 745 imported rows, 654 carry the pharmacy's eight-digit catalogue codes and
+ * 88 carry a five- or six-digit number for products the catalogue already
+ * holds — sixteen distinct codes all naming `MOUNJARO KWIKPEN 5 MG`, for
+ * instance. The import stored what the file said, correctly; the consequence
+ * landed here, where a code that is not in `telesales_products` has no refill
+ * cycle, so 88 live leads could never be judged for a refill at all.
+ *
+ * So when a code is unknown, the product's **name** is consulted. Whole-string
+ * and normalised only for whitespace and case — the same conservative compare
+ * the invoice reconciler uses, and for the same reason: `MOUNJARO KWIKPEN 5 MG`
+ * and `MOUNJARO KWIKPEN 15MG` are different medicines, and a prefix or fuzzy
+ * match would silently equate them.
+ *
+ * An exact code match always wins; the name is only ever a fallback.
+ *
+ * `telesales_lead_lifecycle` resolves the cycle the same way, so the queue and
+ * this engine cannot disagree about which leads have one.
+ */
+export function buildCycleIndex(
+  products: readonly { itemCode: string; itemName: string | null; refillDays: number | null }[],
+  leads: readonly { itemCode: string | null; itemName: string | null }[],
+): Map<string, RefillCycle> {
+  const byCode = new Map<string, RefillCycle>();
+  const byName = new Map<string, RefillCycle>();
+
+  for (const p of products) {
+    const code = p.itemCode?.trim();
+    if (!code) continue;
+    const cycle: RefillCycle = { itemCode: code, refillDays: p.refillDays };
+    byCode.set(code, cycle);
+
+    const name = normalizeProductName(p.itemName);
+    // First catalogue row wins a name, so a duplicate name cannot make the
+    // fallback depend on row order.
+    if (name && !byName.has(name)) byName.set(name, cycle);
+  }
+
+  for (const lead of leads) {
+    const code = lead.itemCode?.trim();
+    if (!code || byCode.has(code)) continue;
+    const match = byName.get(normalizeProductName(lead.itemName));
+    if (match) byCode.set(code, { itemCode: code, refillDays: match.refillDays });
+  }
+
+  return byCode;
+}

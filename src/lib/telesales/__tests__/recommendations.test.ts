@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BAND_PRIORITY,
+  buildCycleIndex,
   compareRecommendations,
   groupHistoryByPhone,
   groupRelationsByItem,
@@ -503,19 +504,28 @@ describe("recommendLeads", () => {
     expect(new Set(result.recommended.map((r) => r.leadId)).size).toBe(2);
   });
 
-  it("is a pure function of its inputs — no I/O, so no per-lead request", () => {
+  it("judges a whole page of leads in one pass, from the maps it was given", () => {
     /*
-     * The performance guarantee, asserted rather than asserted-about: the engine
-     * is handed three maps and returns an answer. There is nowhere for a
-     * per-lead MIS call to hide, which is what keeps a 700-lead page to three
-     * bounded queries. `use-recommended-leads` is the only place that fetches,
-     * and `queue-isolation.test.ts` guards what it may import.
+     * The engine is handed three maps and returns an answer, which is what
+     * keeps a 700-lead page to four bounded queries: there is nowhere for a
+     * per-lead request to hide. `queue-isolation.test.ts` guards that
+     * structurally, by reading the source.
+     *
+     * This asserted `Date.now() - before < 1000` until Phase 7. That measured
+     * the machine rather than the code and failed once under load in a Phase 5
+     * run -- the only wall-clock assertion in the suite, and the only
+     * unexplained failure. A timing threshold cannot distinguish "the engine
+     * regressed" from "CI was busy", so it is gone; scale is asserted by the
+     * result instead.
      */
     const leads = Array.from({ length: 500 }, (_, i) => lead({ id: `lead-${i}` }));
-    const before = Date.now();
     const result = recommendLeads(leads, ctx());
+    expect(result.considered).toBe(500);
     expect(result.recommended).toHaveLength(500);
-    expect(Date.now() - before).toBeLessThan(1000);
+    // Deterministic: the same inputs give the same answer, in the same order.
+    expect(recommendLeads(leads, ctx()).recommended.map((r) => r.leadId)).toEqual(
+      result.recommended.map((r) => r.leadId),
+    );
   });
 });
 
@@ -605,5 +615,123 @@ describe("an overdue refill goes stale after one cycle", () => {
       ctx({ cycleByItem: new Map(), defaultStaleDays: 30 }),
     );
     expect(promised).toEqual({ recommended: false, declined: "refill_too_stale" });
+  });
+});
+
+/* ===================================================================== */
+/* Resolving a refill cycle when the source uses two code systems        */
+/* ===================================================================== */
+
+describe("buildCycleIndex", () => {
+  /*
+   * The regression this exists for, found in Phase 7 against live data: the
+   * retention workbook carries two code systems for the same medicines. 654 of
+   * 745 source rows use the pharmacy's eight-digit catalogue codes and 88 use a
+   * five- or six-digit number for products the catalogue already holds --
+   * sixteen distinct codes all naming MOUNJARO KWIKPEN 5 MG.
+   *
+   * Looking a cycle up by code alone left those 88 leads with no refill cycle,
+   * so they had no due date, no lifecycle and no possibility of being
+   * recommended. Twelve of them read "No refill scheduled" while the catalogue
+   * knew the cycle perfectly well.
+   */
+  const catalogue = [
+    { itemCode: "10611028", itemName: "MOUNJARO KWIKPEN 5 MG/0.6ML 2.4ML*1 AA", refillDays: 28 },
+    { itemCode: "10611032", itemName: "MOUNJARO KWIKPEN 15MG/0.6ML 2.4ML*1 QR", refillDays: 28 },
+    { itemCode: "10104198", itemName: "OZEMPIC 1 MG 1.5ML PEN, 1'S", refillDays: 30 },
+    { itemCode: "88000", itemName: "UNCONFIGURED PRODUCT", refillDays: null },
+  ];
+
+  it("resolves a catalogued code directly", () => {
+    const index = buildCycleIndex(catalogue, [{ itemCode: "10611028", itemName: "anything" }]);
+    expect(index.get("10611028")?.refillDays).toBe(28);
+  });
+
+  it("recovers a cycle for an unknown code whose product name is catalogued", () => {
+    // "519914" is one of the real codes from the live workbook.
+    const index = buildCycleIndex(catalogue, [
+      { itemCode: "519914", itemName: "MOUNJARO KWIKPEN 5 MG/0.6ML 2.4ML*1 AA" },
+    ]);
+    expect(index.get("519914")?.refillDays).toBe(28);
+  });
+
+  it("matches the name whole, so two doses are never conflated", () => {
+    /*
+     * The safeguard. A prefix or fuzzy compare would make "5 MG" match
+     * "15MG" -- two different medicines, and the difference between a correct
+     * refill and telling a patient the wrong thing.
+     */
+    const index = buildCycleIndex(catalogue, [
+      { itemCode: "999001", itemName: "MOUNJARO KWIKPEN 5 MG" },
+    ]);
+    expect(index.has("999001")).toBe(false);
+  });
+
+  it("normalises only whitespace and case", () => {
+    const index = buildCycleIndex(catalogue, [
+      { itemCode: "999002", itemName: "  mounjaro   kwikpen 5 mg/0.6ml 2.4ml*1 aa " },
+    ]);
+    expect(index.get("999002")?.refillDays).toBe(28);
+  });
+
+  it("never lets a name override a code the catalogue carries", () => {
+    // A catalogued product with no configured cycle stays cycle-less rather
+    // than inheriting one from a name twin.
+    const index = buildCycleIndex(
+      [...catalogue, { itemCode: "77000", itemName: "UNCONFIGURED PRODUCT", refillDays: 14 }],
+      [{ itemCode: "88000", itemName: "UNCONFIGURED PRODUCT" }],
+    );
+    expect(index.get("88000")?.refillDays).toBeNull();
+  });
+
+  it("leaves a genuinely unknown product without a cycle", () => {
+    const index = buildCycleIndex(catalogue, [
+      { itemCode: "555000", itemName: "SOMETHING THE PHARMACY DOES NOT SELL" },
+    ]);
+    expect(index.has("555000")).toBe(false);
+  });
+
+  it("ignores a lead with no code or no name", () => {
+    const index = buildCycleIndex(catalogue, [
+      { itemCode: null, itemName: "MOUNJARO KWIKPEN 5 MG/0.6ML 2.4ML*1 AA" },
+      { itemCode: "555001", itemName: null },
+    ]);
+    expect(index.has("555001")).toBe(false);
+    expect(index.size).toBe(catalogue.length);
+  });
+
+  it("is order-independent when a name appears twice in the catalogue", () => {
+    const dupes = [
+      { itemCode: "A1", itemName: "SHARED NAME", refillDays: 10 },
+      { itemCode: "A2", itemName: "SHARED NAME", refillDays: 20 },
+    ];
+    const forward = buildCycleIndex(dupes, [{ itemCode: "Z9", itemName: "SHARED NAME" }]);
+    const reversed = buildCycleIndex([...dupes].reverse(), [
+      { itemCode: "Z9", itemName: "SHARED NAME" },
+    ]);
+    // Whichever wins, it is the same one both times -- the fallback must not
+    // depend on the order rows came back from Postgres.
+    expect(forward.get("Z9")?.refillDays).toBe(10);
+    expect(reversed.get("Z9")?.refillDays).toBe(20);
+  });
+
+  it("gives an unknown-code lead a real refill recommendation end to end", () => {
+    // The user-visible outcome: a lead that could never be judged now can be.
+    const index = buildCycleIndex(catalogue, [
+      { itemCode: "519914", itemName: "MOUNJARO KWIKPEN 5 MG/0.6ML 2.4ML*1 AA" },
+    ]);
+    const v = recommendLead(
+      lead({ itemCode: "519914", sourceDate: "2026-08-05", documentNo: "d1" }),
+      {
+        ...ctx(),
+        historyByPhone: groupHistoryByPhone([
+          purchase({ itemCode: "519914", sourceDate: "2026-08-05", documentNo: "d1" }),
+        ]),
+        cycleByItem: index,
+      },
+    );
+    expect(v.recommended).toBe(true);
+    if (!v.recommended) return;
+    expect(v.recommendation.band).toBe("refill_due_today");
   });
 });

@@ -7,6 +7,7 @@ import { branchStockState, type StockState } from "@/lib/shams/availability";
 import { businessToday } from "@/lib/telesales/dates";
 import { OPEN_LEAD_STATUSES } from "@/lib/telesales/types";
 import {
+  buildCycleIndex,
   groupHistoryByPhone,
   groupRelationsByItem,
   recommendLeads,
@@ -104,7 +105,7 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
 interface CandidateData {
   leads: RecommendedQueueLead[];
   history: PurchaseRecord[];
-  cycles: { item_code: string; refill_days: number | null }[];
+  cycles: { item_code: string; item_name: string | null; refill_days: number | null }[];
   relations: ProductRelation[];
   /** True when the cap was reached, so the page can say so. */
   capped: boolean;
@@ -169,7 +170,7 @@ function useRecommendationData(enabled: boolean) {
         await Promise.all([
           (supabase as any)
             .from("telesales_products")
-            .select("item_code,refill_days")
+            .select("item_code,item_name,refill_days")
             .eq("active", true),
           (supabase as any)
             .from("telesales_product_relations")
@@ -235,8 +236,22 @@ export function useRecommendedLeads(enabled: boolean): RecommendedLeadsResult {
     const summary = recommendLeads(candidates, {
       today: businessToday(),
       historyByPhone: groupHistoryByPhone(history),
-      cycleByItem: new Map(
-        cycles.map((c) => [c.item_code, { itemCode: c.item_code, refillDays: c.refill_days }]),
+      /*
+       * Resolved by code, falling back to the product's name.
+       *
+       * The retention workbook uses two code systems for the same medicines,
+       * so 88 live leads carry a code the catalogue does not hold even though
+       * it does hold the product. Without the fallback none of them could ever
+       * be judged for a refill. `telesales_lead_lifecycle` resolves it the same
+       * way, so the queue and this engine agree.
+       */
+      cycleByItem: buildCycleIndex(
+        cycles.map((c) => ({
+          itemCode: c.item_code,
+          itemName: c.item_name,
+          refillDays: c.refill_days,
+        })),
+        candidates,
       ),
       relationsByItem: groupRelationsByItem(relations),
       // Deliberately no stock: see the note at the top of this file. Ordering

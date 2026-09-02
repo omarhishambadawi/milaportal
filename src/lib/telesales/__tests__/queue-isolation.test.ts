@@ -399,3 +399,77 @@ describe("cross-sell configuration is gated and cheap", () => {
     }
   });
 });
+
+describe("the queue and the engine resolve a refill cycle the same way", () => {
+  /*
+   * Phase 7 found the source workbook using two code systems for the same
+   * medicines, which left 88 leads with no refill cycle. Both the view and the
+   * engine were fixed, and they have to stay fixed together: a lead that is
+   * stale on the queue and cycle-less in Recommended Leads is precisely the
+   * disagreement the lifecycle view exists to prevent.
+   */
+
+  it("the engine falls back from code to product name", () => {
+    const text = source("lib/telesales/recommendations.ts");
+    expect(text).toContain("buildCycleIndex");
+    // Whole-name compare, normalised for whitespace and case only.
+    expect(text).toContain("normalizeProductName");
+    expect(text).toMatch(/byCode\.has\(code\)/);
+  });
+
+  it("the view falls back the same way, and prefers the code", () => {
+    const sql = readFileSync(
+      join(
+        ROOT,
+        "..",
+        "supabase",
+        "migrations",
+        "20260908120000_telesales_lifecycle_cycle_resolution.sql",
+      ),
+      "utf8",
+    );
+    // Two joins: by code, then by normalised name.
+    expect(sql).toMatch(/pc\.item_code = l\.item_code/);
+    expect(sql).toMatch(/regexp_replace\(pn\.item_name/);
+    // The code match wins whenever it matched at all, so a catalogued product
+    // with no cycle cannot inherit one from a name twin.
+    expect(sql).toMatch(/CASE WHEN pc\.item_code IS NOT NULL THEN pc\.refill_days/);
+    // Both sides filter inactive products, as the engine does.
+    expect(sql).toMatch(/pc\.active/);
+    expect(sql).toMatch(/pn\.active/);
+  });
+
+  it("the recommendation read passes its leads to the resolver", () => {
+    // Without the leads, the fallback has nothing to resolve against.
+    const text = source("features/telesales/hooks/use-recommended-leads.ts");
+    expect(text).toMatch(/buildCycleIndex\([\s\S]{0,300}candidates,/);
+    expect(text).toContain("item_code,item_name,refill_days");
+  });
+});
+
+describe("the suite does not assert on wall-clock time", () => {
+  /*
+   * A timing threshold in a unit test measures the machine, not the code. One
+   * such assertion (`Date.now() - before < 1000` over 500 leads) was the only
+   * unexplained failure in the project's history -- it failed once, under load,
+   * in a Phase 5 run and could not be reproduced. It cannot distinguish a
+   * genuine regression from a busy CI box, so it was removed and this keeps it
+   * from coming back.
+   */
+  it("no test measures elapsed milliseconds and asserts a bound", () => {
+    const files = [
+      "lib/telesales/__tests__/recommendations.test.ts",
+      "lib/telesales/__tests__/lifecycle.test.ts",
+      "lib/telesales/__tests__/relations.test.ts",
+      "lib/telesales/__tests__/manage-bulk.test.ts",
+      "lib/telesales/__tests__/reconciliation.test.ts",
+    ];
+    for (const file of files) {
+      const text = source(file);
+      expect(text, `${file} must not assert on elapsed time`).not.toMatch(
+        /expect\(\s*Date\.now\(\)\s*-/,
+      );
+      expect(text).not.toMatch(/performance\.now\(\)/);
+    }
+  });
+});

@@ -169,7 +169,14 @@ export function useTelesalesQueue(
   });
 }
 
-/** The branch codes that currently have leads, for the filter dropdown. */
+/**
+ * The branch codes that currently have leads, for the filter dropdown.
+ *
+ * Archived leads are excluded, matching every working view of the queue.
+ * Without that, a branch whose only leads had been archived stayed in the
+ * dropdown and selecting it returned an empty queue -- a filter that looks
+ * broken rather than one that is simply empty.
+ */
 export function useTelesalesBranches(enabled: boolean) {
   return useQuery<string[]>({
     queryKey: [...queryKeys.telesales.all(), "branch-options"],
@@ -180,6 +187,7 @@ export function useTelesalesBranches(enabled: boolean) {
         .from("telesales_leads")
         .select("branch_no")
         .not("branch_no", "is", null)
+        .is("archived_at", null)
         .in("status", OPEN_LEAD_STATUSES)
         .limit(5000);
       if (error) throw new Error(error.message);

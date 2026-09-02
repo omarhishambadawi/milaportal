@@ -8034,6 +8034,140 @@ user._
 
 ---
 
+### End-to-end QA
+
+A pass over the whole module rather than any one feature: baseline the live
+data, walk each workflow across the seams between phases, and fix what that
+turns up. Two real defects, one flaky test, one data-quality finding for the
+business.
+
+#### Production baseline
+
+Measured read-only on 2 September 2026, and reproducible from
+`telesales_lead_lifecycle`:
+
+|                                         |                          |
+| --------------------------------------- | ------------------------ |
+| leads (all retention, one import)       | 712                      |
+| open / archived                         | 712 / 0                  |
+| active · stale · no cycle               | 208 · 501 · 3            |
+| assigned / unassigned                   | 9 / 703                  |
+| customers · source records · activities | 656 · 745 · 733          |
+| open follow-ups                         | 242                      |
+| invoice verdicts                        | 7 matched, 705 unchecked |
+| configured cross-sells                  | 0 active, 0 inactive     |
+
+#### Defect 1 — two code systems, 88 leads with no refill cycle
+
+**Symptom.** 88 of 712 leads referenced an `item_code` absent from
+`telesales_products`, so they had no refill cycle, no projected due date, and no
+possibility of ever being recommended. Twelve read "No refill scheduled".
+
+**Root cause.** Not an import bug — the workbook itself carries them. The raw
+row reads `"Itm_Cd": "519914"` for `MOUNJARO KWIKPEN 5 MG`. The retention source
+uses **two code systems for the same medicines**: 654 rows with the pharmacy's
+eight-digit catalogue codes and 88 with a five- or six-digit number, sixteen
+distinct codes naming that one product. 112 distinct codes cover 23 distinct
+product names. The import stored the file faithfully; the consequence landed in
+the cycle lookup, which keyed on code alone.
+
+**Fix.** `buildCycleIndex` resolves by code and falls back to an exact product
+name — whole-string, normalised for whitespace and case only, the same
+conservative compare the invoice reconciler uses so that `5 MG` and `15MG` are
+never equated. `telesales_lead_lifecycle` resolves identically, so the queue and
+Recommended Leads cannot disagree.
+
+Measured before applying: 76 of the 88 do not move (an agreed callback already
+decided their due date), 12 move `none → active`, and **none becomes stale**.
+Recommendations rose 114 → 126; "no refill basis" fell 12 → 2.
+
+**Regression tests.** Ten, including the whole-name safeguard, catalogue-code
+precedence over a name twin, and a live-shaped `519914` case end to end.
+
+#### Defect 2 — branch filter offered empty options
+
+Archived leads were excluded from every queue view but not from the branch
+dropdown, so a branch whose leads had all been archived stayed selectable and
+returned nothing. One clause.
+
+#### Defect 3 — a test that measured the machine
+
+`recommendations.test.ts` asserted that 500 leads process in under 1000 ms of
+wall clock. It failed once, under load, in a Phase 5 run and could not be
+reproduced in seven attempts; it was the only wall-clock assertion in the suite
+and the only unexplained failure in the project. A timing threshold cannot tell
+a regression from a busy machine, so it was replaced with a determinism
+assertion, and a guard now refuses new ones.
+
+#### Also corrected
+
+The lifecycle view joined `telesales_products` without an `active` filter while
+the engine loads cycles with `active = true`. No product is inactive today, so
+nothing had diverged — but deactivating one would have made a lead stale on the
+queue and cycle-less in the engine. Both joins now filter `active`.
+
+#### Data integrity
+
+Fourteen checks against live data. Zero duplicate customers by normalised phone,
+zero non-canonical phone values, zero orphaned leads, source records, activities
+or follow-ups, zero leads with more than one open follow-up, zero invalid
+reconciliation verdicts, zero self-referencing relations.
+
+The one anomaly was Defect 1, and the residue is left alone deliberately: the
+source file's duplicate coding is the pharmacy's to correct, and adding 88 rows
+to `telesales_products` would mean inventing refill cycles nobody has decided.
+
+#### Security
+
+`anon` holds **no grant on any Telesales object**. Every table has RLS enabled
+with a SELECT policy and **no write policy at all**, so writes are refused for
+`authenticated` regardless of grants; every mutation goes through a server
+function that resolves the actor first.
+
+Attempted rather than assumed:
+
+| attempt                                                   | result                        |
+| --------------------------------------------------------- | ----------------------------- |
+| `anon` INSERT into `telesales_product_relations`          | refused at the grant          |
+| `authenticated` INSERT into `telesales_product_relations` | refused at the grant          |
+| `anon` SELECT from `telesales_lead_lifecycle`             | refused at the base table     |
+| `authenticated` UPDATE assigning a lead directly          | zero rows; baseline unchanged |
+
+The last one is worth stating precisely: with RLS on and no UPDATE policy,
+Postgres matches zero rows rather than raising, so the write silently does
+nothing. Assignment counts were re-checked afterwards and were identical.
+
+#### Performance
+
+The lifecycle view's cycle resolution was written three ways before it was
+right. A single scan with an `OR`, and a ranked `LATERAL`, both re-examined the
+catalogue per lead: 35–37 ms against 712 leads, from a 4.6 ms baseline. Two
+plain LEFT JOINs hash the 28-row catalogue once each and land at **15 ms** while
+doing strictly more work than the original. An index created for the name
+fallback was measured as unused — Postgres correctly prefers a sequential scan
+of a single-page table — and dropped again.
+
+The purchase lookup remains an index-only scan with zero heap fetches. No MIS
+request is made by the queue or by Recommended Leads; both are guarded
+structurally by `queue-isolation.test.ts`, which now also pins that the view and
+the engine resolve cycles the same way.
+
+#### Known limitations
+
+- **Live Shams MIS was not exercised.** This machine has no MIS credentials, so
+  every MIS claim here rests on the code path and its tests, not on a call to
+  production. That is an environment limitation, not evidence about the
+  integration, which is in daily use at `/shams`.
+- The recommendation engine still matches _purchases_ by item code, so the same
+  medicine bought under two codes reads as two products. That hides a repeat
+  purchase for **13 customers** (37 repeat pairs exist by name against 27 by
+  code). Left alone deliberately: unlike the cycle lookup, changing purchase
+  matching alters the "previously purchased" band for every lead, which is a
+  behavioural change rather than a defect fix. The source file is the better
+  place to fix it.
+
+---
+
 ### Access model
 
 Reads are RLS-bounded and go straight from the browser; every write is a
