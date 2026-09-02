@@ -1,5 +1,5 @@
 import { businessToday, type BusinessDate } from "./dates";
-import { toE164 } from "./dedup";
+import { toSaudiPhone } from "@/lib/phone";
 import { applyOutcome, canActOnLead, canRecordOutcome, type ActorContext } from "./status";
 import { OUTCOME_BY_KEY } from "./types";
 
@@ -459,28 +459,28 @@ export async function setPatientPhone(
     notes?: string | null;
     actor: ActorIdentity;
   },
-): Promise<{ phoneE164: string; leadsUpdated: number }> {
+): Promise<{ phone: string; leadsUpdated: number }> {
   if (!input.actor.canWork && !input.actor.canManage) {
     throw new Error("You do not have permission to record a phone number.");
   }
-  const phoneE164 = toE164(input.phone);
-  if (!phoneE164) {
+  const phone = toSaudiPhone(input.phone);
+  if (!phone) {
     throw new Error("That is not a usable Saudi mobile number.");
   }
 
   const now = new Date().toISOString();
   const { data: existing } = await supabase
     .from("telesales_patient_contacts")
-    .select("id,phone_e164")
+    .select("id,phone")
     .eq("patient_id", input.patientId)
     .is("superseded_at", null)
     .maybeSingle();
 
-  const previous = (existing as { id: string; phone_e164: string } | null) ?? null;
-  if (previous?.phone_e164 === phoneE164) {
+  const previous = (existing as { id: string; phone: string } | null) ?? null;
+  if (previous?.phone === phone) {
     // Nothing changed. Recording an identical number as a correction would put a
     // meaningless entry on every lead for that patient.
-    return { phoneE164, leadsUpdated: 0 };
+    return { phone, leadsUpdated: 0 };
   }
 
   if (previous) {
@@ -492,7 +492,7 @@ export async function setPatientPhone(
 
   const { error } = await supabase.from("telesales_patient_contacts").insert({
     patient_id: input.patientId,
-    phone_e164: phoneE164,
+    phone: phone,
     phone_raw: input.phone,
     source: "agent",
     prescription_no: input.prescriptionNo ?? null,
@@ -504,7 +504,7 @@ export async function setPatientPhone(
   // Back-fill the open leads for this patient.
   const { data: touched } = await supabase
     .from("telesales_leads")
-    .update({ phone_e164: phoneE164 })
+    .update({ phone: phone })
     .eq("patient_id", input.patientId)
     .in("status", ["new", "assigned", "in_progress", "follow_up"])
     .select("id");
@@ -528,7 +528,7 @@ export async function setPatientPhone(
     );
   }
 
-  return { phoneE164, leadsUpdated: leadIds.length };
+  return { phone, leadsUpdated: leadIds.length };
 }
 
 /** Today, in the business timezone. Re-exported so callers do not each import

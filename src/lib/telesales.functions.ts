@@ -305,7 +305,21 @@ const SourceRecordSchema = z.object({
   customerRef: z.string().max(120).nullable(),
   customerName: z.string().max(300).nullable(),
   phoneRaw: z.string().max(64).nullable(),
-  phoneE164: z.string().max(32).nullable(),
+  /*
+   * The canonical number, validated here as well as in `src/lib/phone.ts`.
+   *
+   * The browser parses the workbook and posts the rows, so this schema is the
+   * trust boundary: a client that sent `+966…` — an older tab, a replayed
+   * request, a future integration — would otherwise write a second format into
+   * a column the whole module assumes is canonical. The pattern is the same one
+   * the database CHECK enforces, so all three agree.
+   */
+  phone: z
+    .string()
+    .regex(/^05[03-9]\d{7}$/, "Expected a canonical Saudi mobile number (05XXXXXXXX)")
+    .nullable(),
+  phoneRejection: z.string().max(64).nullable(),
+  phoneAlternates: z.array(z.string().regex(/^05[03-9]\d{7}$/)).max(10),
   branchNo: z.string().max(64).nullable(),
   city: z.string().max(120).nullable(),
   facility: z.string().max(300).nullable(),

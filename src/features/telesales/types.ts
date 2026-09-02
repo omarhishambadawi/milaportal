@@ -19,7 +19,7 @@ export interface QueueLead {
   last_outcome: string | null;
   assigned_to: string | null;
   customer_name: string | null;
-  phone_e164: string | null;
+  phone: string | null;
   branch_no: string | null;
   city: string | null;
   item_name: string | null;
@@ -30,6 +30,10 @@ export interface QueueLead {
   document_no: string | null;
   source_date: string | null;
   next_followup_on: string | null;
+  /** Other numbers found on the source row — a second number in the cell, or
+   *  one an agent wrote into the note column. Never used as the customer’s
+   *  number without somebody choosing it. */
+  phone_alternates: string[] | null;
   contact_attempts: number;
   cycle_number: number;
   total_value: number | null;
@@ -91,7 +95,7 @@ export interface Followup {
 export interface PatientContact {
   id: string;
   patient_id: string;
-  phone_e164: string;
+  phone: string;
   source: string;
   prescription_no: string | null;
   added_by: string | null;

@@ -1,4 +1,5 @@
-import { contentHash, toE164 } from "./dedup";
+import { PHONE_REJECTION_LABELS, extractSaudiPhones, normalizeSaudiPhone } from "@/lib/phone";
+import { contentHash } from "./dedup";
 import { inferDayFirst, parseSheetDate, type DateOrder } from "./dates";
 import type { ImportIssue, ParsedWorkbook, SourceRecordInput, SourceType } from "./types";
 import { workbookDigest } from "./dedup";
@@ -477,12 +478,64 @@ export function parseSheet(grid: Grid, options: ParseOptions = {}): ParsedWorkbo
         ? sourceDate
         : parseSheetDate(cell(row, columns, "fillDate"), dateOrder);
 
-    const phoneE164 = toE164(phoneRaw);
-    if (phoneRaw && !phoneE164) {
+    /*
+     * The phone, normalised at the point of entry.
+     *
+     * One call to the one implementation. Everything downstream — the lead, the
+     * queue, the deduplication key, the agent's screen — sees the canonical
+     * `05XXXXXXXX` and never the twelve ways the workbooks write it.
+     *
+     * A cell that cannot become a number is *not* a reason to reject the row:
+     * 88,096 of the July extract's rows have no usable number and the desk
+     * worked them anyway. The value is kept in `phoneRaw`, the reason is
+     * recorded, and the row goes through with `phone: null`.
+     */
+    const phoneResult = normalizeSaudiPhone(phoneRaw);
+    // `extractSaudiPhones` also handles a cell holding more than one number,
+    // which `normalizeSaudiPhone` correctly refuses as a single value.
+    const phoneCell = phoneRaw ? extractSaudiPhones(phoneRaw) : null;
+    const phone = phoneResult.phone ?? phoneCell?.phone ?? null;
+    if (phoneRaw && !phone) {
       issues.count("unusable_phone");
       issues.add(
         "unusable_phone",
-        "Phone cell is present but is not a usable Saudi mobile number",
+        `Phone cell is present but unusable (${PHONE_REJECTION_LABELS[phoneResult.rejection ?? "no_digits"]})`,
+        rowNumber,
+      );
+    } else if (phone && !phoneResult.wasCanonical) {
+      // Not a problem — a count, so the operator can see how much of the file
+      // was rewritten and satisfy themselves that it was rewritten correctly.
+      issues.count("phone_normalized");
+      issues.add("phone_normalized", "Phone number normalised to 05XXXXXXXX", rowNumber);
+    }
+
+    /*
+     * Numbers hiding in the note column.
+     *
+     * Checked against the real files rather than assumed: no phone *cell* in any
+     * of the three workbooks holds two numbers, but the notes hold 448 — 167 of
+     * them on the four per-city Wasfaty sheets, which have no phone column at
+     * all, and 281 more on `Wasfaty Aug`, which does.
+     *
+     * They are collected as alternates and never promoted. The Retention sheet
+     * has exactly one and it is the argument against promoting them:
+     * `0509736898 رقم زوجه العميل اللي تستخدم الابر` — the customer's *wife's*
+     * number. An agent decides; the importer only stops the number being lost.
+     */
+    const noteText = text(cell(row, columns, "notes"));
+    const fromNote = noteText ? extractSaudiPhones(noteText) : null;
+    const alternates: string[] = [];
+    for (const candidate of [
+      ...(phoneCell?.alternates ?? []),
+      ...(fromNote?.phone ? [fromNote.phone, ...fromNote.alternates] : []),
+    ]) {
+      if (candidate !== phone && !alternates.includes(candidate)) alternates.push(candidate);
+    }
+    if (alternates.length > 0) {
+      issues.count("phone_alternates");
+      issues.add(
+        "phone_alternates",
+        "Another phone number appears on this row (kept, not used as the customer's number)",
         rowNumber,
       );
     }
@@ -492,7 +545,7 @@ export function parseSheet(grid: Grid, options: ParseOptions = {}): ParsedWorkbo
     const hash = contentHash([
       sourceType,
       text(cell(row, columns, "customerRef")),
-      phoneE164 ?? phoneRaw,
+      phone ?? phoneRaw,
       itemCode ?? itemName,
       branchNo,
       sourceDate,
@@ -522,7 +575,9 @@ export function parseSheet(grid: Grid, options: ParseOptions = {}): ParsedWorkbo
       customerRef: text(cell(row, columns, "customerRef")),
       customerName,
       phoneRaw,
-      phoneE164,
+      phone,
+      phoneRejection: phone ? null : (phoneResult.rejection ?? null),
+      phoneAlternates: alternates,
       branchNo,
       city: text(cell(row, columns, "city")),
       facility: text(cell(row, columns, "facility")),

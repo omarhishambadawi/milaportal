@@ -75,7 +75,11 @@ describe("layout 1 — the raw Cash extract", () => {
     const [first] = parsed.records;
     expect(first.customerRef).toBe("509226");
     expect(first.customerName).toBe("MOHAMED");
-    expect(first.phoneE164).toBe("+966535323292");
+    // Canonical on the way in: the CRM's one phone format, from a cell that
+    // said `0535323292`. `phoneRaw` keeps what the cell actually held.
+    expect(first.phone).toBe("0535323292");
+    expect(first.phoneRaw).toBe("0535323292");
+    expect(first.phoneRejection).toBeNull();
     expect(first.branchNo).toBe("P0001");
     expect(first.documentNo).toBe("188767");
     expect(first.sourceDate).toBe("2026-07-21");
@@ -306,7 +310,7 @@ describe("layout 4 — the current Wasfaty shape", () => {
 
   it("records a missing phone without complaining about it", () => {
     const parsed = parseSheet(grid);
-    expect(parsed.records[0].phoneE164).toBeNull();
+    expect(parsed.records[0].phone).toBeNull();
     // No `unusable_phone` issue: the cell is empty, which is the normal case.
     expect(parsed.issues.some((i) => i.code === "unusable_phone")).toBe(false);
   });
@@ -452,7 +456,7 @@ describe("what the parser refuses", () => {
     ]);
     // The row is kept — it is a real lead — and the phone is reported.
     expect(parsed.records).toHaveLength(1);
-    expect(parsed.records[0].phoneE164).toBeNull();
+    expect(parsed.records[0].phone).toBeNull();
     expect(parsed.issues.find((i) => i.code === "unusable_phone")?.rows).toEqual([2]);
   });
 });

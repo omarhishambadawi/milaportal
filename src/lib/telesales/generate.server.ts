@@ -131,7 +131,8 @@ export async function loadCatalog(supabase: any): Promise<ProductCatalog> {
 /* ------------------------------------------------------------------------- */
 
 const SOURCE_COLUMNS =
-  "id,source_type,row_number,content_hash,customer_ref,customer_name,phone_raw,phone_e164," +
+  "id,source_type,row_number,content_hash,customer_ref,customer_name,phone_raw,phone," +
+  "phone_rejection,phone_alternates," +
   "branch_no,city,facility,item_code,item_name,quantity,unit_price,total_value," +
   "source_date,fill_date,dispense_time,callback_date,document_no,channel,patient_id,prescription_no";
 
@@ -144,7 +145,9 @@ function toSourceRecord(row: any): SourceRecordInput & { id: string } {
     customerRef: row.customer_ref,
     customerName: row.customer_name,
     phoneRaw: row.phone_raw,
-    phoneE164: row.phone_e164,
+    phone: row.phone,
+    phoneRejection: row.phone_rejection ?? null,
+    phoneAlternates: row.phone_alternates ?? [],
     branchNo: row.branch_no,
     city: row.city,
     facility: row.facility,
@@ -216,12 +219,12 @@ async function fetchKnownPhones(supabase: any): Promise<Map<string, string>> {
   for (let page = 0; ; page++) {
     const { data, error } = await supabase
       .from("telesales_patient_contacts")
-      .select("patient_id,phone_e164")
+      .select("patient_id,phone")
       .is("superseded_at", null)
       .range(page * READ_PAGE, page * READ_PAGE + READ_PAGE - 1);
     if (error) break;
-    const rows = (data as { patient_id: string; phone_e164: string }[]) ?? [];
-    for (const r of rows) map.set(r.patient_id, r.phone_e164);
+    const rows = (data as { patient_id: string; phone: string }[]) ?? [];
+    for (const r of rows) map.set(r.patient_id, r.phone);
     if (rows.length < READ_PAGE) break;
   }
   return map;
@@ -248,7 +251,7 @@ async function fetchRetentionCandidates(
     .from("telesales_followups")
     .select(
       "due_on,lead_id," +
-        "telesales_leads!inner(id,lead_type,cycle_number,customer_ref,customer_name,phone_e164," +
+        "telesales_leads!inner(id,lead_type,cycle_number,customer_ref,customer_name,phone," +
         "branch_no,city,channel,item_code,item_name,product_family,product_strength,status)",
     )
     .eq("status", "scheduled")
@@ -285,7 +288,7 @@ async function fetchRetentionCandidates(
       cycleNumber: lead.cycle_number ?? 1,
       customerRef: lead.customer_ref,
       customerName: lead.customer_name,
-      phoneE164: lead.phone_e164,
+      phone: lead.phone,
       branchNo: lead.branch_no,
       city: lead.city,
       channel: lead.channel,
@@ -315,7 +318,8 @@ function draftToRow(draft: LeadDraft, runId: string | null) {
     status: "new",
     customer_ref: draft.customerRef,
     customer_name: draft.customerName,
-    phone_e164: draft.phoneE164,
+    phone: draft.phone,
+    phone_alternates: draft.phoneAlternates,
     branch_no: draft.branchNo,
     city: draft.city,
     facility: draft.facility,

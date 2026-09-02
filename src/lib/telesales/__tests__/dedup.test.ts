@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  contentHash,
-  dedupKeyForRetention,
-  dedupKeyForSource,
-  normalizePhone,
-  toE164,
-  workbookDigest,
-} from "../dedup";
+import { contentHash, dedupKeyForRetention, dedupKeyForSource, workbookDigest } from "../dedup";
+import { toSaudiPhone } from "@/lib/phone";
 import type { SourceRecordInput } from "../types";
 
 function cashRow(over: Partial<SourceRecordInput> = {}): SourceRecordInput {
@@ -17,7 +11,9 @@ function cashRow(over: Partial<SourceRecordInput> = {}): SourceRecordInput {
     customerRef: "509226",
     customerName: "MOHAMED",
     phoneRaw: "0535323292",
-    phoneE164: "+966535323292",
+    phone: "0535323292",
+    phoneRejection: null,
+    phoneAlternates: [],
     branchNo: "P0001",
     city: null,
     facility: null,
@@ -58,47 +54,12 @@ function wasfatyRow(over: Partial<SourceRecordInput> = {}): SourceRecordInput {
   };
 }
 
-describe("phone normalisation", () => {
-  it("reduces every spelling the extracts contain to one comparable form", () => {
-    expect(normalizePhone("0535323292")).toBe("535323292");
-    expect(normalizePhone("535323292")).toBe("535323292");
-    expect(normalizePhone("+966535323292")).toBe("535323292");
-    expect(normalizePhone("966535323292")).toBe("535323292");
-    expect(normalizePhone("966 53 532 3292")).toBe("535323292");
-  });
-
-  it("refuses the placeholders that stand in for a refusal", () => {
-    // All three are real values in the July working sheets, on rows whose name
-    // reads REFUSED TO GET MOBILE NUMBER.
-    expect(normalizePhone("0")).toBe("");
-    expect(normalizePhone("0000")).toBe("");
-    expect(normalizePhone("m")).toBe("");
-    expect(normalizePhone(null)).toBe("");
-    expect(normalizePhone("")).toBe("");
-  });
-
-  it("accepts the Wasfaty numbers as they are actually stored", () => {
-    /*
-     * `9.66555E+11` is what the Wasfaty Phone column *displays* in a narrow
-     * column. The stored value is the full-precision integer 966555389897, and
-     * the importer reads stored values rather than rendered ones — which is why
-     * 1,178 real numbers in `Wasfaty Aug` are usable instead of discarded.
-     */
-    expect(normalizePhone(966555389897)).toBe("555389897");
-    expect(normalizePhone("966555389897")).toBe("555389897");
-  });
-
-  it("refuses the rendered form, which has no digits left to recover", () => {
-    // Should a display string ever reach this — a pasted cell, a CSV export —
-    // there is nothing in it to dial, so it is refused rather than guessed at.
-    expect(normalizePhone("9.66555E+11")).toBe("");
-  });
-
-  it("formats a usable number as E.164 and an unusable one as null", () => {
-    expect(toE164("0535323292")).toBe("+966535323292");
-    expect(toE164("0")).toBeNull();
-  });
-});
+/*
+ * Phone normalisation itself is tested in `src/lib/__tests__/phone.test.ts`.
+ * This file tests what the *keys* do with the result, which is a different
+ * question — and duplicating the format table here is exactly the drift the
+ * single implementation was introduced to prevent.
+ */
 
 describe("the Cash key", () => {
   it("separates two products on one invoice", () => {
@@ -150,7 +111,7 @@ describe("the Cash key", () => {
       cashRow({
         customerRef: "69732",
         phoneRaw: "0508626771",
-        phoneE164: "+966508626771",
+        phone: "0508626771",
         branchNo: "P0202",
         sourceDate: "2026-07-30",
         documentNo: "271460",
@@ -161,7 +122,7 @@ describe("the Cash key", () => {
       cashRow({
         customerRef: "69732",
         phoneRaw: "0508626771",
-        phoneE164: "+966508626771",
+        phone: "0508626771",
         branchNo: "P0202",
         sourceDate: "2026-07-30",
         documentNo: "271474",
@@ -177,7 +138,7 @@ describe("the Cash key", () => {
       customerRef: "437745",
       customerName: "REFUSED TO GET MOBILE NUMBER",
       phoneRaw: "0000",
-      phoneE164: null,
+      phone: null,
       branchNo: "P0027",
       sourceDate: "2026-07-31",
       itemCode: "10611028",
@@ -200,7 +161,7 @@ describe("the Cash key", () => {
     const anon = {
       customerRef: "437745",
       phoneRaw: "0000",
-      phoneE164: null,
+      phone: null,
       documentNo: "86954",
     };
     expect(dedupKeyForSource("cash", cashRow({ ...anon, rowNumber: 12, contentHash: "a" }))).toBe(
@@ -211,14 +172,14 @@ describe("the Cash key", () => {
   it("does not merge two customers who both refused a number", () => {
     const a = dedupKeyForSource(
       "cash",
-      cashRow({ customerRef: "437745", phoneRaw: "0", phoneE164: null, customerName: "REFUSED" }),
+      cashRow({ customerRef: "437745", phoneRaw: "0", phone: null, customerName: "REFUSED" }),
     );
     const b = dedupKeyForSource(
       "cash",
       cashRow({
         customerRef: "509226",
         phoneRaw: "0000",
-        phoneE164: null,
+        phone: null,
         customerName: "REFUSED",
       }),
     );
@@ -234,7 +195,7 @@ describe("the Cash key", () => {
 
     const byName = dedupKeyForSource(
       "cash",
-      cashRow({ customerRef: null, phoneRaw: "0", phoneE164: null, customerName: "OM HOUR" }),
+      cashRow({ customerRef: null, phoneRaw: "0", phone: null, customerName: "OM HOUR" }),
     );
     expect(byName).toContain("om hour");
   });

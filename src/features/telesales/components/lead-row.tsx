@@ -54,7 +54,7 @@ export function LeadRow({
   claiming,
 }: LeadRowProps) {
   const due = describeDue(lead.next_followup_on, today);
-  const tel = telHref(lead.phone_e164);
+  const tel = telHref(lead.phone);
 
   const identity =
     lead.lead_type === "wasfaty"
@@ -131,10 +131,10 @@ export function LeadRow({
       {/* Actions */}
       <div className="flex items-center justify-end gap-1 sm:col-span-2">
         {tel ? (
-          <Button asChild size="sm" variant="ghost" title={formatPhone(lead.phone_e164)}>
+          <Button asChild size="sm" variant="ghost" title={formatPhone(lead.phone)}>
             <a href={tel}>
               <Phone className="h-4 w-4" />
-              <span className="sr-only">Call {formatPhone(lead.phone_e164)}</span>
+              <span className="sr-only">Call {formatPhone(lead.phone)}</span>
             </a>
           </Button>
         ) : (

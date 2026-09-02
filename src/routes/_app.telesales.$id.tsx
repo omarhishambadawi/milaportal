@@ -18,6 +18,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
 import { fmtSAR } from "@/lib/branches";
+import { PHONE_REJECTION_LABELS, normalizeSaudiPhone, toSaudiPhone } from "@/lib/phone";
 import { hasPerm } from "@/lib/permissions";
 import { BUSINESS_TIMEZONE } from "@/lib/timezone";
 import { cn } from "@/lib/utils";
@@ -150,7 +151,7 @@ function LeadDetailPage() {
   const canAct = canWork && (canManage || isMine || !l.assigned_to);
   const openFollowup = (followups.data ?? []).find((f) => f.status === "scheduled");
   const due = describeDue(openFollowup?.due_on ?? null, today);
-  const tel = telHref(l.phone_e164);
+  const tel = telHref(l.phone);
 
   return (
     <div className="space-y-4">
@@ -240,7 +241,7 @@ function LeadDetailPage() {
                 {tel ? (
                   <a href={tel} className="inline-flex items-center gap-1.5 hover:underline">
                     <Phone className="h-3.5 w-3.5" />
-                    {formatPhone(l.phone_e164)}
+                    {formatPhone(l.phone)}
                   </a>
                 ) : (
                   <span className="inline-flex items-center gap-1.5 text-muted-foreground">
@@ -285,7 +286,7 @@ function LeadDetailPage() {
              * assumed — this is that manual lookup, recorded once, so the next
              * prescription for this patient arrives dialable.
              */}
-            {l.lead_type === "wasfaty" && !l.phone_e164 && canWork ? (
+            {l.lead_type === "wasfaty" && !l.phone && canWork ? (
               <div className="rounded-md border border-dashed border-border p-3">
                 <p className="text-sm font-medium">Add the phone number</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
@@ -304,11 +305,30 @@ function LeadDetailPage() {
                       inputMode="tel"
                       placeholder="05XXXXXXXX"
                       onChange={(e) => setPhone(e.target.value)}
+                      /*
+                       * Normalise on blur, so the agent sees what will be stored
+                       * before they commit to it. Pasting `+966 50 463 0565`
+                       * from the Wasfaty portal leaves `0504630565` in the box.
+                       *
+                       * Cosmetic only — the server normalises again and is the
+                       * source of truth. This exists so the agent is never
+                       * surprised by what the CRM saved.
+                       */
+                      onBlur={() => setPhone((v) => toSaudiPhone(v) ?? v)}
                     />
+                    {phone.trim() && !toSaudiPhone(phone) ? (
+                      <p className="text-[11px] text-destructive">
+                        {
+                          PHONE_REJECTION_LABELS[
+                            normalizeSaudiPhone(phone).rejection ?? "no_digits"
+                          ]
+                        }
+                      </p>
+                    ) : null}
                   </div>
                   <Button
                     size="sm"
-                    disabled={!phone.trim() || !l.patient_id || mutations.setPhone.isPending}
+                    disabled={!toSaudiPhone(phone) || !l.patient_id || mutations.setPhone.isPending}
                     onClick={() =>
                       mutations.setPhone.mutate(
                         {
@@ -327,6 +347,59 @@ function LeadDetailPage() {
               </div>
             ) : null}
 
+            {/*
+             * Numbers the source row carried but that are not the customer's.
+             *
+             * 448 of these exist across the three workbooks — mostly on the four
+             * per-city Wasfaty sheets, which have no phone column at all, so
+             * agents wrote the number into the note. Before this they were
+             * discarded on import.
+             *
+             * They are shown, never adopted. The Retention sheet's single
+             * example is a customer's wife's number, so "found on the row" and
+             * "is the customer" are different claims and only a person can turn
+             * the first into the second.
+             */}
+            {(l.phone_alternates ?? []).length > 0 ? (
+              <div className="rounded-md border border-dashed border-border p-3">
+                <p className="text-sm font-medium">
+                  Other number{(l.phone_alternates ?? []).length === 1 ? "" : "s"} on the source row
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Found in the imported file, not confirmed as this customer&apos;s number.
+                </p>
+                <ul className="mt-2 space-y-1.5">
+                  {(l.phone_alternates ?? []).map((alt) => (
+                    <li key={alt} className="flex flex-wrap items-center gap-2">
+                      <a
+                        href={telHref(alt) ?? undefined}
+                        className="font-mono text-sm hover:underline"
+                      >
+                        {formatPhone(alt)}
+                      </a>
+                      {canWork && l.patient_id ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={mutations.setPhone.isPending}
+                          onClick={() =>
+                            mutations.setPhone.mutate({
+                              patientId: l.patient_id!,
+                              phone: alt,
+                              leadId: l.id,
+                              prescriptionNo: l.prescription_no,
+                            })
+                          }
+                        >
+                          Use as the number
+                        </Button>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
             {(contacts.data ?? []).length > 1 ? (
               <div className="rounded-md border border-border p-3">
                 <p className="text-xs font-medium">Number history for this patient</p>
@@ -334,7 +407,7 @@ function LeadDetailPage() {
                   {(contacts.data ?? []).map((c) => (
                     <li key={c.id} className="flex flex-wrap items-center gap-2">
                       <span className={cn("font-mono", c.superseded_at && "line-through")}>
-                        {formatPhone(c.phone_e164)}
+                        {formatPhone(c.phone)}
                       </span>
                       <span>· {c.source === "agent" ? "found by an agent" : "from the file"}</span>
                       <span>· {ts(c.added_at)}</span>

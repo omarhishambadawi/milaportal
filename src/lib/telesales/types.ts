@@ -314,8 +314,21 @@ export interface SourceRecordInput {
   contentHash: string;
   customerRef: string | null;
   customerName: string | null;
+  /** The cell exactly as it arrived. Audit only — never the customer's number. */
   phoneRaw: string | null;
-  phoneE164: string | null;
+  /** The canonical Saudi mobile number — `05XXXXXXXX` — or null when the cell
+   *  held nothing dialable. This is the CRM's phone value; `phoneRaw` is only
+   *  ever evidence. */
+  phone: string | null;
+  /** Why `phone` is null, so the import summary can group the reasons rather
+   *  than reporting one undifferentiated count. A `PhoneRejection` from
+   *  `src/lib/phone.ts`. */
+  phoneRejection: string | null;
+  /** Further canonical numbers found on the row — a second number in the cell,
+   *  or one an agent wrote into the note column. Never promoted to `phone`
+   *  automatically: the Retention sheet's one example is a customer's wife's
+   *  number. See `extractSaudiPhones`. */
+  phoneAlternates: string[];
   branchNo: string | null;
   city: string | null;
   facility: string | null;
@@ -355,6 +368,8 @@ export interface ImportIssue {
     | "missing_product"
     | "duplicate_row"
     | "unusable_phone"
+    | "phone_normalized"
+    | "phone_alternates"
     | "empty_row";
   message: string;
   /** 1-based sheet row. */

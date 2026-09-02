@@ -79,7 +79,9 @@ function row(over: Partial<SourceRecordInput> = {}): SourceRecordInput & { id: s
     customerRef: "509226",
     customerName: "MOHAMED",
     phoneRaw: "0535323292",
-    phoneE164: "+966535323292",
+    phone: "0535323292",
+    phoneRejection: null,
+    phoneAlternates: [],
     branchNo: "P0001",
     city: null,
     facility: null,
@@ -181,14 +183,14 @@ describe("Cash generation — eligibility", () => {
         row({
           customerName: "REFUSED TO GET MOBILE NUMBER",
           phoneRaw: "0",
-          phoneE164: null,
+          phone: null,
         }),
       ],
       catalog,
       DEFAULT_SETTINGS,
     );
     expect(result.drafts).toHaveLength(1);
-    expect(result.drafts[0].phoneE164).toBeNull();
+    expect(result.drafts[0].phone).toBeNull();
     // Ranked below a lead that can be dialled right now.
     expect(result.drafts[0].priority).toBe(0);
   });
@@ -196,7 +198,7 @@ describe("Cash generation — eligibility", () => {
   it("drops a row that identifies nobody at all", () => {
     const result = generateCashLeads(
       "2026-08-01",
-      [row({ customerRef: null, customerName: null, phoneE164: null, phoneRaw: null })],
+      [row({ customerRef: null, customerName: null, phone: null, phoneRaw: null })],
       catalog,
       DEFAULT_SETTINGS,
     );
@@ -273,7 +275,7 @@ function wasfaty(over: Partial<SourceRecordInput> = {}): SourceRecordInput & { i
     channel: null,
     patientId: "1001385382",
     prescriptionNo: "j8952992",
-    phoneE164: null,
+    phone: null,
     phoneRaw: null,
     sourceDate: "2026-09-01",
     ...over,
@@ -312,7 +314,7 @@ describe("Wasfaty generation", () => {
     // 2,774 of 3,952 rows in the August sheet have no phone.
     const result = generateWasfatyLeads("2026-09-01", [wasfaty()], DEFAULT_SETTINGS);
     expect(result.drafts).toHaveLength(1);
-    expect(result.drafts[0].phoneE164).toBeNull();
+    expect(result.drafts[0].phone).toBeNull();
     expect(result.drafts[0].patientId).toBe("1001385382");
     expect(result.drafts[0].prescriptionNo).toBe("j8952992");
   });
@@ -320,7 +322,7 @@ describe("Wasfaty generation", () => {
   it("reuses a number a colleague already looked up for that patient", () => {
     const known = new Map([["1001385382", "+966505551234"]]);
     const result = generateWasfatyLeads("2026-09-01", [wasfaty()], DEFAULT_SETTINGS, known);
-    expect(result.drafts[0].phoneE164).toBe("+966505551234");
+    expect(result.drafts[0].phone).toBe("+966505551234");
     // And it outranks a lead that still needs the portal lookup.
     expect(result.drafts[0].priority).toBeGreaterThan(
       generateWasfatyLeads("2026-09-01", [wasfaty()], DEFAULT_SETTINGS).drafts[0].priority,
@@ -376,7 +378,7 @@ function candidate(over: Partial<RetentionCandidate> = {}): RetentionCandidate {
     cycleNumber: 1,
     customerRef: "509226",
     customerName: "MOHAMED",
-    phoneE164: "+966535323292",
+    phone: "+966535323292",
     branchNo: "P0001",
     city: null,
     channel: "CASH IN BOX",

@@ -1,3 +1,4 @@
+import { phoneKeyPart, toSaudiPhone } from "@/lib/phone";
 import type { LeadType, SourceRecordInput } from "./types";
 
 /**
@@ -35,37 +36,21 @@ function norm(value: string | number | null | undefined): string {
 }
 
 /**
- * Saudi mobile numbers, reduced to a comparable form.
+ * The phone component of a key.
  *
- * The extracts carry `0535323292`, `535323292`, `9.66555E+11` (Excel having
- * decided a phone number was a float) and `0`. This keeps digits only, strips a
- * `966` country prefix and a leading `0`, and returns `""` for anything that
- * cannot be a subscriber number — which then makes the caller fall back to a
- * different discriminator rather than keying thousands of leads on the empty
- * string.
+ * There is no phone logic in this file. `src/lib/phone.ts` is the one
+ * implementation — normalising `0535323292`, `535323292`, `+966 53 532 3292`
+ * and `٠٥٣٥٣٢٣٢٩٢` to the canonical `0535323292` — and `phoneKeyPart` returns
+ * its subscriber digits for comparison.
  *
- * `REFUSED TO GET MOBILE NUMBER` rows carry `0`, `0000` or `m`, all of which
- * land here as `""`. They are real leads with no number, and they must not
- * collapse into one another.
+ * It returns `""` for anything that is not a usable Saudi mobile, which is what
+ * makes the callers below fall back to a different discriminator rather than
+ * keying thousands of leads on the empty string. `REFUSED TO GET MOBILE NUMBER`
+ * rows carry `0`, `0000` or `m`; all three land here as `""`, and they are real
+ * leads that must not collapse into one another.
  */
-export function normalizePhone(value: string | number | null | undefined): string {
-  if (value == null) return "";
-  let digits = String(value).replace(/\D+/g, "");
-  if (!digits) return "";
-  if (digits.startsWith("966")) digits = digits.slice(3);
-  digits = digits.replace(/^0+/, "");
-  // A Saudi mobile is 9 digits beginning 5. Anything shorter is a placeholder,
-  // anything much longer is Excel's scientific notation having lost precision.
-  if (digits.length < 9 || digits.length > 12) return "";
-  return digits;
-}
-
-/** `+9665XXXXXXXX`, or null. The stored form; `normalizePhone` is the compared
- *  form. Separate because a display number and a key have different jobs. */
-export function toE164(value: string | number | null | undefined): string | null {
-  const digits = normalizePhone(value);
-  if (!digits) return null;
-  return `+966${digits}`;
+function phoneKey(value: string | number | null | undefined): string {
+  return phoneKeyPart(toSaudiPhone(value));
 }
 
 /**
@@ -119,7 +104,7 @@ export function toE164(value: string | number | null | undefined): string | null
  * ring, which is a great deal cheaper than silently collapsing 83,634 rows.
  */
 function cashKey(record: SourceRecordInput): string {
-  const phone = normalizePhone(record.phoneE164 ?? record.phoneRaw);
+  const phone = phoneKey(record.phone ?? record.phoneRaw);
   if (phone) {
     return [
       "cash",
@@ -218,7 +203,7 @@ function retentionKey(input: {
 }): string {
   const cycle = `c${Math.max(1, Math.trunc(input.cycleNumber))}`;
   const product = norm(input.itemCode) || norm(input.itemName);
-  const phone = normalizePhone(input.phone);
+  const phone = phoneKey(input.phone);
   if (phone) return ["retention", phone, product, cycle].join("|");
 
   return [

@@ -69,18 +69,16 @@ export const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 export const DEFAULT_PAGE_SIZE = 50;
 
 /**
- * How a phone number is shown.
+ * How a phone number is shown, and how it is dialled.
  *
- * `+966 53 532 3292`. Grouped because an agent reads it aloud while dialling,
- * and a 13-character run of digits is the shape people misread.
+ * Both re-exported from `src/lib/phone.ts` rather than reimplemented here. This
+ * file used to carry its own `+966 53 532 3292` grouping, which was a second
+ * format for the desk to reconcile against the one in the database — precisely
+ * the drift the canonical format exists to end. The screen now shows exactly
+ * what is stored: `0535323292`.
+ *
+ * `telHref` still emits E.164, because a `tel:` URI is a protocol value rather
+ * than a stored one and `+966…` is what dials correctly from a softphone or a
+ * roaming handset.
  */
-export function formatPhone(e164: string | null | undefined): string {
-  if (!e164) return "—";
-  const m = /^\+966(\d{2})(\d{3})(\d{4})$/.exec(e164);
-  return m ? `+966 ${m[1]} ${m[2]} ${m[3]}` : e164;
-}
-
-/** `tel:` href, or null when there is nothing to dial. */
-export function telHref(e164: string | null | undefined): string | null {
-  return e164 ? `tel:${e164}` : null;
-}
+export { formatSaudiPhone as formatPhone, telHref } from "@/lib/phone";

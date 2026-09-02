@@ -45,7 +45,8 @@ export interface LeadDraft {
 
   customerRef: string | null;
   customerName: string | null;
-  phoneE164: string | null;
+  phone: string | null;
+  phoneAlternates: string[];
   branchNo: string | null;
   city: string | null;
   facility: string | null;
@@ -143,7 +144,7 @@ export function generateCashLeads(
       continue;
     }
 
-    if (!record.customerRef && !record.phoneE164 && !record.customerName) {
+    if (!record.customerRef && !record.phone && !record.customerName) {
       skipped.no_contact_identity++;
       continue;
     }
@@ -156,12 +157,13 @@ export function generateCashLeads(
       cycleNumber: 1,
       priority: computePriority({
         leadType: "cash",
-        hasPhone: Boolean(record.phoneE164),
+        hasPhone: Boolean(record.phone),
         followupOverdue: false,
       }),
       customerRef: record.customerRef,
       customerName: record.customerName,
-      phoneE164: record.phoneE164,
+      phone: record.phone,
+      phoneAlternates: record.phoneAlternates ?? [],
       branchNo: record.branchNo,
       city: record.city,
       facility: record.facility,
@@ -242,7 +244,7 @@ export function generateWasfatyLeads(
     }
 
     const phone =
-      record.phoneE164 ?? (record.patientId ? (knownPhones.get(record.patientId) ?? null) : null);
+      record.phone ?? (record.patientId ? (knownPhones.get(record.patientId) ?? null) : null);
 
     drafts.push({
       leadType: "wasfaty",
@@ -257,7 +259,8 @@ export function generateWasfatyLeads(
       }),
       customerRef: record.patientId,
       customerName: record.customerName,
-      phoneE164: phone,
+      phone: phone,
+      phoneAlternates: record.phoneAlternates ?? [],
       branchNo: record.branchNo,
       city: record.city,
       facility: record.facility,
@@ -291,7 +294,7 @@ export interface RetentionCandidate {
   cycleNumber: number;
   customerRef: string | null;
   customerName: string | null;
-  phoneE164: string | null;
+  phone: string | null;
   branchNo: string | null;
   city: string | null;
   channel: string | null;
@@ -359,7 +362,7 @@ export function generateRetentionLeads(
       continue;
     }
 
-    if (!candidate.customerRef && !candidate.phoneE164 && !candidate.customerName) {
+    if (!candidate.customerRef && !candidate.phone && !candidate.customerName) {
       skipped.no_contact_identity++;
       continue;
     }
@@ -369,7 +372,7 @@ export function generateRetentionLeads(
       leadType: "retention",
       dedupKey: dedupKeyForRetention({
         customerRef: candidate.customerRef,
-        phone: candidate.phoneE164,
+        phone: candidate.phone,
         customerName: candidate.customerName,
         itemCode: candidate.itemCode,
         itemName: candidate.itemName,
@@ -380,13 +383,14 @@ export function generateRetentionLeads(
       cycleNumber,
       priority: computePriority({
         leadType: "retention",
-        hasPhone: Boolean(candidate.phoneE164),
+        hasPhone: Boolean(candidate.phone),
         // A cycle raised on a past due date is already late by construction.
         followupOverdue: candidate.dueOn !== anchor,
       }),
       customerRef: candidate.customerRef,
       customerName: candidate.customerName,
-      phoneE164: candidate.phoneE164,
+      phone: candidate.phone,
+      phoneAlternates: [],
       branchNo: candidate.branchNo,
       city: candidate.city,
       facility: null,
@@ -438,7 +442,7 @@ export function generateRetentionBacklog(
       skipped.ineligible_product++;
       continue;
     }
-    if (!record.customerRef && !record.phoneE164 && !record.customerName) {
+    if (!record.customerRef && !record.phone && !record.customerName) {
       skipped.no_contact_identity++;
       continue;
     }
@@ -447,7 +451,7 @@ export function generateRetentionBacklog(
       leadType: "retention",
       dedupKey: dedupKeyForRetention({
         customerRef: record.customerRef,
-        phone: record.phoneE164 ?? record.phoneRaw,
+        phone: record.phone ?? record.phoneRaw,
         customerName: record.customerName,
         itemCode: record.itemCode,
         itemName: record.itemName,
@@ -461,12 +465,13 @@ export function generateRetentionBacklog(
       cycleNumber: 1,
       priority: computePriority({
         leadType: "retention",
-        hasPhone: Boolean(record.phoneE164),
+        hasPhone: Boolean(record.phone),
         followupOverdue: Boolean(record.callbackDate),
       }),
       customerRef: record.customerRef,
       customerName: record.customerName,
-      phoneE164: record.phoneE164,
+      phone: record.phone,
+      phoneAlternates: record.phoneAlternates ?? [],
       branchNo: record.branchNo,
       city: record.city,
       facility: null,

@@ -19,9 +19,10 @@ import type { QueueFilters, QueueLead } from "@/features/telesales/types";
  */
 
 const QUEUE_COLUMNS =
-  "id,lead_type,status,priority,last_outcome,assigned_to,customer_name,phone_e164," +
+  "id,lead_type,status,priority,last_outcome,assigned_to,customer_name,phone," +
   "branch_no,city,item_name,product_family,product_strength,patient_id,prescription_no," +
-  "document_no,source_date,next_followup_on,contact_attempts,cycle_number,total_value,created_at";
+  "document_no,source_date,next_followup_on,contact_attempts,cycle_number,total_value," +
+  "phone_alternates,created_at";
 
 export interface QueuePage {
   rows: QueueLead[];
@@ -103,7 +104,7 @@ export function useTelesalesQueue(
         q = q.or(
           [
             `customer_name.ilike.${t}`,
-            `phone_e164.ilike.${t}`,
+            `phone.ilike.${t}`,
             `patient_id.ilike.${t}`,
             `prescription_no.ilike.${t}`,
             `document_no.ilike.${t}`,

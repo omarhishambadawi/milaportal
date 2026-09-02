@@ -6979,6 +6979,124 @@ Serials carry no timezone and no locale. The same change also recovered the
 Wasfaty phone column, whose `9.66555E+11` is a narrow-column _display_ artifact
 over the full-precision integer `966555389897`.
 
+### Phone numbers: one canonical format
+
+`src/lib/phone.ts` is the single implementation, and everything calls it — both
+importers, the retention backlog, lead generation, patient contacts, the agent's
+input box and the deduplication key. The canonical stored form is the Saudi
+national format:
+
+```
+0504630565
+```
+
+Ten digits, leading zero, no separators, no country code. It is at `src/lib/`
+rather than `src/lib/telesales/` because nothing about it is telesales-specific.
+
+**Accepted inputs.** `504630565`, `0504630565`, `966504630565`, `+966504630565`,
+`00966504630565`, and any of those with spaces, commas, hyphens, dots or
+parentheses; Excel numeric cells (`504630565` as a float, `966555389897` as a
+full-precision integer); and Arabic-Indic digits in both blocks — U+0660–0669
+(`٠٥٠٤٦٣٠٥٦٥`) and U+06F0–06F9 (`۰۵۰۴۶۳۰۵۶۵`).
+
+**The validation rule is `^05[03-9]\d{7}$`,** and the character class is the
+point. Prefix frequencies across the three workbooks:
+
+| prefix | rows   |     | prefix  | rows              |
+| ------ | ------ | --- | ------- | ----------------- |
+| 050    | 24,359 |     | 059     | 4,399             |
+| 055    | 22,940 |     | 058     | 1,649             |
+| 053    | 13,039 |     | 057     | 1,627             |
+| 056    | 10,365 |     | **051** | **251 — refused** |
+| 054    | 10,146 |     | **052** | **3 — refused**   |
+
+`057` is accepted because the data proves it is in live use. `051`/`052` are not
+assigned to Saudi mobile, and 254 rows against 88,524 — in a distribution where
+every assigned prefix appears more than a thousand times — is a typo rate, not a
+prefix. Guessing a correction would dial somebody else.
+
+**Three shapes are refused before punctuation is stripped**, because stripping
+would make each of them look valid:
+
+- `9.66555E+11` — Excel's _rendered_ scientific notation. `Number()` of it is
+  966555000000: well-formed, dialable and wrong. Refused as
+  `scientific_notation`. (The importer reads stored values, so this should never
+  arrive; it is refused in case it does.)
+- `0.540277778` — a real value in the `Jeddah` note column, an Excel time serial
+  for 12:58. Its punctuation stripped is `0540277778`, which satisfies every
+  other rule in the file.
+- `0046727259080` — a Swedish number, refused as `foreign` rather than mangled
+  into a Saudi one. A short `00`/`0000` is a placeholder, not a country code, so
+  the foreign branch requires ten digits.
+
+**Nothing is ever invented.** A value that cannot be normalised yields
+`phone = NULL`, a `PhoneRejection` reason, and `phone_raw` preserving what the
+cell held. `0000`, `0`, `m`, `11111`, `1234`, item codes (`10103514`), invoice
+numbers, patient ids and prescription numbers all refuse. An import is never
+failed for it — 88,096 of the July extract's rows have no usable number and the
+desk works them anyway.
+
+**Deduplication** consumes the canonical value through `phoneKeyPart`, which
+returns the subscriber digits. Every notation above collapses to one key, so
+`+966504630565` and `504630565` are one customer.
+
+**Storage.** `phone` holds the canonical value on `telesales_source_records`,
+`telesales_leads` and `telesales_patient_contacts`; `phone_raw` holds the
+original and is never the CRM's phone value. A `CHECK` constraint enforces the
+format at the database, the Zod schema enforces it at the import boundary, and
+`src/lib/phone.ts` enforces it in the application — three layers that agree, so
+a future write path cannot quietly reintroduce `+966…`.
+
+**Display** is the canonical form itself, unchanged. The module previously
+rendered `+966 53 532 3292`, which was a second format for the desk to reconcile
+against the one in the database. `tel:` links still emit E.164, because a URI is
+a protocol value rather than a stored one. The agent's input normalises on blur
+so nobody is surprised by what was saved; the server normalises again and is the
+source of truth.
+
+### Numbers that are on the row but are not the customer's
+
+`phone_alternates text[]` on source records and leads. No phone _cell_ in any of
+the three workbooks holds two numbers — that was measured. The **note** columns
+hold 448, and they were previously discarded on import:
+
+| sheet                         | numbers in notes | has a phone column |
+| ----------------------------- | ---------------- | ------------------ |
+| `Wasfaty Aug`                 | 281              | yes                |
+| `Taif`                        | 117              | **no**             |
+| `Riyadh \| Al-Kharj \| Rafha` | 21               | **no**             |
+| `Jeddah`                      | 20               | **no**             |
+| `Al Qassim`                   | 9                | **no**             |
+| `Retention`                   | 1                | yes                |
+
+The four per-city sheets have no phone column at all, so agents wrote the number
+into the note. Those are now recovered — 408 of them survive parsing — and shown
+on the lead with a "Use as the number" button.
+
+They are **never** promoted automatically. The Retention sheet's single example
+is the argument: `0509736898 رقم زوجه العميل اللي تستخدم الابر` — the customer's
+_wife's_ number. "A number appears on this row" and "this is the customer's
+number" are different claims, and only a person can turn the first into the
+second.
+
+### What the canonical change did to the existing rules
+
+Measured over every phone cell in all eight sheets:
+
+|                                    |        |
+| ---------------------------------- | ------ |
+| Identical subscriber, new notation | 86,926 |
+| Newly refused                      | 482    |
+| Newly accepted                     | 0      |
+
+The 482 are values the previous rule turned into well-formed E.164 numbers that
+nobody could dial: 269 `not_mobile` (051/052, Riyadh landlines, stray 025/028/091
+prefixes), 212 `too_long` (`05591675252` and similar), and the one Swedish
+number. That is 0.55% of the total, and every one of them is now reported against
+its row number instead of being silently dialled.
+
+---
+
 ### Access model
 
 Reads are RLS-bounded and go straight from the browser; every write is a
