@@ -35,6 +35,12 @@ export interface QueueLead {
    *  number without somebody choosing it. */
   phone_alternates: string[] | null;
   contact_attempts: number;
+  /** Who last recorded a *call*. Not the owner: a lead can be assigned to one
+   *  agent and last dialled by another, and the queue shows both. */
+  last_contacted_by: string | null;
+  last_contacted_at: string | null;
+  /** The consolidated customer identity, keyed on the canonical phone. */
+  customer_id: string | null;
   cycle_number: number;
   total_value: number | null;
   created_at: string;
@@ -42,6 +48,8 @@ export interface QueueLead {
 
 /** The lead detail page's read — every column, plus its history. */
 export interface LeadDetail extends QueueLead {
+  archived_at: string | null;
+  archive_reason: string | null;
   source_record_id: string | null;
   generation_run_id: string | null;
   parent_lead_id: string | null;

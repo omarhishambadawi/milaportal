@@ -68,6 +68,10 @@ export const AUDIT_ACTIONS = {
   telesalesProductChanged: "telesales.product_eligibility_changed",
   /** The Retention workbook backlog was seeded into the CRM. */
   telesalesBacklogSeeded: "telesales.retention_backlog_seeded",
+  /** A source import was archived, taking its leads out of the queue. */
+  telesalesImportArchived: "telesales.import_archived",
+  /** An archived import was restored. */
+  telesalesImportRestored: "telesales.import_restored",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

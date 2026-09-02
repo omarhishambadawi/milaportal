@@ -9,7 +9,7 @@ import {
   outcomeFromLegacyAction,
   proposeFollowup,
 } from "../status";
-import { OUTCOMES, outcomesForLeadType } from "../types";
+import { CONTACT_ACTIVITY_TYPES, OUTCOMES, isContactActivity, outcomesForLeadType } from "../types";
 
 describe("outcomes", () => {
   it("moves the lead where the outcome says", () => {
@@ -242,5 +242,26 @@ describe("reading the workbooks' Action column", () => {
 
   it("returns null for an action nobody has seen, so the importer can report it", () => {
     expect(outcomeFromLegacyAction("Escalated to pharmacist")).toBeNull();
+  });
+});
+
+describe("what counts as contacting the customer", () => {
+  it("is a call, and only a call", () => {
+    // The rule the "last contacted by" column and the Call Lookup both use.
+    expect(isContactActivity("call")).toBe(true);
+    // `created` is written by lead generation with no actor at all — 719 of the
+    // 727 live activities. Counting it would claim every untouched lead had
+    // been contacted by whoever pressed Import.
+    expect(isContactActivity("created")).toBe(false);
+    expect(isContactActivity("assigned")).toBe(false);
+    expect(isContactActivity("reassigned")).toBe(false);
+    expect(isContactActivity("note")).toBe(false);
+    expect(isContactActivity("followup_scheduled")).toBe(false);
+    expect(isContactActivity("phone_added")).toBe(false);
+    expect(isContactActivity("closed")).toBe(false);
+  });
+
+  it("exposes the rule as data so the trigger and the UI cannot drift", () => {
+    expect([...CONTACT_ACTIVITY_TYPES]).toEqual(["call"]);
   });
 });

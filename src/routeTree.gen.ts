@@ -58,6 +58,7 @@ import { Route as LovableEmailQueueProcessRouteImport } from './routes/lovable/e
 import { Route as LovableEmailAuthWebhookRouteImport } from './routes/lovable/email/auth/webhook'
 import { Route as LovableEmailAuthPreviewRouteImport } from './routes/lovable/email/auth/preview'
 import { Route as ApiPublicCdrProgressJobIdRouteImport } from './routes/api/public/cdr-progress.$jobId'
+import { Route as AppTelesalesCustomersIdRouteImport } from './routes/_app.telesales.customers.$id'
 
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
   id: '/reset-password',
@@ -310,6 +311,11 @@ const ApiPublicCdrProgressJobIdRoute =
     path: '/api/public/cdr-progress/$jobId',
     getParentRoute: () => rootRouteImport,
   } as any)
+const AppTelesalesCustomersIdRoute = AppTelesalesCustomersIdRouteImport.update({
+  id: '/telesales/customers/$id',
+  path: '/telesales/customers/$id',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -356,6 +362,7 @@ export interface FileRoutesByFullPath {
   '/complaints/': typeof AppComplaintsIndexRoute
   '/orders/': typeof AppOrdersIndexRoute
   '/telesales/': typeof AppTelesalesIndexRoute
+  '/telesales/customers/$id': typeof AppTelesalesCustomersIdRoute
   '/api/public/cdr-progress/$jobId': typeof ApiPublicCdrProgressJobIdRoute
   '/lovable/email/auth/preview': typeof LovableEmailAuthPreviewRoute
   '/lovable/email/auth/webhook': typeof LovableEmailAuthWebhookRoute
@@ -406,6 +413,7 @@ export interface FileRoutesByTo {
   '/complaints': typeof AppComplaintsIndexRoute
   '/orders': typeof AppOrdersIndexRoute
   '/telesales': typeof AppTelesalesIndexRoute
+  '/telesales/customers/$id': typeof AppTelesalesCustomersIdRoute
   '/api/public/cdr-progress/$jobId': typeof ApiPublicCdrProgressJobIdRoute
   '/lovable/email/auth/preview': typeof LovableEmailAuthPreviewRoute
   '/lovable/email/auth/webhook': typeof LovableEmailAuthWebhookRoute
@@ -458,6 +466,7 @@ export interface FileRoutesById {
   '/_app/complaints/': typeof AppComplaintsIndexRoute
   '/_app/orders/': typeof AppOrdersIndexRoute
   '/_app/telesales/': typeof AppTelesalesIndexRoute
+  '/_app/telesales/customers/$id': typeof AppTelesalesCustomersIdRoute
   '/api/public/cdr-progress/$jobId': typeof ApiPublicCdrProgressJobIdRoute
   '/lovable/email/auth/preview': typeof LovableEmailAuthPreviewRoute
   '/lovable/email/auth/webhook': typeof LovableEmailAuthWebhookRoute
@@ -510,6 +519,7 @@ export interface FileRouteTypes {
     | '/complaints/'
     | '/orders/'
     | '/telesales/'
+    | '/telesales/customers/$id'
     | '/api/public/cdr-progress/$jobId'
     | '/lovable/email/auth/preview'
     | '/lovable/email/auth/webhook'
@@ -560,6 +570,7 @@ export interface FileRouteTypes {
     | '/complaints'
     | '/orders'
     | '/telesales'
+    | '/telesales/customers/$id'
     | '/api/public/cdr-progress/$jobId'
     | '/lovable/email/auth/preview'
     | '/lovable/email/auth/webhook'
@@ -611,6 +622,7 @@ export interface FileRouteTypes {
     | '/_app/complaints/'
     | '/_app/orders/'
     | '/_app/telesales/'
+    | '/_app/telesales/customers/$id'
     | '/api/public/cdr-progress/$jobId'
     | '/lovable/email/auth/preview'
     | '/lovable/email/auth/webhook'
@@ -983,6 +995,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicCdrProgressJobIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/telesales/customers/$id': {
+      id: '/_app/telesales/customers/$id'
+      path: '/telesales/customers/$id'
+      fullPath: '/telesales/customers/$id'
+      preLoaderRoute: typeof AppTelesalesCustomersIdRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
@@ -1018,6 +1037,7 @@ interface AppRouteChildren {
   AppComplaintsIndexRoute: typeof AppComplaintsIndexRoute
   AppOrdersIndexRoute: typeof AppOrdersIndexRoute
   AppTelesalesIndexRoute: typeof AppTelesalesIndexRoute
+  AppTelesalesCustomersIdRoute: typeof AppTelesalesCustomersIdRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -1052,6 +1072,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppComplaintsIndexRoute: AppComplaintsIndexRoute,
   AppOrdersIndexRoute: AppOrdersIndexRoute,
   AppTelesalesIndexRoute: AppTelesalesIndexRoute,
+  AppTelesalesCustomersIdRoute: AppTelesalesCustomersIdRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

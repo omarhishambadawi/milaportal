@@ -22,7 +22,7 @@ const QUEUE_COLUMNS =
   "id,lead_type,status,priority,last_outcome,assigned_to,customer_name,phone," +
   "branch_no,city,item_name,product_family,product_strength,patient_id,prescription_no," +
   "document_no,source_date,next_followup_on,contact_attempts,cycle_number,total_value," +
-  "phone_alternates,created_at";
+  "phone_alternates,last_contacted_by,last_contacted_at,customer_id,created_at";
 
 export interface QueuePage {
   rows: QueueLead[];
@@ -57,6 +57,16 @@ export function useTelesalesQueue(
     queryFn: async () => {
       const today = businessToday();
       let q = (supabase as any).from("telesales_leads").select(QUEUE_COLUMNS, { count: "exact" });
+
+      /*
+       * Archived leads never appear in the queue.
+       *
+       * Applied before every other filter and not exposed as an option: the
+       * queue is the list of work, and an archived lead is precisely the thing
+       * a supervisor decided is not work. Its history stays readable from the
+       * lead detail and the customer profile.
+       */
+      q = q.is("archived_at", null);
 
       if (filters.leadType !== "all") q = q.eq("lead_type", filters.leadType);
 

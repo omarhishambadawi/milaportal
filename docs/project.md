@@ -316,6 +316,7 @@ Conventions are documented in `src/routes/README.md` (`$id` dynamic, `$` splat,
 | `/telesales/$id`                                    | `view_telesales`; acting needs `work_telesales` + ownership            |
 | `/telesales/import`                                 | `manage_telesales`                                                     |
 | `/telesales/management`                             | `view_telesales`; runs panel needs `manage_telesales`                  |
+| `/telesales/customers/$id`                          | `view_telesales`                                                       |
 | `/admin/users`                                      | `manage_users`                                                         |
 | `/profile`                                          | any signed-in user                                                     |
 
@@ -7094,6 +7095,148 @@ nobody could dial: 269 `not_mobile` (051/052, Riyadh landlines, stray 025/028/09
 prefixes), 212 `too_long` (`05591675252` and similar), and the one Swedish
 number. That is 0.55% of the total, and every one of them is now reported against
 its row number instead of being silently dialled.
+
+---
+
+### Customer identity — one customer, several opportunities
+
+`telesales_customers`, keyed on the canonical phone. A customer who bought
+Ozempic, Mounjaro and a FreeStyle sensor is one customer with three leads, and
+the leads are **not** merged: each keeps its own product, branch, dates,
+follow-up and history, because they are three conversations about three
+products.
+
+`telesales_leads.customer_id` is the link, and it is only a link. Measured on
+the live data before the table was designed: 709 of 712 leads carry a usable
+number, across 656 distinct numbers, and **49 numbers hold more than one lead**
+(maximum 3, every one of them multi-product). Of those 49, **48 carry a single
+customer name and one carries two** — `0559374809`, as `SFD` and an Arabic full
+name.
+
+So the phone consolidates but does not adjudicate. `display_name` is the most
+recently seen name, `alternate_names` holds the rest, and the profile shows the
+disagreement rather than resolving it — "this number has answered to another
+name, confirm who you are speaking to". A lead's own `customer_name` is never
+rewritten: a lead is a snapshot of an opportunity.
+
+Backfill result: 656 customers, 709 leads linked, 3 unlinked (the three with no
+usable number — inventing an identity for them would have merged them with each
+other).
+
+**Route:** `/telesales/customers/$id` — identity, every opportunity open and
+closed, and the contact history below.
+
+### Call Lookup, and "last contacted by"
+
+`telesales_contact_history(phone, limit)` answers _which agents have called this
+number_, newest first, across every lead the customer holds. `last_contacted_by`
+on the lead is the same question for one row, maintained by the
+`telesales_activities_sync_last_contact` trigger.
+
+**The rule, written down once:** a contact is `activity_type = 'call'` and
+nothing else — `CONTACT_ACTIVITY_TYPES` in `types.ts`, shared by the trigger, the
+RPC and the queue. The live activity mix is why it matters: of 727 activities,
+**719 are `created`** (written by lead generation with no actor at all), 5 are
+`assigned`, 1 is a `note`, 2 are calls. Counting the others would report that 719
+customers had been contacted by whoever pressed Import.
+
+`last_contacted_by` is deliberately **not** `assigned_to`. A lead reassigned from
+one agent to another is owned by the second and was last called by the first, and
+the queue shows both — otherwise the new owner re-dials a customer their
+colleague spoke to yesterday.
+
+### Refill labels
+
+`describeRefill` replaces the neutral "93 days overdue" with the action:
+
+```
+REFILL DUE TODAY          due       high
+REFILL OVERDUE · 7 DAYS   overdue   high
+REFILL IN 3 DAYS          soon      medium   (within the 3-day reservation window)
+REFILL IN 12 DAYS         future    neutral
+No refill scheduled       none      neutral
+```
+
+Only two of the five are loud, and that is the point. The retention backlog has
+been accumulating promised callbacks since March, so most of its 242 follow-ups
+are already past due; painting every one red would bury the rows due _today_
+inside a wall of alarm. Applied to retention leads only — for Cash and Wasfaty
+the date is a callback the agent chose, not a dose the customer is running out
+of.
+
+### Removing an import
+
+Soft, always. `telesales_archive_import` stamps `archived_at` on the import, its
+source records and the leads generated exclusively from it, and cancels their
+open follow-ups. `telesales_restore_import` is the inverse.
+
+**Nothing is deleted, and the reason is structural:**
+`telesales_lead_activities.lead_id` is `ON DELETE CASCADE`, so a hard delete
+would take every call an agent ever logged with it — straight through the
+append-only trigger that exists to prevent exactly that.
+
+_Exclusively_ is load-bearing and has two edge cases. A **retention cycle** has
+no source record, so archiving the import that produced its parent would strand
+it; a lead with a live child is left alone and reported as retained. A
+**re-imported row** produces a source record whose lead already existed and still
+points at the first import, so joining through `source_record_id` correctly
+claims only the leads this import created.
+
+**Customers are never archived.** A customer identity is shared across imports
+and pipelines by construction; removing a Cash import must not delete the
+identity a Wasfaty lead still points at.
+
+Verified against the live import, in a rolled-back transaction:
+
+|                          | before | after archive | after restore |
+| ------------------------ | ------ | ------------- | ------------- |
+| live leads               | 712    | 0             | 712           |
+| live source records      | 745    | 0             | 745           |
+| activities               | 727    | **727**       | —             |
+| customers                | 656    | **656**       | —             |
+| stale `next_followup_on` | —      | **0**         | —             |
+
+The confirmation dialog quotes `telesales_archive_impact` — one round trip, real
+numbers, and a separate count of leads somebody has already worked, because
+archiving 6 worked leads is a different decision from archiving 706 untouched
+ones.
+
+### Bulk lead management
+
+`manage_telesales` only. Select rows in the queue and assign, unassign or
+archive up to 500 at a time. The bar is sticky at the _bottom_, because a
+supervisor selects by working down the page and a top bar would have scrolled
+away by the time they finished.
+
+Bulk assignment deliberately bypasses the `canActOnLead` ownership rule that
+stops an agent touching a colleague's lead — moving somebody else's lead is what
+a team lead does. An agent's own single-lead claim still goes through
+`telesalesAssignLead`, which enforces it.
+
+Partial results are reported, never silent: archived leads and no-op
+reassignments are refused with a reason, and a supervisor who selected twenty and
+changed eighteen is told so. Selection is cleared by any filter or page change,
+because a selection whose contents are off screen is one whose next action is a
+surprise.
+
+Bulk operations write one activity per lead — "who moved this lead" is asked of
+one lead at a time — and never with `activity_type: 'call'`, which would corrupt
+every "last contacted by" on the board.
+
+### A grant that never bit
+
+Every function in this module was written with
+`REVOKE EXECUTE … FROM anon`, and that line is a no-op: Postgres grants EXECUTE
+to `PUBLIC` by default and `anon` inherits it. Confirmed against the live
+database — `has_function_privilege('anon', …)` returned true for four functions.
+
+Nothing was exposed: each opens with
+`IF NOT public.has_permission(auth.uid(), …) THEN RAISE EXCEPTION`, and an
+unauthenticated request has no JWT, so `auth.uid()` is NULL and the guard
+refuses. What was wrong is the declaration — and the next function added without
+that guard would have been genuinely reachable.
+`20260903150000_telesales_function_grants.sql` revokes from `PUBLIC` and
+re-grants to the intended roles.
 
 ---
 

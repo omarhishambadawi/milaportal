@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -29,6 +30,7 @@ import { cn } from "@/lib/utils";
 import { businessToday } from "@/lib/telesales/dates";
 import { familyLabel } from "@/lib/telesales/products";
 import { LEAD_TYPES, LEAD_TYPE_LABELS } from "@/lib/telesales/types";
+import { BulkActionBar } from "@/features/telesales/components/bulk-action-bar";
 import { LeadRow } from "@/features/telesales/components/lead-row";
 import { OutcomeDialog } from "@/features/telesales/components/outcome-dialog";
 import {
@@ -37,6 +39,10 @@ import {
   PAGE_SIZE_OPTIONS,
   STATUS_FILTER_OPTIONS,
 } from "@/features/telesales/constants";
+import {
+  useAssignableAgents,
+  useBulkLeadActions,
+} from "@/features/telesales/hooks/use-bulk-actions";
 import { useLeadMutations } from "@/features/telesales/hooks/use-lead-detail";
 import {
   useTelesalesBranches,
@@ -82,6 +88,17 @@ function TelesalesQueuePage() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
   const [recording, setRecording] = useState<QueueLead | null>(null);
+  /*
+   * Selection lives on the page rather than in the URL.
+   *
+   * It is scoped to the rows currently on screen: changing a filter or a page
+   * clears it, because a selection that survives a filter change is a selection
+   * whose contents the supervisor can no longer see -- and the next bulk action
+   * would move leads they did not know were still chosen.
+   */
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const bulk = useBulkLeadActions();
+  const assignableAgents = useAssignableAgents(canManage);
 
   const filters = useMemo(
     () => ({
@@ -100,6 +117,14 @@ function TelesalesQueuePage() {
   );
 
   const queue = useTelesalesQueue(filters, page, pageSize, canView);
+
+  // Any change of what is on screen drops the selection.
+  const queueIdentity = `${JSON.stringify(filters)}|${page}|${pageSize}`;
+  const [selectionScope, setSelectionScope] = useState(queueIdentity);
+  if (selectionScope !== queueIdentity) {
+    setSelectionScope(queueIdentity);
+    if (selected.size > 0) setSelected(new Set());
+  }
   const branches = useTelesalesBranches(canView);
   const families = useTelesalesFamilies(canView);
   const mutations = useLeadMutations();
@@ -123,6 +148,14 @@ function TelesalesQueuePage() {
       );
     },
   });
+
+  const toggleOne = (id: string, on: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
 
   if (!canView) {
     return (
@@ -371,6 +404,18 @@ function TelesalesQueuePage() {
             </div>
           ) : (
             <div>
+              {canManage ? (
+                <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2">
+                  <Checkbox
+                    aria-label="Select every lead on this page"
+                    checked={rows.length > 0 && rows.every((r) => selected.has(r.id))}
+                    onCheckedChange={(v) =>
+                      setSelected(v === true ? new Set(rows.map((r) => r.id)) : new Set())
+                    }
+                  />
+                  <span className="text-xs text-muted-foreground">Select all on this page</span>
+                </div>
+              ) : null}
               {rows.map((lead) => (
                 <LeadRow
                   key={lead.id}
@@ -379,6 +424,14 @@ function TelesalesQueuePage() {
                   assigneeName={
                     lead.assigned_to ? (roster.data?.get(lead.assigned_to) ?? null) : null
                   }
+                  lastContactName={
+                    lead.last_contacted_by
+                      ? (roster.data?.get(lead.last_contacted_by) ?? null)
+                      : null
+                  }
+                  selectable={canManage}
+                  selected={selected.has(lead.id)}
+                  onSelect={toggleOne}
                   isMine={Boolean(userId && lead.assigned_to === userId)}
                   canWork={canWork}
                   claiming={mutations.assign.isPending}
@@ -392,6 +445,33 @@ function TelesalesQueuePage() {
           )}
         </CardContent>
       </Card>
+
+      {canManage ? (
+        <BulkActionBar
+          count={selected.size}
+          agents={assignableAgents.data ?? []}
+          busy={bulk.busy}
+          onAssign={(agentId) =>
+            bulk.assign.mutate(
+              { leadIds: [...selected], assigneeId: agentId },
+              { onSuccess: () => setSelected(new Set()) },
+            )
+          }
+          onUnassign={() =>
+            bulk.assign.mutate(
+              { leadIds: [...selected], assigneeId: null },
+              { onSuccess: () => setSelected(new Set()) },
+            )
+          }
+          onArchive={(reason) =>
+            bulk.archive.mutate(
+              { leadIds: [...selected], reason },
+              { onSuccess: () => setSelected(new Set()) },
+            )
+          }
+          onClear={() => setSelected(new Set())}
+        />
+      ) : null}
 
       {total > pageSize ? (
         <div className="flex flex-wrap items-center justify-between gap-3">

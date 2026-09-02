@@ -65,6 +65,41 @@ export const FOLLOWUP_FILTER_OPTIONS = [
   { value: "none", label: "Not scheduled" },
 ] as const;
 
+/**
+ * Refill severity to styling.
+ *
+ * Only two of the five are loud. On the live retention backlog most follow-ups
+ * are already past due -- the workbook had been accumulating them since March --
+ * so painting every one of them red would bury the rows that are due *today*
+ * inside a wall of alarm. Overdue and due-today shout; soon is a gentle amber;
+ * future and none are ordinary text.
+ */
+export const REFILL_SEVERITY_STYLES: Record<string, string> = {
+  due: "bg-[#F59E0B]/15 text-[#B45309] border-[#F59E0B]/40 dark:text-amber-200 font-semibold",
+  overdue: "bg-[#EF4444]/15 text-[#B91C1C] border-[#EF4444]/40 dark:text-red-200 font-semibold",
+  soon: "bg-[#F59E0B]/10 text-[#B45309] border-[#F59E0B]/25 dark:text-amber-200",
+  future: "bg-transparent text-muted-foreground border-border",
+  none: "bg-transparent text-muted-foreground/70 border-transparent",
+};
+
+/**
+ * "3 days ago" / "today" for a last-contact timestamp.
+ *
+ * Coarse on purpose: an agent deciding whether to dial cares about the order of
+ * magnitude, not the hour.
+ */
+export function relativeDays(iso: string | null | undefined, today: string): string | null {
+  if (!iso) return null;
+  const day = iso.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const diff = Math.round(
+    (Date.parse(today + "T00:00:00Z") - Date.parse(day + "T00:00:00Z")) / 86400000,
+  );
+  if (diff <= 0) return "today";
+  if (diff === 1) return "yesterday";
+  return diff + " days ago";
+}
+
 export const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 export const DEFAULT_PAGE_SIZE = 50;
 

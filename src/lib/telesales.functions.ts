@@ -605,3 +605,125 @@ export const telesalesSetProductEligibility = createServerFn({ method: "POST" })
 
     return { ok: true as const };
   });
+
+/* ------------------------------------------------------------------------- */
+/* Management: archiving imports, and moving leads in bulk                    */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * What archiving an import would do, before it is done.
+ *
+ * Read-only, and the numbers the confirmation dialog quotes back to the
+ * operator. Separate from the archive itself so the dialog cannot be the thing
+ * that performs it.
+ */
+export const telesalesArchiveImpact = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => z.object({ importId: uuid }).parse(d))
+  .handler(async ({ context, data }) => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await resolveActor(supabase, userId, "manage");
+    const { describeArchiveImpact } = await import("@/lib/telesales/manage.server");
+    return { ok: true as const, impact: await describeArchiveImpact(await admin(), data.importId) };
+  });
+
+export const telesalesArchiveImport = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) =>
+    z.object({ importId: uuid, reason: z.string().trim().min(1).max(300) }).parse(d),
+  )
+  .handler(async ({ context, data }) => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    const actor = await resolveActor(supabase, userId, "manage");
+    const { archiveImport } = await import("@/lib/telesales/manage.server");
+    const result = await archiveImport(await admin(), {
+      importId: data.importId,
+      reason: data.reason,
+      actor,
+    });
+
+    const { AUDIT_ACTIONS, logAdminAction } = await import("@/lib/audit.server");
+    await logAdminAction({
+      actorId: userId,
+      action: AUDIT_ACTIONS.telesalesImportArchived,
+      targetUserId: null,
+      details: { ...result, reason: data.reason },
+    });
+
+    return { ok: true as const, ...result };
+  });
+
+export const telesalesRestoreImport = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => z.object({ importId: uuid }).parse(d))
+  .handler(async ({ context, data }) => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    const actor = await resolveActor(supabase, userId, "manage");
+    const { restoreImport } = await import("@/lib/telesales/manage.server");
+    const result = await restoreImport(await admin(), { importId: data.importId, actor });
+
+    const { AUDIT_ACTIONS, logAdminAction } = await import("@/lib/audit.server");
+    await logAdminAction({
+      actorId: userId,
+      action: AUDIT_ACTIONS.telesalesImportRestored,
+      targetUserId: null,
+      details: { importId: data.importId, ...result },
+    });
+
+    return { ok: true as const, ...result };
+  });
+
+/** Ids a bulk action may carry. Capped in `manage.server.ts` too; this is the
+ *  boundary check so an oversized request is refused before it reaches a query. */
+const bulkIds = z.array(uuid).min(1).max(500);
+
+/**
+ * Assign, reassign or unassign many leads.
+ *
+ * `manage` rather than `work`: this deliberately bypasses the ownership rule
+ * that stops an agent touching a colleague's lead, because moving somebody
+ * else's lead is exactly what a team lead does. An agent's own single-lead
+ * claim still goes through `telesalesAssignLead`, which enforces it.
+ */
+export const telesalesBulkAssign = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => z.object({ leadIds: bulkIds, assigneeId: uuid.nullable() }).parse(d))
+  .handler(async ({ context, data }) => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    const actor = await resolveActor(supabase, userId, "manage");
+    const { bulkAssign } = await import("@/lib/telesales/manage.server");
+    const result = await bulkAssign(await admin(), {
+      leadIds: data.leadIds,
+      assigneeId: data.assigneeId,
+      actor,
+    });
+    return { ok: true as const, ...result };
+  });
+
+export const telesalesBulkArchive = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) =>
+    z.object({ leadIds: bulkIds, reason: z.string().trim().min(1).max(300) }).parse(d),
+  )
+  .handler(async ({ context, data }) => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    const actor = await resolveActor(supabase, userId, "manage");
+    const { bulkArchive } = await import("@/lib/telesales/manage.server");
+    const result = await bulkArchive(await admin(), {
+      leadIds: data.leadIds,
+      reason: data.reason,
+      actor,
+    });
+    return { ok: true as const, ...result };
+  });
+
+export const telesalesBulkRestore = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => z.object({ leadIds: bulkIds }).parse(d))
+  .handler(async ({ context, data }) => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    const actor = await resolveActor(supabase, userId, "manage");
+    const { bulkRestore } = await import("@/lib/telesales/manage.server");
+    const result = await bulkRestore(await admin(), { leadIds: data.leadIds, actor });
+    return { ok: true as const, ...result };
+  });

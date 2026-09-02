@@ -38,7 +38,7 @@ import {
   telesalesImportWorkbook,
   telesalesSeedRetentionBacklog,
 } from "@/lib/telesales.functions";
-import type { ImportHistoryEntry } from "@/features/telesales/types";
+import { ImportHistory } from "@/features/telesales/components/import-history";
 
 export const Route = createFileRoute("/_app/telesales/import")({
   head: () => ({ meta: [{ title: "Telesales Import — MilaServ Portal" }] }),
@@ -100,15 +100,6 @@ function TelesalesImportPage() {
   const [uploading, setUploading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [anchorDate, setAnchorDate] = useState(businessToday());
-
-  const history = useQuery<ImportHistoryEntry[]>({
-    queryKey: queryKeys.telesales.imports(20),
-    enabled: canManage,
-    queryFn: async () => {
-      const res = await telesalesImportHistory({ data: { limit: 20 } });
-      return res.imports as ImportHistoryEntry[];
-    },
-  });
 
   if (!canManage) {
     return (
@@ -438,40 +429,7 @@ function TelesalesImportPage() {
           <CardTitle className="text-base">Import history</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          {history.isLoading ? (
-            <p className="px-4 py-8 text-center text-sm text-muted-foreground">Loading…</p>
-          ) : (history.data ?? []).length === 0 ? (
-            <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-              Nothing has been imported yet.
-            </p>
-          ) : (
-            <ul className="divide-y divide-border">
-              {(history.data ?? []).map((h) => (
-                <li
-                  key={h.id}
-                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5"
-                >
-                  <span className="text-sm font-medium">{h.file_name}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {SOURCE_TYPE_LABELS[h.source_type as keyof typeof SOURCE_TYPE_LABELS] ??
-                      h.source_type}
-                    {h.sheet_name ? ` · ${h.sheet_name}` : ""}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {h.rows_stored.toLocaleString("en-US")} stored
-                    {h.rows_duplicate ? ` · ${h.rows_duplicate} duplicate` : ""}
-                    {h.rows_rejected ? ` · ${h.rows_rejected} rejected` : ""}
-                  </span>
-                  {h.status !== "completed" ? (
-                    <span className="text-xs font-medium text-destructive">{h.status}</span>
-                  ) : null}
-                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                    {ts(h.imported_at)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
+          <ImportHistory canManage={canManage} />
         </CardContent>
       </Card>
     </div>

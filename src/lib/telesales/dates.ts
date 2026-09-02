@@ -415,6 +415,78 @@ export function formatWindow(window: DateWindow): string {
  * with no next step is a real state that the desk needs to be able to see rather
  * than a number 127 years wide.
  */
+/**
+ * The agent-facing refill label.
+ *
+ * `describeDue` below answers "how far away is this date", which is the right
+ * answer for a follow-up on any lead. This answers the question a retention
+ * agent is actually asking — *what do I do about this customer* — and says it
+ * in the desk's own words.
+ *
+ * ```
+ *   REFILL DUE TODAY
+ *   REFILL OVERDUE · 7 DAYS
+ *   REFILL IN 3 DAYS
+ *   No refill scheduled
+ * ```
+ *
+ * ### Severity is deliberately not uniform
+ *
+ * The brief is explicit that not everything should look like an error, and the
+ * live data is the reason it matters: of 243 follow-ups on the retention
+ * backlog, the great majority are already past due, because the workbook had
+ * been accumulating them since March. If every one of those rendered as a red
+ * alert the queue would be a wall of red and the genuinely urgent rows — the
+ * ones due *today* — would be invisible inside it.
+ *
+ * So four levels, and only two of them are loud:
+ *
+ *   `due`      due today            high    — the day's actual work
+ *   `overdue`  past due             high    — a promise already broken
+ *   `soon`     within `soonDays`    medium  — worth planning for
+ *   `future`   further out          neutral — not this agent's problem today
+ *   `none`     nothing scheduled    neutral
+ */
+export type RefillSeverity = "due" | "overdue" | "soon" | "future" | "none";
+
+export interface RefillLabel {
+  /** The words to render, already cased for display. */
+  label: string;
+  severity: RefillSeverity;
+  /** Signed days from today: negative is overdue, positive is upcoming. */
+  days: number | null;
+}
+
+/** How many days ahead still counts as "soon". Three, matching the branch
+ *  reservation window the Cash rule is built on. */
+const REFILL_SOON_DAYS = 3;
+
+export function describeRefill(
+  dueOn: BusinessDate | null | undefined,
+  today: BusinessDate,
+  opts: { soonDays?: number } = {},
+): RefillLabel {
+  if (!dueOn || !isBusinessDate(dueOn)) {
+    return { label: "No refill scheduled", severity: "none", days: null };
+  }
+  const days = daysBetween(today, dueOn);
+  if (days === 0) return { label: "REFILL DUE TODAY", severity: "due", days: 0 };
+  if (days < 0) {
+    const n = Math.abs(days);
+    return {
+      label: `REFILL OVERDUE · ${n} DAY${n === 1 ? "" : "S"}`,
+      severity: "overdue",
+      days,
+    };
+  }
+  const soon = opts.soonDays ?? REFILL_SOON_DAYS;
+  return {
+    label: `REFILL IN ${days} DAY${days === 1 ? "" : "S"}`,
+    severity: days <= soon ? "soon" : "future",
+    days,
+  };
+}
+
 export function describeDue(
   dueOn: BusinessDate | null | undefined,
   today: BusinessDate,

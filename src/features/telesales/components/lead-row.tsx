@@ -1,16 +1,24 @@
 import { Link } from "@tanstack/react-router";
 import { Phone, PhoneOff, UserPlus } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { fmtSAR } from "@/lib/branches";
-import { describeDue, formatBusinessDate, type BusinessDate } from "@/lib/telesales/dates";
+import {
+  describeDue,
+  describeRefill,
+  formatBusinessDate,
+  type BusinessDate,
+} from "@/lib/telesales/dates";
 import { familyLabel } from "@/lib/telesales/products";
 import { LEAD_STATUS_LABELS, LEAD_TYPE_LABELS } from "@/lib/telesales/types";
 import {
   DUE_TONE_STYLES,
   LEAD_STATUS_STYLES,
   LEAD_TYPE_STYLES,
+  REFILL_SEVERITY_STYLES,
   formatPhone,
+  relativeDays,
   telHref,
 } from "@/features/telesales/constants";
 import type { QueueLead } from "@/features/telesales/types";
@@ -36,8 +44,14 @@ export interface LeadRowProps {
   /** Display name of the assignee, resolved by the page from one roster fetch
    *  rather than one lookup per row. */
   assigneeName: string | null;
+  /** Display name of whoever last *called*, from the same roster fetch. */
+  lastContactName: string | null;
   isMine: boolean;
   canWork: boolean;
+  /** Selection, for the bulk bar. Only rendered when the viewer can manage. */
+  selectable: boolean;
+  selected: boolean;
+  onSelect: (leadId: string, selected: boolean) => void;
   onClaim: (lead: QueueLead) => void;
   onRecord: (lead: QueueLead) => void;
   claiming: boolean;
@@ -47,13 +61,25 @@ export function LeadRow({
   lead,
   today,
   assigneeName,
+  lastContactName,
   isMine,
   canWork,
+  selectable,
+  selected,
+  onSelect,
   onClaim,
   onRecord,
   claiming,
 }: LeadRowProps) {
   const due = describeDue(lead.next_followup_on, today);
+  /*
+   * Retention leads get the agent-facing refill wording; Cash and Wasfaty keep
+   * the neutral "in N days", because for them the date is a callback the agent
+   * chose rather than a dose the customer is running out of.
+   */
+  const refill =
+    lead.lead_type === "retention" ? describeRefill(lead.next_followup_on, today) : null;
+  const lastContact = relativeDays(lead.last_contacted_at, today);
   const tel = telHref(lead.phone);
 
   const identity =
@@ -65,8 +91,22 @@ export function LeadRow({
 
   return (
     <div className="grid grid-cols-1 gap-3 border-b border-border px-3 py-3 transition-colors last:border-0 hover:bg-muted/40 sm:grid-cols-12 sm:items-center">
+      {/* Selection. Rendered only for a viewer who can act on a selection --
+          a checkbox that leads nowhere is worse than no checkbox. */}
+      {selectable ? (
+        <div className="flex items-start sm:col-span-1 sm:items-center">
+          <Checkbox
+            checked={selected}
+            onCheckedChange={(v) => onSelect(lead.id, v === true)}
+            aria-label={`Select ${lead.customer_name ?? "lead"}`}
+          />
+        </div>
+      ) : null}
+
       {/* Who */}
-      <div className="min-w-0 sm:col-span-3">
+      {/* The checkbox takes a column, so "who" gives one back to keep the row
+          at twelve. */}
+      <div className={cn("min-w-0", selectable ? "sm:col-span-2" : "sm:col-span-3")}>
         <div className="flex items-center gap-2">
           <Link
             to="/telesales/$id"
@@ -119,13 +159,34 @@ export function LeadRow({
 
       {/* When / who owns it */}
       <div className="min-w-0 sm:col-span-2">
-        <p className={cn("text-xs", DUE_TONE_STYLES[due.tone])}>{due.label}</p>
+        {refill ? (
+          <span
+            className={cn(
+              "inline-block rounded border px-1.5 py-0.5 text-[10px] tracking-wide",
+              REFILL_SEVERITY_STYLES[refill.severity],
+            )}
+          >
+            {refill.label}
+          </span>
+        ) : (
+          <p className={cn("text-xs", DUE_TONE_STYLES[due.tone])}>{due.label}</p>
+        )}
         <p className="truncate text-xs text-muted-foreground">
           {lead.assigned_to ? (isMine ? "You" : (assigneeName ?? "Assigned")) : "Unassigned"}
           {lead.contact_attempts > 0
             ? ` · ${lead.contact_attempts} attempt${lead.contact_attempts === 1 ? "" : "s"}`
             : ""}
         </p>
+        {/*
+         * Who last actually dialled, which is not who owns the lead.
+         * Shown only when somebody has -- an empty line here on 700 untouched
+         * leads would be noise, and the absence already reads as "nobody yet".
+         */}
+        {lastContact ? (
+          <p className="truncate text-[11px] text-muted-foreground">
+            Last call: {lastContactName ?? "an agent"} · {lastContact}
+          </p>
+        ) : null}
       </div>
 
       {/* Actions */}

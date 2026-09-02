@@ -303,6 +303,26 @@ export const ACTIVITY_LABELS: Record<ActivityType, string> = {
   cycle_started: "Retention cycle started",
 };
 
+/**
+ * What counts as having contacted the customer.
+ *
+ * The rule behind "last contacted by", written down once and shared by the
+ * trigger that maintains the column, the Call Lookup, and the management
+ * counters.
+ *
+ * **Only `call`.** Not `created`, which lead generation writes with no actor at
+ * all; not `assigned` or `note`, which are things the desk does to a lead rather
+ * than to a person. The live activity mix is why this matters: of 727
+ * activities on the retention backlog, 719 are `created`, 5 are `assigned`, 1 is
+ * a `note`, and 2 are calls. Counting the others would claim 719 customers had
+ * been contacted by whoever pressed Import.
+ */
+export const CONTACT_ACTIVITY_TYPES: readonly ActivityType[] = ["call"];
+
+export function isContactActivity(activityType: string): boolean {
+  return (CONTACT_ACTIVITY_TYPES as readonly string[]).includes(activityType);
+}
+
 /* ------------------------------------------------------------------------- */
 /* Row shapes                                                                */
 /* ------------------------------------------------------------------------- */

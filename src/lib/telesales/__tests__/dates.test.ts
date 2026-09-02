@@ -6,6 +6,7 @@ import {
   compareDates,
   daysBetween,
   describeDue,
+  describeRefill,
   enumerateWindow,
   formatWindow,
   fromExcelSerial,
@@ -286,5 +287,44 @@ describe("ordering", () => {
 
   it("throws on a malformed date rather than sorting it", () => {
     expect(() => compareDates("2026-8-1", "2026-08-02")).toThrow(RangeError);
+  });
+});
+
+describe("the agent-facing refill label", () => {
+  it("says what to do, not how many days have elapsed", () => {
+    expect(describeRefill("2026-09-01", "2026-09-01").label).toBe("REFILL DUE TODAY");
+    expect(describeRefill("2026-08-25", "2026-09-01").label).toBe("REFILL OVERDUE · 7 DAYS");
+    expect(describeRefill("2026-08-31", "2026-09-01").label).toBe("REFILL OVERDUE · 1 DAY");
+    expect(describeRefill("2026-09-04", "2026-09-01").label).toBe("REFILL IN 3 DAYS");
+    expect(describeRefill("2026-09-02", "2026-09-01").label).toBe("REFILL IN 1 DAY");
+    expect(describeRefill(null, "2026-09-01").label).toBe("No refill scheduled");
+  });
+
+  it("reserves the loud severities for work that is actually due", () => {
+    // The retention backlog is mostly overdue, so "everything is red" would
+    // hide the rows that need calling today. Only two levels shout.
+    expect(describeRefill("2026-09-01", "2026-09-01").severity).toBe("due");
+    expect(describeRefill("2026-08-25", "2026-09-01").severity).toBe("overdue");
+    expect(describeRefill("2026-09-03", "2026-09-01").severity).toBe("soon");
+    expect(describeRefill("2026-09-20", "2026-09-01").severity).toBe("future");
+    expect(describeRefill(null, "2026-09-01").severity).toBe("none");
+  });
+
+  it("draws the soon/future line at the branch reservation window", () => {
+    expect(describeRefill("2026-09-04", "2026-09-01").severity).toBe("soon");
+    expect(describeRefill("2026-09-05", "2026-09-01").severity).toBe("future");
+    // …and lets a caller move it.
+    expect(describeRefill("2026-09-05", "2026-09-01", { soonDays: 7 }).severity).toBe("soon");
+  });
+
+  it("keeps the signed day count for sorting", () => {
+    expect(describeRefill("2026-08-25", "2026-09-01").days).toBe(-7);
+    expect(describeRefill("2026-09-04", "2026-09-01").days).toBe(3);
+    expect(describeRefill("2026-09-01", "2026-09-01").days).toBe(0);
+  });
+
+  it("crosses a month boundary", () => {
+    expect(describeRefill("2026-09-01", "2026-08-30").label).toBe("REFILL IN 2 DAYS");
+    expect(describeRefill("2026-08-30", "2026-09-01").label).toBe("REFILL OVERDUE · 2 DAYS");
   });
 });

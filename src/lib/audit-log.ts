@@ -59,6 +59,8 @@ export const AUDIT_ACTION_LABEL = {
   "telesales.settings_saved": "Changed the telesales date windows",
   "telesales.product_eligibility_changed": "Changed a telesales product's eligibility",
   "telesales.retention_backlog_seeded": "Seeded the retention backlog",
+  "telesales.import_archived": "Archived a telesales import",
+  "telesales.import_restored": "Restored a telesales import",
 } as const satisfies Record<AuditAction, string>;
 
 /**

@@ -250,6 +250,21 @@ function LeadDetailPage() {
                   </span>
                 )}
               </Field>
+              <Field label="Customer">
+                {/* The consolidated identity. One customer, several
+                    opportunities -- the leads stay separate. */}
+                {l.customer_id ? (
+                  <Link
+                    to="/telesales/customers/$id"
+                    params={{ id: l.customer_id }}
+                    className="hover:underline"
+                  >
+                    View profile
+                  </Link>
+                ) : (
+                  <span className="text-muted-foreground">Not linked</span>
+                )}
+              </Field>
               <Field label="Branch">{l.branch_no ?? "—"}</Field>
               <Field label="City">{l.city ?? "—"}</Field>
               <Field label="Product">{l.item_name ?? "—"}</Field>
