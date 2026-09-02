@@ -24,7 +24,8 @@ const QUEUE_COLUMNS =
   "document_no,source_date,next_followup_on,contact_attempts,cycle_number,total_value," +
   "phone_alternates,last_contacted_by,last_contacted_at,customer_id,created_at," +
   // Derived by the view, stored nowhere. See `20260906120000`.
-  "lifecycle,refill_due_on,stale_after,refill_cycle_days,last_purchased_on";
+  "lifecycle,refill_due_on,stale_after,refill_cycle_days,last_purchased_on," +
+  "archived_at,archived_by,archive_reason";
 
 /**
  * The queue reads the lifecycle view rather than the table.
@@ -72,14 +73,23 @@ export function useTelesalesQueue(
       let q = (supabase as any).from(QUEUE_SOURCE).select(QUEUE_COLUMNS, { count: "exact" });
 
       /*
-       * Archived leads never appear in the queue.
+       * Archived leads are excluded from every view except the one that asks
+       * for them.
        *
-       * Applied before every other filter and not exposed as an option: the
-       * queue is the list of work, and an archived lead is precisely the thing
-       * a supervisor decided is not work. Its history stays readable from the
-       * lead detail and the customer profile.
+       * The queue is the list of work and an archived lead is precisely what a
+       * supervisor decided is not work, so this is applied before every other
+       * filter. "Archived" is an explicit choice from the operational filter,
+       * never a default and never mixed into a working view -- an agent cannot
+       * arrive at archived rows by accident.
+       *
+       * RLS is unchanged either way: `view_telesales` already permits reading
+       * an archived lead, which is how the lead detail and the customer profile
+       * have always shown one. This exposes no row a caller could not already
+       * read; restoring still requires `manage_telesales` at the server
+       * function.
        */
-      q = q.is("archived_at", null);
+      if (filters.lifecycle === "archived") q = q.not("archived_at", "is", null);
+      else q = q.is("archived_at", null);
 
       if (filters.leadType !== "all") q = q.eq("lead_type", filters.leadType);
 
@@ -200,32 +210,80 @@ export function useTelesalesFamilies(enabled: boolean) {
 }
 
 /**
- * How many open leads have gone stale.
+ * The size of the backlog: stale, how much of it nobody owns, and how much has
+ * already been archived.
  *
- * A head-only count, so the pager and the badge cost one number rather than a
- * page of rows. Deliberately independent of the queue's own filters: the point
- * of the figure is "how much old opportunity is sitting in the system", which
- * a supervisor wants to know whatever they are currently looking at.
+ * Head-only counts, so the whole summary costs four numbers rather than four
+ * pages of rows. Deliberately independent of the queue's own filters except
+ * lead type: the question is "how much old opportunity is sitting in the
+ * system", which should not change because a supervisor happens to be looking
+ * at one branch.
  *
  * Same lifecycle definition as everything else -- it comes from the view, so it
  * cannot drift from what the rows say.
  */
+export interface StaleBacklog {
+  /** Open, unarchived, past one full refill cycle. */
+  stale: number;
+  staleUnassigned: number;
+  staleAssigned: number;
+  /** Leads a supervisor has already taken out of the queue. */
+  archived: number;
+}
+
 export function useStaleLeadCount(enabled: boolean, leadType: string) {
-  return useQuery<number>({
-    queryKey: [...queryKeys.telesales.all(), "stale-count", leadType],
+  return useQuery<StaleBacklog>({
+    queryKey: [...queryKeys.telesales.all(), "stale-backlog", leadType],
     enabled,
     staleTime: 60_000,
     queryFn: async () => {
-      let q = (supabase as any)
-        .from(QUEUE_SOURCE)
-        .select("id", { count: "exact", head: true })
-        .is("archived_at", null)
-        .in("status", OPEN_LEAD_STATUSES)
-        .eq("lifecycle", "stale");
-      if (leadType !== "all") q = q.eq("lead_type", leadType);
-      const { count, error } = await q;
-      if (error) throw new Error(error.message);
-      return count ?? 0;
+      /*
+       * Four head-only counts, run together.
+       *
+       * `head: true` means PostgREST returns the count and no rows, so the
+       * whole summary costs four numbers rather than four pages of leads. They
+       * are issued in parallel because they are independent, and none of them
+       * touches the MIS.
+       *
+       * Deliberately independent of the queue's own filters except lead type:
+       * the question a supervisor is asking is "how much backlog is in the
+       * system", which should not change because they happened to be looking
+       * at one branch.
+       */
+      const scope = (q: any) => (leadType === "all" ? q : q.eq("lead_type", leadType));
+      const base = () =>
+        scope(
+          (supabase as any)
+            .from(QUEUE_SOURCE)
+            .select("id", { count: "exact", head: true })
+            .in("status", OPEN_LEAD_STATUSES),
+        );
+
+      const [stale, unassigned, archived] = await Promise.all([
+        base().is("archived_at", null).eq("lifecycle", "stale"),
+        base().is("archived_at", null).eq("lifecycle", "stale").is("assigned_to", null),
+        scope(
+          (supabase as any)
+            .from(QUEUE_SOURCE)
+            .select("id", { count: "exact", head: true })
+            .not("archived_at", "is", null),
+        ),
+      ]);
+
+      for (const r of [stale, unassigned, archived]) {
+        if (r.error) throw new Error(r.error.message);
+      }
+
+      const total = stale.count ?? 0;
+      const un = unassigned.count ?? 0;
+      return {
+        stale: total,
+        staleUnassigned: un,
+        // Derived rather than counted: assigned is whatever is left, so the
+        // three figures cannot disagree with one another.
+        staleAssigned: Math.max(0, total - un),
+        archived: archived.count ?? 0,
+      };
     },
   });
 }

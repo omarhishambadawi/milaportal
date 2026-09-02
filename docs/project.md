@@ -7744,6 +7744,154 @@ precisely because `stale_after` is a _date_ rather than a verdict.
 
 ---
 
+### Backlog operations — archive, restore, bulk
+
+501 of the 712 open leads are stale and 496 of those belong to nobody. That
+backlog needs a way out of the queue that is not a delete.
+
+#### Archive is not delete, and there is no lead delete
+
+|                                                    | archive                                                    | delete                       |
+| -------------------------------------------------- | ---------------------------------------------------------- | ---------------------------- |
+| what it is                                         | `archived_at`, `archived_by`, `archive_reason` on the lead | **does not exist for leads** |
+| the lead row                                       | kept                                                       | —                            |
+| activities, follow-ups, customer link, source link | all kept                                                   | —                            |
+| reversible                                         | yes, by `manage_telesales`                                 | —                            |
+| Shams MIS                                          | untouched                                                  | —                            |
+
+There is no hard delete of a lead anywhere in the module, and this phase did not
+add one. The only delete in Telesales is at the **source-file** level
+(`telesales_imports`), which has its own established safe semantics. Archive is
+therefore not "the safe option next to a dangerous one" — it is the only lead
+cleanup path there is, so the two can never be confused in the UI.
+
+Archiving is soft for the reason the import archive is: the activity log is the
+record that a customer was called, and it has to outlive the queue row.
+
+#### What archiving actually does
+
+`bulkArchive` reads the selected leads first, then in one statement each:
+
+1. cancels any **scheduled follow-up**, so the lead stops being due — done
+   before the archive lands, while the sync trigger can still clear
+   `next_followup_on`;
+2. stamps `archived_at`, `archived_by` and `archive_reason` on the leads that
+   were not already archived;
+3. appends one `closed` activity per lead actually archived.
+
+Leads already archived by somebody else are **skipped with a reason** rather
+than overwritten — the cheap form of concurrency safety, and the reason a second
+supervisor working the same backlog cannot clobber the first.
+
+#### Restore
+
+`bulkRestore` clears the three archive columns and appends a `reopened`
+activity. It touches **no dates**: not `next_followup_on`, not `source_date`,
+not `status`. That is the whole point — the lifecycle is derived from the due
+date, so a lead archived in January and restored in September comes back
+**stale**, because its due date is a fact and restoring is not an event that
+changes one. Restoring returns a lead to the queue; it does not make it current,
+and it cannot launder an old opportunity into new work.
+
+Both the read and the write carry `archived_at IS NOT NULL`, so a lead another
+supervisor restored in the meantime is a no-op rather than a double restore.
+
+It reports what it actually did. It previously returned `changed: ids.length`
+unconditionally and audited every selected id — so a supervisor selecting twenty
+rows of which five were archived was told twenty were restored, and fifteen live
+leads each gained a "reopened" entry describing something that never happened.
+Both are fixed and pinned by tests.
+
+#### Bulk operations
+
+One server call per gesture, never one per lead. The hook hands an array of ids
+to a single server function; the function issues one `UPDATE … IN (…)` plus a
+chunked audit insert, capped at `BULK_LIMIT` (500). Duplicated selections are
+de-duplicated before anything runs, and an empty selection issues no query at
+all.
+
+Every result is `{ requested, changed, skipped[] }` and the toast reports all
+three, so "20 archived · 2 skipped" is what a supervisor sees when two were
+already gone. Nothing ever claims work it did not do.
+
+#### The bar, and the confirmations
+
+The bulk bar appears only when rows are selected, and rows are only selectable
+for a viewer holding `manage_telesales` — the queue renders no checkboxes for
+anyone else, so the bar has no path to appear without the permission behind it.
+
+It shows Archive **or** Restore, never both, depending on whether the current
+view is the archive; offering both would be offering to archive an archived
+lead. Assignment is hidden in the archived view for the same reason — handing an
+archived lead to an agent would put it in a queue it is excluded from. Restore
+first, then assign.
+
+Both confirmations say what will happen in specific terms rather than "Are you
+sure?":
+
+> **Archive 37 leads?** They leave the operational queue immediately. Nothing is
+> deleted: the customer, their call history and their follow-up records are all
+> kept, other leads for the same customer are untouched, and a team lead can
+> restore these from the Archived filter.
+
+> **Restore 12 leads?** They return to the queue unassigned, with their history
+> intact. Their refill dates are unchanged, so a lead whose opportunity already
+> expired comes back as stale rather than as new work.
+
+Archive uses the ordinary outline button, not a destructive red one. It is not a
+destructive action and should not be dressed as one.
+
+#### Finding the backlog
+
+The operational filter gained a fourth option: **Active leads** (default),
+**Stale**, **Active + stale**, **Archived**. Stale and Archived carry their own
+counts on the option itself, so a supervisor sees the size of each backlog
+without switching view to find out.
+
+Archived is the only one that is not a lifecycle value — the first three read
+the derived `lifecycle` column, archived selects on `archived_at`. They share a
+control because an operator is choosing a view, not a column. It is never the
+default, so an agent cannot reach archived rows without asking for them.
+
+"Unassigned stale" needs no new filter: the existing **Unassigned** checkbox
+combines with **Stale**, which is how a supervisor selects the 496.
+
+While viewing stale or archived, a one-line summary sits above the list —
+`501 stale · 496 unassigned · 5 assigned` — built from head-only counts, so the
+whole summary costs four numbers rather than four pages of rows. Stale rows also
+carry how long ago they lapsed (`· 214d ago`), which is the figure a backlog is
+triaged by.
+
+#### What archiving does not touch
+
+- **The customer.** Archiving one opportunity archives one lead. A customer with
+  a stale Mounjaro lead and live Ozempic and Libre leads keeps all three records
+  and both live leads; consolidation by normalised phone is unaffected.
+- **Activities and follow-ups.** Kept. Follow-ups are cancelled, not deleted.
+- **The source relationship.** `source_record_id` survives, so source-file
+  archive and delete continue to behave exactly as they did.
+- **Shams MIS.** Nothing in this path reads or writes it.
+
+Verified against production: 0 orphaned activities, 0 leads pointing at a
+customer that does not exist.
+
+#### Recommended Leads
+
+An archived lead can never be recommended. The candidate read filters
+`archived_at IS NULL` before the engine sees a row, and the engine has no notion
+of archiving at all — which is only safe because of that filter, so both are
+pinned by regression tests rather than left as an assumption.
+
+#### Permissions
+
+Unchanged. `view_telesales` reads the queue and, since RLS has always permitted
+reading an archived lead, the Archived view exposes no row a caller could not
+already reach from the lead detail or the customer profile. Every bulk action —
+assign, unassign, archive, restore — resolves the actor with `manage`, so an
+agent cannot invoke one even by calling the server function directly.
+
+---
+
 ### Access model
 
 Reads are RLS-bounded and go straight from the browser; every write is a

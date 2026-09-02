@@ -315,22 +315,60 @@ export async function bulkRestore(
   const ids = [...new Set(input.leadIds)].slice(0, BULK_LIMIT);
   if (ids.length === 0) return { requested: 0, changed: 0, skipped: [] };
 
+  /*
+   * Read first, exactly as `bulkArchive` does.
+   *
+   * The obvious shortcut -- update `.not("archived_at","is",null)` and report
+   * `ids.length` changed -- reports work that did not happen. A supervisor who
+   * selects twenty rows of which five are archived would be told twenty were
+   * restored, and the other fifteen would each gain a "reopened" entry in an
+   * append-only timeline describing something that never occurred. Both the
+   * count and the audit trail have to describe reality.
+   */
+  const { data: rows, error: readError } = await supabase
+    .from("telesales_leads")
+    .select("id,archived_at")
+    .in("id", ids);
+  if (readError) throw new Error(readError.message);
+
+  const skipped: BulkResult["skipped"] = [];
+  const actionable: string[] = [];
+  for (const row of (rows as any[]) ?? []) {
+    if (row.archived_at) actionable.push(row.id);
+    else skipped.push({ id: row.id, reason: "not archived" });
+  }
+  if (actionable.length === 0) return { requested: ids.length, changed: 0, skipped };
+
+  /*
+   * `.not("archived_at","is",null)` stays on the write as well as the read.
+   *
+   * Between the two, another supervisor may have restored the same lead. The
+   * condition makes the write a no-op in that case rather than a second
+   * restore, which is the cheap form of the concurrency guarantee -- no lock,
+   * no transaction, and the loser of the race simply changes nothing.
+   */
   const { error } = await supabase
     .from("telesales_leads")
     .update({ archived_at: null, archived_by: null, archive_reason: null })
-    .in("id", ids)
+    .in("id", actionable)
     .not("archived_at", "is", null);
   if (error) throw new Error(error.message);
 
   await appendBulkActivities(supabase, {
-    leadIds: ids,
+    leadIds: actionable,
     actor: input.actor,
     activityType: "reopened",
     note: "Restored from the archive",
     metadata: { bulk: true },
   });
 
-  return { requested: ids.length, changed: ids.length, skipped: [] };
+  /*
+   * Restoring returns the lead to the queue and nothing more. Its dates are
+   * untouched, so the lifecycle view re-derives from the same due date it had
+   * before -- a lead archived in January comes back stale, which is the honest
+   * answer. Restoring is not a way to make an old opportunity look new.
+   */
+  return { requested: ids.length, changed: actionable.length, skipped };
 }
 
 /**

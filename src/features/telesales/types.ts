@@ -61,6 +61,13 @@ export interface QueueLead {
   refill_cycle_days: number | null;
   /** Most recent purchase of this product by this customer. */
   last_purchased_on: string | null;
+  /* ----------------------------------------------------------------------
+   * Operational archive. A soft state on the lead itself, not a deletion:
+   * the row, its activities and its customer all survive it.
+   * -------------------------------------------------------------------- */
+  archived_at: string | null;
+  archived_by: string | null;
+  archive_reason: string | null;
 }
 
 /** The lead detail page's read — every column, plus its history. */

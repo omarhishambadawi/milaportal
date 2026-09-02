@@ -122,7 +122,7 @@ function TelesalesQueuePage() {
   );
 
   const queue = useTelesalesQueue(filters, page, pageSize, canView);
-  const staleCount = useStaleLeadCount(canView, leadType);
+  const backlog = useStaleLeadCount(canView, leadType);
 
   // Any change of what is on screen drops the selection.
   const queueIdentity = `${JSON.stringify(filters)}|${page}|${pageSize}`;
@@ -344,9 +344,14 @@ function TelesalesQueuePage() {
                 {LIFECYCLE_FILTER_OPTIONS.map((o) => (
                   <SelectItem key={o.value} value={o.value}>
                     {o.label}
-                    {o.value === "stale" && staleCount.data != null
-                      ? ` · ${staleCount.data.toLocaleString("en-US")}`
-                      : ""}
+                    {/* The size of each backlog, on the option itself, so a
+                        supervisor sees how much is waiting without switching
+                        view to find out. */}
+                    {o.value === "stale" && backlog.data
+                      ? ` · ${backlog.data.stale.toLocaleString("en-US")}`
+                      : o.value === "archived" && backlog.data
+                        ? ` · ${backlog.data.archived.toLocaleString("en-US")}`
+                        : ""}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -389,6 +394,40 @@ function TelesalesQueuePage() {
           </div>
         </CardContent>
       </Card>
+
+      {/*
+       * The backlog, in one line.
+       *
+       * Only while a supervisor is actually looking at it -- an agent working
+       * the active queue does not need a running total of leads they have been
+       * deliberately shielded from. Operational rather than analytical: three
+       * numbers that say how big the problem is and how much of it nobody owns.
+       */}
+      {(lifecycle === "stale" || lifecycle === "archived") && backlog.data ? (
+        <p className="px-1 text-xs text-muted-foreground">
+          {lifecycle === "stale" ? (
+            <>
+              <span className="font-medium text-foreground">
+                {backlog.data.stale.toLocaleString("en-US")} stale
+              </span>
+              {" · "}
+              {backlog.data.staleUnassigned.toLocaleString("en-US")} unassigned
+              {" · "}
+              {backlog.data.staleAssigned.toLocaleString("en-US")} assigned
+              {backlog.data.archived > 0
+                ? ` · ${backlog.data.archived.toLocaleString("en-US")} already archived`
+                : ""}
+            </>
+          ) : (
+            <>
+              <span className="font-medium text-foreground">
+                {backlog.data.archived.toLocaleString("en-US")} archived
+              </span>
+              {" · out of the queue, history kept, restorable by a team lead"}
+            </>
+          )}
+        </p>
+      ) : null}
 
       <Card>
         <CardContent className="p-0">
@@ -468,6 +507,9 @@ function TelesalesQueuePage() {
                       ? (roster.data?.get(lead.last_contacted_by) ?? null)
                       : null
                   }
+                  archivedByLabel={
+                    lead.archived_by ? (roster.data?.get(lead.archived_by) ?? null) : null
+                  }
                   selectable={canManage}
                   selected={selected.has(lead.id)}
                   onSelect={toggleOne}
@@ -505,6 +547,18 @@ function TelesalesQueuePage() {
           onArchive={(reason) =>
             bulk.archive.mutate(
               { leadIds: [...selected], reason },
+              { onSuccess: () => setSelected(new Set()) },
+            )
+          }
+          /*
+           * Archive and restore are the same gesture in opposite directions, so
+           * the bar shows whichever one applies to what is on screen. Offering
+           * both at once would mean offering to archive an archived lead.
+           */
+          mode={lifecycle === "archived" ? "archived" : "active"}
+          onRestore={() =>
+            bulk.restore.mutate(
+              { leadIds: [...selected] },
               { onSuccess: () => setSelected(new Set()) },
             )
           }

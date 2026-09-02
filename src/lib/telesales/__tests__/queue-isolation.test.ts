@@ -231,3 +231,70 @@ describe("the lead lifecycle costs no request per lead", () => {
     }
   });
 });
+
+describe("archived leads stay out of operational views", () => {
+  /*
+   * Archiving is the backlog's cleanup path, so the exclusions it relies on are
+   * worth pinning. All three are one-line filters that would be easy to drop in
+   * a refactor and impossible to notice: the failure is an archived lead
+   * quietly reappearing as work.
+   */
+
+  it("Recommended Leads never considers an archived lead", () => {
+    const text = source("features/telesales/hooks/use-recommended-leads.ts");
+    // On the candidate read, before the engine ever sees the row.
+    expect(text).toMatch(/\.is\("archived_at", null\)/);
+  });
+
+  it("the recommendation engine is never handed archived leads to judge", () => {
+    // Belt and braces: the engine has no notion of archiving, which is only
+    // safe because the read above excludes them.
+    const text = source("lib/telesales/recommendations.ts");
+    expect(text).not.toContain("archived");
+  });
+
+  it("the queue hides archived leads unless they are explicitly asked for", () => {
+    const text = source("features/telesales/hooks/use-telesales-queue.ts");
+    expect(text).toMatch(/if \(filters\.lifecycle === "archived"\)/);
+    // The else branch is what keeps every other view clean.
+    expect(text).toMatch(/else q = q\.is\("archived_at", null\)/);
+  });
+
+  it("archived is never the default view", () => {
+    // An agent must not arrive at archived rows without choosing to.
+    const text = source("features/telesales/types.ts");
+    expect(text).toMatch(/lifecycle: "active"/);
+  });
+
+  it("the stale backlog count measures live leads, not archived ones", () => {
+    const text = source("features/telesales/hooks/use-telesales-queue.ts");
+    expect(text).toContain("staleUnassigned");
+    expect(text).toContain("head: true");
+  });
+
+  it("bulk operations are one server call, not one per lead", () => {
+    /*
+     * The performance rule for this phase. The hook hands an array of ids to a
+     * single server function; a `map` over ids calling a mutation would be 500
+     * requests for one supervisor gesture.
+     */
+    const text = source("features/telesales/hooks/use-bulk-actions.ts");
+    expect(text).toContain("leadIds");
+    expect(text).not.toMatch(/for \(const .* of .*leadIds/);
+    expect(text).not.toMatch(/leadIds\.map\(/);
+    for (const forbidden of MIS_IMPORTS) {
+      expect(text).not.toContain(forbidden);
+    }
+  });
+
+  it("archiving is soft everywhere — no lead is ever deleted", () => {
+    // The whole module: archive is the only cleanup, and it is a timestamp.
+    for (const file of [
+      "lib/telesales/manage.server.ts",
+      "features/telesales/hooks/use-bulk-actions.ts",
+    ]) {
+      expect(source(file)).not.toMatch(/\.delete\(\)/);
+    }
+    expect(source("lib/telesales/manage.server.ts")).toContain("archived_at");
+  });
+});

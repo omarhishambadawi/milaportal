@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { fmtSAR } from "@/lib/branches";
 import {
+  daysBetween,
   describeDue,
   describeRefill,
   formatBusinessDate,
@@ -48,6 +49,9 @@ export interface LeadRowProps {
   assigneeName: string | null;
   /** Display name of whoever last *called*, from the same roster fetch. */
   lastContactName: string | null;
+  /** Who archived it, from that same roster fetch. Only meaningful on an
+   *  archived row. */
+  archivedByLabel?: string | null;
   isMine: boolean;
   canWork: boolean;
   /** Selection, for the bulk bar. Only rendered when the viewer can manage. */
@@ -64,6 +68,7 @@ export function LeadRow({
   today,
   assigneeName,
   lastContactName,
+  archivedByLabel,
   isMine,
   canWork,
   selectable,
@@ -98,6 +103,11 @@ export function LeadRow({
         today,
       })
     : null;
+  const daysSinceDue =
+    isStale && lead.refill_due_on ? daysBetween(lead.refill_due_on, today) : null;
+  const archivedOn = lead.archived_at ? relativeDays(lead.archived_at, today) : null;
+  const archivedByName = lead.archived_by ? (archivedByLabel ?? null) : null;
+
   const lastContact = relativeDays(lead.last_contacted_at, today);
   const tel = telHref(lead.phone);
 
@@ -178,7 +188,28 @@ export function LeadRow({
 
       {/* When / who owns it */}
       <div className="min-w-0 sm:col-span-2">
-        {isStale ? (
+        {lead.archived_at ? (
+          /*
+           * An archived lead is not work, so it shows neither a countdown nor a
+           * lifecycle badge -- just what happened to it and when. Who archived
+           * it is resolved from the roster the page already fetched.
+           */
+          <>
+            <span
+              className={cn(
+                "inline-block rounded border px-1.5 py-0.5 text-[10px] tracking-wide",
+                STALE_BADGE_STYLE,
+              )}
+              title={lead.archive_reason ?? undefined}
+            >
+              ARCHIVED
+            </span>
+            <p className="truncate text-[11px] text-muted-foreground/80">
+              {archivedOn ? `Archived ${archivedOn}` : "Archived"}
+              {archivedByName ? ` · ${archivedByName}` : ""}
+            </p>
+          </>
+        ) : isStale ? (
           /*
            * A stale lead never shows a refill countdown. Telling an agent
            * "REFILL OVERDUE - 214 DAYS" invites them to open a call with
@@ -198,6 +229,10 @@ export function LeadRow({
             <p className="truncate text-[11px] text-muted-foreground/80">
               No longer a current refill
               {lead.refill_due_on ? ` · due ${formatBusinessDate(lead.refill_due_on)}` : ""}
+              {/* How long ago it lapsed: the figure a supervisor sorts a
+                  backlog by, and the one that makes "archive these" an easy
+                  call. Counted from the due date, not from the boundary. */}
+              {daysSinceDue != null ? ` · ${daysSinceDue}d ago` : ""}
             </p>
           </>
         ) : refill ? (

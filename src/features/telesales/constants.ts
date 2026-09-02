@@ -119,17 +119,26 @@ export const DEFAULT_PAGE_SIZE = 50;
 export { formatSaudiPhone as formatPhone, telHref } from "@/lib/phone";
 
 /**
- * The lifecycle filter.
+ * The operational filter: which leads are on the board at all.
  *
- * Three options and no more. "Active" is the default and includes leads that
- * never had a refill date to expire — a Wasfaty prescription or a Cash invoice
- * is not stale, it simply has no cycle — because setting those aside would hide
- * work that is perfectly current.
+ * "Active" is the default and includes leads that never had a refill date to
+ * expire — a Wasfaty prescription or a Cash invoice is not stale, it simply has
+ * no cycle — because setting those aside would hide work that is perfectly
+ * current.
+ *
+ * "Archived" is on this control rather than in a tab of its own, which is the
+ * whole reason the control exists: an agent picks where they are working from
+ * one place, and archived rows can only be reached by asking for them. It is
+ * also the only one of the four that is not a *lifecycle* value — the first
+ * three read the derived `lifecycle` column, while archived selects on
+ * `archived_at`. They share a control because an operator is choosing a view,
+ * not a column.
  */
 export const LIFECYCLE_FILTER_OPTIONS = [
   { value: "active", label: "Active leads" },
   { value: "stale", label: "Stale" },
   { value: "all", label: "Active + stale" },
+  { value: "archived", label: "Archived" },
 ] as const;
 
 /**

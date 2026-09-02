@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Archive, Loader2, UserCheck, UserMinus, X } from "lucide-react";
+import { Archive, ArchiveRestore, Loader2, UserCheck, UserMinus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -42,6 +42,15 @@ export interface BulkActionBarProps {
   onAssign: (agentId: string) => void;
   onUnassign: () => void;
   onArchive: (reason: string) => void;
+  /**
+   * Which side of the archive the selection is on.
+   *
+   * `archived` swaps Archive for Restore and drops assignment: an archived lead
+   * is not work, and handing it to an agent would put it in a queue it is
+   * excluded from. Restore first, then assign.
+   */
+  mode?: "active" | "archived";
+  onRestore?: () => void;
   onClear: () => void;
 }
 
@@ -52,9 +61,13 @@ export function BulkActionBar({
   onAssign,
   onUnassign,
   onArchive,
+  mode = "active",
+  onRestore,
   onClear,
 }: BulkActionBarProps) {
   const [confirmArchive, setConfirmArchive] = useState(false);
+  const [confirmRestore, setConfirmRestore] = useState(false);
+  const archived = mode === "archived";
 
   if (count === 0) return null;
 
@@ -67,33 +80,54 @@ export function BulkActionBar({
 
         <span className="mx-1 h-5 w-px bg-border" aria-hidden />
 
-        <Select disabled={busy} onValueChange={onAssign}>
-          <SelectTrigger className="h-8 w-[190px]">
-            <UserCheck className="mr-1.5 h-4 w-4" />
-            <SelectValue placeholder="Assign to…" />
-          </SelectTrigger>
-          <SelectContent>
-            {agents.length === 0 ? (
-              <div className="px-2 py-1.5 text-xs text-muted-foreground">No active agents</div>
-            ) : (
-              agents.map((a) => (
-                <SelectItem key={a.id} value={a.id}>
-                  {a.name}
-                </SelectItem>
-              ))
-            )}
-          </SelectContent>
-        </Select>
+        {archived ? null : (
+          <Select disabled={busy} onValueChange={onAssign}>
+            <SelectTrigger className="h-8 w-[190px]">
+              <UserCheck className="mr-1.5 h-4 w-4" />
+              <SelectValue placeholder="Assign to…" />
+            </SelectTrigger>
+            <SelectContent>
+              {agents.length === 0 ? (
+                <div className="px-2 py-1.5 text-xs text-muted-foreground">No active agents</div>
+              ) : (
+                agents.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.name}
+                  </SelectItem>
+                ))
+              )}
+            </SelectContent>
+          </Select>
+        )}
 
-        <Button size="sm" variant="outline" disabled={busy} onClick={onUnassign}>
-          <UserMinus className="mr-1.5 h-4 w-4" />
-          Unassign
-        </Button>
+        {archived ? null : (
+          <Button size="sm" variant="outline" disabled={busy} onClick={onUnassign}>
+            <UserMinus className="mr-1.5 h-4 w-4" />
+            Unassign
+          </Button>
+        )}
 
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => setConfirmArchive(true)}>
-          <Archive className="mr-1.5 h-4 w-4" />
-          Archive
-        </Button>
+        {archived ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => setConfirmRestore(true)}
+          >
+            <ArchiveRestore className="mr-1.5 h-4 w-4" />
+            Restore
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => setConfirmArchive(true)}
+          >
+            <Archive className="mr-1.5 h-4 w-4" />
+            Archive
+          </Button>
+        )}
 
         {busy ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
 
@@ -102,6 +136,32 @@ export function BulkActionBar({
           <span className="sr-only">Clear selection</span>
         </Button>
       </div>
+
+      <AlertDialog open={confirmRestore} onOpenChange={setConfirmRestore}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Restore {count} lead{count === 1 ? "" : "s"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {/*
+               * Says the part a supervisor would otherwise assume wrongly.
+               * Restoring returns a lead to the queue; it does not make it
+               * current. A lead whose refill was due in January comes back
+               * stale, because its due date is a fact and restoring is not an
+               * event that changes it.
+               */}
+              They return to the queue unassigned, with their history intact. Their refill dates are
+              unchanged, so a lead whose opportunity already expired comes back as stale rather than
+              as new work.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => onRestore?.()}>Restore {count}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={confirmArchive} onOpenChange={setConfirmArchive}>
         <AlertDialogContent>
@@ -116,8 +176,9 @@ export function BulkActionBar({
                * and a supervisor who believes they have erased a customer's
                * call history has been misled.
                */}
-              They leave the queue immediately. Their call history and follow-up records are kept,
-              and a team lead can restore them from the archive filter.
+              They leave the operational queue immediately. Nothing is deleted: the customer, their
+              call history and their follow-up records are all kept, other leads for the same
+              customer are untouched, and a team lead can restore these from the Archived filter.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
