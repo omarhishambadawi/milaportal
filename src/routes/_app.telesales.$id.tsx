@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ClipboardList,
@@ -19,6 +19,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
 import { fmtSAR } from "@/lib/branches";
 import { PHONE_REJECTION_LABELS, normalizeSaudiPhone, toSaudiPhone } from "@/lib/phone";
+import { telesalesRecordInvoiceMatch } from "@/lib/telesales.functions";
 import { hasPerm } from "@/lib/permissions";
 import { BUSINESS_TIMEZONE } from "@/lib/timezone";
 import { cn } from "@/lib/utils";
@@ -31,9 +32,14 @@ import {
   OUTCOME_BY_KEY,
   type ActivityType,
 } from "@/lib/telesales/types";
+import { LeadVerificationPanel } from "@/features/telesales/components/lead-verification-panel";
 import { MisCustomerPanel } from "@/features/telesales/components/mis-customer-panel";
 import { OutcomeDialog } from "@/features/telesales/components/outcome-dialog";
 import { useCustomerIntelligence } from "@/features/telesales/hooks/use-customer-intelligence";
+import {
+  useInvoiceVerification,
+  useLeadStock,
+} from "@/features/telesales/hooks/use-lead-verification";
 import {
   DUE_TONE_STYLES,
   LEAD_STATUS_STYLES,
@@ -102,6 +108,67 @@ function LeadDetailPage() {
    * The lead renders without waiting for it.
    */
   const intel = useCustomerIntelligence(lead.data?.phone, canView);
+
+  /*
+   * Invoice verification and branch stock.
+   *
+   * Two requests, both on this page only and both under the Shams module’s own
+   * query keys, so they share a cache with the /shams Invoices and Stock tabs.
+   * The queue issues neither.
+   *
+   * The customer history already loaded above is handed to the reconciler as a
+   * free cross-check: it is what lets a “not matched” answer name the branch
+   * where the document number actually appears.
+   */
+  const reconcilableLead = lead.data
+    ? {
+        leadType: lead.data.lead_type,
+        documentNo: lead.data.document_no,
+        branchNo: lead.data.branch_no,
+        sourceDate: lead.data.source_date,
+        itemCode: lead.data.item_code,
+        itemName: lead.data.item_name,
+        quantity: lead.data.quantity,
+      }
+    : null;
+  const historyDocuments = (intel.data?.purchases ?? []).map((purchase) => ({
+    docNo: purchase.documentNo,
+    branchCode: purchase.branchCode,
+  }));
+  const invoiceCheck = useInvoiceVerification(reconcilableLead, canView, historyDocuments);
+  const stockCheck = useLeadStock(
+    {
+      itemCode: lead.data?.item_code ?? null,
+      itemName: lead.data?.item_name ?? null,
+      branchNo: lead.data?.branch_no ?? null,
+    },
+    canView,
+  );
+
+  /*
+   * Write the verdict down once, per lead, per visit.
+   *
+   * The panel above is already showing it — this only records it so a
+   * supervisor can report on it later. Guarded by a ref keyed on the lead so a
+   * re-render cannot produce a second write, and failures are swallowed: a
+   * reporting shadow must never disturb a page an agent is reading mid-call.
+   */
+  const recordedFor = useRef<string | null>(null);
+  const verdict = invoiceCheck.verification;
+  useEffect(() => {
+    if (!id || !verdict || invoiceCheck.state !== "ready") return;
+    if (recordedFor.current === id) return;
+    recordedFor.current = id;
+    void telesalesRecordInvoiceMatch({
+      data: {
+        leadId: id,
+        status: verdict.status,
+        docNo: verdict.invoice?.docNo ?? null,
+        branchNo: verdict.invoice?.branchCode ?? null,
+        discrepancies: verdict.discrepancies,
+      },
+    }).catch(() => {});
+  }, [id, verdict, invoiceCheck.state]);
 
   const [recording, setRecording] = useState(false);
   const [note, setNote] = useState("");
@@ -548,6 +615,16 @@ function LeadDetailPage() {
           ) : null}
         </div>
       </div>
+
+      {/* Did the lead convert, and can we still fulfil it? Shams MIS answers both. */}
+      <LeadVerificationPanel
+        invoiceState={invoiceCheck.state}
+        verification={invoiceCheck.verification}
+        onRetryInvoice={invoiceCheck.refetch}
+        stockState={stockCheck.state}
+        stock={stockCheck.stock}
+        onRetryStock={stockCheck.refetch}
+      />
 
       {/*
        * Customer intelligence, compact.

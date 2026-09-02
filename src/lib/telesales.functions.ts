@@ -768,3 +768,52 @@ export const telesalesLinkMisCustomer = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
     return { ok: true as const };
   });
+
+/**
+ * Record an invoice reconciliation verdict on a lead.
+ *
+ * The reporting shadow of a live derivation. The lead detail always re-derives
+ * from the MIS; this exists so a supervisor can ask "which of this week's leads
+ * turned into invoices" without re-running a lookup per lead.
+ *
+ * Stores the relationship and nothing else — the matched document number, its
+ * branch, the verdict and what disagreed. Never the invoice: Shams MIS owns
+ * what it sold, and a copy inside Telesales would be a second version of a
+ * commercial record ageing apart from the original.
+ *
+ * `view` is the gate. The verdict is derived from data the caller has already
+ * been shown by `shamsGetInvoices` — which enforces `view_shams_mis` itself —
+ * so writing down a conclusion about what you were just permitted to see is not
+ * a further privilege.
+ */
+export const telesalesRecordInvoiceMatch = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) =>
+    z
+      .object({
+        leadId: uuid,
+        status: z.enum(["matched", "not_matched", "ambiguous", "not_checked"]),
+        docNo: z.string().trim().max(32).nullable(),
+        branchNo: z.string().trim().max(32).nullable(),
+        discrepancies: z.array(z.string().max(64)).max(10),
+      })
+      .parse(d),
+  )
+  .handler(async ({ context, data }) => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await resolveActor(supabase, userId, "view");
+
+    const client = await admin();
+    const { error } = await client
+      .from("telesales_leads")
+      .update({
+        invoice_match_status: data.status,
+        invoice_matched_doc_no: data.docNo,
+        invoice_matched_branch_no: data.branchNo,
+        invoice_discrepancies: data.discrepancies,
+        invoice_checked_at: new Date().toISOString(),
+      })
+      .eq("id", data.leadId);
+    if (error) throw new Error(error.message);
+    return { ok: true as const };
+  });

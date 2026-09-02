@@ -7358,6 +7358,120 @@ guarded by `IS NULL` and fired at most once per mount, so it cannot loop.
 
 ---
 
+### Invoice verification and branch stock
+
+The lead detail answers two questions the agent asks together: **did this lead
+become a real sale**, and **can we still fulfil it**. Both come from the Shams MIS
+through the server functions the `/shams` Invoices and Stock tabs already use.
+
+```
+src/lib/telesales/reconciliation.ts                       PURE: checkability + matching
+src/features/telesales/hooks/use-lead-verification.ts     two lookups, Shams' own cache keys
+src/features/telesales/components/lead-verification-panel.tsx
+```
+
+Again no integration was built. `shamsGetInvoices` and `shamsGetProduct` own the
+credential, the token exchange and the permission check; `branchStockState` --
+the Stock tab's own rule — decides what a quantity means. Nothing here calls
+`shamsFetch` or `fetch`, and a test asserts that.
+
+#### Branch-scoped, because a document number is not unique
+
+`getInvoices` is queried with **both** the warehouse code and the document
+number, and the reconciler then filters the response to an exact `docNo` match.
+This is the single most important fact about the feature: a Shams document number
+identifies a document only within a branch. MilaPortal's own `orders` table holds
+29 invoice numbers appearing against more than one branch. A number-only lookup
+would confidently show an agent somebody else's sale.
+
+The exact-match filter also guards the transport: `getInvoices` is a **range**
+query whose ends both default to the same value, so a neighbouring document in
+the response must not be allowed to become a match.
+
+#### Four verdicts
+
+| verdict       | when                                                    |
+| ------------- | ------------------------------------------------------- |
+| `matched`     | exactly one document at that branch carries that number |
+| `not_matched` | none does                                               |
+| `ambiguous`   | more than one does — **no document is chosen**          |
+| `not_checked` | there was nothing to check                              |
+
+`ambiguous` exists so the module never picks. Given two documents sharing a
+number the panel lists both as candidates and names neither as the answer.
+
+`not_checked` is the state that keeps a non-answer from being rendered as a
+failure. `invoiceCheckability` refuses three cases before any request: a Wasfaty
+lead (a prescription is not a Shams invoice), a lead with no document number, and
+a lead whose branch is not a warehouse code. That third one is real — Wasfaty
+sheets carry pharmacy numbers such as `202` in the branch column, and
+`validateInvoiceQuery` would reject them as `invalid_query`, which would reach an
+agent as an outage when the truthful answer is that there is nothing to check.
+
+Measured against the live table: of **712** active leads, **710** are
+invoice-checkable and 2 are `not_checked` for want of a document number; **709**
+are stock-checkable across 109 distinct products and 111 warehouses.
+
+#### Discrepancies, on a document that did match
+
+A matched document can still disagree with the lead, and every disagreement is
+named rather than folded into the verdict: `date_mismatch`,
+`product_not_on_invoice`, `quantity_mismatch`, `invoice_cancelled`,
+`found_at_another_branch`.
+
+Products are compared by item code, falling back to a **whole-string** name
+compare when the code was lost in the extract. Whole-string on purpose:
+"MOUNJARO KWIKPEN 5 MG" and "MOUNJARO KWIKPEN 15MG" are different medicines and a
+prefix compare would equate them.
+
+`found_at_another_branch` is derived from the customer history **already on
+screen** for customer intelligence, so it costs no additional request. It is what
+lets a "not matched" answer say _the customer's history shows this number at
+P0027_ instead of stopping at "not found" — without sweeping all 145 branches.
+
+#### Stock, without inventing a number
+
+`branchStockState` is reused verbatim, which preserves the distinction a fresh
+implementation gets wrong: a branch **absent from a non-empty response** is
+`unknown`, not `out_of_stock`. The panel keeps `not_found` ("not in the Shams
+catalogue") separate from `unknown` ("stock unknown") for the same reason, and
+renders a quantity only where one is a fact — printing `0` for either would be an
+invented figure about a real shelf.
+
+#### The cache is shared with `/shams`, deliberately
+
+Both queries are stored under the **Shams module's own** query keys --
+`queryKeys.shams.invoices(branchCode, docNo)` and
+`queryKeys.shams.product(itemCode)`. An agent who looks a document up on the
+Shams page and then opens the telesales lead for it pays for one request, and the
+two screens cannot show different answers about the same document. A
+`telesales`-prefixed key would have produced a second cache entry for identical
+data.
+
+#### Nothing runs from the queue
+
+Both lookups are `enabled` only on a lead detail view. A hundred queue rows would
+otherwise be a hundred invoice lookups and a hundred stock lookups.
+`src/lib/telesales/__tests__/queue-isolation.test.ts` enforces this structurally --
+it reads the queue's own source and fails if it ever imports anything that
+reaches the MIS, the same technique the permission-parity guard uses.
+
+#### What is stored
+
+`20260904120000_telesales_invoice_reconciliation.sql` adds five columns to
+`telesales_leads`: `invoice_match_status` (CHECK-constrained text, not an enum),
+`invoice_matched_doc_no`, `invoice_matched_branch_no`, `invoice_discrepancies`
+and `invoice_checked_at`, behind a partial index for the supervisor read.
+
+The **relationship**, never the invoice. No lines, no totals, no customer account
+label: Shams MIS is the source of truth for what it sold, and a copy of an invoice
+inside Telesales is a second version of a commercial record that ages apart from
+the original. The document number is stored **with its branch**, always. The
+verdict is re-derived live whenever a lead is opened, so these columns are the
+reporting shadow of that derivation, not its cache.
+
+---
+
 ### Access model
 
 Reads are RLS-bounded and go straight from the browser; every write is a
