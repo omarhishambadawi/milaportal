@@ -727,3 +727,44 @@ export const telesalesBulkRestore = createServerFn({ method: "POST" })
     const result = await bulkRestore(await admin(), { leadIds: data.leadIds, actor });
     return { ok: true as const, ...result };
   });
+
+/**
+ * Record the Shams MIS customer id a lookup resolved.
+ *
+ * The only write this phase adds, and it stores one identifier — not the
+ * customer's name, not their purchases, not their loyalty balance. Duplicating
+ * the MIS into Telesales would mean two copies of a customer record ageing
+ * apart; storing the id means a later phase can join to the MIS without asking
+ * it who this number belongs to all over again.
+ *
+ * `mis_customer_id` and `mis_synced_at` were created in Phase 1 for exactly
+ * this, so no schema change is needed.
+ *
+ * Idempotent and cheap: the caller only sends it when the resolved id differs
+ * from what is stored, and the update is a no-op otherwise.
+ */
+export const telesalesLinkMisCustomer = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) =>
+    z
+      .object({
+        customerId: uuid,
+        misCustomerId: z.string().trim().min(1).max(64),
+      })
+      .parse(d),
+  )
+  .handler(async ({ context, data }) => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    // `view` is the right gate: seeing the MIS panel is what produces this id,
+    // and recording what you were already shown is not a privileged act.
+    await resolveActor(supabase, userId, "view");
+
+    const client = await admin();
+    const { error } = await client
+      .from("telesales_customers")
+      .update({ mis_customer_id: data.misCustomerId, mis_synced_at: new Date().toISOString() })
+      .eq("id", data.customerId)
+      .is("mis_customer_id", null);
+    if (error) throw new Error(error.message);
+    return { ok: true as const };
+  });

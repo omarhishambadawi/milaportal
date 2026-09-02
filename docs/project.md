@@ -7240,6 +7240,124 @@ re-grants to the intended roles.
 
 ---
 
+### Shams MIS customer intelligence
+
+The Telesales customer profile and lead detail show what the pharmacy's own
+system knows about the person on the line: identity, loyalty balance, last
+purchase, previously purchased products, and the full purchase history.
+
+**No integration was built.** `shamsGetCustomerHistory` — the server function the
+`/shams` Customers tab already uses — owns the credential, the token exchange,
+the timeout, the permission check and the error taxonomy. Phase 2 calls it and
+derives four things from the answer. The additions are one pure module, one
+hook, one component and one small write.
+
+```
+src/lib/telesales/customer-intelligence.ts   PURE: derive + classify + window
+src/features/telesales/hooks/use-customer-intelligence.ts   one lookup per customer
+src/features/telesales/components/mis-customer-panel.tsx    both densities
+```
+
+#### The phone seam
+
+The CRM stores `0504630565`; `crm/data` wants `mobileno=<9 digits>`. The
+canonical value is handed to the existing server function unchanged and
+`normalizeCrmMobile` — the integration's own established conversion — reduces it.
+**There is no second algorithm**, and a test asserts the conversion for every
+assigned Saudi prefix. Verified against production: all 656 live
+`telesales_customers` rows convert to a valid nine-digit key
+(`0500277710 → 500277710`).
+
+A lead with no usable number never produces a lookup. That matters more than it
+looks: `crm/data` answers `200` with an empty result for a query it could not
+use, which is indistinguishable from a customer who has bought nothing.
+
+#### Keyed on the customer, not the lead
+
+The React Query key is the phone. A customer holding a Mounjaro lead, an Ozempic
+lead and a retention cycle has **one** cache entry, so opening the second and
+third costs no upstream request — the Phase 1 consolidation paying for itself.
+The queue makes no MIS request at all; the lookup happens when a lead or profile
+is opened.
+
+#### Four kinds of nothing
+
+The failure this phase exists to avoid is telling an agent "no purchase history"
+when the lookup simply failed — inviting them to say something false to a
+customer of ten years. `classifyLookup` separates them, and the panel renders a
+different message for each:
+
+| state            | when                                    | retry offered |
+| ---------------- | --------------------------------------- | ------------- |
+| `not_configured` | no MIS credentials on this deployment   | no            |
+| `forbidden`      | caller lacks `view_shams_mis`           | no            |
+| `error`          | timeout, network, 401, HTTP, malformed  | **yes**       |
+| `no_customer`    | MIS answered; the number matches nobody | no            |
+| `no_purchases`   | MIS knows them; no sales in the window  | no            |
+
+Order is deliberate: configuration before failure, failure before absence. An
+unconfigured deployment is not an outage, and an outage is not an empty history.
+
+Nothing upstream reaches the screen verbatim — `ShamsFailure.kind` is a closed
+set and is mapped to copy here, so no status code, URL, body or stack is ever
+rendered.
+
+#### Loyalty
+
+`availablePoints` and `pointsValue` exactly as the MIS returns them. **Null when
+the MIS named no customer** — a number it has never heard of has no balance to
+read, and rendering "0 points" would be an invented fact about a real person. A
+genuine zero balance still shows as zero. No value is ever derived from points;
+the conversion rate belongs to the pharmacy.
+
+#### Names are compared, never merged
+
+Phase 1 found one number answering to two names; the MIS is a third opinion. When
+the MIS name differs from the Telesales name the panel shows both and says
+"confirm who you are speaking to before discussing a previous order". Nothing
+overwrites `telesales_customers.display_name`.
+
+#### Freshness, and what is not claimed
+
+The panel is labelled **Shams MIS** and stamped with when the answer on screen
+was actually retrieved — React Query's own `dataUpdatedAt` for that cache entry,
+not an implied "live".
+
+Caching is browser-side only, and that is the existing integration's decision
+being respected rather than a new one: `crm.server.ts` documents why it does not
+cache server-side — a cache keyed on mobile number would be a server-side store
+of identifiable customer data, which is a thing to add on purpose with a reason.
+`staleTime` is five minutes; **automatic retry is off**, because React Query's
+default of three silent attempts turns one agent opening a lead into three
+requests against a third-party system. A failure offers a Retry button instead.
+
+#### The window
+
+`crm/data` has no "everything" — it requires `fromdt`/`todt` in `YYYYMMDD` — so
+`historyWindow()` asks for **24 months**, long enough to establish a pattern for a
+28-day refill customer (~26 fills) and usually inside one 100-line page. When it
+is not, `hasMore` is surfaced as "older purchases exist beyond this page" rather
+than showing a truncated history that looks complete.
+
+#### Permissions
+
+Both gates apply naturally and neither is bypassed. `view_telesales` puts the
+agent on the page (RLS); `view_shams_mis` is checked inside
+`shamsGetCustomerHistory` and produces the `forbidden` state. Both live telesales
+agents already hold `view_shams_mis` explicitly.
+
+#### What is stored
+
+One identifier. `telesalesLinkMisCustomer` records `mis_customer_id` and
+`mis_synced_at` on `telesales_customers` the first time a lookup resolves them —
+columns Phase 1 already created, so **no schema change**. Not the name, not the
+purchases, not the balance: duplicating the MIS into Telesales would mean two
+copies of a customer ageing apart. The id is what a later phase needs to
+reconcile invoices without re-asking who a number belongs to. The update is
+guarded by `IS NULL` and fired at most once per mount, so it cannot loop.
+
+---
+
 ### Access model
 
 Reads are RLS-bounded and go straight from the browser; every write is a

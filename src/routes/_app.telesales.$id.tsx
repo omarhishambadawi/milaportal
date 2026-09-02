@@ -31,7 +31,9 @@ import {
   OUTCOME_BY_KEY,
   type ActivityType,
 } from "@/lib/telesales/types";
+import { MisCustomerPanel } from "@/features/telesales/components/mis-customer-panel";
 import { OutcomeDialog } from "@/features/telesales/components/outcome-dialog";
+import { useCustomerIntelligence } from "@/features/telesales/hooks/use-customer-intelligence";
 import {
   DUE_TONE_STYLES,
   LEAD_STATUS_STYLES,
@@ -89,6 +91,17 @@ function LeadDetailPage() {
   const followups = useLeadFollowups(canView ? id : undefined);
   const contacts = usePatientContacts(lead.data?.patient_id);
   const mutations = useLeadMutations(id);
+
+  /*
+   * Shams MIS for this lead’s customer.
+   *
+   * Keyed on the phone rather than the lead, so the three leads one customer
+   * holds share a single lookup and a single cache entry -- opening the second
+   * and third costs no upstream request at all.
+   *
+   * The lead renders without waiting for it.
+   */
+  const intel = useCustomerIntelligence(lead.data?.phone, canView);
 
   const [recording, setRecording] = useState(false);
   const [note, setNote] = useState("");
@@ -535,6 +548,24 @@ function LeadDetailPage() {
           ) : null}
         </div>
       </div>
+
+      {/*
+       * Customer intelligence, compact.
+       *
+       * The headline only -- loyalty, last purchase, what they have bought
+       * before. The full ledger lives on the customer profile; a lead page’s
+       * job is to get an agent onto a call.
+       */}
+      <MisCustomerPanel
+        state={intel.state}
+        data={intel.data}
+        retrievedAt={intel.retrievedAt}
+        isFetching={intel.isFetching}
+        onRetry={intel.refetch}
+        telesalesName={l.customer_name}
+        phone={l.phone}
+        compact
+      />
 
       {/* History */}
       <Card>

@@ -1,5 +1,7 @@
 import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
+import { telesalesLinkMisCustomer } from "@/lib/telesales.functions";
 import { ArrowLeft, Loader2, Phone, PhoneOff, ShieldAlert, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,6 +17,8 @@ import { businessToday, describeRefill, formatBusinessDate } from "@/lib/telesal
 import { familyLabel } from "@/lib/telesales/products";
 import { LEAD_STATUS_LABELS, LEAD_TYPE_LABELS, OUTCOME_BY_KEY } from "@/lib/telesales/types";
 import { LEAD_STATUS_STYLES, REFILL_SEVERITY_STYLES } from "@/features/telesales/constants";
+import { MisCustomerPanel } from "@/features/telesales/components/mis-customer-panel";
+import { useCustomerIntelligence } from "@/features/telesales/hooks/use-customer-intelligence";
 
 export const Route = createFileRoute("/_app/telesales/customers/$id")({
   head: () => ({ meta: [{ title: "Customer — MilaServ Portal" }] }),
@@ -148,6 +152,39 @@ function CustomerProfilePage() {
     },
   });
 
+  /*
+   * Shams MIS, loaded independently.
+   *
+   * The identity, leads and contact history above render as soon as Postgres
+   * answers; this waits on a third-party system and must never hold the page.
+   * Keyed on the phone, so a customer with three leads costs one lookup.
+   */
+  const intel = useCustomerIntelligence(customer.data?.phone, canView);
+
+  /*
+   * Record the MIS customer id the first time a lookup resolves one.
+   *
+   * One identifier, not a copy of the customer -- it is what a later phase needs
+   * to reconcile invoices without asking the MIS who this number is again. The
+   * ref makes it at most once per mount, and the server-side update is a no-op
+   * unless the column is still null, so a re-render or a second agent opening
+   * the same profile cannot produce a write loop.
+   */
+  const linked = useRef(false);
+  const storedMisId = customer.data?.mis_customer_id ?? null;
+  const resolvedMisId = intel.data?.misCustomerId ?? null;
+  const customerRowId = customer.data?.id ?? null;
+  useEffect(() => {
+    if (linked.current || !customerRowId || !resolvedMisId || storedMisId) return;
+    linked.current = true;
+    void telesalesLinkMisCustomer({
+      data: { customerId: customerRowId, misCustomerId: resolvedMisId },
+    }).catch(() => {
+      // Best effort. Failing to record the id must never disturb a profile the
+      // agent is reading mid-call; the next visit tries again.
+    });
+  }, [customerRowId, resolvedMisId, storedMisId]);
+
   if (!canView) {
     return (
       <div className="py-16 text-center">
@@ -245,22 +282,18 @@ function CustomerProfilePage() {
               </p>
             </div>
           ) : null}
-
-          {/*
-           * Shams MIS. Deliberately explicit about not being connected yet,
-           * rather than rendering an empty purchase history that looks like a
-           * customer who has never bought anything.
-           */}
-          <div className="rounded-md border border-border p-3">
-            <p className="text-xs font-medium">Purchase history, loyalty and last purchase</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Not connected yet. MilaPortal already reads this from the Shams MIS elsewhere
-              (customer lookup by mobile, purchase lines and loyalty points); wiring it into this
-              profile is the next phase.
-            </p>
-          </div>
         </CardContent>
       </Card>
+
+      <MisCustomerPanel
+        state={intel.state}
+        data={intel.data}
+        retrievedAt={intel.retrievedAt}
+        isFetching={intel.isFetching}
+        onRetry={intel.refetch}
+        telesalesName={c.display_name}
+        phone={c.phone}
+      />
 
       <Card>
         <CardHeader className="pb-2">
