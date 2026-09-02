@@ -537,15 +537,32 @@ function findRelation(
   for (const r of history) if (r.itemCode?.trim()) owned.add(r.itemCode.trim());
   if (leadItemCode) owned.add(leadItemCode);
 
-  for (const code of owned) {
-    const relations = ctx.relationsByItem.get(code);
-    if (!relations) continue;
-    for (const relation of relations) {
+  /*
+   * One product may have several configured companions, and a lead carries one
+   * recommendation, so one has to be chosen. It is chosen deterministically.
+   *
+   * Iterating `owned` directly would order the candidates by whatever order the
+   * customer's purchase rows came back in, which means the same lead could show
+   * a different cross-sell on two page loads. Sorting both the sources and the
+   * targets makes the answer a function of the configuration and the customer,
+   * and of nothing else.
+   */
+  const candidates: ProductRelation[] = [];
+  for (const code of [...owned].sort()) {
+    for (const relation of ctx.relationsByItem.get(code) ?? []) {
+      // Never recommend something the customer has already bought: a companion
+      // they own is not an opportunity, it is noise.
       if (owned.has(relation.toItemCode.trim())) continue;
-      return relation;
+      candidates.push(relation);
     }
   }
-  return null;
+  if (candidates.length === 0) return null;
+
+  candidates.sort(
+    (a, b) =>
+      a.fromItemCode.localeCompare(b.fromItemCode) || a.toItemCode.localeCompare(b.toItemCode),
+  );
+  return candidates[0];
 }
 
 /** The refill sentence, in the desk's own terms. */

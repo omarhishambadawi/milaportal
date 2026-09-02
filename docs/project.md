@@ -318,6 +318,7 @@ Conventions are documented in `src/routes/README.md` (`$id` dynamic, `$` splat,
 | `/telesales/management`                             | `view_telesales`; runs panel needs `manage_telesales`                  |
 | `/telesales/customers/$id`                          | `view_telesales`                                                       |
 | `/telesales/recommended`                            | `view_telesales`; acting needs `work_telesales`                        |
+| `/telesales/relations`                              | `view_telesales`; configuring needs `manage_telesales`                 |
 | `/admin/users`                                      | `manage_users`                                                         |
 | `/profile`                                          | any signed-in user                                                     |
 
@@ -6798,7 +6799,8 @@ below — so a phone never scrolls sideways. Branch labels come from
 
 **Routes:** `/telesales` (agent queue), `/telesales/recommended` (ranked
 opportunities), `/telesales/$id` (lead), `/telesales/customers/$id` (customer),
-`/telesales/import` (import & generate), `/telesales/management` (team lead board).
+`/telesales/import` (import & generate), `/telesales/management` (team lead board),
+`/telesales/relations` (cross-sell configuration).
 **Permissions:** `view_telesales`, `work_telesales`, `manage_telesales`.
 **Tables:** twelve, all prefixed `telesales_` — eleven for the CRM, plus
 `telesales_scheduler_state` alongside the cron job. One view,
@@ -7889,6 +7891,146 @@ reading an archived lead, the Archived view exposes no row a caller could not
 already reach from the lead detail or the customer profile. Every bulk action —
 assign, unassign, archive, restore — resolves the actor with `manage`, so an
 agent cannot invoke one even by calling the server function directly.
+
+---
+
+### Cross-sell configuration
+
+Phase 3 built the cross-sell rule and left it silent, because the data could not
+justify a single pair. This is the way a pair comes into existence: a person
+with `manage_telesales` enters it.
+
+```
+src/lib/telesales/relations.ts                          PURE: what may be configured
+src/features/telesales/hooks/use-product-relations.ts   two reads, two writes
+src/routes/_app.telesales.relations.tsx                 the screen
+```
+
+#### Still not inferred
+
+Nothing derives these. The measurement stands: of the product pairs bought by
+the same customer, the nine with support from more than one customer are all
+different strengths of the same medicine, and every cross-family pair rests on
+exactly one customer. So a **dose change is not a relationship** — Mounjaro 5mg
+to 15mg is a prescribing decision, and the engine has no notion of product
+families at all. A cross-sell exists because somebody typed it, and the row
+records who.
+
+The table is **empty in production and stays that way** until the desk
+configures something. The screen says so rather than showing examples: a
+plausible-looking sample pair is indistinguishable from a real commercial
+decision the moment it is saved.
+
+#### Directional
+
+`A → B` does not imply `B → A`. Configuring the reverse is a separate row. The
+form spells the direction out — _When the customer has bought_ … _Recommend_ …
+— rather than leaving it to column order, because a commercial recommendation
+is not symmetric.
+
+#### What may be configured
+
+Both ends come from `telesales_products`; neither is free text. A typed item
+code would let somebody configure a recommendation for a product the pharmacy
+does not sell, which an agent would then read out to a customer. The recommended
+product's **name** is taken from the catalogue too, because that name is the
+sentence the agent sees.
+
+| rule                                  | enforced by                               |
+| ------------------------------------- | ----------------------------------------- |
+| both products exist                   | `validateRelation`, against the catalogue |
+| a product is not its own cross-sell   | validator **and** `CHECK (from <> to)`    |
+| one pair configured once              | `UNIQUE (from_item_code, to_item_code)`   |
+| the recommended product is still sold | validator (`inactive_target`)             |
+
+The source may be a **deactivated** product and the target may not: a customer
+may have bought something the desk has stopped selling, and that purchase is
+still a real fact to recommend _from_, but recommending a switched-off product
+offers something that cannot be fulfilled.
+
+#### Duplicates and reactivation
+
+The unique key deliberately ignores `active`. Re-configuring a pair somebody
+switched off **reactivates the original row** rather than failing on the
+constraint or creating a second, so the configuration's history survives being
+toggled and a supervisor never sees "that already exists" for something they
+cannot see in the list. `planSave` returns which of four things happened —
+created, reactivated, updated, or `unchanged` — and `unchanged` matters: saving
+an identical pair must not bump `updated_at` and claim an edit.
+
+#### Deactivation, not deletion
+
+There is no delete. The row records a commercial decision, and _why were we
+offering this in March_ should stay answerable. Switching a pair off stops every
+recommendation it was producing on the next load, because the read asks for
+`active = true` — an inactive pair never reaches the engine at all.
+
+#### Permissions and RLS
+
+`manage_telesales`, reusing the existing permission; no new one was added.
+
+The table carries a **SELECT policy and nothing else**, so PostgREST refuses
+every write from the browser and configuration can change only through a server
+function running as `service_role` that checks `manage_telesales` itself.
+Hiding the form from an agent is a convenience; this is the boundary.
+
+Verified against production rather than assumed — an `INSERT` was attempted as
+both `anon` and `authenticated` and **both were refused**, at the grant level,
+before RLS was even consulted. `20260907120000` also takes back the write grants
+the project's default privileges hand to `anon` on every new table, the same
+trap that appeared in `20260903150000` and `20260906120000`.
+
+#### Audit
+
+`created_by` / `created_at` existed; `updated_by` is the one column this phase
+added, because "who turned this off" had no answer while `updated_at` sat there
+with nobody attached to it. Both are nullable and `ON DELETE SET NULL`, so a
+departed employee's configuration keeps working and loses only the name. The
+screen shows both.
+
+#### How it reaches an agent
+
+Through the Phase 3 engine, unchanged. A cross-sell appears only when the
+customer genuinely bought the source product and has **not** already bought the
+recommended one — a companion they own is noise, not an opportunity.
+
+Priority is untouched: cross-sell remains beneath refill-due-today, overdue,
+soon, and previously-purchased. A lead with several signals still produces one
+recommendation, not several.
+
+Where a source product has several configured companions, one is chosen
+**deterministically** — sorted by source then target code. Iterating the
+customer's purchases directly would order candidates by whatever order Postgres
+returned their rows in, so the same lead could show a different cross-sell on two
+page loads.
+
+The explanation names products, never codes:
+
+> Customer previously purchased MOUNJARO KWIKPEN 5 MG; FREESTYLE LIBRE 3 SENSOR
+> is configured as a related product (the desk's own note).
+
+#### Stock
+
+The existing implementation, and the stock shown is the **recommended** product's
+at the lead's branch — that is the shelf the agent is being asked to sell from.
+`in_stock` / `out_of_stock` / `unknown` behave exactly as everywhere else: an
+unanswered lookup is unknown, never out of stock, and no quantity is invented. A
+cross-sell is never suppressed for want of a stock answer.
+
+#### Cost
+
+One bounded read per page load, filtered to `active`, inside the same gathering
+query the engine already ran — no per-lead relationship query and no MIS call.
+The configuration screen is two small reads of its own. The normal queue is
+untouched.
+
+#### The boundary
+
+A cross-sell is commercial configuration. The system does not infer that one
+medication is appropriate because another was purchased, does not recommend
+treatment changes, and does not propose switching between strengths. What it can
+say is only ever: _this relationship was configured by an authorized business
+user._
 
 ---
 

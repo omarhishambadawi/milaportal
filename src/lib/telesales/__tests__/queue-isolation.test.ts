@@ -298,3 +298,104 @@ describe("archived leads stay out of operational views", () => {
     expect(source("lib/telesales/manage.server.ts")).toContain("archived_at");
   });
 });
+
+describe("cross-sell configuration is gated and cheap", () => {
+  /*
+   * Configuration that decides what an agent offers a patient is worth guarding
+   * structurally: who may write it, and what evaluating it costs.
+   */
+
+  it("both writes require manage_telesales, not view", () => {
+    const text = source("lib/telesales.functions.ts");
+    const save = text.slice(text.indexOf("telesalesSaveProductRelation"));
+    const toggle = text.slice(text.indexOf("telesalesSetProductRelationActive"));
+    // An agent calling either server function directly is refused before
+    // anything is read.
+    expect(save.slice(0, 2500)).toContain('resolveActor(supabase, userId, "manage")');
+    expect(toggle.slice(0, 1500)).toContain('resolveActor(supabase, userId, "manage")');
+  });
+
+  it("the database grants no write path at all", () => {
+    /*
+     * RLS carries a SELECT policy and nothing else, so PostgREST refuses every
+     * write from the browser regardless of grants. Hiding the buttons is a
+     * convenience; this is the boundary.
+     */
+    const sql = readFileSync(
+      join(ROOT, "..", "supabase", "migrations", "20260905120000_telesales_product_relations.sql"),
+      "utf8",
+    );
+    expect(sql).toContain("ENABLE ROW LEVEL SECURITY");
+    expect(sql).toMatch(/FOR SELECT/);
+    expect(sql).not.toMatch(/FOR (INSERT|UPDATE|DELETE|ALL)/);
+
+    const followUp = readFileSync(
+      join(
+        ROOT,
+        "..",
+        "supabase",
+        "migrations",
+        "20260907120000_telesales_relation_management.sql",
+      ),
+      "utf8",
+    );
+    expect(followUp).toContain("REVOKE ALL ON public.telesales_product_relations FROM anon");
+    expect(followUp).not.toMatch(/CREATE POLICY[\s\S]*FOR (INSERT|UPDATE|DELETE|ALL)/);
+  });
+
+  it("relations load once per page, never once per lead", () => {
+    const text = source("features/telesales/hooks/use-recommended-leads.ts");
+    // One bounded read inside the single gathering query, filtered to active.
+    expect(text).toContain("telesales_product_relations");
+    expect(text).toMatch(/\.eq\("active", true\)/);
+    // Not inside any per-lead loop.
+    expect(text).not.toMatch(/for \([^)]*leads[^)]*\)[\s\S]{0,400}telesales_product_relations/);
+  });
+
+  it("evaluating a relationship reaches no MIS module", () => {
+    for (const file of ["lib/telesales/relations.ts", "lib/telesales/recommendations.ts"]) {
+      const text = source(file);
+      for (const forbidden of MIS_IMPORTS) {
+        expect(text, `${file} must not import ${forbidden}`).not.toContain(forbidden);
+      }
+      expect(text).not.toMatch(/\bfetch\(/);
+    }
+  });
+
+  it("the validator is pure — no client, no I/O", () => {
+    const text = source("lib/telesales/relations.ts");
+    expect(text).not.toContain("supabase");
+    expect(text).not.toContain("createServerFn");
+  });
+
+  it("the configuration screen never writes through the browser client", () => {
+    // Reads go direct under RLS; every write goes through a server function.
+    const text = source("features/telesales/hooks/use-product-relations.ts");
+    expect(text).toContain("telesalesSaveProductRelation");
+    expect(text).toContain("telesalesSetProductRelationActive");
+    expect(text).not.toMatch(
+      /\.from\("telesales_product_relations"\)[\s\S]{0,200}\.(insert|update|delete)\(/,
+    );
+  });
+
+  it("nothing seeds a relationship", () => {
+    /*
+     * The table is empty in production and must stay that way until a person
+     * configures a pair. A seeded example would be indistinguishable from a
+     * real commercial decision once it was saved.
+     */
+    for (const file of [
+      "lib/telesales/relations.ts",
+      "features/telesales/hooks/use-product-relations.ts",
+      "routes/_app.telesales.relations.tsx",
+    ]) {
+      const text = source(file);
+      // A seed would be relation-shaped data written into the source: a literal
+      // carrying a target product. Prose about there being no examples is not
+      // that, so the pattern looks for the shape rather than for words.
+      expect(text).not.toMatch(/toItemCode\s*:\s*["'`]/);
+      expect(text).not.toMatch(/to_item_code\s*:\s*["'`]/);
+      expect(text).not.toMatch(/insert\(\s*\[/);
+    }
+  });
+});

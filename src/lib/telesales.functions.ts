@@ -817,3 +817,155 @@ export const telesalesRecordInvoiceMatch = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
     return { ok: true as const };
   });
+
+/* ------------------------------------------------------------------------- */
+/* Cross-sell configuration                                                  */
+/* ------------------------------------------------------------------------- */
+
+/** An item code as it appears in `telesales_products`. */
+const itemCode = z.string().trim().min(1).max(64);
+
+/**
+ * Configure a cross-sell pair, or switch an existing one back on.
+ *
+ * The only write path to `telesales_product_relations`. RLS carries a SELECT
+ * policy and nothing else, so PostgREST refuses every write from the browser
+ * regardless of grants — configuration can change only here, and only for a
+ * caller holding `manage_telesales`. An agent calling this function directly is
+ * refused by `resolveActor` before anything is read.
+ *
+ * Both products are checked against `telesales_products` rather than trusted
+ * from the request. A free-typed code would let somebody configure a
+ * recommendation for a product the pharmacy does not sell, which an agent would
+ * then read out to a customer. The recommended product's *name* is taken from
+ * the catalogue for the same reason: it is the sentence the agent sees.
+ *
+ * Saving a pair that already exists reactivates it instead of failing on the
+ * unique key or creating a second row — see `planSave`. Nothing here infers a
+ * relationship; a pair exists because a person entered it.
+ */
+export const telesalesSaveProductRelation = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) =>
+    z
+      .object({
+        fromItemCode: itemCode,
+        toItemCode: itemCode,
+        note: z.string().trim().max(300).nullable().optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ context, data }) => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    const actor = await resolveActor(supabase, userId, "manage");
+
+    const { buildRelationCatalog, planSave, validateRelation } =
+      await import("@/lib/telesales/relations");
+
+    const client = await admin();
+
+    const { data: products, error: catalogError } = await client
+      .from("telesales_products")
+      .select("item_code,item_name,active");
+    if (catalogError) throw new Error(catalogError.message);
+
+    const catalog = buildRelationCatalog(
+      ((products as any[]) ?? []).map((p) => ({
+        itemCode: p.item_code,
+        itemName: p.item_name,
+        active: p.active,
+      })),
+    );
+
+    const verdict = validateRelation(data, catalog);
+    if (!verdict.ok) {
+      const { RELATION_REJECTION_LABELS } = await import("@/lib/telesales/relations");
+      throw new Error(RELATION_REJECTION_LABELS[verdict.reason]);
+    }
+    const next = verdict.value;
+
+    const { data: existingRows, error: existingError } = await client
+      .from("telesales_product_relations")
+      .select("id,active,note,to_item_name")
+      .eq("from_item_code", next.fromItemCode)
+      .eq("to_item_code", next.toItemCode)
+      .limit(1);
+    if (existingError) throw new Error(existingError.message);
+
+    const existing = ((existingRows as any[]) ?? [])[0] ?? null;
+    const plan = planSave(
+      existing
+        ? { active: existing.active, note: existing.note, toItemName: existing.to_item_name }
+        : null,
+      next,
+    );
+
+    if (plan === "unchanged") return { ok: true as const, plan };
+
+    const now = new Date().toISOString();
+
+    if (!existing) {
+      const { error } = await client.from("telesales_product_relations").insert({
+        from_item_code: next.fromItemCode,
+        to_item_code: next.toItemCode,
+        to_item_name: next.toItemName,
+        note: next.note,
+        active: true,
+        created_by: actor.userId,
+        updated_by: actor.userId,
+      });
+      // The unique key is the backstop for two supervisors configuring the same
+      // pair at once: the loser is told it already exists rather than creating
+      // a duplicate.
+      if (error) {
+        throw new Error(
+          error.code === "23505"
+            ? "That cross-sell was just configured by somebody else."
+            : error.message,
+        );
+      }
+      return { ok: true as const, plan };
+    }
+
+    const { error } = await client
+      .from("telesales_product_relations")
+      .update({
+        to_item_name: next.toItemName,
+        note: next.note,
+        active: true,
+        updated_by: actor.userId,
+        updated_at: now,
+      })
+      .eq("id", existing.id);
+    if (error) throw new Error(error.message);
+    return { ok: true as const, plan };
+  });
+
+/**
+ * Switch a configured cross-sell on or off.
+ *
+ * Deactivation rather than deletion, and there is no delete: the row records a
+ * commercial decision somebody made, and the question "why were we offering
+ * this in March" should stay answerable. An inactive pair is excluded at the
+ * read — `use-recommended-leads` asks for `active = true` — so switching it off
+ * stops every recommendation it was producing on the next load.
+ */
+export const telesalesSetProductRelationActive = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => z.object({ id: uuid, active: z.boolean() }).parse(d))
+  .handler(async ({ context, data }) => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    const actor = await resolveActor(supabase, userId, "manage");
+
+    const client = await admin();
+    const { error } = await client
+      .from("telesales_product_relations")
+      .update({
+        active: data.active,
+        updated_by: actor.userId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", data.id);
+    if (error) throw new Error(error.message);
+    return { ok: true as const };
+  });
