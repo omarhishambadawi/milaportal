@@ -32,6 +32,7 @@ import { Route as AppComplaintsIndexRouteImport } from './routes/_app.complaints
 import { Route as AppCallsIndexRouteImport } from './routes/_app.calls.index'
 import { Route as AppBranchesIndexRouteImport } from './routes/_app.branches.index'
 import { Route as AppAdminIndexRouteImport } from './routes/_app.admin.index'
+import { Route as AppTelesalesRecommendedRouteImport } from './routes/_app.telesales.recommended'
 import { Route as AppTelesalesManagementRouteImport } from './routes/_app.telesales.management'
 import { Route as AppTelesalesImportRouteImport } from './routes/_app.telesales.import'
 import { Route as AppTelesalesIdRouteImport } from './routes/_app.telesales.$id'
@@ -174,6 +175,11 @@ const AppBranchesIndexRoute = AppBranchesIndexRouteImport.update({
 const AppAdminIndexRoute = AppAdminIndexRouteImport.update({
   id: '/admin/',
   path: '/admin/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppTelesalesRecommendedRoute = AppTelesalesRecommendedRouteImport.update({
+  id: '/telesales/recommended',
+  path: '/telesales/recommended',
   getParentRoute: () => AppRoute,
 } as any)
 const AppTelesalesManagementRoute = AppTelesalesManagementRouteImport.update({
@@ -356,6 +362,7 @@ export interface FileRoutesByFullPath {
   '/telesales/$id': typeof AppTelesalesIdRoute
   '/telesales/import': typeof AppTelesalesImportRoute
   '/telesales/management': typeof AppTelesalesManagementRoute
+  '/telesales/recommended': typeof AppTelesalesRecommendedRoute
   '/admin/': typeof AppAdminIndexRoute
   '/branches/': typeof AppBranchesIndexRoute
   '/calls/': typeof AppCallsIndexRoute
@@ -407,6 +414,7 @@ export interface FileRoutesByTo {
   '/telesales/$id': typeof AppTelesalesIdRoute
   '/telesales/import': typeof AppTelesalesImportRoute
   '/telesales/management': typeof AppTelesalesManagementRoute
+  '/telesales/recommended': typeof AppTelesalesRecommendedRoute
   '/admin': typeof AppAdminIndexRoute
   '/branches': typeof AppBranchesIndexRoute
   '/calls': typeof AppCallsIndexRoute
@@ -460,6 +468,7 @@ export interface FileRoutesById {
   '/_app/telesales/$id': typeof AppTelesalesIdRoute
   '/_app/telesales/import': typeof AppTelesalesImportRoute
   '/_app/telesales/management': typeof AppTelesalesManagementRoute
+  '/_app/telesales/recommended': typeof AppTelesalesRecommendedRoute
   '/_app/admin/': typeof AppAdminIndexRoute
   '/_app/branches/': typeof AppBranchesIndexRoute
   '/_app/calls/': typeof AppCallsIndexRoute
@@ -513,6 +522,7 @@ export interface FileRouteTypes {
     | '/telesales/$id'
     | '/telesales/import'
     | '/telesales/management'
+    | '/telesales/recommended'
     | '/admin/'
     | '/branches/'
     | '/calls/'
@@ -564,6 +574,7 @@ export interface FileRouteTypes {
     | '/telesales/$id'
     | '/telesales/import'
     | '/telesales/management'
+    | '/telesales/recommended'
     | '/admin'
     | '/branches'
     | '/calls'
@@ -616,6 +627,7 @@ export interface FileRouteTypes {
     | '/_app/telesales/$id'
     | '/_app/telesales/import'
     | '/_app/telesales/management'
+    | '/_app/telesales/recommended'
     | '/_app/admin/'
     | '/_app/branches/'
     | '/_app/calls/'
@@ -811,6 +823,13 @@ declare module '@tanstack/react-router' {
       path: '/admin'
       fullPath: '/admin/'
       preLoaderRoute: typeof AppAdminIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/telesales/recommended': {
+      id: '/_app/telesales/recommended'
+      path: '/telesales/recommended'
+      fullPath: '/telesales/recommended'
+      preLoaderRoute: typeof AppTelesalesRecommendedRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/telesales/management': {
@@ -1031,6 +1050,7 @@ interface AppRouteChildren {
   AppTelesalesIdRoute: typeof AppTelesalesIdRoute
   AppTelesalesImportRoute: typeof AppTelesalesImportRoute
   AppTelesalesManagementRoute: typeof AppTelesalesManagementRoute
+  AppTelesalesRecommendedRoute: typeof AppTelesalesRecommendedRoute
   AppAdminIndexRoute: typeof AppAdminIndexRoute
   AppBranchesIndexRoute: typeof AppBranchesIndexRoute
   AppCallsIndexRoute: typeof AppCallsIndexRoute
@@ -1066,6 +1086,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppTelesalesIdRoute: AppTelesalesIdRoute,
   AppTelesalesImportRoute: AppTelesalesImportRoute,
   AppTelesalesManagementRoute: AppTelesalesManagementRoute,
+  AppTelesalesRecommendedRoute: AppTelesalesRecommendedRoute,
   AppAdminIndexRoute: AppAdminIndexRoute,
   AppBranchesIndexRoute: AppBranchesIndexRoute,
   AppCallsIndexRoute: AppCallsIndexRoute,

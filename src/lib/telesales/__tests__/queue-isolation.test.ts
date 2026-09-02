@@ -112,3 +112,62 @@ describe("the detail pages fetch through the existing integration", () => {
     }
   });
 });
+
+describe("the recommendation engine makes no MIS request per lead", () => {
+  /*
+   * Phase 3's version of the same guarantee. The Recommended page ranks the
+   * whole open queue, so a per-lead upstream call here would be several hundred
+   * requests on one page load -- the failure the brief is most explicit about.
+   *
+   * The defence is architectural: the engine is pure and reads local Postgres
+   * data, and the only MIS call on the page is stock, which is per *product* on
+   * the visible page rather than per lead.
+   */
+
+  it("the engine imports no Shams client, function or hook at all", () => {
+    const text = source("lib/telesales/recommendations.ts");
+    for (const forbidden of MIS_IMPORTS) {
+      expect(text, `recommendations.ts must not import ${forbidden}`).not.toContain(forbidden);
+    }
+    // A call, not a mention: the prose above the module names the customer-history
+    // function to explain what this one deliberately does not do.
+    expect(text).not.toMatch(/shamsGetw*\(/);
+    expect(text).not.toMatch(/\bfetch\(/);
+    // The one thing it may take from the Shams module is a type, which is
+    // erased at build time and cannot issue a request.
+    expect(text).toContain("import type { StockState }");
+  });
+
+  it("the recommendation read asks the MIS for stock and nothing else", () => {
+    const text = source("features/telesales/hooks/use-recommended-leads.ts");
+    // Customer history and invoices would each be one call per lead. Both are
+    // answered locally instead -- history from telesales_source_records, the
+    // invoice verdict from the column Phase 2 persisted.
+    expect(text).not.toContain("shamsGetCustomerHistory");
+    expect(text).not.toContain("shamsGetInvoices");
+    expect(text).toContain("telesales_source_records");
+    expect(text).toContain("invoice_match_status");
+  });
+
+  it("stock is fetched per product under the Shams key, so the cache is shared", () => {
+    const text = source("features/telesales/hooks/use-recommended-leads.ts");
+    expect(text).toContain("queryKeys.shams.product(");
+    expect(text).toContain("branchStockState");
+    expect(text).not.toContain("shamsFetch");
+  });
+
+  it("the candidate read is bounded rather than unbounded", () => {
+    // A recommendation page that selected the whole table would be a different
+    // kind of N+1 -- one enormous query instead of many small ones.
+    const text = source("features/telesales/hooks/use-recommended-leads.ts");
+    expect(text).toContain("CANDIDATE_LIMIT");
+    expect(text).toMatch(/\.limit\(CANDIDATE_LIMIT\)/);
+  });
+
+  it("the Recommended page pulls in no per-lead MIS hook", () => {
+    const text = source("routes/_app.telesales.recommended.tsx");
+    expect(text).not.toContain("use-customer-intelligence");
+    expect(text).not.toContain("use-lead-verification");
+    expect(text).not.toContain("shams.functions");
+  });
+});

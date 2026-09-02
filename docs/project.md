@@ -317,6 +317,7 @@ Conventions are documented in `src/routes/README.md` (`$id` dynamic, `$` splat,
 | `/telesales/import`                                 | `manage_telesales`                                                     |
 | `/telesales/management`                             | `view_telesales`; runs panel needs `manage_telesales`                  |
 | `/telesales/customers/$id`                          | `view_telesales`                                                       |
+| `/telesales/recommended`                            | `view_telesales`; acting needs `work_telesales`                        |
 | `/admin/users`                                      | `manage_users`                                                         |
 | `/profile`                                          | any signed-in user                                                     |
 
@@ -6795,10 +6796,11 @@ below — so a phone never scrolls sideways. Branch labels come from
 
 ## Telesales CRM Module
 
-**Routes:** `/telesales` (agent queue), `/telesales/$id` (lead), `/telesales/import`
-(import & generate), `/telesales/management` (team lead board).
+**Routes:** `/telesales` (agent queue), `/telesales/recommended` (ranked
+opportunities), `/telesales/$id` (lead), `/telesales/customers/$id` (customer),
+`/telesales/import` (import & generate), `/telesales/management` (team lead board).
 **Permissions:** `view_telesales`, `work_telesales`, `manage_telesales`.
-**Tables:** eleven, all prefixed `telesales_` — ten for the CRM, plus
+**Tables:** twelve, all prefixed `telesales_` — eleven for the CRM, plus
 `telesales_scheduler_state` alongside the cron job.
 **Scheduled job:** `telesales-generation-tick`, hourly.
 
@@ -7469,6 +7471,146 @@ inside Telesales is a second version of a commercial record that ages apart from
 the original. The document number is stored **with its branch**, always. The
 verdict is re-derived live whenever a lead is opened, so these columns are the
 reporting shadow of that derivation, not its cache.
+
+---
+
+### Recommended leads
+
+A ranked view over the existing queue, answering "which of these should I call
+first, and why". Every row is an ordinary lead with its ordinary actions — call,
+claim, record, follow up. Nothing here is a second workflow.
+
+```
+src/lib/telesales/recommendations.ts                    PURE: rules, priority, reasons
+src/features/telesales/hooks/use-recommended-leads.ts   four bounded reads
+src/features/telesales/components/recommendation-strip.tsx
+src/routes/_app.telesales.recommended.tsx
+```
+
+#### The rules
+
+Deterministic, and each one produces a sentence an agent can read out.
+
+| band                   | rule                                                                 |
+| ---------------------- | -------------------------------------------------------------------- |
+| `refill_due_today`     | the customer bought this product; the refill falls due today         |
+| `refill_overdue`       | past due, but by less than one full cycle                            |
+| `refill_soon`          | due within three days                                                |
+| `previously_purchased` | bought this product on an earlier, separate document                 |
+| `cross_sell`           | a **configured** relation from a product they own to one they do not |
+
+Priority runs in exactly that order. Where several signals apply they combine
+into **one** recommendation with supporting badges — repeat customer, verified
+invoice, in stock — rather than producing several rows for one lead.
+
+The due date comes from the agreed callback (`next_followup_on`) where one
+exists, and otherwise from the customer's last purchase of the product plus
+`telesales_products.refill_days`. A promise a human made outranks a projection.
+
+#### Why an overdue refill expires after one cycle
+
+The single most consequential rule on the page. Past one full refill cycle the
+customer has missed an entire fill, and "you are due for a refill" is no longer
+a true thing to say to them — it is a re-activation conversation.
+
+The live backlog is the argument. Of 712 open leads, **561 are past due, and 430
+of those by more than sixty days**, some since January, because the retention
+workbook had been accumulating since March. Without the bound the Recommended
+page would carry 83% of the queue, which is the same as recommending nothing.
+With it, **114 leads (16%)** are recommended: 4 due today, 61 overdue, 25 due
+within three days, 24 previously purchased.
+
+The bound is the product's own configured cycle, so a 10-day sensor and a 30-day
+pen are each judged against their own rhythm rather than one invented number.
+
+A lead that fails the test is not dropped. It falls through to the
+repeat-purchase rule, where a customer who has bought before is still worth a
+call — labelled as demonstrated demand, ranked beneath the urgent ones, and
+described honestly. It also stays in the ordinary queue, which is where the desk
+works its backlog. That fall-through is visible in the live figures: previously
+purchased rises from 3 to 24 once staleness is applied.
+
+#### Cross-sell reads configuration, and there is none yet
+
+`telesales_product_relations` (migration `20260905120000`) holds explicitly
+configured pairs. It is **created empty and is empty in production**, so no
+cross-sell recommendation can appear until somebody configures one.
+
+That is a finding, not an omission. Co-purchase in the live data does not
+support inferring relationships: of the product pairs bought by the same
+customer, the nine supported by more than one customer are all **within a single
+family** — two Mounjaro strengths, two Libre SKUs, which are dose changes and
+substitutions rather than companions — and every one of the thirty cross-family
+pairs rests on exactly one customer. Deriving "bought A, so offer B" from that
+would be inventing a commercial relationship out of coincidence, and for a
+medication it would be inventing a clinical one.
+
+`telesales_product_patterns` was inspected first and is not a relationship
+source: it classifies a product name into a family and decides eligibility.
+
+#### Unknown stays unknown
+
+Stock is a supporting signal and never a reason. `branchStockState` — the Stock
+tab's own rule, reused — keeps `unknown` distinct from `out_of_stock`, and the
+strip keeps `not_found` ("not in catalogue") distinct from both. A quantity is
+rendered only where one is a fact. No lead is buried, hidden or declined for
+want of a stock answer, and the sort treats unknown and out-of-stock alike so
+that an unanswered question never costs a lead its place.
+
+The same discipline applies to the invoice signal: only `matched` earns the
+INVOICE VERIFIED badge. `not_matched`, `ambiguous` and `not_checked` earn
+nothing, and none of them suppresses a recommendation.
+
+#### Performance: four bounded reads, no MIS call per lead
+
+The constraint that shaped the design. The whole ranked list is computed from
+Postgres:
+
+1. candidate leads — one query, capped at 2,000 open leads
+2. their purchase history — one query per 250 phones
+3. refill cycles — one query (`telesales_products`, 28 rows)
+4. configured relations — one query (empty)
+
+**The purchase history is local.** `telesales_source_records` is the pharmacy's
+own imported sales extract — phone, item, date, document, branch — so "has this
+customer bought this before" is a join, not a question for the MIS. That single
+fact is what makes the page affordable.
+
+Stock is the one MIS-owned signal, fetched **per distinct product on the visible
+page** rather than per lead, through `shamsGetProduct` under
+`queryKeys.shams.product` — the same cache entry the `/shams` Stock tab and the
+lead detail's verification panel use. Rows render immediately with stock
+`unknown` and fill in; nothing waits on it.
+
+`src/lib/telesales/__tests__/queue-isolation.test.ts` enforces this
+structurally, as it does for the queue: it reads the engine's source and fails
+if it ever calls a Shams function, and fails if the recommendation read reaches
+for customer history or invoices.
+
+**Two limitations, stated rather than hidden.** Ranking uses local data only, so
+stock decorates rows without reordering them — ranking by stock would mean
+either asking about all 109 distinct products before drawing anything, or
+ordering page 1 by stock we have and page 2 by stock we do not.
+`compareRecommendations` implements the in-stock tiebreak and is tested; it
+applies whenever a caller supplies stock. And filtering and paging happen in the
+browser, because the recommendation is derived rather than stored and there is
+no column to filter on in SQL. At 712 open leads the derivation is a few
+milliseconds; a materially larger backlog would want this pushed into SQL.
+
+#### Permissions
+
+Unchanged, and nothing is bypassed. `view_telesales` gates the page,
+`work_telesales` gates claiming and recording, and every read is RLS-bounded by
+the same policies the queue uses. `telesales_product_relations` carries a SELECT
+policy on `view_telesales` and no write policy — configuring a commercial
+relationship between two medications is a supervisor act, and writes would go
+through a server function checking `manage_telesales`.
+
+#### Not a clinical system
+
+Cross-sell comes from explicit business configuration and nothing else. The
+engine makes no medical claim, infers no relationship between medications, and
+never suggests switching or changing a treatment.
 
 ---
 

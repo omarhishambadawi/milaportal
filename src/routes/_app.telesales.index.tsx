@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Inbox,
+  Lightbulb,
   Loader2,
   Search,
   ShieldAlert,
@@ -215,6 +216,14 @@ function TelesalesQueuePage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Recommended is an agent view, so it sits outside the manage-only
+              block — the whole point is the person making the calls. */}
+          <Button asChild variant="outline" size="sm">
+            <Link to="/telesales/recommended">
+              <Lightbulb className="mr-2 h-4 w-4" />
+              Recommended
+            </Link>
+          </Button>
           {canManage ? (
             <>
               <Button asChild variant="outline" size="sm">
