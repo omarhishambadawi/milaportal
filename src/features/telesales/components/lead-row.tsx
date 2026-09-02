@@ -10,6 +10,7 @@ import {
   formatBusinessDate,
   type BusinessDate,
 } from "@/lib/telesales/dates";
+import { leadLifecycle } from "@/lib/telesales/lifecycle";
 import { familyLabel } from "@/lib/telesales/products";
 import { LEAD_STATUS_LABELS, LEAD_TYPE_LABELS } from "@/lib/telesales/types";
 import {
@@ -17,6 +18,7 @@ import {
   LEAD_STATUS_STYLES,
   LEAD_TYPE_STYLES,
   REFILL_SEVERITY_STYLES,
+  STALE_BADGE_STYLE,
   formatPhone,
   relativeDays,
   telHref,
@@ -79,6 +81,23 @@ export function LeadRow({
    */
   const refill =
     lead.lead_type === "retention" ? describeRefill(lead.next_followup_on, today) : null;
+
+  /*
+   * The refill lifecycle.
+   *
+   * The state comes from the view -- the same column the queue filtered on, so
+   * a row can never contradict the filter that selected it. The wording comes
+   * from `leadLifecycle`, which is also what the recommendation engine uses, so
+   * the sentence here and the exclusion there are the same rule spoken twice.
+   */
+  const isStale = lead.lifecycle === "stale";
+  const lifecycle = isStale
+    ? leadLifecycle({
+        dueOn: lead.refill_due_on,
+        cycleDays: lead.refill_cycle_days,
+        today,
+      })
+    : null;
   const lastContact = relativeDays(lead.last_contacted_at, today);
   const tel = telHref(lead.phone);
 
@@ -159,7 +178,29 @@ export function LeadRow({
 
       {/* When / who owns it */}
       <div className="min-w-0 sm:col-span-2">
-        {refill ? (
+        {isStale ? (
+          /*
+           * A stale lead never shows a refill countdown. Telling an agent
+           * "REFILL OVERDUE - 214 DAYS" invites them to open a call with
+           * something that stopped being true months ago; the badge says what
+           * this actually is, and the line underneath says why.
+           */
+          <>
+            <span
+              className={cn(
+                "inline-block rounded border px-1.5 py-0.5 text-[10px] tracking-wide",
+                STALE_BADGE_STYLE,
+              )}
+              title={lifecycle?.reason ?? undefined}
+            >
+              STALE
+            </span>
+            <p className="truncate text-[11px] text-muted-foreground/80">
+              No longer a current refill
+              {lead.refill_due_on ? ` · due ${formatBusinessDate(lead.refill_due_on)}` : ""}
+            </p>
+          </>
+        ) : refill ? (
           <span
             className={cn(
               "inline-block rounded border px-1.5 py-0.5 text-[10px] tracking-wide",

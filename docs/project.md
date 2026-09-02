@@ -6801,7 +6801,8 @@ opportunities), `/telesales/$id` (lead), `/telesales/customers/$id` (customer),
 `/telesales/import` (import & generate), `/telesales/management` (team lead board).
 **Permissions:** `view_telesales`, `work_telesales`, `manage_telesales`.
 **Tables:** twelve, all prefixed `telesales_` — eleven for the CRM, plus
-`telesales_scheduler_state` alongside the cron job.
+`telesales_scheduler_state` alongside the cron job. One view,
+`telesales_lead_lifecycle`, which derives the refill lifecycle on every read.
 **Scheduled job:** `telesales-generation-tick`, hourly.
 
 The module replaces the Excel workflow the Shams Pharmacies telesales desk ran
@@ -7611,6 +7612,135 @@ through a server function checking `manage_telesales`.
 Cross-sell comes from explicit business configuration and nothing else. The
 engine makes no medical claim, infers no relationship between medications, and
 never suggests switching or changing a treatment.
+
+---
+
+### Lead lifecycle — active and stale
+
+A lead can be a perfectly good record and a dead opportunity at the same time.
+Of 712 open leads, **501 are more than a full refill cycle past due** — the
+backlog the retention workbook accumulated since March. Drawing those as "REFILL
+OVERDUE · 214 DAYS" hands an agent an opening line that stopped being true months
+ago, and buries the leads that are genuinely due today.
+
+```
+src/lib/telesales/lifecycle.ts    PURE: the boundary, the state, the wording
+supabase/migrations/20260906120000_telesales_lead_lifecycle.sql
+```
+
+#### The definition
+
+A refill opportunity is **stale once today is past `due_on + refill_days`** —
+one full cycle of grace. By the day after that the customer has missed an entire
+fill, and whatever is happening, it is a re-activation conversation rather than
+a refill.
+
+| state    | meaning                                       |
+| -------- | --------------------------------------------- |
+| `active` | current, or overdue by no more than one cycle |
+| `stale`  | more than one full cycle past due             |
+| `none`   | no refill date at all, so nothing to expire   |
+
+The boundary is inclusive: due 1 August on a 28-day cycle is **active through 29
+August** and stale from 30 August. `none` matters as much as the other two — a
+Wasfaty prescription or a Cash invoice has no cycle and is not stale, it simply
+never had a refill rhythm, so the active filter keeps it.
+
+The bound is always the product's own `telesales_products.refill_days`, so a
+10-day sensor and a 30-day pen are judged differently. Thirty days is a fallback
+reachable only by a lead whose due date came from an agreed callback — a
+projection cannot exist without a cycle to project with.
+
+#### The due date, and whose date wins
+
+`due_on` is the agreed callback (`next_followup_on`) where one exists, and
+otherwise the customer's last purchase of that product plus the cycle. **A date
+a human committed to always outranks a projection**, in the queue and in
+Recommended Leads alike. This is the Phase 3 precedence rule, unchanged.
+
+#### Derived, never stored
+
+There is no `is_stale` column and there will not be one. Staleness is a function
+of _today_: a lead due on 1 August with a 28-day cycle becomes stale on 30 August
+without anything happening to it, so a stored flag is correct until midnight and
+then needs a job to keep it true.
+
+It is also **orthogonal to `status`**, which is why it is not a status value. A
+lead can be `follow_up` and stale at once. Folding the two axes into one column
+would destroy the answer to "has anybody actually worked this?" — exactly the
+question a supervisor looking at a 501-lead backlog needs most.
+
+So `telesales_lead_lifecycle` is a **view**. It computes the boundary on every
+read, which means it cannot disagree with the clock, and because the boundary is
+a plain date column the queue still filters and pages in Postgres rather than in
+the browser. `security_invoker = true` is what makes that safe: the view resolves
+`telesales_leads` as the caller, so the existing policies still decide what comes
+back. Verified — an `anon` read is refused at the base table, before RLS is even
+consulted.
+
+One implementation, two callers: `lifecycle.ts` holds the rule, the queue calls
+it for the badge and Recommended Leads calls it for the exclusion, so a lead
+cannot be stale on one screen and an overdue refill on the other.
+
+#### Queue behaviour
+
+The lifecycle filter is its own control — **Active leads** (the default),
+**Stale**, **Active + stale** — because it is not a status and a single dropdown
+cannot say both. The stale count rides on the option itself (`Stale · 501`), so
+a supervisor sees how much old opportunity is in the system without changing
+filter to find out.
+
+Default is Active, which takes the agent's queue from 712 rows to **211**.
+Nothing is hidden: the count is on screen and the stale leads are one click away,
+with every management capability — assign, reassign, inspect, history — intact.
+
+A stale row shows a muted `STALE` badge and the line _No longer a current refill
+· due 1 Aug 2026_, never a countdown. Muted rather than red on purpose: 501 red
+rows would make the queue unreadable and would defeat the point, which is that
+the urgent leads should stand out.
+
+The customer profile lists a customer's leads the same way and for the same
+reason: it was rendering "REFILL OVERDUE · 214 DAYS" against opportunities that
+expired months ago. The sentence is removed wherever an agent can read it, not
+only on the queue.
+
+#### Recommended Leads
+
+Unchanged from Phase 3, and not weakened. A stale refill is never recommended as
+a refill. It falls through to **PREVIOUSLY PURCHASED** only where the customer
+genuinely bought the product on an earlier, separate document; otherwise it is
+declined as `refill_too_stale`. Of the 501 stale leads, 21 earn the fall-through
+and 480 do not.
+
+#### Reactivation, which needed no code
+
+This falls out of deriving the state rather than storing it. The lifecycle is a
+function of the due date, so any business event that moves that date moves the
+lead back to active on the very next read — a newly imported source record
+(`last_purchased_on` is a `max()` over live source rows) or a newly agreed
+callback. No job has to remember to do it, and nothing has to be un-flagged.
+
+The converse is structural too: **time alone can never reactivate a lead**.
+Waiting only ever increases the gap between today and the due date, so a stale
+lead cannot un-stale itself — a new business event is required, which is exactly
+the rule the brief asks for.
+
+Archiving a source file behaves as it always did: the archive excludes those rows
+from `last_purchased_on`, so the projection disappears and the lead reads `none`
+rather than inventing a date from withdrawn evidence.
+
+#### Cost
+
+One view, no extra round trip, no MIS call — staleness is decided from data the
+lead already carries. `telesales_source_records_phone_item_idx` serves the
+per-lead purchase lookup as an index-only scan with zero heap fetches; the live
+queue page plans and executes in **4.6 ms**.
+
+The honest limitation: because the verdict depends on `now()` it cannot be
+indexed, so the lifecycle filter is applied after the join rather than as an
+index condition. At 712 open leads that is immaterial. A materially larger
+backlog would want the boundary date materialised on write — which is safe to do
+precisely because `stale_after` is a _date_ rather than a verdict.
 
 ---
 

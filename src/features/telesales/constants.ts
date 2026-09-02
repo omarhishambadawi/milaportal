@@ -117,3 +117,28 @@ export const DEFAULT_PAGE_SIZE = 50;
  * roaming handset.
  */
 export { formatSaudiPhone as formatPhone, telHref } from "@/lib/phone";
+
+/**
+ * The lifecycle filter.
+ *
+ * Three options and no more. "Active" is the default and includes leads that
+ * never had a refill date to expire — a Wasfaty prescription or a Cash invoice
+ * is not stale, it simply has no cycle — because setting those aside would hide
+ * work that is perfectly current.
+ */
+export const LIFECYCLE_FILTER_OPTIONS = [
+  { value: "active", label: "Active leads" },
+  { value: "stale", label: "Stale" },
+  { value: "all", label: "Active + stale" },
+] as const;
+
+/**
+ * How a stale lead is drawn.
+ *
+ * Muted, not alarming. A stale lead is not an error and not a failure — it is
+ * an old opportunity, and the brief is explicit that it should read that way.
+ * Rendering 501 of 712 rows in red would make the queue unreadable and would
+ * mean the genuinely urgent leads no longer stand out, which is the exact
+ * problem this phase set out to solve.
+ */
+export const STALE_BADGE_STYLE = "bg-muted text-muted-foreground border-border font-normal";

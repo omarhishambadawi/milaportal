@@ -16,7 +16,11 @@ import { cn } from "@/lib/utils";
 import { businessToday, describeRefill, formatBusinessDate } from "@/lib/telesales/dates";
 import { familyLabel } from "@/lib/telesales/products";
 import { LEAD_STATUS_LABELS, LEAD_TYPE_LABELS, OUTCOME_BY_KEY } from "@/lib/telesales/types";
-import { LEAD_STATUS_STYLES, REFILL_SEVERITY_STYLES } from "@/features/telesales/constants";
+import {
+  LEAD_STATUS_STYLES,
+  REFILL_SEVERITY_STYLES,
+  STALE_BADGE_STYLE,
+} from "@/features/telesales/constants";
 import { MisCustomerPanel } from "@/features/telesales/components/mis-customer-panel";
 import { useCustomerIntelligence } from "@/features/telesales/hooks/use-customer-intelligence";
 
@@ -66,6 +70,9 @@ interface CustomerLead {
   cycle_number: number;
   archived_at: string | null;
   created_at: string;
+  /** Derived by `telesales_lead_lifecycle`. */
+  lifecycle: "active" | "stale" | "none";
+  refill_due_on: string | null;
 }
 
 interface ContactRow {
@@ -118,10 +125,17 @@ function CustomerProfilePage() {
     enabled: canView && Boolean(id),
     queryFn: async () => {
       const { data, error } = await (supabase as any)
-        .from("telesales_leads")
+        /*
+         * The lifecycle view, for the same reason the queue reads it: this list
+         * showed "REFILL OVERDUE - 214 DAYS" against leads whose opportunity
+         * expired months ago, which is the sentence this phase exists to stop
+         * putting in front of an agent. Same RLS, same rule, two extra columns.
+         */
+        .from("telesales_lead_lifecycle")
         .select(
           "id,lead_type,status,item_name,product_family,branch_no,source_date," +
-            "next_followup_on,total_value,contact_attempts,cycle_number,archived_at,created_at",
+            "next_followup_on,total_value,contact_attempts,cycle_number,archived_at,created_at," +
+            "lifecycle,refill_due_on",
         )
         .eq("customer_id", id)
         .order("created_at", { ascending: false })
@@ -311,8 +325,11 @@ function CustomerProfilePage() {
           ) : (
             <ul className="divide-y divide-border">
               {[...open, ...closed].map((l) => {
+                const isStale = l.lifecycle === "stale";
                 const refill =
-                  l.lead_type === "retention" ? describeRefill(l.next_followup_on, today) : null;
+                  !isStale && l.lead_type === "retention"
+                    ? describeRefill(l.next_followup_on, today)
+                    : null;
                 return (
                   <li
                     key={l.id}
@@ -343,6 +360,16 @@ function CustomerProfilePage() {
                       {l.product_family ? ` · ${familyLabel(l.product_family)}` : ""}
                       {l.total_value != null ? ` · ${fmtSAR(l.total_value)}` : ""}
                     </span>
+                    {isStale ? (
+                      <span
+                        className={cn(
+                          "rounded border px-1.5 py-0.5 text-[10px]",
+                          STALE_BADGE_STYLE,
+                        )}
+                      >
+                        STALE
+                      </span>
+                    ) : null}
                     {refill && refill.severity !== "none" ? (
                       <span
                         className={cn(

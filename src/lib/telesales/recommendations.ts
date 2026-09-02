@@ -8,6 +8,7 @@ import {
   type BusinessDate,
   type RefillLabel,
 } from "./dates";
+import { isRefillStale } from "./lifecycle";
 import type { InvoiceMatchStatus } from "./reconciliation";
 import type { StockState } from "@/lib/shams/availability";
 
@@ -363,19 +364,10 @@ export function recommendLead(lead: RecommendableLead, ctx: RecommendationContex
     /*
      * How long an overdue refill stays an opportunity.
      *
-     * One full cycle. Past that the customer has missed an entire fill, and
-     * whatever is going on -- they bought elsewhere, they stopped, somebody
-     * already called -- it is not "you are due for a refill" any more. Telling
-     * an agent it is would put a false sentence in their mouth.
-     *
-     * This is not a tuning knob dressed up as a rule. The live backlog is the
-     * argument for it: 561 open leads are past due, and 430 of them by more
-     * than sixty days, some since January -- because the retention workbook had
-     * been accumulating since March. Recommending all of them would mean
-     * recommending 83% of the queue, which is the same as recommending nothing.
-     *
-     * The bound is the product's own configured cycle, so a 10-day sensor and a
-     * 30-day pen are each judged against their own rhythm.
+     * One full cycle, bounded by the product's own configured `refill_days`.
+     * The rule and the reasoning behind it live in `lifecycle.ts`, which the
+     * queue also calls -- so a lead cannot be stale on one screen and an
+     * overdue refill on another.
      *
      * A lead that fails this test is not discarded. It falls through to the
      * repeat-purchase rule below, where a customer who has bought before is
@@ -383,8 +375,12 @@ export function recommendLead(lead: RecommendableLead, ctx: RecommendationContex
      * than as a refill, and correctly ranked beneath the urgent ones. It also
      * stays in the ordinary queue, which is where the desk works its backlog.
      */
-    const staleAfter = cycle?.refillDays ?? ctx.defaultStaleDays ?? 30;
-    const tooStale = refill.days != null && refill.days < -staleAfter;
+    const tooStale = isRefillStale({
+      dueOn,
+      cycleDays: cycle?.refillDays ?? null,
+      today: ctx.today,
+      defaultCycleDays: ctx.defaultStaleDays,
+    });
 
     // `future` is not an opportunity either: a refill three weeks out is not
     // this agent's call today, and putting it on the recommended list would
@@ -511,12 +507,15 @@ export function recommendLead(lead: RecommendableLead, ctx: RecommendationContex
     return { recommended: false, declined: "no_refill_basis" };
   }
   // Past due by more than a cycle, with no earlier purchase to fall back on.
-  if (dueOn && isBusinessDate(dueOn)) {
-    const refill = describeRefill(dueOn, ctx.today, { soonDays: ctx.soonDays });
-    const staleAfter = cycle?.refillDays ?? ctx.defaultStaleDays ?? 30;
-    if (refill.days != null && refill.days < -staleAfter) {
-      return { recommended: false, declined: "refill_too_stale" };
-    }
+  if (
+    isRefillStale({
+      dueOn,
+      cycleDays: cycle?.refillDays ?? null,
+      today: ctx.today,
+      defaultCycleDays: ctx.defaultStaleDays,
+    })
+  ) {
+    return { recommended: false, declined: "refill_too_stale" };
   }
   return { recommended: false, declined: "not_due_and_no_repeat" };
 }

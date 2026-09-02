@@ -22,7 +22,20 @@ const QUEUE_COLUMNS =
   "id,lead_type,status,priority,last_outcome,assigned_to,customer_name,phone," +
   "branch_no,city,item_name,product_family,product_strength,patient_id,prescription_no," +
   "document_no,source_date,next_followup_on,contact_attempts,cycle_number,total_value," +
-  "phone_alternates,last_contacted_by,last_contacted_at,customer_id,created_at";
+  "phone_alternates,last_contacted_by,last_contacted_at,customer_id,created_at," +
+  // Derived by the view, stored nowhere. See `20260906120000`.
+  "lifecycle,refill_due_on,stale_after,refill_cycle_days,last_purchased_on";
+
+/**
+ * The queue reads the lifecycle view rather than the table.
+ *
+ * A view with `security_invoker = true`, so the RLS policies on
+ * `telesales_leads` still decide what comes back -- the lens does not widen
+ * anything. What it adds is the derived refill lifecycle as ordinary columns,
+ * which is what lets "show me only the leads that are still current" stay a
+ * `WHERE` clause and a `range()` instead of becoming a filter in the browser.
+ */
+const QUEUE_SOURCE = "telesales_lead_lifecycle";
 
 export interface QueuePage {
   rows: QueueLead[];
@@ -56,7 +69,7 @@ export function useTelesalesQueue(
     staleTime: 15_000,
     queryFn: async () => {
       const today = businessToday();
-      let q = (supabase as any).from("telesales_leads").select(QUEUE_COLUMNS, { count: "exact" });
+      let q = (supabase as any).from(QUEUE_SOURCE).select(QUEUE_COLUMNS, { count: "exact" });
 
       /*
        * Archived leads never appear in the queue.
@@ -72,6 +85,17 @@ export function useTelesalesQueue(
 
       if (filters.status === "open") q = q.in("status", OPEN_LEAD_STATUSES);
       else if (filters.status !== "all") q = q.eq("status", filters.status);
+
+      /*
+       * Lifecycle. Orthogonal to status, so it is its own clause.
+       *
+       * `active` deliberately keeps `none` -- a lead with no refill date has no
+       * opportunity to have expired, and dropping it would quietly hide the
+       * Wasfaty and Cash leads that never had one. Only leads that genuinely
+       * went past their cycle are set aside.
+       */
+      if (filters.lifecycle === "active") q = q.in("lifecycle", ["active", "none"]);
+      else if (filters.lifecycle === "stale") q = q.eq("lifecycle", "stale");
 
       if (filters.branch !== "all") q = q.eq("branch_no", filters.branch);
       if (filters.family !== "all") q = q.eq("product_family", filters.family);
@@ -171,6 +195,37 @@ export function useTelesalesFamilies(enabled: boolean) {
       const set = new Set<string>();
       for (const r of (data as { family: string }[]) ?? []) set.add(r.family);
       return [...set].sort();
+    },
+  });
+}
+
+/**
+ * How many open leads have gone stale.
+ *
+ * A head-only count, so the pager and the badge cost one number rather than a
+ * page of rows. Deliberately independent of the queue's own filters: the point
+ * of the figure is "how much old opportunity is sitting in the system", which
+ * a supervisor wants to know whatever they are currently looking at.
+ *
+ * Same lifecycle definition as everything else -- it comes from the view, so it
+ * cannot drift from what the rows say.
+ */
+export function useStaleLeadCount(enabled: boolean, leadType: string) {
+  return useQuery<number>({
+    queryKey: [...queryKeys.telesales.all(), "stale-count", leadType],
+    enabled,
+    staleTime: 60_000,
+    queryFn: async () => {
+      let q = (supabase as any)
+        .from(QUEUE_SOURCE)
+        .select("id", { count: "exact", head: true })
+        .is("archived_at", null)
+        .in("status", OPEN_LEAD_STATUSES)
+        .eq("lifecycle", "stale");
+      if (leadType !== "all") q = q.eq("lead_type", leadType);
+      const { count, error } = await q;
+      if (error) throw new Error(error.message);
+      return count ?? 0;
     },
   });
 }

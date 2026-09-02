@@ -171,3 +171,63 @@ describe("the recommendation engine makes no MIS request per lead", () => {
     expect(text).not.toContain("shams.functions");
   });
 });
+
+describe("the lead lifecycle costs no request per lead", () => {
+  /*
+   * Staleness is derived, and the derivation has to stay cheap. The rule is a
+   * pure function of three values the lead already carries, and the filtering
+   * happens in Postgres -- so adding a lifecycle to the queue adds no round
+   * trip, and certainly no MIS call.
+   */
+
+  it("the rule imports nothing that could make a request", () => {
+    const text = source("lib/telesales/lifecycle.ts");
+    for (const forbidden of MIS_IMPORTS) {
+      expect(text, `lifecycle.ts must not import ${forbidden}`).not.toContain(forbidden);
+    }
+    expect(text).not.toMatch(/shamsGet\w*\(/);
+    expect(text).not.toMatch(/\bfetch\(/);
+    // Pure: dates in, verdict out. No client, no supabase, no I/O.
+    expect(text).not.toContain("supabase");
+  });
+
+  it("the queue filters lifecycle in Postgres, not in the browser", () => {
+    /*
+     * The whole point of the view. Filtering 712 rows client-side would work
+     * today and break the moment an import lands 173,008 -- and it would make
+     * the pager disagree with the rows, because `count` would still describe
+     * the unfiltered set.
+     */
+    const text = source("features/telesales/hooks/use-telesales-queue.ts");
+    expect(text).toContain("telesales_lead_lifecycle");
+    expect(text).toMatch(/\.eq\("lifecycle", "stale"\)/);
+    expect(text).toMatch(/\.in\("lifecycle", \["active", "none"\]\)/);
+    // Still paged and counted server-side, exactly as before.
+    expect(text).toContain('count: "exact"');
+    expect(text).toContain(".range(");
+  });
+
+  it("the queue still reaches no MIS module", () => {
+    // The read moved from a table to a view; nothing else about it changed.
+    const text = source("features/telesales/hooks/use-telesales-queue.ts");
+    for (const forbidden of MIS_IMPORTS) {
+      expect(text).not.toContain(forbidden);
+    }
+  });
+
+  it("the stale count is a head-only query, not a page of rows", () => {
+    const text = source("features/telesales/hooks/use-telesales-queue.ts");
+    expect(text).toContain("head: true");
+  });
+
+  it("the row renders the lifecycle from data it was already given", () => {
+    // No lookup per row: the view supplied the columns with the page.
+    const text = source("features/telesales/components/lead-row.tsx");
+    expect(text).toContain("lead.lifecycle");
+    expect(text).toContain("leadLifecycle(");
+    expect(text).not.toContain("useQuery");
+    for (const forbidden of MIS_IMPORTS) {
+      expect(text).not.toContain(forbidden);
+    }
+  });
+});

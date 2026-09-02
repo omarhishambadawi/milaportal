@@ -37,6 +37,7 @@ import { OutcomeDialog } from "@/features/telesales/components/outcome-dialog";
 import {
   DEFAULT_PAGE_SIZE,
   FOLLOWUP_FILTER_OPTIONS,
+  LIFECYCLE_FILTER_OPTIONS,
   PAGE_SIZE_OPTIONS,
   STATUS_FILTER_OPTIONS,
 } from "@/features/telesales/constants";
@@ -46,6 +47,7 @@ import {
 } from "@/features/telesales/hooks/use-bulk-actions";
 import { useLeadMutations } from "@/features/telesales/hooks/use-lead-detail";
 import {
+  useStaleLeadCount,
   useTelesalesBranches,
   useTelesalesFamilies,
   useTelesalesQueue,
@@ -83,6 +85,7 @@ function TelesalesQueuePage() {
   const [branch, setBranch] = useState(DEFAULT_QUEUE_FILTERS.branch);
   const [family, setFamily] = useState(DEFAULT_QUEUE_FILTERS.family);
   const [followup, setFollowup] = useState(DEFAULT_QUEUE_FILTERS.followup);
+  const [lifecycle, setLifecycle] = useState(DEFAULT_QUEUE_FILTERS.lifecycle);
   const [term, setTerm] = useState("");
   const [mineOnly, setMineOnly] = useState(false);
   const [unassignedOnly, setUnassignedOnly] = useState(false);
@@ -109,15 +112,17 @@ function TelesalesQueuePage() {
       branch,
       family,
       followup,
+      lifecycle,
       term: term.trim(),
       mineOnly,
       unassignedOnly,
       userId,
     }),
-    [leadType, status, branch, family, followup, term, mineOnly, unassignedOnly, userId],
+    [leadType, status, branch, family, followup, lifecycle, term, mineOnly, unassignedOnly, userId],
   );
 
   const queue = useTelesalesQueue(filters, page, pageSize, canView);
+  const staleCount = useStaleLeadCount(canView, leadType);
 
   // Any change of what is on screen drops the selection.
   const queueIdentity = `${JSON.stringify(filters)}|${page}|${pageSize}`;
@@ -317,6 +322,31 @@ function TelesalesQueuePage() {
                 {FOLLOWUP_FILTER_OPTIONS.map((o) => (
                   <SelectItem key={o.value} value={o.value}>
                     {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            {/*
+             * Lifecycle. Its own control rather than another status option,
+             * because a lead can be `follow_up` and stale at the same time and
+             * a single dropdown cannot say both.
+             *
+             * The stale count rides on the option itself, so a supervisor sees
+             * how much old opportunity is in the system without changing the
+             * filter to find out.
+             */}
+            <Select value={lifecycle} onValueChange={onFilter(setLifecycle)}>
+              <SelectTrigger className="w-[190px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {LIFECYCLE_FILTER_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                    {o.value === "stale" && staleCount.data != null
+                      ? ` · ${staleCount.data.toLocaleString("en-US")}`
+                      : ""}
                   </SelectItem>
                 ))}
               </SelectContent>

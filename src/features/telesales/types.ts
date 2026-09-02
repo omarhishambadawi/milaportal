@@ -1,4 +1,5 @@
 import type { LeadStatus, LeadType } from "@/lib/telesales/types";
+import type { LifecycleState as LeadLifecycleState } from "@/lib/telesales/lifecycle";
 
 /**
  * Row shapes the Telesales screens read.
@@ -44,6 +45,22 @@ export interface QueueLead {
   cycle_number: number;
   total_value: number | null;
   created_at: string;
+  /* ----------------------------------------------------------------------
+   * Derived by `telesales_lead_lifecycle`, not stored on the lead.
+   *
+   * The view computes these on every read, so they cannot disagree with the
+   * clock the way a persisted `is_stale` column would.
+   * -------------------------------------------------------------------- */
+  /** "active" | "stale" | "none" */
+  lifecycle: LeadLifecycleState;
+  /** The date the refill is judged against: agreed callback, else projection. */
+  refill_due_on: string | null;
+  /** The last day the opportunity is still current (`refill_due_on` + cycle). */
+  stale_after: string | null;
+  /** `telesales_products.refill_days` for this lead's product. */
+  refill_cycle_days: number | null;
+  /** Most recent purchase of this product by this customer. */
+  last_purchased_on: string | null;
 }
 
 /** The lead detail page's read — every column, plus its history. */
@@ -122,6 +139,14 @@ export interface QueueFilters {
   family: string;
   /** "all" | "today" | "overdue" | "upcoming" | "none" */
   followup: string;
+  /**
+   * "active" | "stale" | "all".
+   *
+   * Orthogonal to `status`, which is workflow. A lead can be `follow_up` and
+   * stale at once, so the two are separate filters and neither implies the
+   * other.
+   */
+  lifecycle: string;
   /** Free text over customer name, phone, patient id, prescription, invoice. */
   term: string;
   mineOnly: boolean;
@@ -139,6 +164,16 @@ export const DEFAULT_QUEUE_FILTERS: Omit<QueueFilters, "userId"> = {
   branch: "all",
   family: "all",
   followup: "all",
+  /*
+   * Actionable work by default.
+   *
+   * 501 of the 712 open leads are more than a full refill cycle past due --
+   * a backlog the retention workbook accumulated since March. An agent opening
+   * the queue to a list that is 70% dead opportunities is the problem this
+   * phase exists to fix. The stale count sits beside the filter and is one
+   * click away, so this prioritises rather than hides.
+   */
+  lifecycle: "active",
   term: "",
   mineOnly: false,
   unassignedOnly: false,

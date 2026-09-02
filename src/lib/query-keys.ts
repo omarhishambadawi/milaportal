@@ -90,6 +90,8 @@ export interface TelesalesQueueFilters {
   branch: string;
   family: string;
   followup: string;
+  /** "active" | "stale" | "all". Derived, and orthogonal to `status`. */
+  lifecycle: string;
   term: string;
   mineOnly: boolean;
   unassignedOnly: boolean;
