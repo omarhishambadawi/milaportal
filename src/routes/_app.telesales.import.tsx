@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
+  Download,
   FileSpreadsheet,
   Loader2,
   Play,
@@ -39,6 +40,15 @@ import {
   telesalesSeedRetentionBacklog,
 } from "@/lib/telesales.functions";
 import { ImportHistory } from "@/features/telesales/components/import-history";
+import {
+  TEMPLATE_ORDER,
+  checkMapping,
+  templateFor,
+  wasfatyUsesFillDateFallback,
+  type MappingCheck,
+} from "@/lib/telesales/templates";
+import { TEMPLATE_DATA_SHEET, downloadTemplate } from "@/lib/telesales/template-file";
+import { UploadProgress, type UploadStage } from "@/features/telesales/components/upload-progress";
 
 export const Route = createFileRoute("/_app/telesales/import")({
   head: () => ({ meta: [{ title: "Telesales Import — MilaServ Portal" }] }),
@@ -97,8 +107,18 @@ function TelesalesImportPage() {
   const [file, setFile] = useState<File | null>(null);
   const [sourceType, setSourceType] = useState<string>("cash");
   const [sheetName, setSheetName] = useState<string>("");
-  const [uploading, setUploading] = useState(false);
+  const [stage, setStage] = useState<UploadStage>("idle");
+  const [stageDetail, setStageDetail] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [downloading, setDownloading] = useState<string | null>(null);
+
+  /*
+   * One boolean derived from the stage, rather than a second piece of state
+   * that can disagree with it. A duplicate submit is prevented by the stage
+   * machine itself — there is no state in which the button is enabled and work
+   * is in flight.
+   */
+  const busy = stage === "reading" || stage === "uploading" || stage === "storing";
   const [anchorDate, setAnchorDate] = useState(businessToday());
 
   if (!canManage) {
@@ -115,16 +135,31 @@ function TelesalesImportPage() {
 
   async function readFile(f: File, sheet?: string) {
     setParsing(true);
+    setStage("reading");
+    setStageDetail(`${f.name} · ${formatBytes(f.size)}`);
     try {
+      /*
+       * Yield a frame before parsing.
+       *
+       * `parseWorkbookFile` is synchronous CPU work once the bytes are in hand,
+       * and a 15 MB workbook blocks the main thread for long enough that the
+       * "Reading" state would otherwise never paint — the operator would see
+       * the click do nothing, which is the exact complaint this addresses.
+       */
+      await new Promise((resolve) => setTimeout(resolve, 0));
       const parsed = await parseWorkbookFile(f, sheet ? { sheetName: sheet } : {});
       setPreview(parsed);
       setFile(f);
       setSourceType(parsed.sourceType);
       setSheetName(parsed.sheetName);
+      setStage("idle");
+      setStageDetail(null);
       if (parsed.records.length === 0) {
         toast.warning("No usable rows were found in that sheet.");
       }
     } catch (err) {
+      setStage("failed");
+      setStageDetail(err instanceof Error ? err.message : "That file could not be read.");
       toast.error(err instanceof Error ? err.message : "That file could not be read.");
       setPreview(null);
       setFile(null);
@@ -137,13 +172,61 @@ function TelesalesImportPage() {
     setPreview(null);
     setFile(null);
     setSheetName("");
+    setStage("idle");
+    setStageDetail(null);
     if (inputRef.current) inputRef.current.value = "";
   }
 
-  async function apply() {
-    if (!preview || !file) return;
-    setUploading(true);
+  /**
+   * Which template columns this file supplied, and which it did not.
+   *
+   * Computed from the fields the parser *resolved*, not from the header text, so
+   * an external spreadsheet that spells a column differently still counts as
+   * supplying it. The template is the reliable path, not the only one.
+   */
+  const mapping: MappingCheck | null = preview
+    ? checkMapping(
+        templateFor(sourceType as "cash" | "retention" | "wasfaty"),
+        new Set(preview.mappedFields as any),
+      )
+    : null;
+
+  /*
+   * The single most expensive mapping mistake this module has seen, called out
+   * on its own rather than left in the missing-columns list: a Wasfaty file
+   * carrying a fill date and no next-dispense date parses perfectly and then
+   * generates almost nothing, because the forward window is measured against a
+   * backward-looking column.
+   */
+  const wasfatyDateTrap =
+    sourceType === "wasfaty" &&
+    preview != null &&
+    wasfatyUsesFillDateFallback(new Set(preview.mappedFields as any));
+
+  async function getTemplate(type: "cash" | "retention" | "wasfaty") {
+    setDownloading(type);
     try {
+      await downloadTemplate(templateFor(type));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "The template could not be built.");
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  async function apply() {
+    if (!preview || !file || busy) return;
+    setStage("uploading");
+    setStageDetail(`${preview.records.length.toLocaleString("en-US")} rows`);
+    try {
+      /*
+       * One request carries the parsed rows, and the server writes them in
+       * batches of 500. There is no byte-level progress to report for it —
+       * `fetch` exposes none for a request body — so the stage says "Sending"
+       * and then "Storing" rather than animating a number that would be
+       * invented. The row count is the honest measure of size.
+       */
+      setStage("storing");
       const result = await telesalesImportWorkbook({
         data: {
           fileName: file.name,
@@ -153,6 +236,7 @@ function TelesalesImportPage() {
           contentDigest: preview.contentDigest,
           rowsSeen: preview.rowsSeen,
           headers: preview.headers,
+          mappedFields: preview.mappedFields,
           records: preview.records.map((r) => ({ ...r, sourceType })) as any,
           issues: preview.issues,
         },
@@ -181,11 +265,22 @@ function TelesalesImportPage() {
       }
 
       qc.invalidateQueries({ queryKey: queryKeys.telesales.all() });
-      clear();
+      setStage("done");
+      setStageDetail(
+        `${result.rowsStored.toLocaleString("en-US")} of ${preview.records.length.toLocaleString(
+          "en-US",
+        )} rows stored. Review the import, then generate leads when you are ready.`,
+      );
+      setPreview(null);
+      setFile(null);
+      setSheetName("");
+      if (inputRef.current) inputRef.current.value = "";
     } catch (err) {
+      setStage("failed");
+      // The server's own message, kept rather than replaced by a generic one:
+      // "duplicate key" and "payload too large" need different actions.
+      setStageDetail(err instanceof Error ? err.message : "The import failed.");
       toast.error(err instanceof Error ? err.message : "The import failed.");
-    } finally {
-      setUploading(false);
     }
   }
 
@@ -227,6 +322,45 @@ function TelesalesImportPage() {
         </div>
       </div>
 
+      {/* Templates */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">MilaPortal templates</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            A file built from one of these maps with no guessing: every header is one the importer
+            recognises, and the sheet says which columns are required and what the dates mean. Your
+            existing spreadsheets still work — this is the reliable path, not the only one.
+          </p>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {TEMPLATE_ORDER.map((type) => {
+              const t = templateFor(type);
+              return (
+                <div key={type} className="rounded-lg border border-border p-3">
+                  <p className="text-sm font-medium">{t.title}</p>
+                  <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{t.purpose}</p>
+                  <Button
+                    className="mt-2 w-full"
+                    variant="outline"
+                    size="sm"
+                    disabled={downloading != null}
+                    onClick={() => void getTemplate(type)}
+                  >
+                    {downloading === type ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Download className="mr-2 h-4 w-4" />
+                    )}
+                    Download
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Upload */}
       <Card>
         <CardHeader className="pb-3">
@@ -260,7 +394,7 @@ function TelesalesImportPage() {
               variant="outline"
               size="sm"
               onClick={() => inputRef.current?.click()}
-              disabled={parsing}
+              disabled={parsing || busy}
             >
               {parsing ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -280,6 +414,8 @@ function TelesalesImportPage() {
               }}
             />
           </div>
+
+          <UploadProgress stage={stage} detail={stageDetail} />
 
           {preview && file ? (
             <div className="space-y-3 rounded-lg border border-border p-3">
@@ -365,10 +501,79 @@ function TelesalesImportPage() {
                 </p>
               )}
 
-              <Button disabled={uploading || preview.records.length === 0} onClick={apply}>
-                {uploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                Import {preview.records.length.toLocaleString("en-US")} rows
-              </Button>
+              {/* ------------------------------------------------------------
+                  What the importer understood.
+
+                  Shown before the import rather than after, because this is the
+                  last moment at which a wrong file is cheap to fix. It lists the
+                  template's columns against what the file supplied, so "it
+                  imported fine and produced nothing" stops being a surprise
+                  discovered a day later.
+                  ------------------------------------------------------------ */}
+              {mapping ? (
+                <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+                  <p className="text-xs font-medium">
+                    Mapping · {mapping.matched.length} of{" "}
+                    {templateFor(sourceType as "cash" | "retention" | "wasfaty").columns.length}{" "}
+                    template columns found
+                  </p>
+                  <ul className="space-y-0.5 text-xs text-muted-foreground">
+                    {mapping.matched.slice(0, 8).map((c) => (
+                      <li key={c.header} className="flex items-center gap-1.5">
+                        <CheckCircle2 className="h-3 w-3 shrink-0 text-[#047857] dark:text-emerald-300" />
+                        <span className="truncate">
+                          {c.header}
+                          {c.required ? "" : " (optional)"}
+                        </span>
+                      </li>
+                    ))}
+                    {mapping.matched.length > 8 ? (
+                      <li className="pl-4.5">+{mapping.matched.length - 8} more</li>
+                    ) : null}
+                  </ul>
+
+                  {mapping.missingRequired.length > 0 ? (
+                    <div className="rounded border border-destructive/40 bg-destructive/5 p-2">
+                      <p className="text-xs font-medium text-destructive">
+                        Missing required: {mapping.missingRequired.map((c) => c.header).join(", ")}
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        The rows will import and be kept, but they cannot become leads without
+                        these. Importing anyway is safe; nothing is discarded.
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {wasfatyDateTrap ? (
+                    <div className="rounded border border-[#F59E0B]/40 bg-[#F59E0B]/10 p-2">
+                      <p className="flex items-center gap-1.5 text-xs font-medium text-[#B45309] dark:text-amber-200">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                        This file has a fill date but no next-dispense date
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        Wasfaty eligibility is measured against the date a prescription becomes
+                        collectable — today or tomorrow. A fill date is a past event, so almost
+                        every row will fall outside the window and produce no lead. The rows are
+                        still stored, and the import review will show exactly how many.
+                      </p>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button disabled={busy || preview.records.length === 0} onClick={apply}>
+                  {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  Import {preview.records.length.toLocaleString("en-US")} rows
+                </Button>
+                {/* Says what the button does *not* do. The distinction between
+                    storing rows and creating work is the one this screen has
+                    been failing to make. */}
+                <p className="text-xs text-muted-foreground">
+                  Stores the rows only. Leads are generated separately, once you have reviewed the
+                  import.
+                </p>
+              </div>
             </div>
           ) : null}
         </CardContent>

@@ -320,6 +320,7 @@ Conventions are documented in `src/routes/README.md` (`$id` dynamic, `$` splat,
 | `/telesales/recommended`                            | `view_telesales`; acting needs `work_telesales`                        |
 | `/telesales/relations`                              | `view_telesales`; configuring needs `manage_telesales`                 |
 | `/telesales/identity`                               | `view_telesales`; mapping needs `manage_telesales`                     |
+| `/telesales/imports/$id`                            | `manage_telesales`                                                     |
 | `/admin/users`                                      | `manage_users`                                                         |
 | `/profile`                                          | any signed-in user                                                     |
 
@@ -6802,7 +6803,8 @@ below — so a phone never scrolls sideways. Branch labels come from
 opportunities), `/telesales/$id` (lead), `/telesales/customers/$id` (customer),
 `/telesales/import` (import & generate), `/telesales/management` (team lead board),
 `/telesales/relations` (cross-sell configuration), `/telesales/identity`
-(product identity mapping).
+(product identity mapping), `/telesales/imports/$id` (import review &
+generation).
 **Permissions:** `view_telesales`, `work_telesales`, `manage_telesales`.
 **Tables:** thirteen, all prefixed `telesales_` — twelve for the CRM, plus
 `telesales_scheduler_state` alongside the cron job. One view,
@@ -6856,7 +6858,9 @@ src/lib/telesales/identity.ts     PURE: the one product identity resolver
 src/lib/telesales/aliases.ts      PURE: what an identity mapping may assert
 src/lib/telesales/dedup.ts        PURE: the deduplication keys
 src/lib/telesales/status.ts       PURE: the state machine, ownership, follow-up proposals
-src/lib/telesales/generation.ts   PURE: source rows -> lead drafts
+src/lib/telesales/generation.ts   PURE: source rows -> lead drafts, and the per-row verdict
+src/lib/telesales/diagnostics.ts  PURE: why an import produced the leads it did
+src/lib/telesales/templates.ts    PURE: the three import templates and mapping checks
 src/lib/telesales/parse.ts        PURE grid parser + the thin xlsx wrapper
 src/lib/telesales/import.server.ts    stores an upload and its rows
 src/lib/telesales/generate.server.ts  fetches candidates, calls the projection, writes
@@ -8342,6 +8346,181 @@ test that asserts neither file reaches the other.
 3. **Whether the source file's duplicate coding should be fixed upstream.** This
    layer interprets it correctly; it does not make it go away, and every future
    import will land new codes for the same 23 products.
+
+---
+
+## Telesales import and generation
+
+**Routes:** `/telesales/import` (upload & templates), `/telesales/imports/$id`
+(review & generate). **Permission:** `manage_telesales` throughout.
+
+### Importing is not generating
+
+The two have always been separate server functions — `telesalesImportWorkbook`
+stores rows and creates no leads; `telesalesGenerate` creates leads and reads no
+files — and a structural test now asserts it, because the failure would be
+silent and would look like a queue full of work nobody chose to raise.
+
+```
+UPLOAD  →  IMPORT (store rows)  →  REVIEW  →  FILTER  →  GENERATE  →  QUEUE
+```
+
+The one deliberate exception is the Retention backlog, which is seeded on import
+because it has no window to wait for: every row is already due, and making the
+operator press a second button would only delay work the desk is already late
+on. It is a named function the operator invokes, not a side effect of storing
+rows.
+
+### The 3,937 → 46 question, answered
+
+A Wasfaty file of 3,937 rows was imported and 46 leads appeared. **Nothing was
+wrong.** Reconciled against live data:
+
+| bucket                                           | rows      |
+| ------------------------------------------------ | --------- |
+| eligible → became leads                          | 46        |
+| dispense date in the past (2026-01-08 → 09-02)   | 3,721     |
+| dispense date in the future (2026-09-05 → 12-09) | 170       |
+| missing Patient ID                               | 0         |
+| missing Prescription No                          | 0         |
+| missing date                                     | 0         |
+| no contact identity                              | 0         |
+| **total**                                        | **3,937** |
+
+46 is 25 due today plus 21 due tomorrow. The window worked exactly as designed;
+the product had no way to say so, and that was the actual defect.
+
+**Recommendation on the 3,721 past-dated rows: leave the forward window as it
+is.** They are not missed opportunities. 2,527 of the 3,937 rows already carry an
+`Action` written by the desk — 742 `Dispensed / Expired`, 638 `Rejected`, 454
+`Answered - Order Created`, 285 `No Answer or Busy` — so the file is largely a
+record of work already done. Generating leads from it would re-call customers who
+have already been called and re-offer prescriptions already dispensed or expired.
+Of the 1,370 past rows with no `Action` at all, only 356 carry a phone number and
+just 95 fall within the last fortnight.
+
+### The column that actually needs fixing
+
+The live file carries `raw fill date` and **no next-dispense column**. The parser
+falls back to the fill date, so a _forward_ today-and-tomorrow window is measured
+against a _backward-looking_ field — which is why 95% of rows land in the past.
+The window is right; the column it is pointed at is not.
+
+That is a mapping problem, and it is fixed at the only point where it can be:
+the Wasfaty template names `Next Dispense Date` as a required column, and the
+import screen warns when a Wasfaty file supplies a fill date without one.
+
+### Import templates
+
+Downloadable `.xlsx` for Cash, Retention and Wasfaty. Two sheets: `Data` (the
+header row the importer reads, plus one example row) and `Instructions` (each
+column's meaning, whether it is required, the expected format, and the rule that
+decides which rows become leads).
+
+Every template header is one the parser's `HEADER_ALIASES` already recognises,
+and this is asserted **behaviourally** — the test builds the sheet the download
+produces, runs the real parser over it, and requires every column to map. A
+template that the importer did not understand would be worse than none.
+
+Headers are business words, never database column names. Dates are `YYYY-MM-DD`
+(Excel date cells work too), phones `05XXXXXXXX`.
+
+Templates are a convenience, not a requirement: any spreadsheet whose headers
+the importer recognises still works exactly as before, and `checkMapping`
+reports what a file supplied against what the template expects rather than
+refusing it.
+
+### Import review
+
+`/telesales/imports/$id` answers _of the rows in this import, how many are
+leads, and what is each of the others waiting for_. Buckets are mutually
+exclusive, ordered actionable-first, and **sum to the rows examined** — asserted
+in the tests, because a reconciliation that does not reconcile invites the
+reader to trust a number that is quietly wrong.
+
+The verdicts come from `judgeCashRecord` / `judgeWasfatyRecord` /
+`judgeRetentionBacklogRecord` — the same functions the generators call, extracted
+in this phase precisely so a report cannot drift into explaining a run that did
+not happen. The only thing layered on top is presentational: `outside_window` is
+one rule in the generator and is split by which side of the window the row fell
+on, because "collectable last month" and "opens in November" are different facts
+for the desk.
+
+`already_generated` is checked **after** the rules, never instead of them: it is
+only meaningful for a row that would otherwise qualify. Archived leads count as
+generated, because the unique index does not care that a lead was archived and
+re-running would not produce another.
+
+### Scoped generation
+
+`runGeneration` takes optional filters — import, branches, cities, item codes,
+has-a-phone, and a narrowed date range. All are applied **in the database**; a
+filter that read every row and discarded most of them would be a slower way to
+run the same generation.
+
+Filters only ever **shrink** the set considered. `narrowWindow` clamps the dates
+to the pipeline's own window, so a filter cannot be used to generate last
+March's prescriptions by typing a date into a box — that would not be a filter,
+it would be a different business decision. A filtered run can only ever produce
+a subset of what an unfiltered one would have.
+
+The scope is recorded on the run: `import_id` as a column (it is what people ask
+about by name, and the review screen queries it) and the rest as `filters` jsonb.
+Without them a filtered run and a full run are indistinguishable afterwards.
+
+### Idempotency
+
+Unchanged and already proven in production. Every lead carries a `dedup_key`;
+`UNIQUE (lead_type, dedup_key)` refuses the second and the refusal is _counted_
+rather than raised. The generator does not check-then-insert — that is a race,
+and it would lose the first morning somebody pressed Generate while the cron was
+mid-flight.
+
+The live run history shows it plainly: the same 46 Wasfaty candidates, one run
+recording `created 46`, the next recording `created 0, skipped_duplicate 46`.
+
+Generation also now reads only **live** source rows (`archived_at IS NULL`).
+Archiving an import takes its leads out of the queue; a generator that re-created
+them from the same rows would have undone the archive on the next run, silently.
+No import is archived today, so nothing moved.
+
+### Upload feedback
+
+Named stages — Reading, Sending, Storing — with no percentage, because there is
+no honest number to show:
+
+- **Reading** is synchronous `xlsx` parsing in the browser, which reports nothing.
+- **Sending** is one `fetch`; `fetch` exposes no request-body progress, and
+  swapping to `XMLHttpRequest` to animate a bar would buy a number with a
+  transport rewrite.
+- **Storing** happens server-side, in batches of 500, after the request lands.
+
+A moving bar here would be driven by a timer rather than by the file, which is
+worse than no bar: it teaches the operator to trust a value that knows nothing.
+The row count is a real measure of size and is shown instead. A test asserts the
+component contains no timer and no percentage.
+
+Duplicate submission is prevented by the stage machine itself — there is no
+state in which the button is enabled and work is in flight.
+
+### Large files
+
+Unchanged, and deliberately: the parse is in the browser (so a 15 MB workbook is
+never uploaded), rows are posted once as normalised JSON, and the server writes
+them in batches of 500. The known ceiling is the single request body — the
+schema caps it at 200,000 records. Raising it means a chunked import protocol,
+which is a real architectural change and is not worth making before a file
+actually needs it.
+
+### Troubleshooting
+
+| symptom                                  | where to look                                                                    |
+| ---------------------------------------- | -------------------------------------------------------------------------------- |
+| "Rows imported but no leads appeared"    | `/telesales/imports/$id` — the buckets say which rule refused each row           |
+| Wasfaty file produces almost nothing     | Check for the fill-date warning on import; the file likely has no dispense date  |
+| Generation created 0                     | Read `skipped_duplicate` on the run — 0 created with N duplicates is idempotency |
+| A column was not picked up               | The mapping panel on import lists what resolved; compare against the template    |
+| Rows are eligible tomorrow but not today | Expected for Wasfaty; the review screen's "waiting for their date" bucket        |
 
 The last one is worth stating precisely: with RLS on and no UPDATE policy,
 Postgres matches zero rows rather than raising, so the write silently does

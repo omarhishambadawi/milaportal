@@ -48,7 +48,7 @@ import { workbookDigest } from "./dedup";
 /* ------------------------------------------------------------------------- */
 
 /** The fields a sheet can supply, whatever it calls them. */
-type Field =
+export type Field =
   | "customerRef"
   | "customerName"
   | "phone"
@@ -371,6 +371,7 @@ export function parseSheet(grid: Grid, options: ParseOptions = {}): ParsedWorkbo
       sourceType: options.sourceType ?? "cash",
       sheetName: options.sheetName ?? "",
       headers: [],
+      mappedFields: [],
       records: [],
       issues: [
         {
@@ -605,6 +606,9 @@ export function parseSheet(grid: Grid, options: ParseOptions = {}): ParsedWorkbo
     sourceType,
     sheetName: options.sheetName ?? "",
     headers,
+    // Sorted, so the reported mapping is a set rather than an artefact of
+    // whichever order the header columns happened to appear in.
+    mappedFields: [...columns.keys()].sort(),
     records,
     issues: issues.list(),
     rowsSeen,

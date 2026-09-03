@@ -611,6 +611,125 @@ describe("product identity is configuration, and it is not cross-sell", () => {
   });
 });
 
+describe("import is not generation", () => {
+  /*
+   * The workflow the desk needs: a file arrives, its rows are stored, somebody
+   * reviews them, and *then* leads are created. Uploading must never mean
+   * "create every possible lead now" — a structural guard, because the failure
+   * is silent and only visible as a queue full of work nobody chose to raise.
+   */
+  it("the import server function creates no leads", () => {
+    const text = source("lib/telesales/import.server.ts");
+    expect(text).not.toContain("telesales_leads");
+    expect(text).not.toContain("generateCashLeads");
+    expect(text).not.toContain("generateWasfatyLeads");
+    expect(text).not.toContain("runGeneration");
+  });
+
+  it("the import write path is separate from the generation write path", () => {
+    const text = source("lib/telesales.functions.ts");
+    // Two entry points, each with its own authorization check.
+    expect(text).toContain("telesalesImportWorkbook");
+    expect(text).toContain("telesalesGenerate");
+    // Importing must not call generation on the way out. The retention backlog
+    // is the one deliberate exception and it is its own named function the
+    // operator invokes, not a side effect of storing rows.
+    const importFn = text.slice(
+      text.indexOf("export const telesalesImportWorkbook"),
+      text.indexOf("export const telesalesImportHistory"),
+    );
+    expect(importFn).not.toContain("runGeneration");
+    expect(importFn).not.toContain("runDailyGeneration");
+    expect(importFn).not.toContain("telesalesGenerate");
+  });
+
+  it("generation reads only live source rows", () => {
+    /*
+     * Archiving an import takes its leads out of the queue. A generator that
+     * then re-created them from the same rows would undo the archive on the
+     * next run, silently.
+     */
+    const text = source("lib/telesales/generate.server.ts");
+    expect(text).toMatch(/\.is\("archived_at", null\)/);
+  });
+
+  it("the diagnostic is read-only", () => {
+    // A report that mutates what it reports on is not a report.
+    const text = source("lib/telesales/diagnose.server.ts");
+    for (const write of [".insert(", ".update(", ".upsert(", ".delete(", ".rpc("]) {
+      expect(text, `diagnose.server.ts must not ${write}`).not.toContain(write);
+    }
+  });
+
+  it("the diagnostic asks the generator's own rules", () => {
+    // Not a second reading of the same list of rules: a diagnostic that
+    // reasoned independently would eventually explain a run that did not happen.
+    const text = source("lib/telesales/diagnostics.ts");
+    expect(text).toContain("judgeCashRecord");
+    expect(text).toContain("judgeWasfatyRecord");
+    expect(text).toContain("judgeRetentionBacklogRecord");
+    // And it re-implements none of them.
+    expect(text).not.toContain("withinWindow(");
+    expect(text).not.toContain("matchProduct(");
+  });
+
+  it("the pure import modules reach no client and no MIS", () => {
+    for (const file of ["lib/telesales/diagnostics.ts", "lib/telesales/templates.ts"]) {
+      const text = source(file);
+      expect(text).not.toContain("supabase");
+      expect(text).not.toContain("createServerFn");
+      expect(text).not.toMatch(/\bfetch\(/);
+      for (const forbidden of MIS_IMPORTS) {
+        expect(text, `${file} must not import ${forbidden}`).not.toContain(forbidden);
+      }
+    }
+  });
+
+  it("the diagnostic reads bounded pages, never one query per row", () => {
+    const text = source("lib/telesales/diagnose.server.ts");
+    expect(text).toContain("DIAGNOSIS_ROW_LIMIT");
+    expect(text).toMatch(/\.range\(/);
+    /*
+     * No I/O inside the row loop. Scoped to the loop's own statement rather
+     * than to the next few hundred characters -- the paging `await` on the line
+     * below is the *next page*, which is the bounded read this is defending.
+     */
+    for (const line of text.split("\n")) {
+      if (line.includes("for (const row of rows)")) {
+        expect(line, "the row loop must not await").not.toContain("await");
+      }
+    }
+  });
+
+  it("generation filters are applied in the database, not in JavaScript", () => {
+    /*
+     * A filter that reads every row and then discards most of them is a slower
+     * way to run the same generation.
+     */
+    const text = source("lib/telesales/generate.server.ts");
+    expect(text).toContain("applyFilters");
+    expect(text).toMatch(/q\.in\("branch_no"/);
+    expect(text).toMatch(/q\.eq\("import_id"/);
+    // And a filter may never widen the window it runs in.
+    expect(text).toContain("narrowWindow");
+  });
+
+  it("the upload progress reports stages, never an invented percentage", () => {
+    /*
+     * There is no byte-level progress to report: parsing is synchronous browser
+     * work, `fetch` exposes no upload progress, and storing happens server-side
+     * after the request lands. A moving number would be driven by a timer.
+     */
+    const text = source("features/telesales/components/upload-progress.tsx");
+    expect(text).not.toMatch(/setInterval|setTimeout/);
+    expect(text).not.toMatch(/\bpercent\b|\bprogress\s*=\s*\d/);
+    // Every stage the machine can be in is rendered.
+    for (const stage of ["reading", "uploading", "storing", "done", "failed"]) {
+      expect(text, `stage ${stage} must be handled`).toContain(stage);
+    }
+  });
+});
+
 describe("the suite does not assert on wall-clock time", () => {
   /*
    * A timing threshold in a unit test measures the machine, not the code. One

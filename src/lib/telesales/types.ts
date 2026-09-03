@@ -401,6 +401,17 @@ export interface ParsedWorkbook {
   sheetName: string;
   /** Header row as read, for the preview panel. */
   headers: string[];
+  /**
+   * The MilaPortal fields the header row actually resolved to.
+   *
+   * Reported so the import screen can say *what it understood* rather than only
+   * what it read. A file whose headers all parse but which omits the column the
+   * eligibility rule depends on imports cleanly and then generates nothing —
+   * the live Wasfaty file, which carried a fill date and no next-dispense date,
+   * is exactly that case. Names are `Field` values from `parse.ts`, kept as
+   * plain strings here so this module stays free of the parser.
+   */
+  mappedFields: string[];
   records: SourceRecordInput[];
   issues: ImportIssue[];
   rowsSeen: number;

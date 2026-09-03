@@ -88,6 +88,89 @@ function emptySkips(): Record<SkipReason, number> {
 }
 
 /* ------------------------------------------------------------------------- */
+/* One verdict per row, asked by the generator and by the diagnostic          */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Whether one row qualifies, and if not, which rule refused it.
+ *
+ * Extracted so that the generator and the import diagnostic ask the *same*
+ * function rather than two implementations of the same list of rules. That
+ * matters more here than anywhere else in the module: the diagnostic's entire
+ * purpose is to explain a generation run, and a diagnostic that reasons about
+ * the rules separately would eventually explain a run that did not happen.
+ *
+ * The order of the checks is the answer's precedence. A row with no date *and*
+ * an ineligible product is reported as `no_date`, once, so the buckets sum to
+ * the row count instead of double-counting.
+ */
+export type RowVerdict = { eligible: true } | { eligible: false; reason: SkipReason };
+
+const ELIGIBLE: RowVerdict = { eligible: true };
+
+/** A row identifies somebody callable at all. Looser than "has a phone" on
+ *  purpose — see `generateCashLeads`. */
+function hasContactIdentity(record: {
+  customerRef: string | null;
+  phone: string | null;
+  customerName: string | null;
+}): boolean {
+  return Boolean(record.customerRef || record.phone || record.customerName);
+}
+
+/** The Cash rules, in order. */
+export function judgeCashRecord(
+  record: SourceRecordInput,
+  window: DateWindow,
+  catalog: ProductCatalog,
+): RowVerdict {
+  if (!record.sourceDate) return { eligible: false, reason: "no_date" };
+  if (!withinWindow(window, record.sourceDate)) {
+    return { eligible: false, reason: "outside_window" };
+  }
+  if (!matchProduct(catalog, record, "cash").eligible) {
+    return { eligible: false, reason: "ineligible_product" };
+  }
+  if (!hasContactIdentity(record)) {
+    return { eligible: false, reason: "no_contact_identity" };
+  }
+  return ELIGIBLE;
+}
+
+/**
+ * The Wasfaty rules, in order.
+ *
+ * No product check: the Wasfaty sheets carry no item code and no product name,
+ * because the medication is inside the prescription. No phone check either — a
+ * number the file does not have is the agent's job to find, not a reason to
+ * discard the prescription.
+ */
+export function judgeWasfatyRecord(record: SourceRecordInput, window: DateWindow): RowVerdict {
+  if (!record.sourceDate) return { eligible: false, reason: "no_date" };
+  if (!withinWindow(window, record.sourceDate)) {
+    return { eligible: false, reason: "outside_window" };
+  }
+  if (!record.patientId && !record.prescriptionNo) {
+    return { eligible: false, reason: "no_contact_identity" };
+  }
+  return ELIGIBLE;
+}
+
+/** The retention-backlog rules. No window: the backlog is taken as it stands. */
+export function judgeRetentionBacklogRecord(
+  record: SourceRecordInput,
+  catalog: ProductCatalog,
+): RowVerdict {
+  if (!matchProduct(catalog, record, "retention").eligible) {
+    return { eligible: false, reason: "ineligible_product" };
+  }
+  if (!hasContactIdentity(record)) {
+    return { eligible: false, reason: "no_contact_identity" };
+  }
+  return ELIGIBLE;
+}
+
+/* ------------------------------------------------------------------------- */
 /* Cash                                                                      */
 /* ------------------------------------------------------------------------- */
 
@@ -129,25 +212,12 @@ export function generateCashLeads(
   const windowLabel = formatWindow(window);
 
   for (const record of records) {
-    if (!record.sourceDate) {
-      skipped.no_date++;
+    const verdict = judgeCashRecord(record, window, catalog);
+    if (!verdict.eligible) {
+      skipped[verdict.reason]++;
       continue;
     }
-    if (!withinWindow(window, record.sourceDate)) {
-      skipped.outside_window++;
-      continue;
-    }
-
     const product = matchProduct(catalog, record, "cash");
-    if (!product.eligible) {
-      skipped.ineligible_product++;
-      continue;
-    }
-
-    if (!record.customerRef && !record.phone && !record.customerName) {
-      skipped.no_contact_identity++;
-      continue;
-    }
 
     drafts.push({
       leadType: "cash",
@@ -230,16 +300,9 @@ export function generateWasfatyLeads(
   const windowLabel = formatWindow(window);
 
   for (const record of records) {
-    if (!record.sourceDate) {
-      skipped.no_date++;
-      continue;
-    }
-    if (!withinWindow(window, record.sourceDate)) {
-      skipped.outside_window++;
-      continue;
-    }
-    if (!record.patientId && !record.prescriptionNo) {
-      skipped.no_contact_identity++;
+    const verdict = judgeWasfatyRecord(record, window);
+    if (!verdict.eligible) {
+      skipped[verdict.reason]++;
       continue;
     }
 
@@ -437,15 +500,12 @@ export function generateRetentionBacklog(
   const drafts: LeadDraft[] = [];
 
   for (const record of records) {
+    const verdict = judgeRetentionBacklogRecord(record, catalog);
+    if (!verdict.eligible) {
+      skipped[verdict.reason]++;
+      continue;
+    }
     const product = matchProduct(catalog, record, "retention");
-    if (!product.eligible) {
-      skipped.ineligible_product++;
-      continue;
-    }
-    if (!record.customerRef && !record.phone && !record.customerName) {
-      skipped.no_contact_identity++;
-      continue;
-    }
 
     drafts.push({
       leadType: "retention",

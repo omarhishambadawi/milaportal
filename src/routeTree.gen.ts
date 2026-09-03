@@ -61,6 +61,7 @@ import { Route as LovableEmailQueueProcessRouteImport } from './routes/lovable/e
 import { Route as LovableEmailAuthWebhookRouteImport } from './routes/lovable/email/auth/webhook'
 import { Route as LovableEmailAuthPreviewRouteImport } from './routes/lovable/email/auth/preview'
 import { Route as ApiPublicCdrProgressJobIdRouteImport } from './routes/api/public/cdr-progress.$jobId'
+import { Route as AppTelesalesImportsIdRouteImport } from './routes/_app.telesales.imports.$id'
 import { Route as AppTelesalesCustomersIdRouteImport } from './routes/_app.telesales.customers.$id'
 
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
@@ -329,6 +330,11 @@ const ApiPublicCdrProgressJobIdRoute =
     path: '/api/public/cdr-progress/$jobId',
     getParentRoute: () => rootRouteImport,
   } as any)
+const AppTelesalesImportsIdRoute = AppTelesalesImportsIdRouteImport.update({
+  id: '/telesales/imports/$id',
+  path: '/telesales/imports/$id',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppTelesalesCustomersIdRoute = AppTelesalesCustomersIdRouteImport.update({
   id: '/telesales/customers/$id',
   path: '/telesales/customers/$id',
@@ -384,6 +390,7 @@ export interface FileRoutesByFullPath {
   '/orders/': typeof AppOrdersIndexRoute
   '/telesales/': typeof AppTelesalesIndexRoute
   '/telesales/customers/$id': typeof AppTelesalesCustomersIdRoute
+  '/telesales/imports/$id': typeof AppTelesalesImportsIdRoute
   '/api/public/cdr-progress/$jobId': typeof ApiPublicCdrProgressJobIdRoute
   '/lovable/email/auth/preview': typeof LovableEmailAuthPreviewRoute
   '/lovable/email/auth/webhook': typeof LovableEmailAuthWebhookRoute
@@ -438,6 +445,7 @@ export interface FileRoutesByTo {
   '/orders': typeof AppOrdersIndexRoute
   '/telesales': typeof AppTelesalesIndexRoute
   '/telesales/customers/$id': typeof AppTelesalesCustomersIdRoute
+  '/telesales/imports/$id': typeof AppTelesalesImportsIdRoute
   '/api/public/cdr-progress/$jobId': typeof ApiPublicCdrProgressJobIdRoute
   '/lovable/email/auth/preview': typeof LovableEmailAuthPreviewRoute
   '/lovable/email/auth/webhook': typeof LovableEmailAuthWebhookRoute
@@ -494,6 +502,7 @@ export interface FileRoutesById {
   '/_app/orders/': typeof AppOrdersIndexRoute
   '/_app/telesales/': typeof AppTelesalesIndexRoute
   '/_app/telesales/customers/$id': typeof AppTelesalesCustomersIdRoute
+  '/_app/telesales/imports/$id': typeof AppTelesalesImportsIdRoute
   '/api/public/cdr-progress/$jobId': typeof ApiPublicCdrProgressJobIdRoute
   '/lovable/email/auth/preview': typeof LovableEmailAuthPreviewRoute
   '/lovable/email/auth/webhook': typeof LovableEmailAuthWebhookRoute
@@ -550,6 +559,7 @@ export interface FileRouteTypes {
     | '/orders/'
     | '/telesales/'
     | '/telesales/customers/$id'
+    | '/telesales/imports/$id'
     | '/api/public/cdr-progress/$jobId'
     | '/lovable/email/auth/preview'
     | '/lovable/email/auth/webhook'
@@ -604,6 +614,7 @@ export interface FileRouteTypes {
     | '/orders'
     | '/telesales'
     | '/telesales/customers/$id'
+    | '/telesales/imports/$id'
     | '/api/public/cdr-progress/$jobId'
     | '/lovable/email/auth/preview'
     | '/lovable/email/auth/webhook'
@@ -659,6 +670,7 @@ export interface FileRouteTypes {
     | '/_app/orders/'
     | '/_app/telesales/'
     | '/_app/telesales/customers/$id'
+    | '/_app/telesales/imports/$id'
     | '/api/public/cdr-progress/$jobId'
     | '/lovable/email/auth/preview'
     | '/lovable/email/auth/webhook'
@@ -1052,6 +1064,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicCdrProgressJobIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/telesales/imports/$id': {
+      id: '/_app/telesales/imports/$id'
+      path: '/telesales/imports/$id'
+      fullPath: '/telesales/imports/$id'
+      preLoaderRoute: typeof AppTelesalesImportsIdRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/telesales/customers/$id': {
       id: '/_app/telesales/customers/$id'
       path: '/telesales/customers/$id'
@@ -1098,6 +1117,7 @@ interface AppRouteChildren {
   AppOrdersIndexRoute: typeof AppOrdersIndexRoute
   AppTelesalesIndexRoute: typeof AppTelesalesIndexRoute
   AppTelesalesCustomersIdRoute: typeof AppTelesalesCustomersIdRoute
+  AppTelesalesImportsIdRoute: typeof AppTelesalesImportsIdRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -1136,6 +1156,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppOrdersIndexRoute: AppOrdersIndexRoute,
   AppTelesalesIndexRoute: AppTelesalesIndexRoute,
   AppTelesalesCustomersIdRoute: AppTelesalesCustomersIdRoute,
+  AppTelesalesImportsIdRoute: AppTelesalesImportsIdRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

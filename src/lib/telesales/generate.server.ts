@@ -1,4 +1,4 @@
-import { businessToday, type BusinessDate } from "./dates";
+import { businessToday, compareDates, type BusinessDate, type DateWindow } from "./dates";
 import {
   generateCashLeads,
   generateRetentionBacklog,
@@ -172,6 +172,64 @@ function toSourceRecord(row: any): SourceRecordInput & { id: string } {
 }
 
 /**
+ * Narrowing a generation run to part of the available source data.
+ *
+ * Every field is optional and every one is applied **in the database**, not in
+ * JavaScript — the point of filtering is to fetch less, and a filter that reads
+ * every row and then discards most of them is a slower way to do the same run.
+ *
+ * These narrow *which rows are considered*. They never relax an eligibility
+ * rule: a row inside the filter that fails `judgeCashRecord` is still refused,
+ * and the same `dedup_key` still arbitrates duplicates. Filtering can only ever
+ * produce a subset of what an unfiltered run would have produced.
+ */
+export interface GenerationFilters {
+  /** Only rows from this import. */
+  importId?: string | null;
+  /** Only these branches. */
+  branchNos?: string[] | null;
+  /** Only these cities. */
+  cities?: string[] | null;
+  /** Only these product codes. */
+  itemCodes?: string[] | null;
+  /** True: only rows with a usable phone. False: only rows without one. */
+  hasPhone?: boolean | null;
+  /** Narrow the date window further. Never widens it — see `applyFilters`. */
+  dateFrom?: BusinessDate | null;
+  dateTo?: BusinessDate | null;
+}
+
+/** How many values one `in (...)` filter may carry, so the URL cannot overrun. */
+const FILTER_VALUE_LIMIT = 200;
+
+function cleanList(values: string[] | null | undefined): string[] | null {
+  if (!values?.length) return null;
+  const out = [...new Set(values.map((v) => String(v).trim()).filter(Boolean))];
+  return out.length ? out.slice(0, FILTER_VALUE_LIMIT) : null;
+}
+
+/** Apply the optional narrowing to a PostgREST query builder. */
+function applyFilters(query: any, filters: GenerationFilters | undefined): any {
+  if (!filters) return query;
+  let q = query;
+  if (filters.importId) q = q.eq("import_id", filters.importId);
+
+  const branches = cleanList(filters.branchNos);
+  if (branches) q = q.in("branch_no", branches);
+
+  const cities = cleanList(filters.cities);
+  if (cities) q = q.in("city", cities);
+
+  const codes = cleanList(filters.itemCodes);
+  if (codes) q = q.in("item_code", codes);
+
+  if (filters.hasPhone === true) q = q.not("phone", "is", null);
+  else if (filters.hasPhone === false) q = q.is("phone", null);
+
+  return q;
+}
+
+/**
  * Source rows whose operative date falls in a window.
  *
  * Paged, because the alternative is `select(...)` over a table that will hold
@@ -181,21 +239,32 @@ function toSourceRecord(row: any): SourceRecordInput & { id: string } {
  * The `source_date` filter is applied in the database, not in JavaScript. The
  * July extract is 173,008 rows and its eligible window is about 190; fetching
  * the former to find the latter is the Excel workflow with extra steps.
+ *
+ * Archived rows are excluded. Archiving an import takes its leads out of the
+ * queue, and a generator that then re-created them from the same rows would
+ * undo the archive on the next run — which is exactly what would have happened
+ * here, silently, the first time somebody archived an import whose window was
+ * still open.
  */
 async function fetchWindow(
   supabase: any,
   sourceType: string,
   from: BusinessDate,
   to: BusinessDate,
+  filters?: GenerationFilters,
 ): Promise<(SourceRecordInput & { id: string })[]> {
   const out: (SourceRecordInput & { id: string })[] = [];
   for (let page = 0; ; page++) {
-    const { data, error } = await supabase
-      .from("telesales_source_records")
-      .select(SOURCE_COLUMNS)
-      .eq("source_type", sourceType)
-      .gte("source_date", from)
-      .lte("source_date", to)
+    const { data, error } = await applyFilters(
+      supabase
+        .from("telesales_source_records")
+        .select(SOURCE_COLUMNS)
+        .eq("source_type", sourceType)
+        .is("archived_at", null)
+        .gte("source_date", from)
+        .lte("source_date", to),
+      filters,
+    )
       .order("source_date", { ascending: true })
       .order("id", { ascending: true })
       .range(page * READ_PAGE, page * READ_PAGE + READ_PAGE - 1);
@@ -205,6 +274,28 @@ async function fetchWindow(
     if (rows.length < READ_PAGE) break;
   }
   return out;
+}
+
+/**
+ * The window a run actually reads, after any narrowing.
+ *
+ * A filter may only ever shrink the window. Letting `dateFrom` reach outside it
+ * would turn a filter into a way to bypass the eligibility rule the window
+ * exists to express — a Wasfaty run could be made to generate last March's
+ * prescriptions by typing a date into a filter box, which is not a filter, it
+ * is a different business decision.
+ */
+function narrowWindow(window: DateWindow, filters: GenerationFilters | undefined): DateWindow {
+  if (!filters) return window;
+  const from =
+    filters.dateFrom && compareDates(filters.dateFrom, window.from) > 0
+      ? filters.dateFrom
+      : window.from;
+  const to =
+    filters.dateTo && compareDates(filters.dateTo, window.to) < 0 ? filters.dateTo : window.to;
+  // An inverted range yields nothing rather than throwing: the operator asked
+  // for an empty set and an empty set is a legitimate answer.
+  return compareDates(from, to) > 0 ? { from, to: from } : { from, to };
 }
 
 /**
@@ -429,8 +520,26 @@ async function openRun(
     executionSource: "scheduled" | "manual";
     anchorDate: BusinessDate;
     actorId: string | null;
+    filters?: GenerationFilters;
   },
 ): Promise<string | null> {
+  /*
+   * The scope is recorded on the run, not just applied to it.
+   *
+   * "Why did Tuesday's run create 12 leads when Monday's created 400" is
+   * unanswerable if a filtered run looks identical to a full one afterwards.
+   * `import_id` is a column because it is the scope people ask about; the rest
+   * travel as jsonb because they are a variable set and nothing joins on them.
+   */
+  const filters = input.filters ?? {};
+  const scope: Record<string, unknown> = {};
+  if (filters.branchNos?.length) scope.branch_nos = filters.branchNos;
+  if (filters.cities?.length) scope.cities = filters.cities;
+  if (filters.itemCodes?.length) scope.item_codes = filters.itemCodes;
+  if (filters.hasPhone != null) scope.has_phone = filters.hasPhone;
+  if (filters.dateFrom) scope.date_from = filters.dateFrom;
+  if (filters.dateTo) scope.date_to = filters.dateTo;
+
   const { data } = await supabase
     .from("telesales_generation_runs")
     .insert({
@@ -439,6 +548,8 @@ async function openRun(
       anchor_date: input.anchorDate,
       status: "running",
       actor_id: input.actorId,
+      import_id: filters.importId ?? null,
+      filters: Object.keys(scope).length ? scope : null,
     })
     .select("id")
     .single();
@@ -492,6 +603,12 @@ export async function runGeneration(
     anchorDate?: BusinessDate;
     executionSource?: "scheduled" | "manual";
     actorId?: string | null;
+    /**
+     * Narrow the run to part of the source data — one import, some branches,
+     * only rows with a phone. Omitted, the run behaves exactly as it always
+     * has: the whole window, every pipeline row in it.
+     */
+    filters?: GenerationFilters;
   },
 ): Promise<GenerationSummary> {
   const anchorDate = input.anchorDate ?? businessToday();
@@ -501,6 +618,7 @@ export async function runGeneration(
     executionSource,
     anchorDate,
     actorId: input.actorId ?? null,
+    filters: input.filters,
   });
 
   try {
@@ -509,21 +627,26 @@ export async function runGeneration(
 
     if (input.leadType === "cash") {
       const catalog = await loadCatalog(supabase);
-      const window = (await import("./dates")).cashWindow(anchorDate, {
+      const full = (await import("./dates")).cashWindow(anchorDate, {
         days: settings.cashWindowDays,
         lagDays: settings.cashWindowLagDays,
       });
-      const records = await fetchWindow(supabase, "cash", window.from, window.to);
+      const window = narrowWindow(full, input.filters);
+      const records = await fetchWindow(supabase, "cash", window.from, window.to, input.filters);
       result = generateCashLeads(anchorDate, records, catalog, settings);
+      // The generator computes the full window itself; report the one actually read.
+      result = { ...result, window };
     } else if (input.leadType === "wasfaty") {
-      const window = (await import("./dates")).wasfatyWindow(anchorDate, {
+      const full = (await import("./dates")).wasfatyWindow(anchorDate, {
         days: settings.wasfatyWindowDays,
       });
+      const window = narrowWindow(full, input.filters);
       const [records, phones] = await Promise.all([
-        fetchWindow(supabase, "wasfaty", window.from, window.to),
+        fetchWindow(supabase, "wasfaty", window.from, window.to, input.filters),
         fetchKnownPhones(supabase),
       ]);
       result = generateWasfatyLeads(anchorDate, records, settings, phones);
+      result = { ...result, window };
     } else {
       const catalog = await loadCatalog(supabase);
       const window = (await import("./dates")).retentionWindow(anchorDate, {

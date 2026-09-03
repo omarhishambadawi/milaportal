@@ -354,6 +354,10 @@ export const telesalesImportWorkbook = createServerFn({ method: "POST" })
         contentDigest: z.string().max(64),
         rowsSeen: z.number().int().nonnegative(),
         headers: z.array(z.string().max(200)).max(100),
+        // What the parser understood the headers to mean. Reported by the
+        // browser because that is where parsing happens; stored with the import
+        // so "what did it map" is answerable after the fact.
+        mappedFields: z.array(z.string().max(64)).max(100).default([]),
         records: z.array(SourceRecordSchema).max(200_000),
         issues: z
           .array(
@@ -378,6 +382,7 @@ export const telesalesImportWorkbook = createServerFn({ method: "POST" })
         sourceType: data.sourceType,
         sheetName: data.sheetName,
         headers: data.headers,
+        mappedFields: data.mappedFields,
         records: data.records as any,
         issues: data.issues as any,
         rowsSeen: data.rowsSeen,
@@ -425,6 +430,28 @@ export const telesalesImportHistory = createServerFn({ method: "POST" })
 /* Generation                                                                */
 /* ------------------------------------------------------------------------- */
 
+/**
+ * How a generation run may be narrowed.
+ *
+ * Every field only ever *shrinks* the set of rows considered. None of them
+ * relaxes an eligibility rule, and none can reach outside the pipeline's own
+ * window — `narrowWindow` clamps the dates, so a filter cannot be used to
+ * generate last March's prescriptions by typing a date into a box. The lists
+ * are capped here as well as server-side because an unbounded `in (...)` is a
+ * URL the database never sees.
+ */
+const generationFilters = z
+  .object({
+    importId: uuid.nullable().optional(),
+    branchNos: z.array(z.string().trim().min(1).max(64)).max(200).nullable().optional(),
+    cities: z.array(z.string().trim().min(1).max(120)).max(200).nullable().optional(),
+    itemCodes: z.array(z.string().trim().min(1).max(64)).max(200).nullable().optional(),
+    hasPhone: z.boolean().nullable().optional(),
+    dateFrom: businessDate.nullable().optional(),
+    dateTo: businessDate.nullable().optional(),
+  })
+  .optional();
+
 export const telesalesGenerate = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) =>
@@ -433,6 +460,7 @@ export const telesalesGenerate = createServerFn({ method: "POST" })
         // Omitted runs all three pipelines in the order the daily sweep uses.
         leadType: z.enum(["cash", "retention", "wasfaty"]).nullable().optional(),
         anchorDate: businessDate.nullable().optional(),
+        filters: generationFilters,
       })
       .parse(d),
   )
@@ -442,6 +470,16 @@ export const telesalesGenerate = createServerFn({ method: "POST" })
     const { runDailyGeneration, runGeneration } = await import("@/lib/telesales/generate.server");
     const client = await admin();
 
+    /*
+     * A scoped run must name its pipeline. Filtering "all three" by an import
+     * that belongs to one of them would silently run the other two unfiltered,
+     * which is the opposite of what somebody pressing a filtered Generate
+     * expects.
+     */
+    if (data.filters && !data.leadType) {
+      throw new Error("Choose which pipeline to generate before filtering it.");
+    }
+
     const runs = data.leadType
       ? [
           await runGeneration(client, {
@@ -449,6 +487,7 @@ export const telesalesGenerate = createServerFn({ method: "POST" })
             anchorDate: data.anchorDate ?? undefined,
             executionSource: "manual",
             actorId: userId,
+            filters: (data.filters ?? undefined) as any,
           }),
         ]
       : await runDailyGeneration(client, {
@@ -474,6 +513,38 @@ export const telesalesGenerate = createServerFn({ method: "POST" })
     });
 
     return { ok: true as const, runs };
+  });
+
+/**
+ * Explain an import: how many of its rows are leads, and why the rest are not.
+ *
+ * Read-only, and the answer comes from the generator's own rules — the same
+ * `judgeCashRecord` / `judgeWasfatyRecord` the run itself calls. A report that
+ * reasoned about the rules separately would eventually explain a run that did
+ * not happen, and it would be believed.
+ *
+ * `manage_telesales`, matching the tables it reports on. `telesales_imports`,
+ * `telesales_source_records` and `telesales_generation_runs` all carry RLS
+ * policies keyed on that permission, so an agent who could call this would read
+ * counts derived from rows they cannot see anywhere else in the product -- and
+ * the review screen beside it would render empty. Import is a supervisor
+ * surface end to end.
+ */
+export const telesalesDiagnoseImport = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) =>
+    z.object({ importId: uuid, anchorDate: businessDate.nullable().optional() }).parse(d),
+  )
+  .handler(async ({ context, data }) => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await resolveActor(supabase, userId, "manage");
+    const { diagnoseImportById } = await import("@/lib/telesales/diagnose.server");
+    const diagnosis = await diagnoseImportById(await admin(), {
+      importId: data.importId,
+      anchorDate: data.anchorDate ?? undefined,
+    });
+    if (!diagnosis) throw new Error("That import no longer exists.");
+    return { ok: true as const, diagnosis };
   });
 
 export const telesalesSeedRetentionBacklog = createServerFn({ method: "POST" })

@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Archive, Loader2, RotateCcw } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { Archive, ListChecks, Loader2, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -200,6 +201,15 @@ export function ImportHistory({ canManage }: { canManage: boolean }) {
               </p>
 
               <div className="mt-2 flex items-center gap-2">
+                {/* Where the import's rows are accounted for: how many are
+                    leads, and what each of the others is waiting for. The
+                    answer to "3,937 rows imported and 46 leads appeared". */}
+                <Button asChild size="sm" variant="outline">
+                  <Link to="/telesales/imports/$id" params={{ id: h.id }}>
+                    <ListChecks className="mr-1.5 h-4 w-4" />
+                    Review &amp; generate
+                  </Link>
+                </Button>
                 {h.archived_at ? (
                   <Button
                     size="sm"
