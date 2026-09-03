@@ -122,12 +122,20 @@ function ProductRelationsPage() {
             invents them.
           </p>
         </div>
-        <Button asChild variant="outline" size="sm">
-          <Link to="/telesales">
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to the queue
-          </Link>
-        </Button>
+        <div className="flex gap-2">
+          {/* The other product screen. Kept separate on purpose: identity says
+              two codes are one product, a cross-sell says one product is worth
+              mentioning alongside another, and neither ever creates the other. */}
+          <Button asChild variant="outline" size="sm">
+            <Link to="/telesales/identity">Product identity</Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/telesales">
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to the queue
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {canManage ? (

@@ -969,3 +969,155 @@ export const telesalesSetProductRelationActive = createServerFn({ method: "POST"
     if (error) throw new Error(error.message);
     return { ok: true as const };
   });
+
+/* ------------------------------------------------------------------------- */
+/* Product identity mapping                                                  */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Map a source item code onto the catalogue product it means.
+ *
+ * The only write path to `telesales_product_aliases`. RLS carries a SELECT
+ * policy and nothing else, so PostgREST refuses every write from the browser
+ * regardless of grants — a mapping can change only here, and only for a caller
+ * holding `manage_telesales`. An agent calling this function directly is
+ * refused by `resolveActor` before anything is read.
+ *
+ * What is being asserted is that two item codes are **the same medicine**, and
+ * every downstream answer — repeat purchases, refill dates, which leads get
+ * recommended — follows from it. So the canonical end is taken from
+ * `telesales_products` rather than trusted from the request, an alias code that
+ * is itself a catalogue product is refused, and the database repeats all of it
+ * as constraints and a trigger.
+ *
+ * Nothing is rewritten. No source record, lead or catalogue row changes, and
+ * `telesalesSetProductAliasActive` reverses the effect completely. Saving a code
+ * that is already mapped reactivates or re-points the existing row rather than
+ * failing on the unique key or creating a second, contradictory answer — see
+ * `planAliasSave`.
+ *
+ * This is not cross-sell and never creates one: `telesales_product_relations` is
+ * a different table, a different concept, and neither feeds the other.
+ */
+export const telesalesSaveProductAlias = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) =>
+    z
+      .object({
+        aliasItemCode: itemCode,
+        canonicalItemCode: itemCode,
+        aliasNameSnapshot: z.string().trim().max(300).nullable().optional(),
+        note: z.string().trim().max(300).nullable().optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ context, data }) => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    const actor = await resolveActor(supabase, userId, "manage");
+
+    const { ALIAS_REJECTION_LABELS, buildAliasCatalog, planAliasSave, validateAlias } =
+      await import("@/lib/telesales/aliases");
+
+    const client = await admin();
+
+    const { data: products, error: catalogError } = await client
+      .from("telesales_products")
+      .select("item_code,item_name,active");
+    if (catalogError) throw new Error(catalogError.message);
+
+    const catalog = buildAliasCatalog(
+      ((products as any[]) ?? []).map((p) => ({
+        itemCode: p.item_code,
+        itemName: p.item_name,
+        active: p.active,
+      })),
+    );
+
+    const verdict = validateAlias(data, catalog);
+    if (!verdict.ok) throw new Error(ALIAS_REJECTION_LABELS[verdict.reason]);
+    const next = verdict.value;
+
+    const { data: existingRows, error: existingError } = await client
+      .from("telesales_product_aliases")
+      .select("id,canonical_item_code,active,note,alias_name_snapshot")
+      .eq("alias_item_code", next.aliasItemCode)
+      .limit(1);
+    if (existingError) throw new Error(existingError.message);
+
+    const existing = ((existingRows as any[]) ?? [])[0] ?? null;
+    const plan = planAliasSave(
+      existing
+        ? {
+            canonicalItemCode: existing.canonical_item_code,
+            active: existing.active,
+            note: existing.note,
+            aliasNameSnapshot: existing.alias_name_snapshot,
+          }
+        : null,
+      next,
+    );
+
+    if (plan === "unchanged") return { ok: true as const, plan };
+
+    if (!existing) {
+      const { error } = await client.from("telesales_product_aliases").insert({
+        alias_item_code: next.aliasItemCode,
+        canonical_item_code: next.canonicalItemCode,
+        alias_name_snapshot: next.aliasNameSnapshot,
+        note: next.note,
+        active: true,
+        created_by: actor.userId,
+        updated_by: actor.userId,
+      });
+      // The unique key is the backstop for two supervisors mapping the same
+      // code at once: the loser is told it already exists rather than creating
+      // a duplicate.
+      if (error) {
+        throw new Error(
+          error.code === "23505"
+            ? "That item code was just mapped by somebody else."
+            : error.message,
+        );
+      }
+      return { ok: true as const, plan };
+    }
+
+    const { error } = await client
+      .from("telesales_product_aliases")
+      .update({
+        canonical_item_code: next.canonicalItemCode,
+        alias_name_snapshot: next.aliasNameSnapshot,
+        note: next.note,
+        active: true,
+        updated_by: actor.userId,
+      })
+      .eq("id", existing.id);
+    if (error) throw new Error(error.message);
+    return { ok: true as const, plan };
+  });
+
+/**
+ * Switch a product identity mapping on or off.
+ *
+ * Deactivation rather than deletion, and there is no delete: the row records a
+ * decision about what two item codes mean, and "why did this customer count as
+ * a repeat buyer in September" should stay answerable. An inactive mapping is
+ * excluded at the read — the resolver drops it, and the lifecycle view's
+ * `codeset` filters `active` — so switching it off returns every affected lead
+ * to code-only matching on the next load, with nothing to undo.
+ */
+export const telesalesSetProductAliasActive = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => z.object({ id: uuid, active: z.boolean() }).parse(d))
+  .handler(async ({ context, data }) => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    const actor = await resolveActor(supabase, userId, "manage");
+
+    const client = await admin();
+    const { error } = await client
+      .from("telesales_product_aliases")
+      .update({ active: data.active, updated_by: actor.userId })
+      .eq("id", data.id);
+    if (error) throw new Error(error.message);
+    return { ok: true as const };
+  });

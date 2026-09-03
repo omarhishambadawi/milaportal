@@ -5,6 +5,11 @@ import { queryKeys } from "@/lib/query-keys";
 import { shamsGetProduct } from "@/lib/shams.functions";
 import { branchStockState, type StockState } from "@/lib/shams/availability";
 import { businessToday } from "@/lib/telesales/dates";
+import {
+  buildProductIdentityIndex,
+  type IdentityAlias,
+  type IdentityProduct,
+} from "@/lib/telesales/identity";
 import { OPEN_LEAD_STATUSES } from "@/lib/telesales/types";
 import {
   buildCycleIndex,
@@ -24,7 +29,7 @@ import type { InvoiceMatchStatus } from "@/lib/telesales/reconciliation";
  * The data behind Recommended Leads.
  *
  * ===========================================================================
- * Four bounded queries, and not one MIS request
+ * Five bounded queries, and not one MIS request
  * ===========================================================================
  * The brief's sharpest constraint is that this page must not become one
  * upstream call per lead. It does not come close: the whole ranked list is
@@ -33,7 +38,8 @@ import type { InvoiceMatchStatus } from "@/lib/telesales/reconciliation";
  *   1. candidate leads        one query, capped at `CANDIDATE_LIMIT`
  *   2. their purchase history one query per 250 phones (`telesales_source_records`)
  *   3. refill cycles          one query (`telesales_products`, 28 rows)
- *   4. configured cross-sells one query (`telesales_product_relations`, empty)
+ *   4. configured cross-sells one query (`telesales_product_relations`)
+ *   5. identity mappings      one query (`telesales_product_aliases`, 88 rows)
  *
  * The purchase history is the part that makes this possible. It is the
  * pharmacy's own sales extract, already imported, so "has this customer bought
@@ -78,6 +84,15 @@ const CANDIDATE_LIMIT = 2000;
 /** PostgREST takes these as a URL filter, so phones go in batches. */
 const PHONE_CHUNK = 250;
 
+/**
+ * How many identity mappings are read.
+ *
+ * 88 today, one per source item code the catalogue does not carry. The cap
+ * exists for the same reason `CANDIDATE_LIMIT` does — so a table that grows
+ * unexpectedly cannot turn a bounded read into an unbounded one.
+ */
+const ALIAS_LIMIT = 5000;
+
 /** The queue row plus the two columns the engine needs and the queue does not. */
 export interface RecommendedQueueLead extends QueueLead {
   item_code: string | null;
@@ -107,6 +122,8 @@ interface CandidateData {
   history: PurchaseRecord[];
   cycles: { item_code: string; item_name: string | null; refill_days: number | null }[];
   relations: ProductRelation[];
+  /** Configured product identity mappings (`telesales_product_aliases`). */
+  aliases: IdentityAlias[];
   /** True when the cap was reached, so the page can say so. */
   capped: boolean;
 }
@@ -166,17 +183,30 @@ function useRecommendationData(enabled: boolean) {
         }
       }
 
-      const [{ data: cycleRows, error: cycleError }, { data: relationRows, error: relationError }] =
-        await Promise.all([
-          (supabase as any)
-            .from("telesales_products")
-            .select("item_code,item_name,refill_days")
-            .eq("active", true),
-          (supabase as any)
-            .from("telesales_product_relations")
-            .select("from_item_code,to_item_code,to_item_name,note")
-            .eq("active", true),
-        ]);
+      const [
+        { data: cycleRows, error: cycleError },
+        { data: relationRows, error: relationError },
+        { data: aliasRows, error: aliasError },
+      ] = await Promise.all([
+        (supabase as any)
+          .from("telesales_products")
+          .select("item_code,item_name,refill_days")
+          .eq("active", true),
+        (supabase as any)
+          .from("telesales_product_relations")
+          .select("from_item_code,to_item_code,to_item_name,note")
+          .eq("active", true),
+        /*
+         * The identity mappings. One bounded read of a table that holds 88 rows,
+         * not one lookup per lead or per customer — the whole point of resolving
+         * identity from a compiled in-memory index.
+         */
+        (supabase as any)
+          .from("telesales_product_aliases")
+          .select("alias_item_code,canonical_item_code")
+          .eq("active", true)
+          .limit(ALIAS_LIMIT),
+      ]);
       if (cycleError) throw new Error(cycleError.message);
       // The relations table is new; a deployment that has not run the migration
       // should show recommendations without cross-sell rather than an error.
@@ -189,11 +219,26 @@ function useRecommendationData(enabled: boolean) {
             note: r.note,
           }));
 
+      /*
+       * A deployment that has not run the migration yet resolves identity by
+       * code and by exact product name, exactly as it did before this phase —
+       * the same tolerance the relations read above already applies, and for
+       * the same reason: a missing table must degrade the answer, not the page.
+       */
+      const aliases: IdentityAlias[] = aliasError
+        ? []
+        : ((aliasRows as any[]) ?? []).map((a) => ({
+            aliasItemCode: a.alias_item_code,
+            canonicalItemCode: a.canonical_item_code,
+            active: true,
+          }));
+
       return {
         leads,
         history,
         cycles: (cycleRows as CandidateData["cycles"]) ?? [],
         relations,
+        aliases,
         capped: leads.length >= CANDIDATE_LIMIT,
       };
     },
@@ -218,7 +263,7 @@ export function useRecommendedLeads(enabled: boolean): RecommendedLeadsResult {
   const computed = useMemo(() => {
     if (!query.data) return { rows: [] as RecommendedRow[], summary: null };
 
-    const { leads, history, cycles, relations } = query.data;
+    const { leads, history, cycles, relations, aliases } = query.data;
     const byId = new Map(leads.map((l) => [l.id, l]));
 
     const candidates: RecommendableLead[] = leads.map((l) => ({
@@ -233,26 +278,26 @@ export function useRecommendedLeads(enabled: boolean): RecommendedLeadsResult {
       documentNo: l.document_no,
     }));
 
+    /*
+     * One compiled index, shared by every identity question on the page.
+     *
+     * Built from the 28 catalogue rows and the 88 mappings already fetched —
+     * two bounded reads, no per-lead lookup. `telesales_lead_lifecycle`
+     * resolves identity the same way in SQL, so the queue and this engine
+     * cannot disagree about which purchases are the same product.
+     */
+    const products: IdentityProduct[] = cycles.map((c) => ({
+      itemCode: c.item_code,
+      itemName: c.item_name,
+      refillDays: c.refill_days,
+    }));
+    const identity = buildProductIdentityIndex(products, aliases);
+
     const summary = recommendLeads(candidates, {
       today: businessToday(),
       historyByPhone: groupHistoryByPhone(history),
-      /*
-       * Resolved by code, falling back to the product's name.
-       *
-       * The retention workbook uses two code systems for the same medicines,
-       * so 88 live leads carry a code the catalogue does not hold even though
-       * it does hold the product. Without the fallback none of them could ever
-       * be judged for a refill. `telesales_lead_lifecycle` resolves it the same
-       * way, so the queue and this engine agree.
-       */
-      cycleByItem: buildCycleIndex(
-        cycles.map((c) => ({
-          itemCode: c.item_code,
-          itemName: c.item_name,
-          refillDays: c.refill_days,
-        })),
-        candidates,
-      ),
+      identity,
+      cycleByItem: buildCycleIndex(identity, [...candidates, ...history]),
       relationsByItem: groupRelationsByItem(relations),
       // Deliberately no stock: see the note at the top of this file. Ordering
       // stays stable and stock decorates the visible rows instead.

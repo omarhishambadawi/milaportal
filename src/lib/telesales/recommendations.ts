@@ -8,6 +8,11 @@ import {
   type BusinessDate,
   type RefillLabel,
 } from "./dates";
+import {
+  productMatchKey,
+  resolveTelesalesProductIdentity,
+  type ProductIdentityIndex,
+} from "./identity";
 import { isRefillStale } from "./lifecycle";
 import type { InvoiceMatchStatus } from "./reconciliation";
 import type { StockState } from "@/lib/shams/availability";
@@ -165,6 +170,15 @@ export interface RecommendationContext {
   today: BusinessDate;
   /** Purchase history grouped by canonical phone. */
   historyByPhone: ReadonlyMap<string, readonly PurchaseRecord[]>;
+  /**
+   * The catalogue and its identity mappings, compiled once.
+   *
+   * Every "is this the same product" question in this file goes through it, so
+   * a customer who bought `519914` and a lead carrying `10611028` are one
+   * medicine rather than two. Built from two bounded reads by the caller; this
+   * module never resolves an identity by asking the database.
+   */
+  identity: ProductIdentityIndex;
   /** Refill cycle per item code. */
   cycleByItem: ReadonlyMap<string, RefillCycle>;
   /** Configured relations, keyed by the product the customer already bought. */
@@ -260,9 +274,33 @@ function isOwnSourcePurchase(lead: RecommendableLead, record: PurchaseRecord): b
   return Boolean(lead.sourceDate) && lead.sourceDate === record.sourceDate;
 }
 
-function sameProduct(a: string | null, b: string | null): boolean {
-  if (!a || !b) return false;
-  return a.trim() === b.trim();
+/**
+ * Are these two rows the same CRM product?
+ *
+ * Resolved identity, not raw codes. The retention source uses two code systems
+ * for the same medicines, so a purchase recorded under `519914` and a lead
+ * carrying `10611028` are the same 5 MG Mounjaro pen and the customer has
+ * bought it twice — which is the whole reason the previously-purchased band
+ * missed 26 leads and 13 customers before this.
+ *
+ * The comparison stays exact. `resolveTelesalesProductIdentity` maps a code by
+ * the catalogue, then by an explicitly configured alias, then by a whole
+ * normalised product name that belongs to exactly one product; nothing else
+ * resolves, and a row that resolves to nothing falls back to comparing its raw
+ * code, so no match that succeeds today can start failing. Two strengths of the
+ * same medicine are never equated, because nothing here compares parts of a
+ * name.
+ */
+function sameProduct(ctx: RecommendationContext, a: ProductPair, b: ProductPair): boolean {
+  const left = productMatchKey(ctx.identity, a);
+  if (left === null) return false;
+  return left === productMatchKey(ctx.identity, b);
+}
+
+/** The two fields identity is resolved from. */
+interface ProductPair {
+  itemCode: string | null;
+  itemName: string | null;
 }
 
 /** The most recent of a set of purchases. */
@@ -325,11 +363,24 @@ export function recommendLead(lead: RecommendableLead, ctx: RecommendationContex
   /*
    * Purchases of *this* product, split into the one that produced the lead and
    * any earlier, separate ones.
+   *
+   * "This product" is the resolved identity, so the 88 source rows carrying a
+   * second code system for a medicine the catalogue already holds count towards
+   * the customer who bought them.
    */
-  const sameProductPurchases = history.filter((r) => sameProduct(r.itemCode, itemCode));
+  const sameProductPurchases = history.filter((r) => sameProduct(ctx, r, lead));
   const priorPurchases = sameProductPurchases.filter((r) => !isOwnSourcePurchase(lead, r));
   const anchor = latest(sameProductPurchases);
 
+  /*
+   * Stock is still asked for under the lead's own item code.
+   *
+   * The canonical code would frequently be the better question to ask the Shams
+   * MIS — an alias code is the retention workbook's numbering, not the
+   * pharmacy's — but which identifiers that API accepts cannot be verified from
+   * here, and stock is decoration that never suppresses a recommendation. It
+   * stays exactly as it was rather than being changed on an assumption.
+   */
   const stock = stockFor(ctx, itemCode);
   const invoiceVerified = lead.invoiceMatchStatus === "matched";
 
@@ -345,7 +396,17 @@ export function recommendLead(lead: RecommendableLead, ctx: RecommendationContex
    * exist the promise is the one the desk is accountable for, so it decides,
    * and the projection is not consulted.
    */
-  const cycle = itemCode ? ctx.cycleByItem.get(itemCode) : undefined;
+  /*
+   * The cycle is looked up for the *resolved* product, so a lead and the
+   * purchases counted as its product are always judged by one cycle.
+   * `buildCycleIndex` keys the map by every raw code that resolves, so the raw
+   * lookup is the same answer and is kept as the fallback for a lead whose
+   * identity does not resolve at all.
+   */
+  const canonicalCode = resolveTelesalesProductIdentity(ctx.identity, lead).canonicalItemCode;
+  const cycle =
+    (canonicalCode ? ctx.cycleByItem.get(canonicalCode) : undefined) ??
+    (itemCode ? ctx.cycleByItem.get(itemCode) : undefined);
   const projected =
     anchor?.sourceDate && cycle?.refillDays != null && cycle.refillDays > 0
       ? addDays(anchor.sourceDate, cycle.refillDays)
@@ -468,9 +529,11 @@ export function recommendLead(lead: RecommendableLead, ctx: RecommendationContex
    * branch returns nothing, which is the correct answer for the data rather
    * than a gap to be filled with a guess.
    */
-  const relation = findRelation(history, ctx, itemCode);
+  const relation = findRelation(history, ctx, itemCode, lead.itemName);
   if (relation) {
-    const source = history.find((r) => sameProduct(r.itemCode, relation.fromItemCode));
+    const source = history.find((r) =>
+      sameProduct(ctx, r, { itemCode: relation.fromItemCode, itemName: null }),
+    );
     const supporting: SupportingBadge[] = [];
     const relStock = stockFor(ctx, relation.toItemCode);
     if (relStock.state === "in_stock") supporting.push("in_stock");
@@ -532,10 +595,26 @@ function findRelation(
   history: readonly PurchaseRecord[],
   ctx: RecommendationContext,
   leadItemCode: string | null,
+  leadItemName: string | null,
 ): ProductRelation | null {
+  /*
+   * What the customer already has, in canonical terms *and* raw ones.
+   *
+   * Canonical, so a purchase recorded under an alias code still satisfies a
+   * relation configured against the catalogue product — the relation validator
+   * only accepts catalogue codes, so without this a customer who bought under
+   * the other code system would never trigger one. Raw as well, so nothing that
+   * matches today can stop matching because an identity failed to resolve.
+   */
   const owned = new Set<string>();
-  for (const r of history) if (r.itemCode?.trim()) owned.add(r.itemCode.trim());
-  if (leadItemCode) owned.add(leadItemCode);
+  const own = (row: { itemCode: string | null; itemName: string | null }) => {
+    const raw = row.itemCode?.trim();
+    if (raw) owned.add(raw);
+    const canonical = resolveTelesalesProductIdentity(ctx.identity, row).canonicalItemCode;
+    if (canonical) owned.add(canonical);
+  };
+  for (const r of history) own(r);
+  if (leadItemCode) own({ itemCode: leadItemCode, itemName: leadItemName });
 
   /*
    * One product may have several configured companions, and a lead carries one
@@ -713,65 +792,56 @@ export function daysUntilRefill(rec: Recommendation, today: BusinessDate): numbe
 /* Resolving a lead's refill cycle                                           */
 /* ------------------------------------------------------------------------- */
 
-/** Collapse whitespace and upper-case, so two spellings of one name match. */
-function normalizeProductName(name: string | null | undefined): string {
-  return String(name ?? "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toUpperCase();
-}
-
 /**
  * Which refill cycle applies to each item code a lead might carry.
  *
- * Keyed by code, because that is what a lead has. The interesting part is the
- * fallback.
+ * Keyed by *every* code that resolves — the catalogue's own codes and each raw
+ * code seen on a lead or a purchase — because that is what the caller has in
+ * hand. The value is always the canonical product's cycle, so a lead and the
+ * purchases counted as its product are judged by one number.
  *
- * ### Why a name fallback exists
+ * ### Why a code is not enough on its own
  *
  * The retention workbook uses **two code systems for the same medicines**. Of
- * 745 imported rows, 654 carry the pharmacy's eight-digit catalogue codes and
+ * 745 imported rows, 652 carry the pharmacy's eight-digit catalogue codes and
  * 88 carry a five- or six-digit number for products the catalogue already
- * holds — sixteen distinct codes all naming `MOUNJARO KWIKPEN 5 MG`, for
+ * holds — twenty distinct codes all naming `MOUNJARO KWIKPEN 12.5 MG`, for
  * instance. The import stored what the file said, correctly; the consequence
- * landed here, where a code that is not in `telesales_products` has no refill
+ * landed here, where a code that is not in `telesales_products` had no refill
  * cycle, so 88 live leads could never be judged for a refill at all.
  *
- * So when a code is unknown, the product's **name** is consulted. Whole-string
- * and normalised only for whitespace and case — the same conservative compare
- * the invoice reconciler uses, and for the same reason: `MOUNJARO KWIKPEN 5 MG`
- * and `MOUNJARO KWIKPEN 15MG` are different medicines, and a prefix or fuzzy
- * match would silently equate them.
+ * The resolution is `resolveTelesalesProductIdentity`'s and only its: the
+ * catalogue code, then a configured alias, then a whole normalised product name
+ * that belongs to exactly one product. This function no longer carries a name
+ * rule of its own — that duplicate is what this phase removed — so the cycle a
+ * lead is judged by and the purchases counted as its product cannot come from
+ * different products.
  *
- * An exact code match always wins; the name is only ever a fallback.
- *
- * `telesales_lead_lifecycle` resolves the cycle the same way, so the queue and
- * this engine cannot disagree about which leads have one.
+ * `telesales_lead_lifecycle` resolves it the same way in SQL, so the queue and
+ * this engine cannot disagree about which leads have a cycle.
  */
 export function buildCycleIndex(
-  products: readonly { itemCode: string; itemName: string | null; refillDays: number | null }[],
-  leads: readonly { itemCode: string | null; itemName: string | null }[],
+  identity: ProductIdentityIndex,
+  rows: readonly { itemCode: string | null; itemName: string | null }[],
 ): Map<string, RefillCycle> {
   const byCode = new Map<string, RefillCycle>();
-  const byName = new Map<string, RefillCycle>();
 
-  for (const p of products) {
-    const code = p.itemCode?.trim();
-    if (!code) continue;
-    const cycle: RefillCycle = { itemCode: code, refillDays: p.refillDays };
-    byCode.set(code, cycle);
-
-    const name = normalizeProductName(p.itemName);
-    // First catalogue row wins a name, so a duplicate name cannot make the
-    // fallback depend on row order.
-    if (name && !byName.has(name)) byName.set(name, cycle);
+  // The catalogue itself first: every live product is its own identity, and a
+  // code with no lead pointing at it still needs an entry for the cross-sell
+  // target and for a caller looking one up directly.
+  for (const [code, product] of identity.byCode) {
+    byCode.set(code, { itemCode: code, refillDays: product.refillDays ?? null });
   }
 
-  for (const lead of leads) {
-    const code = lead.itemCode?.trim();
+  for (const row of rows) {
+    const code = row.itemCode?.trim();
     if (!code || byCode.has(code)) continue;
-    const match = byName.get(normalizeProductName(lead.itemName));
-    if (match) byCode.set(code, { itemCode: code, refillDays: match.refillDays });
+    const resolvedCode = resolveTelesalesProductIdentity(identity, row).canonicalItemCode;
+    if (!resolvedCode) continue;
+    byCode.set(code, {
+      itemCode: code,
+      refillDays: identity.byCode.get(resolvedCode)?.refillDays ?? null,
+    });
   }
 
   return byCode;

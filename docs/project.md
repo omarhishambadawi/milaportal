@@ -319,6 +319,7 @@ Conventions are documented in `src/routes/README.md` (`$id` dynamic, `$` splat,
 | `/telesales/customers/$id`                          | `view_telesales`                                                       |
 | `/telesales/recommended`                            | `view_telesales`; acting needs `work_telesales`                        |
 | `/telesales/relations`                              | `view_telesales`; configuring needs `manage_telesales`                 |
+| `/telesales/identity`                               | `view_telesales`; mapping needs `manage_telesales`                     |
 | `/admin/users`                                      | `manage_users`                                                         |
 | `/profile`                                          | any signed-in user                                                     |
 
@@ -6800,11 +6801,13 @@ below — so a phone never scrolls sideways. Branch labels come from
 **Routes:** `/telesales` (agent queue), `/telesales/recommended` (ranked
 opportunities), `/telesales/$id` (lead), `/telesales/customers/$id` (customer),
 `/telesales/import` (import & generate), `/telesales/management` (team lead board),
-`/telesales/relations` (cross-sell configuration).
+`/telesales/relations` (cross-sell configuration), `/telesales/identity`
+(product identity mapping).
 **Permissions:** `view_telesales`, `work_telesales`, `manage_telesales`.
-**Tables:** twelve, all prefixed `telesales_` — eleven for the CRM, plus
+**Tables:** thirteen, all prefixed `telesales_` — twelve for the CRM, plus
 `telesales_scheduler_state` alongside the cron job. One view,
-`telesales_lead_lifecycle`, which derives the refill lifecycle on every read.
+`telesales_lead_lifecycle`, which derives the refill lifecycle and the canonical
+product identity on every read.
 **Scheduled job:** `telesales-generation-tick`, hourly.
 
 The module replaces the Excel workflow the Shams Pharmacies telesales desk ran
@@ -6849,6 +6852,8 @@ everything resolves by header name.
 src/lib/telesales/types.ts        PURE: lead types, statuses, the outcome table
 src/lib/telesales/dates.ts        PURE: the three windows, Riyadh arithmetic, sheet dates
 src/lib/telesales/products.ts     PURE: eligibility — catalogue first, then name rules
+src/lib/telesales/identity.ts     PURE: the one product identity resolver
+src/lib/telesales/aliases.ts      PURE: what an identity mapping may assert
 src/lib/telesales/dedup.ts        PURE: the deduplication keys
 src/lib/telesales/status.ts       PURE: the state machine, ownership, follow-up proposals
 src/lib/telesales/generation.ts   PURE: source rows -> lead drafts
@@ -8113,9 +8118,11 @@ zero non-canonical phone values, zero orphaned leads, source records, activities
 or follow-ups, zero leads with more than one open follow-up, zero invalid
 reconciliation verdicts, zero self-referencing relations.
 
-The one anomaly was Defect 1, and the residue is left alone deliberately: the
-source file's duplicate coding is the pharmacy's to correct, and adding 88 rows
-to `telesales_products` would mean inventing refill cycles nobody has decided.
+The one anomaly was Defect 1, and the residue was left alone deliberately at the
+time: the source file's duplicate coding is the pharmacy's to correct, and adding
+88 rows to `telesales_products` would mean inventing refill cycles nobody has
+decided. The remaining half — purchase history still matched on the raw code — is
+closed by the product identity layer below.
 
 #### Security
 
@@ -8132,6 +8139,209 @@ Attempted rather than assumed:
 | `authenticated` INSERT into `telesales_product_relations` | refused at the grant          |
 | `anon` SELECT from `telesales_lead_lifecycle`             | refused at the base table     |
 | `authenticated` UPDATE assigning a lead directly          | zero rows; baseline unchanged |
+
+---
+
+## Telesales product identity
+
+**Table:** `telesales_product_aliases`. **Route:** `/telesales/identity`.
+**Resolver:** `src/lib/telesales/identity.ts`.
+
+### The problem
+
+The retention source uses **two code systems for the same medicines**. Of 745
+imported rows, 652 carry the pharmacy's eight-digit catalogue codes and 88 carry
+a five- or six-digit number for products the catalogue already holds — twenty
+distinct codes naming `MOUNJARO KWIKPEN 12.5 MG`, twelve naming the 5 MG pen,
+112 codes across 23 product names. The raw row really does read
+`"Itm_Cd": "519914"` for `MOUNJARO KWIKPEN 5 MG`.
+
+Phase 7 fixed the _refill cycle_ half by falling back to an exact product name
+and said in its own closing paragraph what it was leaving: the engine still
+matched purchases by item code, so the same medicine under two codes hid a
+repeat purchase for 13 customers. A customer who bought under one code and
+appeared on a lead under the other read as a first-time buyer.
+
+### The resolution rules
+
+One resolver, `resolveTelesalesProductIdentity`, called by lifecycle,
+recommendations, purchase history and cross-sell. There is no second
+implementation, which is the point — a lead that is "the same product" on one
+screen and a different one on the next is the disagreement the layer exists to
+prevent. Three rules, in order:
+
+1. **The code is a live `telesales_products` row.** It is its own canonical
+   identity and nothing else is consulted.
+2. **An active `telesales_product_aliases` mapping covers it.** A recorded human
+   decision, switchable off.
+3. **The whole normalised product name matches exactly one live product.** Case
+   and whitespace folded, nothing else.
+
+Anything else is **unresolved**, and unresolved is an answer rather than a gap to
+fill with a guess. A name carried by two catalogue products is `ambiguous_name`
+and resolves to nothing — Phase 7 resolved such a name to whichever row came back
+first; Phase 8 refuses it. No live catalogue name is duplicated, so nothing moved.
+
+There is no fuzzy match, no prefix match, no token overlap and no similarity
+score. `MOUNJARO KWIKPEN` 5, 7.5, 10, 12.5 and 15 MG are five products that share
+every word but one, and any matcher loose enough to relate two of them is loose
+enough to relate all five.
+
+An unresolved row still compares by its **raw trimmed code**, so canonical
+matching is a strict superset of code matching: measured on live data, **zero**
+comparisons that succeeded before now fail.
+
+### It is an interpretation, not a rewrite
+
+Nothing is rewritten. `telesales_source_records.item_code` and `item_name`, every
+lead's denormalised copy, the catalogue and every Shams MIS identifier keep the
+values they arrived with. Identity is computed on read, and switching a mapping
+off reverts every answer it changed without touching a row. That is why it is a
+mapping table and not an `UPDATE`.
+
+Verified after applying: the retention source is still 745 rows with 112 distinct
+codes and 23 distinct names, `telesales_products` is 28 rows last touched before
+the migration, and nothing is archived.
+
+### Schema guarantees
+
+The alias's canonical **must** be a `telesales_products` row (foreign key) and the
+alias code **must not** be one (trigger, guarded from both directions). Together
+those make a chain — `A → B` where `B → C` — structurally impossible, so
+resolution is always a single step and no consumer has to decide how far to
+follow one.
+
+| rule                                        | enforced by                                    |
+| ------------------------------------------- | ---------------------------------------------- |
+| one code means one product                  | `UNIQUE (alias_item_code)`                     |
+| a code is not an alias of itself            | validator **and** `CHECK (alias <> canonical)` |
+| the canonical exists and is live            | FK `ON DELETE RESTRICT` **and** validator      |
+| an alias is never a catalogue product       | `telesales_product_alias_guard` trigger        |
+| a catalogue code is never an existing alias | the same trigger, on `telesales_products`      |
+| nothing is hard-deleted                     | deactivation only; no delete path exists       |
+
+All six were exercised against production, not assumed. Each was refused.
+
+### Security
+
+Identical in shape to `telesales_product_relations`: RLS enabled, a SELECT policy
+for `view_telesales` and **no write policy at all**, `anon` revoked entirely,
+`authenticated` holding `SELECT` only. Every write goes through
+`telesalesSaveProductAlias` / `telesalesSetProductAliasActive`, running as
+`service_role` and checking `manage_telesales` first.
+
+Eight unauthorized operations were attempted against production and all eight
+were refused: `anon` SELECT, INSERT, UPDATE, DELETE and the lifecycle view;
+`authenticated` INSERT, UPDATE, DELETE. The 88 mappings were intact and active
+afterwards, with no test rows left behind.
+
+### Activated mappings
+
+88, across 15 canonical products, and every one because the database proved it.
+Of 112 distinct source codes, 22 are catalogue products; of the remaining 90, 88
+carry a name that — normalised for whitespace and case and compared whole —
+matches **exactly one** active catalogue product, and **zero** were ambiguous.
+
+The two that matched nothing are left unresolved on purpose:
+`10609623 LIMITLESS CHROMAX CUT SACHETS, 30'S` and
+`10606737 SAXENDA 6MG/ML, 5 PRE-FILLED PEN` are products the Telesales catalogue
+does not carry.
+
+Each Mounjaro strength collects its own alias codes and none is mapped to
+another; the same holds for the four Wegovy strengths, the three Rybelsus
+tablets and the two Ozempic pens.
+
+The mappings are written into the migration as literal pairs rather than derived
+at apply time. They were reviewed as data; re-inferring them against whatever the
+catalogue says on the day would make the migration's effect depend on the
+environment, which is the opposite of an audited decision.
+
+### Measured against production
+
+Before/after, comparing the deployed view against a faithful reconstruction of
+the Phase 7 one, over all 758 open leads:
+
+| measure                                  | before | after |
+| ---------------------------------------- | ------ | ----- |
+| leads with a recognised earlier purchase | 27     | 52    |
+| purchase matches lost                    | —      | **0** |
+| refill cycles changed                    | —      | 0     |
+| leads whose last purchase date moved     | —      | 13    |
+| …of those, moved **earlier**             | —      | **0** |
+| lifecycle `stale → active`               | —      | 7     |
+| lifecycle `active → stale`               | —      | **0** |
+
+Nothing is hidden, archived or de-prioritised. All 712 retention leads now
+resolve — 621 by code, 88 by alias, 3 by name — and none is unresolved. The 46
+Wasfaty leads carry no item code at all and resolve to nothing, which is correct:
+that pipeline identifies by prescription.
+
+### Performance
+
+The purchase lookup stays on `telesales_source_records_phone_item_idx`
+`(phone, item_code, source_date DESC)`. Comparing a _computed_ canonical on the
+source side would have abandoned it and scanned, so the codes are expanded
+instead: a `codeset` CTE builds, once, the raw codes that resolve to each
+catalogue product — reading two tables of 28 and 88 rows and never touching
+`telesales_source_records` — and the lookup stays `item_code = ANY(...)`.
+
+Measured on live data, best of nine: **9.85 ms before, 10.54 ms after**, at 1488
+shared buffers against 1473 — while covering 46 more leads. The plan still shows
+`Index Only Scan … Heap Fetches: 0`.
+
+An earlier shape that re-derived the mapping per lead measured 166 ms and was
+discarded. Recommended Leads gains one bounded read (88 rows) and compiles the
+index once per page, never per lead or per customer.
+
+### The one place SQL and TypeScript can differ
+
+`codeset` expands codes through the catalogue and the alias table, not through
+the name rule, because the name rule needs a _row's_ name and collecting those
+means scanning the source table on every read — measured at +10 ms to cover a
+case that is currently empty.
+
+So a lead resolves by code, alias or name (all three), while a source row is
+gathered by code or alias. A source row whose code is in neither the catalogue
+nor the alias table but whose _name_ matches a product would be counted by
+`recommendations.ts` and missed by the view. On live data that set is empty, and
+`/telesales/identity` surfaces any new one for a decision. It is the cost of
+keeping the queue's own view on its index, and it is recorded rather than left to
+be discovered.
+
+### What was deliberately not changed
+
+**Invoice reconciliation.** Untouched. It already matches on code and falls back
+to a whole-string name compare, and because every activated mapping was _derived_
+from an exact name match, the alias adds nothing its name fallback does not
+already do. A future hand-entered mapping whose names differ would be the first
+case where it would.
+
+**Stock.** Untouched. The canonical code would frequently be the better question
+to ask the Shams MIS — an alias code is the retention workbook's numbering, not
+the pharmacy's — but which identifiers that API accepts cannot be verified from
+here, and stock is decoration that never suppresses a recommendation. Changing
+the request identifier on an assumption is the speculative MIS change the brief
+rules out. See _Remaining decisions_.
+
+**Customer intelligence.** Untouched. It folds Shams MIS purchase lines, which
+are the MIS's identifiers rather than the source workbook's.
+
+**Cross-sell.** A mapping never creates a relation and a relation never merges
+two identities. The two concepts have separate tables, separate screens and a
+test that asserts neither file reaches the other.
+
+### Remaining decisions
+
+1. **Whether the two unmatched codes are products the desk should carry.**
+   `LIMITLESS CHROMAX CUT SACHETS` and `SAXENDA 6MG/ML` are one source row each
+   and are correctly unresolved. Adding them to `telesales_products` means
+   deciding their refill cycles, which is the desk's call, not the software's.
+2. **Whether stock should be asked for under the canonical code.** A one-line
+   change, worth real stock answers for the 88 alias-coded leads, and verifiable
+   only against a live MIS.
+3. **Whether the source file's duplicate coding should be fixed upstream.** This
+   layer interprets it correctly; it does not make it go away, and every future
+   import will land new codes for the same 23 products.
 
 The last one is worth stating precisely: with RLS on and no UPDATE policy,
 Postgres matches zero rows rather than raising, so the write silently does

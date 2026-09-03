@@ -36,6 +36,7 @@ import { Route as AppTelesalesRelationsRouteImport } from './routes/_app.telesal
 import { Route as AppTelesalesRecommendedRouteImport } from './routes/_app.telesales.recommended'
 import { Route as AppTelesalesManagementRouteImport } from './routes/_app.telesales.management'
 import { Route as AppTelesalesImportRouteImport } from './routes/_app.telesales.import'
+import { Route as AppTelesalesIdentityRouteImport } from './routes/_app.telesales.identity'
 import { Route as AppTelesalesIdRouteImport } from './routes/_app.telesales.$id'
 import { Route as AppOrdersNewRouteImport } from './routes/_app.orders.new'
 import { Route as AppOrdersIdRouteImport } from './routes/_app.orders.$id'
@@ -196,6 +197,11 @@ const AppTelesalesManagementRoute = AppTelesalesManagementRouteImport.update({
 const AppTelesalesImportRoute = AppTelesalesImportRouteImport.update({
   id: '/telesales/import',
   path: '/telesales/import',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppTelesalesIdentityRoute = AppTelesalesIdentityRouteImport.update({
+  id: '/telesales/identity',
+  path: '/telesales/identity',
   getParentRoute: () => AppRoute,
 } as any)
 const AppTelesalesIdRoute = AppTelesalesIdRouteImport.update({
@@ -366,6 +372,7 @@ export interface FileRoutesByFullPath {
   '/orders/$id': typeof AppOrdersIdRoute
   '/orders/new': typeof AppOrdersNewRoute
   '/telesales/$id': typeof AppTelesalesIdRoute
+  '/telesales/identity': typeof AppTelesalesIdentityRoute
   '/telesales/import': typeof AppTelesalesImportRoute
   '/telesales/management': typeof AppTelesalesManagementRoute
   '/telesales/recommended': typeof AppTelesalesRecommendedRoute
@@ -419,6 +426,7 @@ export interface FileRoutesByTo {
   '/orders/$id': typeof AppOrdersIdRoute
   '/orders/new': typeof AppOrdersNewRoute
   '/telesales/$id': typeof AppTelesalesIdRoute
+  '/telesales/identity': typeof AppTelesalesIdentityRoute
   '/telesales/import': typeof AppTelesalesImportRoute
   '/telesales/management': typeof AppTelesalesManagementRoute
   '/telesales/recommended': typeof AppTelesalesRecommendedRoute
@@ -474,6 +482,7 @@ export interface FileRoutesById {
   '/_app/orders/$id': typeof AppOrdersIdRoute
   '/_app/orders/new': typeof AppOrdersNewRoute
   '/_app/telesales/$id': typeof AppTelesalesIdRoute
+  '/_app/telesales/identity': typeof AppTelesalesIdentityRoute
   '/_app/telesales/import': typeof AppTelesalesImportRoute
   '/_app/telesales/management': typeof AppTelesalesManagementRoute
   '/_app/telesales/recommended': typeof AppTelesalesRecommendedRoute
@@ -529,6 +538,7 @@ export interface FileRouteTypes {
     | '/orders/$id'
     | '/orders/new'
     | '/telesales/$id'
+    | '/telesales/identity'
     | '/telesales/import'
     | '/telesales/management'
     | '/telesales/recommended'
@@ -582,6 +592,7 @@ export interface FileRouteTypes {
     | '/orders/$id'
     | '/orders/new'
     | '/telesales/$id'
+    | '/telesales/identity'
     | '/telesales/import'
     | '/telesales/management'
     | '/telesales/recommended'
@@ -636,6 +647,7 @@ export interface FileRouteTypes {
     | '/_app/orders/$id'
     | '/_app/orders/new'
     | '/_app/telesales/$id'
+    | '/_app/telesales/identity'
     | '/_app/telesales/import'
     | '/_app/telesales/management'
     | '/_app/telesales/recommended'
@@ -865,6 +877,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppTelesalesImportRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/telesales/identity': {
+      id: '/_app/telesales/identity'
+      path: '/telesales/identity'
+      fullPath: '/telesales/identity'
+      preLoaderRoute: typeof AppTelesalesIdentityRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/telesales/$id': {
       id: '/_app/telesales/$id'
       path: '/telesales/$id'
@@ -1067,6 +1086,7 @@ interface AppRouteChildren {
   AppOrdersIdRoute: typeof AppOrdersIdRoute
   AppOrdersNewRoute: typeof AppOrdersNewRoute
   AppTelesalesIdRoute: typeof AppTelesalesIdRoute
+  AppTelesalesIdentityRoute: typeof AppTelesalesIdentityRoute
   AppTelesalesImportRoute: typeof AppTelesalesImportRoute
   AppTelesalesManagementRoute: typeof AppTelesalesManagementRoute
   AppTelesalesRecommendedRoute: typeof AppTelesalesRecommendedRoute
@@ -1104,6 +1124,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppOrdersIdRoute: AppOrdersIdRoute,
   AppOrdersNewRoute: AppOrdersNewRoute,
   AppTelesalesIdRoute: AppTelesalesIdRoute,
+  AppTelesalesIdentityRoute: AppTelesalesIdentityRoute,
   AppTelesalesImportRoute: AppTelesalesImportRoute,
   AppTelesalesManagementRoute: AppTelesalesManagementRoute,
   AppTelesalesRecommendedRoute: AppTelesalesRecommendedRoute,

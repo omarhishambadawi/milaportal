@@ -238,6 +238,9 @@ function TelesalesQueuePage() {
               <Button asChild variant="outline" size="sm">
                 <Link to="/telesales/relations">Cross-sell</Link>
               </Button>
+              <Button asChild variant="outline" size="sm">
+                <Link to="/telesales/identity">Product identity</Link>
+              </Button>
               <Button asChild size="sm">
                 <Link to="/telesales/import">
                   <Upload className="mr-2 h-4 w-4" />

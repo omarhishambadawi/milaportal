@@ -7,6 +7,7 @@ import {
   type RecommendableLead,
   type RecommendationContext,
 } from "../recommendations";
+import { buildProductIdentityIndex } from "../identity";
 
 const TODAY = "2026-09-02";
 
@@ -151,6 +152,9 @@ function ctx(over: Partial<RecommendationContext> = {}): RecommendationContext {
   return {
     today: TODAY,
     historyByPhone: groupHistoryByPhone([purchase()]),
+    identity: buildProductIdentityIndex([
+      { itemCode: ITEM, itemName: "MOUNJARO KWIKPEN 5 MG", refillDays: 28 },
+    ]),
     cycleByItem: new Map([[ITEM, { itemCode: ITEM, refillDays: 28 }]]),
     relationsByItem: new Map(),
     ...over,

@@ -12,6 +12,7 @@ import {
   type RecommendableLead,
   type RecommendationContext,
 } from "../recommendations";
+import { buildProductIdentityIndex, type IdentityAlias } from "../identity";
 
 const TODAY = "2026-09-02";
 const PHONE = "0504630565";
@@ -45,10 +46,22 @@ function lead(over: Partial<RecommendableLead> = {}): RecommendableLead {
   };
 }
 
+/** The live catalogue, trimmed to what these tests exercise. */
+const CATALOGUE = [
+  { itemCode: MOUNJARO, itemName: "MOUNJARO KWIKPEN 5 MG/0.6ML 2.4ML*1 AA", refillDays: 28 },
+  { itemCode: "10611032", itemName: "MOUNJARO KWIKPEN 15MG/0.6ML 2.4ML*1 QR", refillDays: 28 },
+  { itemCode: OZEMPIC, itemName: "OZEMPIC 1 MG 1.5ML PEN, 1'S", refillDays: 30 },
+];
+
+function identityIndex(aliases: IdentityAlias[] = []) {
+  return buildProductIdentityIndex(CATALOGUE, aliases);
+}
+
 function ctx(over: Partial<RecommendationContext> = {}): RecommendationContext {
   return {
     today: TODAY,
     historyByPhone: groupHistoryByPhone([purchase()]),
+    identity: identityIndex(),
     // 28-day cycle: bought 5 Aug, due 2 Sep, which is TODAY.
     cycleByItem: new Map([[MOUNJARO, { itemCode: MOUNJARO, refillDays: 28 }]]),
     relationsByItem: new Map(),
@@ -643,13 +656,15 @@ describe("buildCycleIndex", () => {
   ];
 
   it("resolves a catalogued code directly", () => {
-    const index = buildCycleIndex(catalogue, [{ itemCode: "10611028", itemName: "anything" }]);
+    const index = buildCycleIndex(buildProductIdentityIndex(catalogue), [
+      { itemCode: "10611028", itemName: "anything" },
+    ]);
     expect(index.get("10611028")?.refillDays).toBe(28);
   });
 
   it("recovers a cycle for an unknown code whose product name is catalogued", () => {
     // "519914" is one of the real codes from the live workbook.
-    const index = buildCycleIndex(catalogue, [
+    const index = buildCycleIndex(buildProductIdentityIndex(catalogue), [
       { itemCode: "519914", itemName: "MOUNJARO KWIKPEN 5 MG/0.6ML 2.4ML*1 AA" },
     ]);
     expect(index.get("519914")?.refillDays).toBe(28);
@@ -661,14 +676,14 @@ describe("buildCycleIndex", () => {
      * "15MG" -- two different medicines, and the difference between a correct
      * refill and telling a patient the wrong thing.
      */
-    const index = buildCycleIndex(catalogue, [
+    const index = buildCycleIndex(buildProductIdentityIndex(catalogue), [
       { itemCode: "999001", itemName: "MOUNJARO KWIKPEN 5 MG" },
     ]);
     expect(index.has("999001")).toBe(false);
   });
 
   it("normalises only whitespace and case", () => {
-    const index = buildCycleIndex(catalogue, [
+    const index = buildCycleIndex(buildProductIdentityIndex(catalogue), [
       { itemCode: "999002", itemName: "  mounjaro   kwikpen 5 mg/0.6ml 2.4ml*1 aa " },
     ]);
     expect(index.get("999002")?.refillDays).toBe(28);
@@ -678,21 +693,24 @@ describe("buildCycleIndex", () => {
     // A catalogued product with no configured cycle stays cycle-less rather
     // than inheriting one from a name twin.
     const index = buildCycleIndex(
-      [...catalogue, { itemCode: "77000", itemName: "UNCONFIGURED PRODUCT", refillDays: 14 }],
+      buildProductIdentityIndex([
+        ...catalogue,
+        { itemCode: "77000", itemName: "UNCONFIGURED PRODUCT", refillDays: 14 },
+      ]),
       [{ itemCode: "88000", itemName: "UNCONFIGURED PRODUCT" }],
     );
     expect(index.get("88000")?.refillDays).toBeNull();
   });
 
   it("leaves a genuinely unknown product without a cycle", () => {
-    const index = buildCycleIndex(catalogue, [
+    const index = buildCycleIndex(buildProductIdentityIndex(catalogue), [
       { itemCode: "555000", itemName: "SOMETHING THE PHARMACY DOES NOT SELL" },
     ]);
     expect(index.has("555000")).toBe(false);
   });
 
   it("ignores a lead with no code or no name", () => {
-    const index = buildCycleIndex(catalogue, [
+    const index = buildCycleIndex(buildProductIdentityIndex(catalogue), [
       { itemCode: null, itemName: "MOUNJARO KWIKPEN 5 MG/0.6ML 2.4ML*1 AA" },
       { itemCode: "555001", itemName: null },
     ]);
@@ -700,30 +718,42 @@ describe("buildCycleIndex", () => {
     expect(index.size).toBe(catalogue.length);
   });
 
-  it("is order-independent when a name appears twice in the catalogue", () => {
+  it("refuses a name carried by two catalogue products, in either order", () => {
+    /*
+     * Phase 7 resolved a duplicated name to whichever catalogue row came back
+     * first, which was deterministic only because the read was ordered. Phase 8
+     * refuses it outright: a name that identifies two products identifies
+     * neither, and guessing which one a lead meant is exactly the kind of
+     * decision this module is not allowed to make.
+     *
+     * No live catalogue name is duplicated today, so nothing in production
+     * moves -- this is the rule holding for the day one is.
+     */
     const dupes = [
       { itemCode: "A1", itemName: "SHARED NAME", refillDays: 10 },
       { itemCode: "A2", itemName: "SHARED NAME", refillDays: 20 },
     ];
-    const forward = buildCycleIndex(dupes, [{ itemCode: "Z9", itemName: "SHARED NAME" }]);
-    const reversed = buildCycleIndex([...dupes].reverse(), [
+    const forward = buildCycleIndex(buildProductIdentityIndex(dupes), [
       { itemCode: "Z9", itemName: "SHARED NAME" },
     ]);
-    // Whichever wins, it is the same one both times -- the fallback must not
-    // depend on the order rows came back from Postgres.
-    expect(forward.get("Z9")?.refillDays).toBe(10);
-    expect(reversed.get("Z9")?.refillDays).toBe(20);
+    const reversed = buildCycleIndex(buildProductIdentityIndex([...dupes].reverse()), [
+      { itemCode: "Z9", itemName: "SHARED NAME" },
+    ]);
+    expect(forward.has("Z9")).toBe(false);
+    expect(reversed.has("Z9")).toBe(false);
   });
 
   it("gives an unknown-code lead a real refill recommendation end to end", () => {
     // The user-visible outcome: a lead that could never be judged now can be.
-    const index = buildCycleIndex(catalogue, [
+    const identity = buildProductIdentityIndex(catalogue);
+    const index = buildCycleIndex(identity, [
       { itemCode: "519914", itemName: "MOUNJARO KWIKPEN 5 MG/0.6ML 2.4ML*1 AA" },
     ]);
     const v = recommendLead(
       lead({ itemCode: "519914", sourceDate: "2026-08-05", documentNo: "d1" }),
       {
         ...ctx(),
+        identity,
         historyByPhone: groupHistoryByPhone([
           purchase({ itemCode: "519914", sourceDate: "2026-08-05", documentNo: "d1" }),
         ]),

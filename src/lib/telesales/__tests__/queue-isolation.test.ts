@@ -409,41 +409,205 @@ describe("the queue and the engine resolve a refill cycle the same way", () => {
    * disagreement the lifecycle view exists to prevent.
    */
 
-  it("the engine falls back from code to product name", () => {
+  it("the engine resolves identity only through the shared resolver", () => {
+    /*
+     * Phase 8 removed the engine's own name-matching. There is one resolver and
+     * every identity question goes through it -- a second implementation is
+     * exactly how the queue and the engine came to disagree in the first place.
+     */
     const text = source("lib/telesales/recommendations.ts");
     expect(text).toContain("buildCycleIndex");
-    // Whole-name compare, normalised for whitespace and case only.
-    expect(text).toContain("normalizeProductName");
-    expect(text).toMatch(/byCode\.has\(code\)/);
+    expect(text).toContain("resolveTelesalesProductIdentity");
+    expect(text).toContain("productMatchKey");
+    // The duplicate that used to live here is gone.
+    expect(text).not.toContain("normalizeProductName");
+    // And no ad-hoc name compare has grown back in its place.
+    expect(text).not.toMatch(/toUpperCase\(\)\s*===/);
   });
 
-  it("the view falls back the same way, and prefers the code", () => {
-    const sql = readFileSync(
-      join(
-        ROOT,
-        "..",
-        "supabase",
-        "migrations",
-        "20260908120000_telesales_lifecycle_cycle_resolution.sql",
-      ),
-      "utf8",
-    );
-    // Two joins: by code, then by normalised name.
+  it("the view resolves the same three ways, in the same order", () => {
+    const sql = identitySql();
+    // Three joins, in the resolver's order: code, alias, then normalised name.
     expect(sql).toMatch(/pc\.item_code = l\.item_code/);
+    expect(sql).toMatch(/al\.alias_item_code = l\.item_code/);
     expect(sql).toMatch(/regexp_replace\(pn\.item_name/);
     // The code match wins whenever it matched at all, so a catalogued product
     // with no cycle cannot inherit one from a name twin.
-    expect(sql).toMatch(/CASE WHEN pc\.item_code IS NOT NULL THEN pc\.refill_days/);
-    // Both sides filter inactive products, as the engine does.
+    expect(sql).toMatch(/WHEN pc\.item_code IS NOT NULL THEN pc\.refill_days/);
+    // Every side filters inactive products and inactive mappings, as the
+    // resolver does.
     expect(sql).toMatch(/pc\.active/);
+    expect(sql).toMatch(/pa\.active/);
     expect(sql).toMatch(/pn\.active/);
+    expect(sql).toMatch(/al\.active/);
   });
 
-  it("the recommendation read passes its leads to the resolver", () => {
-    // Without the leads, the fallback has nothing to resolve against.
+  it("the view matches purchases on identity, not on the raw code", () => {
+    const sql = identityStatements();
+    // The defect this phase closed: `s.item_code = l.item_code` hid a repeat
+    // purchase for 13 customers.
+    expect(sql).not.toMatch(/s\.item_code = l\.item_code/);
+    expect(sql).toMatch(/s\.item_code = ANY\(/);
+    // Falls back to the lead's own code, so nothing that matched can stop.
+    expect(sql).toMatch(/ARRAY\[l\.item_code\]/);
+  });
+
+  it("the recommendation read passes its leads and history to the resolver", () => {
+    // Without both sides, a purchase under the other code system cannot be
+    // recognised as the lead's product.
     const text = source("features/telesales/hooks/use-recommended-leads.ts");
-    expect(text).toMatch(/buildCycleIndex\([\s\S]{0,300}candidates,/);
+    expect(text).toMatch(/buildCycleIndex\(identity,[\s\S]{0,120}candidates/);
     expect(text).toContain("item_code,item_name,refill_days");
+    expect(text).toContain("buildProductIdentityIndex");
+  });
+});
+
+/** The Phase 8 migration, read once for the guards below. */
+function identitySql(): string {
+  return readFileSync(
+    join(ROOT, "..", "supabase", "migrations", "20260909120000_telesales_product_identity.sql"),
+    "utf8",
+  );
+}
+
+/**
+ * The same migration with its `--` comments removed.
+ *
+ * A guard that asserts a statement is absent has to read statements. These
+ * migrations explain themselves at length and quote the very code they replaced
+ * -- the comment naming `s.item_code = l.item_code` as the defect being fixed is
+ * the clearest example -- so matching the raw file would fail on the
+ * explanation rather than on the SQL.
+ */
+function identityStatements(): string {
+  return identitySql()
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("--"))
+    .join("\n");
+}
+
+describe("product identity is configuration, and it is not cross-sell", () => {
+  it("the mapping table is readable but never writable from the browser", () => {
+    const sql = identitySql();
+    expect(sql).toContain("ENABLE ROW LEVEL SECURITY");
+    expect(sql).toContain("REVOKE ALL ON public.telesales_product_aliases FROM anon");
+    expect(sql).toMatch(
+      /REVOKE INSERT, UPDATE, DELETE[\s\S]{0,120}telesales_product_aliases FROM authenticated/,
+    );
+    // A SELECT policy and nothing else: every write goes through a server
+    // function that checks manage_telesales itself.
+    expect(sql).toMatch(/CREATE POLICY telesales_product_aliases_select/);
+    expect(sql).not.toMatch(/CREATE POLICY[\s\S]*FOR (INSERT|UPDATE|DELETE|ALL)/);
+    expect(sql).toContain("view_telesales");
+  });
+
+  it("the schema makes a chain and a self-map impossible", () => {
+    const sql = identitySql();
+    // One code means one product.
+    expect(sql).toMatch(/UNIQUE \(alias_item_code\)/);
+    // A code is not an alias of itself.
+    expect(sql).toMatch(/CHECK \(alias_item_code <> canonical_item_code\)/);
+    // The canonical must be a real product...
+    expect(sql).toMatch(/REFERENCES public\.telesales_products\(item_code\)/);
+    // ...and the alias must not be, guarded from both directions.
+    expect(sql).toContain("telesales_product_alias_guard");
+    expect(sql).toMatch(/CREATE TRIGGER telesales_products_alias_guard/);
+  });
+
+  it("no source record, lead or catalogue row is rewritten", () => {
+    /*
+     * The mandatory rule. Canonical identity is an interpretation computed on
+     * read; the migration must not carry an UPDATE against the data it
+     * reinterprets, or the mapping could not be reversed by switching it off.
+     */
+    const sql = identityStatements();
+    for (const table of [
+      "telesales_source_records",
+      "telesales_leads",
+      "telesales_products",
+      "telesales_customers",
+    ]) {
+      expect(sql, `${table} must not be updated`).not.toMatch(
+        new RegExp(String.raw`UPDATE\s+(public\.)?` + table, "i"),
+      );
+    }
+    // Nothing is deleted anywhere, including from the mapping table itself:
+    // deactivation only, so the decision stays auditable.
+    expect(sql).not.toMatch(/DELETE FROM/i);
+    // The one INSERT is into the mapping table.
+    expect(sql).toMatch(/INSERT INTO public\.telesales_product_aliases/);
+  });
+
+  it("identity never becomes a cross-sell", () => {
+    /*
+     * The two concepts stay apart. A mapping says two codes are one product; a
+     * relation says one product is worth mentioning beside another. Deriving
+     * either from the other would put a medication recommendation in front of a
+     * patient on the strength of a numbering accident.
+     */
+    for (const file of [
+      "lib/telesales/identity.ts",
+      "lib/telesales/aliases.ts",
+      "features/telesales/hooks/use-product-aliases.ts",
+    ]) {
+      const text = source(file);
+      expect(text, `${file} must not write a relation`).not.toContain(
+        "telesalesSaveProductRelation",
+      );
+      expect(text).not.toMatch(/to_item_code\s*:/);
+    }
+    // The migration touches no cross-sell object.
+    expect(identityStatements()).not.toContain("telesales_product_relations");
+  });
+
+  it("the resolver and the validator are pure — no client, no I/O", () => {
+    for (const file of ["lib/telesales/identity.ts", "lib/telesales/aliases.ts"]) {
+      const text = source(file);
+      expect(text).not.toContain("supabase");
+      expect(text).not.toContain("createServerFn");
+      expect(text).not.toMatch(/\bfetch\(/);
+      for (const forbidden of MIS_IMPORTS) {
+        expect(text, `${file} must not import ${forbidden}`).not.toContain(forbidden);
+      }
+    }
+  });
+
+  it("the identity screen never writes through the browser client", () => {
+    const text = source("features/telesales/hooks/use-product-aliases.ts");
+    expect(text).toContain("telesalesSaveProductAlias");
+    expect(text).toContain("telesalesSetProductAliasActive");
+    expect(text).not.toMatch(
+      /\.from\("telesales_product_aliases"\)[\s\S]{0,200}\.(insert|update|delete)\(/,
+    );
+  });
+
+  it("mappings load once per page, never once per lead or per customer", () => {
+    const text = source("features/telesales/hooks/use-recommended-leads.ts");
+    expect(text).toContain("telesales_product_aliases");
+    // Not inside any per-lead or per-customer loop.
+    expect(text).not.toMatch(
+      /for \([^)]*(leads|phones|customers)[^)]*\)[\s\S]{0,400}telesales_product_aliases/,
+    );
+    // The read is bounded, like every other read on this page.
+    expect(text).toMatch(/\.limit\(ALIAS_LIMIT\)/);
+    // And the index is compiled once, before the per-lead walk.
+    expect(text).toMatch(
+      /buildProductIdentityIndex\([\s\S]{0,120}\);[\s\S]{0,400}recommendLeads\(/,
+    );
+  });
+
+  it("the identity layer reaches no MIS module", () => {
+    for (const file of [
+      "lib/telesales/identity.ts",
+      "lib/telesales/aliases.ts",
+      "features/telesales/hooks/use-product-aliases.ts",
+      "routes/_app.telesales.identity.tsx",
+    ]) {
+      const text = source(file);
+      for (const forbidden of MIS_IMPORTS) {
+        expect(text, `${file} must not import ${forbidden}`).not.toContain(forbidden);
+      }
+    }
   });
 });
 

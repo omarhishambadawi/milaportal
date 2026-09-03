@@ -15,6 +15,7 @@ import {
   type RecommendableLead,
   type RecommendationContext,
 } from "../recommendations";
+import { buildProductIdentityIndex } from "../identity";
 
 const TODAY = "2026-09-02";
 const PHONE = "0504630565";
@@ -190,6 +191,13 @@ function ctx(over: Partial<RecommendationContext> = {}): RecommendationContext {
   return {
     today: TODAY,
     historyByPhone: groupHistoryByPhone([purchase()]),
+    identity: buildProductIdentityIndex(
+      PRODUCTS.filter((p) => p.active).map((p) => ({
+        itemCode: p.itemCode,
+        itemName: p.itemName,
+        refillDays: 28,
+      })),
+    ),
     // 28-day cycle from 28 Aug is 25 Sep: not due, not soon, so no refill.
     cycleByItem: new Map([[MOUNJARO_5, { itemCode: MOUNJARO_5, refillDays: 28 }]]),
     relationsByItem: new Map(),
