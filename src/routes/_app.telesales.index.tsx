@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ChevronLeft,
@@ -53,9 +53,30 @@ import {
   useTelesalesQueue,
 } from "@/features/telesales/hooks/use-telesales-queue";
 import { DEFAULT_QUEUE_FILTERS, type QueueLead } from "@/features/telesales/types";
+import { useDebounced } from "@/features/shams/hooks/use-shams-data";
+import {
+  encodeQueueContext,
+  queueStateFromSearch,
+  searchFromQueueState,
+  validateQueueSearch,
+  type QueueState,
+} from "@/features/telesales/queue-search";
 
 export const Route = createFileRoute("/_app/telesales/")({
   head: () => ({ meta: [{ title: "Telesales — MilaServ Portal" }] }),
+  /*
+   * The filters live in the address bar.
+   *
+   * They were component state, which meant opening a lead and coming back
+   * landed the agent on an unfiltered first page — as did a refresh, and as did
+   * browser Back. In the URL all three restore what was on screen, and a
+   * filtered queue becomes something a supervisor can send as a link.
+   *
+   * Validated rather than trusted: `validateQueueSearch` collapses anything
+   * unexpected to the default, so a hand-edited URL cannot reach the database
+   * with a filter the queue has no rendering for.
+   */
+  validateSearch: validateQueueSearch,
   component: TelesalesQueuePage,
 });
 
@@ -80,17 +101,100 @@ function TelesalesQueuePage() {
   const canWork = hasPerm(role, perms, "work_telesales");
   const canManage = hasPerm(role, perms, "manage_telesales");
 
-  const [leadType, setLeadType] = useState(DEFAULT_QUEUE_FILTERS.leadType);
-  const [status, setStatus] = useState(DEFAULT_QUEUE_FILTERS.status);
-  const [branch, setBranch] = useState(DEFAULT_QUEUE_FILTERS.branch);
-  const [family, setFamily] = useState(DEFAULT_QUEUE_FILTERS.family);
-  const [followup, setFollowup] = useState(DEFAULT_QUEUE_FILTERS.followup);
-  const [lifecycle, setLifecycle] = useState(DEFAULT_QUEUE_FILTERS.lifecycle);
-  const [term, setTerm] = useState("");
-  const [mineOnly, setMineOnly] = useState(false);
-  const [unassignedOnly, setUnassignedOnly] = useState(false);
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
+  /*
+   * Everything that decides what is on screen comes from the URL.
+   *
+   * `queueStateFromSearch` applies the defaults, so the rest of this component
+   * reads the same plain values it always did — the change is where they are
+   * stored, not how they are used.
+   */
+  const search = Route.useSearch();
+  const navigate = Route.useNavigate();
+  const queueState = useMemo(() => queueStateFromSearch(search), [search]);
+  const {
+    leadType,
+    status,
+    branch,
+    family,
+    followup,
+    lifecycle,
+    term,
+    mineOnly,
+    unassignedOnly,
+    page,
+    pageSize,
+  } = queueState;
+
+  /**
+   * Write part of the queue state back to the URL.
+   *
+   * `replace` for typing, so a search term does not leave one history entry per
+   * keystroke — Back from a lead would otherwise step backwards through the
+   * word the agent typed. Everything else pushes, because a filter change is a
+   * navigation the agent may well want to undo.
+   */
+  const put = useCallback(
+    (next: Partial<QueueState>, replace = false) => {
+      void navigate({ search: () => searchFromQueueState({ ...queueState, ...next }), replace });
+    },
+    [navigate, queueState],
+  );
+
+  /*
+   * The setters, in the shape the rest of the page already used.
+   *
+   * Every filter resets to page 1: page 4 of a different result set is a page
+   * the agent never asked for and usually an empty one. That rule was in
+   * `onFilter` before and is now in the setter itself, so it cannot be
+   * forgotten at a call site.
+   */
+  const setLeadType = (v: string) => put({ leadType: v, page: 0 });
+  const setStatus = (v: string) => put({ status: v, page: 0 });
+  const setBranch = (v: string) => put({ branch: v, page: 0 });
+  const setFamily = (v: string) => put({ family: v, page: 0 });
+  const setFollowup = (v: string) => put({ followup: v, page: 0 });
+  const setLifecycle = (v: string) => put({ lifecycle: v, page: 0 });
+  const setTerm = (v: string) => put({ term: v, page: 0 }, true);
+  const setPageSize = (v: number) => put({ pageSize: v, page: 0 });
+  /** Accepts a value or an updater, because the pager uses both. */
+  const setPage = (v: number | ((p: number) => number)) =>
+    put({ page: typeof v === "function" ? v(page) : v });
+
+  /*
+   * The filters, packed for a lead to carry.
+   *
+   * Browser Back already returns here, because the filters are in the URL it
+   * came from. This is for the lead's own Queue button, which is a Link and
+   * navigates forward to wherever it is told. Undefined on the default queue,
+   * so an unfiltered view adds nothing to the address bar.
+   */
+  const queueContext = useMemo(() => encodeQueueContext(search), [search]);
+
+  /*
+   * The search box types locally and publishes when it settles.
+   *
+   * Writing the URL on every keystroke would put one history entry per
+   * character — so Back from a lead would walk backwards through the typed
+   * word — and would round-trip each keypress through the router, which drops
+   * characters under fast typing. The same `draft` + `useDebounced` pattern the
+   * `/shams` stock search uses, and for the same two reasons.
+   */
+  const [draft, setDraft] = useState(term);
+  const settled = useDebounced(draft);
+
+  // Adopt the URL when it changes underneath: a Back navigation, or a link
+  // opened with `?q=`. Guarded on inequality so typing is never fought.
+  useEffect(() => {
+    setDraft((d) => (d === term ? d : term));
+  }, [term]);
+
+  // Publish what was searched, not what is being typed.
+  useEffect(() => {
+    if (settled !== term) setTerm(settled);
+    // `setTerm` is recreated per render; `settled` is what decides this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settled]);
+
   const [recording, setRecording] = useState<QueueLead | null>(null);
   /*
    * Selection lives on the page rather than in the URL.
@@ -188,25 +292,29 @@ function TelesalesQueuePage() {
     mineOnly ||
     unassignedOnly;
 
+  /*
+   * Clearing is one navigation, not nine.
+   *
+   * Calling each setter in turn would issue nine `navigate` calls against a
+   * `queueState` that is stale after the first, so the last would win and the
+   * rest would be lost. The whole default state goes back at once instead.
+   *
+   * `lifecycle` is deliberately not reset: it is the actionable/stale axis and
+   * it was not on the old reset either, because an agent clearing filters wants
+   * their working set back, not the dead backlog with it.
+   */
   function resetFilters() {
-    setLeadType(DEFAULT_QUEUE_FILTERS.leadType);
-    setStatus(DEFAULT_QUEUE_FILTERS.status);
-    setBranch("all");
-    setFamily("all");
-    setFollowup("all");
-    setTerm("");
-    setMineOnly(false);
-    setUnassignedOnly(false);
-    setPage(0);
-  }
-
-  /** Any filter change returns to page 1 — page 4 of a different result set is
-   *  a page the agent never asked for and usually an empty one. */
-  function onFilter<T>(setter: (v: T) => void) {
-    return (value: T) => {
-      setter(value);
-      setPage(0);
-    };
+    put({
+      leadType: DEFAULT_QUEUE_FILTERS.leadType,
+      status: DEFAULT_QUEUE_FILTERS.status,
+      branch: "all",
+      family: "all",
+      followup: "all",
+      term: "",
+      mineOnly: false,
+      unassignedOnly: false,
+      page: 0,
+    });
   }
 
   return (
@@ -258,7 +366,7 @@ function TelesalesQueuePage() {
         <Button
           size="sm"
           variant={leadType === "all" ? "default" : "outline"}
-          onClick={() => onFilter(setLeadType)("all")}
+          onClick={() => setLeadType("all")}
         >
           All
         </Button>
@@ -267,7 +375,7 @@ function TelesalesQueuePage() {
             key={t}
             size="sm"
             variant={leadType === t ? "default" : "outline"}
-            onClick={() => onFilter(setLeadType)(t)}
+            onClick={() => setLeadType(t)}
           >
             {LEAD_TYPE_LABELS[t]}
           </Button>
@@ -277,8 +385,9 @@ function TelesalesQueuePage() {
           size="sm"
           variant={mineOnly ? "default" : "outline"}
           onClick={() => {
-            onFilter(setMineOnly)(!mineOnly);
-            if (!mineOnly) setUnassignedOnly(false);
+            // One navigation: the two toggles are mutually exclusive, and
+            // writing them separately would lose the first.
+            put({ mineOnly: !mineOnly, unassignedOnly: false, page: 0 });
           }}
         >
           My leads
@@ -287,8 +396,7 @@ function TelesalesQueuePage() {
           size="sm"
           variant={unassignedOnly ? "default" : "outline"}
           onClick={() => {
-            onFilter(setUnassignedOnly)(!unassignedOnly);
-            if (!unassignedOnly) setMineOnly(false);
+            put({ unassignedOnly: !unassignedOnly, mineOnly: false, page: 0 });
           }}
         >
           Unassigned
@@ -301,14 +409,14 @@ function TelesalesQueuePage() {
             <div className="relative min-w-[220px] flex-1">
               <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                value={term}
-                onChange={(e) => onFilter(setTerm)(e.target.value)}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
                 placeholder="Name, phone, Patient ID, prescription, invoice"
                 className="pl-8"
               />
             </div>
 
-            <Select value={status} onValueChange={onFilter(setStatus)}>
+            <Select value={status} onValueChange={setStatus}>
               <SelectTrigger className="w-[150px]">
                 <SelectValue />
               </SelectTrigger>
@@ -321,7 +429,7 @@ function TelesalesQueuePage() {
               </SelectContent>
             </Select>
 
-            <Select value={followup} onValueChange={onFilter(setFollowup)}>
+            <Select value={followup} onValueChange={setFollowup}>
               <SelectTrigger className="w-[150px]">
                 <SelectValue />
               </SelectTrigger>
@@ -343,7 +451,7 @@ function TelesalesQueuePage() {
              * how much old opportunity is in the system without changing the
              * filter to find out.
              */}
-            <Select value={lifecycle} onValueChange={onFilter(setLifecycle)}>
+            <Select value={lifecycle} onValueChange={setLifecycle}>
               <SelectTrigger className="w-[190px]">
                 <SelectValue />
               </SelectTrigger>
@@ -364,7 +472,7 @@ function TelesalesQueuePage() {
               </SelectContent>
             </Select>
 
-            <Select value={branch} onValueChange={onFilter(setBranch)}>
+            <Select value={branch} onValueChange={setBranch}>
               <SelectTrigger className="w-[140px]">
                 <SelectValue placeholder="Branch" />
               </SelectTrigger>
@@ -378,7 +486,7 @@ function TelesalesQueuePage() {
               </SelectContent>
             </Select>
 
-            <Select value={family} onValueChange={onFilter(setFamily)}>
+            <Select value={family} onValueChange={setFamily}>
               <SelectTrigger className="w-[160px]">
                 <SelectValue placeholder="Product" />
               </SelectTrigger>
@@ -506,6 +614,7 @@ function TelesalesQueuePage() {
                   key={lead.id}
                   lead={lead}
                   today={today}
+                  queueContext={queueContext}
                   assigneeName={
                     lead.assigned_to ? (roster.data?.get(lead.assigned_to) ?? null) : null
                   }
@@ -581,7 +690,6 @@ function TelesalesQueuePage() {
               value={String(pageSize)}
               onValueChange={(v) => {
                 setPageSize(Number(v));
-                setPage(0);
               }}
             >
               <SelectTrigger className="h-8 w-[80px]">

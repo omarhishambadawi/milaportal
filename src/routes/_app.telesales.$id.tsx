@@ -34,6 +34,7 @@ import {
   OUTCOME_BY_KEY,
   type ActivityType,
 } from "@/lib/telesales/types";
+import { decodeQueueContext, validateLeadSearch } from "@/features/telesales/queue-search";
 import { LeadCrossSellPanel } from "@/features/telesales/components/lead-cross-sell-panel";
 import { LeadStockPanel } from "@/features/telesales/components/lead-stock-panel";
 import { MisCustomerPanel } from "@/features/telesales/components/mis-customer-panel";
@@ -57,6 +58,16 @@ import {
 
 export const Route = createFileRoute("/_app/telesales/$id")({
   head: () => ({ meta: [{ title: "Lead — MilaServ Portal" }] }),
+  /*
+   * One opaque parameter: the queue's filters, as the queue packed them.
+   *
+   * This page never reads inside it. It hands the string to
+   * `decodeQueueContext` and puts the result on the Back link, so the queue can
+   * gain a filter tomorrow without this file knowing. Bounded and validated
+   * there, so a mangled value degrades to the default queue rather than to a
+   * broken one.
+   */
+  validateSearch: validateLeadSearch,
   component: LeadDetailPage,
 });
 
@@ -85,6 +96,14 @@ function ts(iso: string | null | undefined): string {
  */
 function LeadDetailPage() {
   const { id } = useParams({ from: "/_app/telesales/$id" });
+  /*
+   * Where "Queue" goes back to.
+   *
+   * The filters the agent had when they opened this lead, restored. Empty when
+   * they arrived from an unfiltered queue or from a direct link, which lands
+   * them on the default queue — the behaviour before this existed.
+   */
+  const backToQueue = decodeQueueContext(Route.useSearch().from);
   const { profile, role, session } = useAuth();
   const userId = session?.user?.id;
   const perms = profile?.permissions as string[] | null | undefined;
@@ -195,7 +214,9 @@ function LeadDetailPage() {
       <div className="py-16 text-center">
         <p className="text-sm font-medium">This lead no longer exists</p>
         <Button asChild className="mt-4" variant="outline" size="sm">
-          <Link to="/telesales">Back to the queue</Link>
+          <Link to="/telesales" search={backToQueue}>
+            Back to the queue
+          </Link>
         </Button>
       </div>
     );
@@ -212,7 +233,7 @@ function LeadDetailPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Button asChild variant="ghost" size="sm">
-          <Link to="/telesales">
+          <Link to="/telesales" search={backToQueue}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             Queue
           </Link>

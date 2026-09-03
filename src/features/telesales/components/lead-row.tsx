@@ -61,6 +61,15 @@ export interface LeadRowProps {
   onClaim: (lead: QueueLead) => void;
   onRecord: (lead: QueueLead) => void;
   claiming: boolean;
+  /**
+   * The queue's current filters, as one opaque string, so the lead can offer a
+   * Back that returns here rather than to the default queue.
+   *
+   * Opaque on purpose: the row does not read it and the lead page does not
+   * either — it is produced by `encodeQueueContext` and consumed by
+   * `decodeQueueContext`, so adding a filter tomorrow changes neither file.
+   */
+  queueContext?: string;
 }
 
 export function LeadRow({
@@ -77,6 +86,7 @@ export function LeadRow({
   onClaim,
   onRecord,
   claiming,
+  queueContext,
 }: LeadRowProps) {
   const due = describeDue(lead.next_followup_on, today);
   /*
@@ -140,6 +150,7 @@ export function LeadRow({
           <Link
             to="/telesales/$id"
             params={{ id: lead.id }}
+            search={queueContext ? { from: queueContext } : {}}
             className="truncate font-medium hover:underline"
           >
             {lead.customer_name || (lead.lead_type === "wasfaty" ? "Wasfaty patient" : "No name")}
