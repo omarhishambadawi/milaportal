@@ -10,7 +10,7 @@ export type PermissionGroup =
   | "Invoice Verification"
   | "Branches"
   | "Shams MIS"
-  | "Telesales"
+  | "CRM"
   | "Administration";
 
 export interface PermissionDef {
@@ -51,7 +51,13 @@ export const ALL_PERMISSIONS: PermissionDef[] = [
   // screen against each other for no operational reason.
   { key: "view_shams_mis", label: "View Shams MIS", group: "Shams MIS" },
   /*
-   * Telesales CRM — three keys, because the module has three audiences.
+   * The CRM — three keys, because the module has three audiences.
+   *
+   * Labelled "CRM" here and in the sidebar because that is what the desk calls
+   * it. The keys stay `*_telesales`: they are the RLS predicates on eleven
+   * tables and the argument to `has_permission()` in SQL, so renaming them
+   * would be a migration and a re-grant of every user, to change a string
+   * nobody outside the code reads.
    *
    * `view_` is also the RLS read boundary on every telesales table, so the page
    * appears exactly when the data would load. `work_` is the verbs an agent
@@ -65,12 +71,12 @@ export const ALL_PERMISSIONS: PermissionDef[] = [
    * reassign leads to themselves is the ownership problem the module exists to
    * remove.
    */
-  { key: "view_telesales", label: "View Telesales CRM", group: "Telesales" },
-  { key: "work_telesales", label: "Work Telesales Leads", group: "Telesales" },
+  { key: "view_telesales", label: "View CRM", group: "CRM" },
+  { key: "work_telesales", label: "Work CRM Leads", group: "CRM" },
   {
     key: "manage_telesales",
-    label: "Manage Telesales (import, generate, assign)",
-    group: "Telesales",
+    label: "Manage CRM (import, generate, assign)",
+    group: "CRM",
   },
   // Administration
   { key: "view_reports", label: "View All Reports", group: "Administration" },
@@ -340,12 +346,27 @@ export function canViewCallsPage(
   return callsPageAllowedForRole(role, page);
 }
 
+/**
+ * The order the permission editor renders its sections in.
+ *
+ * A group missing from this list is a group whose permissions are **not
+ * rendered at all** — `PermissionEditor` iterates this array and filters
+ * `ALL_PERMISSIONS` by it, so anything unlisted is silently unreachable in the
+ * UI. "CRM" was missing, which meant the three `*_telesales` keys could not be
+ * granted or withdrawn through Rules by anyone: the only way a role got CRM
+ * access was the hardcoded default. Adding it here is what makes
+ * `ROLE_ALLOWED_PERMS` mean something for Customer Care and Auditor, both of
+ * which already list `view_telesales` as grantable.
+ *
+ * Ordered to mirror the sidebar, where the CRM sits above Shams MIS.
+ */
 export const PERMISSION_GROUPS: PermissionGroup[] = [
   "Orders",
   "Complaints",
   "Dashboard",
   "Invoice Verification",
   "Branches",
+  "CRM",
   "Shams MIS",
   "Administration",
 ];

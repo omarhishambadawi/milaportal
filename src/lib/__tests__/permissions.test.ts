@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ALL_PERMISSIONS,
+  PERMISSION_GROUPS,
   canViewCallCenter,
   defaultPermsForRole,
   hasPerm,
@@ -381,5 +382,121 @@ describe("canViewCallCenter", () => {
   it("refuses a null role and a retired role", () => {
     expect(canViewCallCenter(null, ["view_call_center"])).toBe(false);
     expect(canViewCallCenter("call_center" as AppRole, ["view_call_center"])).toBe(false);
+  });
+});
+
+/* ===================================================================== */
+/* CRM visibility                                                        */
+/* ===================================================================== */
+
+describe("CRM sidebar visibility", () => {
+  /*
+   * The sidebar renders the CRM item when `hasPerm(role, perms,
+   * "view_telesales")` is true — `src/routes/_app.tsx` computes exactly that
+   * and nothing else. So these assertions are the sidebar's rule, not a model
+   * of it, and the chain the desk asked for is:
+   *
+   *     Rules -> view_telesales -> sidebar
+   *
+   * The permission key stays `view_telesales`; only the label says CRM. The key
+   * is the RLS predicate on eleven tables and the argument to
+   * `has_permission()` in SQL, so renaming it would be a migration and a
+   * re-grant of every user to change a string nobody outside the code reads.
+   */
+  const crmVisible = (role: AppRole | null, perms: string[] | null) =>
+    hasPerm(role, perms, "view_telesales");
+
+  it("is visible by default to Owner, Admin, Supervisor and Telesales", () => {
+    for (const role of ["owner", "admin", "supervisor", "telesales"] as AppRole[]) {
+      // `null` perms means "follow the role defaults", which is how every
+      // account that has never been individually edited is stored.
+      expect(crmVisible(role, null), `${role} should see the CRM`).toBe(true);
+    }
+  });
+
+  it("is hidden by default from Customer Care and Auditor", () => {
+    for (const role of ["customer_care", "auditor"] as AppRole[]) {
+      expect(crmVisible(role, null), `${role} should not see the CRM`).toBe(false);
+    }
+  });
+
+  it("appears for a role once an administrator grants the rule", () => {
+    /*
+     * The requirement that stops the role list being the source of truth: an
+     * administrator ticks View CRM in the permission editor and the item
+     * appears, with no release. Both roles list `view_telesales` in their
+     * *allowed* ceiling, which is what makes the grant stick.
+     */
+    expect(crmVisible("customer_care", ["view_telesales"])).toBe(true);
+    expect(crmVisible("auditor", ["view_telesales"])).toBe(true);
+  });
+
+  it("disappears again when the rule is withdrawn", () => {
+    // Reversible, and reversible through the same mechanism.
+    expect(crmVisible("customer_care", ["view_orders"])).toBe(false);
+  });
+
+  it("cannot be granted to a role outside its ceiling", () => {
+    /*
+     * `manage_telesales` is absent from the telesales role's allowed ceiling as
+     * well as its defaults: an agent who could reassign leads to themselves is
+     * the ownership problem the module exists to remove. Storing the key on the
+     * account must not be enough.
+     */
+    expect(hasPerm("telesales", ["manage_telesales"], "manage_telesales")).toBe(false);
+  });
+
+  it("shows the CRM permissions in the editor, so Rules can actually reach them", () => {
+    /*
+     * The defect this phase fixed. `PermissionEditor` iterates
+     * `PERMISSION_GROUPS` and filters `ALL_PERMISSIONS` by it, so a group
+     * missing from that array is a group whose permissions render nowhere — and
+     * "CRM" was missing. The grant path existed in the model and was unreachable
+     * in the UI, which made the hardcoded defaults the only way any role got
+     * CRM access.
+     */
+    expect(PERMISSION_GROUPS).toContain("CRM");
+    const crmPerms = ALL_PERMISSIONS.filter((p) => p.group === "CRM");
+    expect(crmPerms.map((p) => p.key).sort()).toEqual([
+      "manage_telesales",
+      "view_telesales",
+      "work_telesales",
+    ]);
+    // Every group that carries permissions must be renderable, not just this one.
+    for (const perm of ALL_PERMISSIONS) {
+      expect(PERMISSION_GROUPS, `group "${perm.group}" is not rendered`).toContain(perm.group);
+    }
+  });
+
+  it("labels the CRM permissions for the desk, not for the schema", () => {
+    for (const perm of ALL_PERMISSIONS.filter((p) => p.group === "CRM")) {
+      expect(perm.label).toContain("CRM");
+      expect(perm.label).not.toMatch(/telesales/i);
+    }
+  });
+
+  it("hiding the item is not the security boundary", () => {
+    /*
+     * `/telesales` computes the same `view_telesales` in-page and renders a
+     * refusal instead of the queue, every read is additionally gated by RLS on
+     * the same key, and every write re-checks server-side through
+     * `resolveActor`. Navigating straight to the URL therefore gains nothing —
+     * asserted here as the rule the sidebar and the page share.
+     */
+    expect(crmVisible("customer_care", null)).toBe(false);
+    expect(hasPerm("customer_care", null, "view_telesales")).toBe(false);
+    expect(hasPerm("customer_care", null, "work_telesales")).toBe(false);
+    expect(hasPerm("customer_care", null, "manage_telesales")).toBe(false);
+  });
+
+  it("leaves the Calls telesales-team view alone", () => {
+    /*
+     * `/calls/telesales` is the call-analytics view of the telesales *team* and
+     * is a different thing from the CRM at `/telesales`. It is gated by
+     * `canViewCallsPage`, not by `view_telesales`, and this phase did not touch
+     * it — the two would otherwise be easy to conflate on the next rename.
+     */
+    expect(canViewCallCenter("telesales", null)).toBe(false);
+    expect(crmVisible("telesales", null)).toBe(true);
   });
 });

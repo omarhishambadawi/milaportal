@@ -154,12 +154,26 @@ function AppLayout() {
             },
           ]
         : []),
+      /*
+       * The CRM. Named for what the desk calls it, not for the client: Shams
+       * Pharmacies is the account whose desk it runs, and a second account
+       * would add rows here rather than a second menu entry.
+       *
+       * The label is the only thing that says "CRM" — the route, the tables and
+       * the permission keys stay `telesales`, because renaming those would be a
+       * migration and a re-grant of every user to change a string nobody
+       * outside the code reads.
+       *
+       * Visibility is `view_telesales` through `hasPerm`, exactly like every
+       * other item here, so Rules decide it: Owner, Admin, Supervisor and
+       * Telesales hold it by default, and an administrator can grant it to
+       * Customer Care or Auditor from the permission editor without a release.
+       * Hiding the item is a courtesy, never the boundary — `/telesales` gates
+       * on the same permission in-page and every write re-checks it server-side.
+       */
+      ...(canTelesales ? [{ to: "/telesales", label: "CRM", icon: PhoneCall }] : []),
       // Shams MIS reads the pharmacy's own system, behind its own page-level
       // permission so it can be granted or withdrawn on its own.
-      // The Telesales queue. Named for the work, not for the client: Shams
-      // Pharmacies is the account whose desk it runs, and a second account would
-      // add rows here rather than a second menu entry.
-      ...(canTelesales ? [{ to: "/telesales", label: "Telesales", icon: PhoneCall }] : []),
       ...(canShams ? [{ to: "/shams", label: "Shams MIS", icon: PackageSearch }] : []),
       /*
        * The administration area. Its own rail carries the pages inside it, so
