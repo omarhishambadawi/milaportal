@@ -2362,10 +2362,77 @@ const LOOKUP_MAX_DAYS = 90;
 /** Hard cap on returned rows. A number with more history than this needs a report. */
 const LOOKUP_MAX_ROWS = 200;
 
+/**
+ * The window may be given as a lookback or as an explicit range.
+ *
+ * `days` is what `/calls/lookup` sends and stays the default. `from`/`to` were
+ * added for the CRM lead page, which offers two date fields rather than a
+ * lookback menu — an agent asking "did anyone call this patient in July" is
+ * asking about a closed period, which a count of days back from today cannot
+ * express.
+ *
+ * The whole retrieval below already works on a `from`/`to` pair; `days` was
+ * only ever converted into one on the way in. So this is the same lookup with
+ * its window stated directly, not a second lookup — same permission check, same
+ * four retrieval paths, same row shape.
+ */
 const callLookupInput = z.object({
   number: z.string().min(1).max(32),
   days: z.number().int().min(1).max(LOOKUP_MAX_DAYS).default(30),
+  from: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+  to: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
 });
+
+/**
+ * The window a lookup will actually read.
+ *
+ * An explicit range wins, and is then bounded the same way the lookback is:
+ *
+ *   * never past today, because the PBX has no future calls and asking for them
+ *     is how a typo turns into a sweep of an empty window;
+ *   * never inverted — a `from` after `to` collapses to a single day rather
+ *     than throwing, because the operator is mid-edit, not wrong;
+ *   * never longer than `LOOKUP_MAX_DAYS`, the same 90-day ceiling the `days`
+ *     input carries. Without this clamp a hand-typed range would be the one way
+ *     to ask for an unbounded sweep, which is precisely what the cap exists to
+ *     prevent.
+ */
+function resolveLookupWindow(
+  input: { days: number; from?: string; to?: string },
+  nowMs: number,
+): { from: string; to: string; days: number } {
+  const today = businessDay(nowMs);
+  const dayMs = 86_400_000;
+
+  if (!input.from || !input.to) {
+    const to = today;
+    const from = businessDay(nowMs - (input.days - 1) * dayMs);
+    return { from, to, days: input.days };
+  }
+
+  const to = input.to > today ? today : input.to;
+  let from = input.from > to ? to : input.from;
+
+  const span =
+    Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / dayMs) + 1;
+  if (span > LOOKUP_MAX_DAYS) {
+    from = new Date(Date.parse(`${to}T00:00:00Z`) - (LOOKUP_MAX_DAYS - 1) * dayMs)
+      .toISOString()
+      .slice(0, 10);
+  }
+
+  const days =
+    Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / dayMs) + 1;
+  return { from, to, days };
+}
+
+export const __lookupWindow = { resolveLookupWindow, LOOKUP_MAX_DAYS };
 
 export interface CallLookupRow {
   callId: string;
@@ -2519,10 +2586,8 @@ export const lookupCallsByNumber = createServerFn({ method: "POST" })
     const { canView } = await callCenterAccess(supabase, userId);
     if (!canView) throw new Error("Forbidden: call analytics access required");
 
-    const now = Date.now();
-    const to = businessDay(now);
-    const from = businessDay(now - (data.days - 1) * 86_400_000);
-    const window = { from, to, days: data.days };
+    const window = resolveLookupWindow(data, Date.now());
+    const { from, to } = window;
 
     const wanted = matchKey(data.number);
     if (digitsOf(data.number).length < LOOKUP_MIN_DIGITS) {

@@ -252,6 +252,17 @@ export const queryKeys = {
      * be indistinguishable from a bug.
      */
     lookup: (number: string, days: number) => ["call-center", "lookup", number, days] as const,
+    /**
+     * The same lookup asked for an explicit window rather than a lookback.
+     *
+     * A separate key because it is a different question with a different
+     * answer: `lookup(n, 30)` slides forward every midnight while
+     * `lookupWindow(n, from, to)` names a closed period, and sharing one entry
+     * would serve one as the other. Used by the CRM lead page, which offers two
+     * date fields instead of a lookback menu.
+     */
+    lookupWindow: (number: string, from: string, to: string) =>
+      ["call-center", "lookup", number, { from, to }] as const,
   },
 
   yeastar: {

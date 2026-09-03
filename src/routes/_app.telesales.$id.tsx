@@ -6,6 +6,7 @@ import {
   ClipboardList,
   Loader2,
   Phone,
+  PhoneCall,
   PhoneOff,
   ShieldAlert,
   UserPlus,
@@ -19,6 +20,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
 import { fmtSAR } from "@/lib/branches";
 import { PHONE_REJECTION_LABELS, normalizeSaudiPhone, toSaudiPhone } from "@/lib/phone";
+import { LeadCallLookup } from "@/features/telesales/components/lead-call-lookup";
 import { telesalesRecordInvoiceMatch } from "@/lib/telesales.functions";
 import { hasPerm } from "@/lib/permissions";
 import { BUSINESS_TIMEZONE } from "@/lib/timezone";
@@ -319,10 +321,30 @@ function LeadDetailPage() {
             <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
               <Field label="Phone">
                 {tel ? (
-                  <a href={tel} className="inline-flex items-center gap-1.5 hover:underline">
-                    <Phone className="h-3.5 w-3.5" />
-                    {formatPhone(l.phone)}
-                  </a>
+                  <span className="inline-flex flex-wrap items-center gap-2">
+                    <a href={tel} className="inline-flex items-center gap-1.5 hover:underline">
+                      <Phone className="h-3.5 w-3.5" />
+                      {formatPhone(l.phone)}
+                    </a>
+                    {/*
+                     * The call action, made a button rather than left as the
+                     * number itself.
+                     *
+                     * Same `tel:` href and therefore the same mechanism the rest
+                     * of the platform uses -- `telHref` is the one place that
+                     * builds one, and it emits E.164 because that is what dials
+                     * correctly from a softphone or a roaming handset. The
+                     * button exists because getting an agent onto a call is what
+                     * this page is for, and an underlined number is not an
+                     * obvious control.
+                     */}
+                    <Button asChild size="sm" className="h-7 px-2.5">
+                      <a href={tel} aria-label={`Call ${formatPhone(l.phone)}`}>
+                        <PhoneCall className="mr-1.5 h-3.5 w-3.5" />
+                        Call
+                      </a>
+                    </Button>
+                  </span>
                 ) : (
                   <span className="inline-flex items-center gap-1.5 text-muted-foreground">
                     <PhoneOff className="h-3.5 w-3.5" />
@@ -643,6 +665,20 @@ function LeadDetailPage() {
         phone={l.phone}
         compact
       />
+
+      {/*
+       * Who has already spoken to this number.
+       *
+       * The Calls module's own lookup, called with this lead's phone and a
+       * From/To window defaulted to the last month. It runs only here, on an
+       * opened lead -- never from the queue, where one lookup per row would be
+       * one PBX request per row.
+       *
+       * It renders nothing for somebody without call access, and a failure
+       * inside it is contained: the PBX being unreachable must not stop an
+       * agent reading the customer, the product or the follow-up above.
+       */}
+      <LeadCallLookup phone={l.phone} />
 
       {/* History */}
       <Card>
