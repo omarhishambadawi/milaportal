@@ -35,6 +35,18 @@ export interface MisCustomerPanelProps {
   /** Canonical phone, for the "looked up as" line. */
   phone: string | null;
   compact?: boolean;
+  /**
+   * How many purchase lines to table. Omitted, the table is not rendered in
+   * `compact` and is rendered whole otherwise.
+   *
+   * The lead page asks for a bounded history: an agent mid-call wants the last
+   * few purchases, and the ledger already has a home on the customer profile.
+   * A number here is what lets the same component answer both without a second
+   * density flag that would have to be kept in step with `compact`.
+   */
+  historyLimit?: number;
+  /** Rendered in the header, right of the title. The profile link, on a lead. */
+  action?: React.ReactNode;
 }
 
 /** "2 minutes ago". Coarse, because the exact second is never the question. */
@@ -67,6 +79,8 @@ export function MisCustomerPanel({
   telesalesName,
   phone,
   compact = false,
+  historyLimit,
+  action,
 }: MisCustomerPanelProps) {
   const retrieved = retrievedLabel(retrievedAt);
 
@@ -74,7 +88,17 @@ export function MisCustomerPanel({
     <Card>
       <CardHeader className="pb-3">
         <div className="flex flex-wrap items-center gap-2">
-          <CardTitle className="text-base">Shams MIS</CardTitle>
+          <CardTitle className="text-base">Customer intelligence</CardTitle>
+          {/*
+           * The source, named. It was the title; it is a provenance label now
+           * that this is the lead page's primary customer section rather than
+           * one integration panel among several. The distinction the agent
+           * needs is still there — this is what Shams MIS says, not what
+           * Telesales holds.
+           */}
+          <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+            Shams MIS
+          </span>
           {/*
            * The source and its freshness, always. Never "live" -- this is a
            * lookup whose answer is held in the browser for five minutes, and
@@ -86,11 +110,7 @@ export function MisCustomerPanel({
           {isFetching ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
           ) : null}
-          {phone ? (
-            <span className="ml-auto font-mono text-xs text-muted-foreground">
-              {formatSaudiPhone(phone)}
-            </span>
-          ) : null}
+          {action ? <div className="ml-auto">{action}</div> : null}
         </div>
       </CardHeader>
 
@@ -103,7 +123,13 @@ export function MisCustomerPanel({
         ) : state !== "ready" ? (
           <NonReady state={state} isFetching={isFetching} onRetry={onRetry} />
         ) : (
-          <Ready data={data!} telesalesName={telesalesName} compact={compact} />
+          <Ready
+            data={data!}
+            telesalesName={telesalesName}
+            phone={phone}
+            compact={compact}
+            historyLimit={historyLimit}
+          />
         )}
       </CardContent>
     </Card>
@@ -169,11 +195,15 @@ function NonReady({
 function Ready({
   data,
   telesalesName,
+  phone,
   compact,
+  historyLimit,
 }: {
   data: CustomerIntelligence;
   telesalesName: string | null;
+  phone: string | null;
   compact: boolean;
+  historyLimit?: number;
 }) {
   /*
    * The two names are compared, never merged.
@@ -190,6 +220,25 @@ function Ready({
 
   return (
     <>
+      {/* ------------------------------------------------------------------ */}
+      {/* Identity                                                           */}
+      {/* ------------------------------------------------------------------ */}
+      {/*
+       * Who this is, separated from what they have bought. The two were one
+       * undifferentiated grid, which made the name — the thing an agent reads
+       * out loud within a second of the call connecting — no more prominent
+       * than a loyalty balance.
+       */}
+      <div>
+        <p className="text-sm font-semibold leading-tight">
+          {misName || localName || "Unnamed customer"}
+        </p>
+        <p className="mt-0.5 font-mono text-xs text-muted-foreground">
+          {formatSaudiPhone(phone)}
+          {data.misCustomerId ? ` · ${data.misCustomerId}` : ""}
+        </p>
+      </div>
+
       <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
         <Field label="Shams customer">{misName || "—"}</Field>
         <Field label="Shams customer ID">
@@ -227,6 +276,13 @@ function Ready({
           </p>
         </div>
       ) : null}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Purchase intelligence                                              */}
+      {/* ------------------------------------------------------------------ */}
+      <p className="border-t border-border pt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Purchase intelligence
+      </p>
 
       {/* Last purchase — the single most useful line during a call. */}
       <div className="rounded-md border border-border p-3">
@@ -274,14 +330,31 @@ function Ready({
         </div>
       ) : null}
 
-      {/* The full table lives on the customer profile only. A lead row's job is
-          to get an agent onto a call, not to hold a ledger. */}
-      {!compact ? <PurchaseTable data={data} /> : null}
+      {/*
+       * The ledger is the customer profile's job; a lead shows the recent lines
+       * an agent needs mid-call. `historyLimit` is what distinguishes the two,
+       * so neither has to render the other's amount of it.
+       */}
+      {!compact || historyLimit ? <PurchaseTable data={data} limit={historyLimit} /> : null}
     </>
   );
 }
 
-function PurchaseTable({ data }: { data: CustomerIntelligence }) {
+function PurchaseTable({ data, limit }: { data: CustomerIntelligence; limit?: number }) {
+  const rows = limit ? data.purchases.slice(0, limit) : data.purchases;
+  const hidden = data.purchases.length - rows.length;
+
+  if (data.purchases.length === 0) {
+    // A customer the MIS knows but has never sold to. Distinct from a lookup
+    // that failed, which `NonReady` handles.
+    return (
+      <div>
+        <p className="mb-1.5 text-xs font-medium">Purchase history</p>
+        <p className="text-sm text-muted-foreground">No purchases on record.</p>
+      </div>
+    );
+  }
+
   return (
     <div>
       <p className="mb-1.5 text-xs font-medium">
@@ -302,7 +375,7 @@ function PurchaseTable({ data }: { data: CustomerIntelligence }) {
             </tr>
           </thead>
           <tbody>
-            {data.purchases.map((p, i) => (
+            {rows.map((p, i) => (
               <tr
                 key={`${p.documentNo ?? "?"}-${p.itemCode ?? i}-${i}`}
                 className="border-b border-border last:border-0"
@@ -321,6 +394,12 @@ function PurchaseTable({ data }: { data: CustomerIntelligence }) {
           </tbody>
         </table>
       </div>
+      {hidden > 0 ? (
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          Showing the {rows.length} most recent of {data.purchases.length} lines. The full history
+          is on the customer profile.
+        </p>
+      ) : null}
       {data.hasMore ? (
         /*
          * `crm/data` reports no total, so "more" is inferred from a full page.

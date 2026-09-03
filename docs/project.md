@@ -7374,14 +7374,20 @@ guarded by `IS NULL` and fired at most once per mount, so it cannot loop.
 
 ### Invoice verification and branch stock
 
-The lead detail answers two questions the agent asks together: **did this lead
-become a real sale**, and **can we still fulfil it**. Both come from the Shams MIS
-through the server functions the `/shams` Invoices and Stock tabs already use.
+> **Invoice verification was removed from the lead page.** The reconciler, the
+> column and the recommendation badge are all still here; only the lead-page UI
+> and its per-open lookup are gone. See _Customer intelligence is the lead's
+> primary section_ below.
+
+The lead detail used to answer two questions the agent asks together: **did this
+lead become a real sale**, and **can we still fulfil it**. Both come from the
+Shams MIS through the server functions the `/shams` Invoices and Stock tabs
+already use. Only the second is asked on the lead now.
 
 ```
 src/lib/telesales/reconciliation.ts                       PURE: checkability + matching
-src/features/telesales/hooks/use-lead-verification.ts     two lookups, Shams' own cache keys
-src/features/telesales/components/lead-verification-panel.tsx
+src/features/telesales/hooks/use-lead-verification.ts     the lookups, Shams' own cache keys
+src/features/telesales/components/lead-stock-panel.tsx    availability, on the lead
 ```
 
 Again no integration was built. `shamsGetInvoices` and `shamsGetProduct` own the
@@ -7485,6 +7491,47 @@ verdict is re-derived live whenever a lead is opened, so these columns are the
 reporting shadow of that derivation, not its cache.
 
 ---
+
+### Customer intelligence is the lead's primary section
+
+An agent opens a lead with a customer already on the line. What they need in the
+first second is who this is and what they have bought — not whether a document
+number reconciles, which is a reporting question the desk reads on the
+recommendation board.
+
+So `MisCustomerPanel` moved to the top of the lead's panel stack and invoice
+verification came off it entirely. The panel now separates **identity** — name,
+Shams customer ID, phone, loyalty points and value — from **purchase
+intelligence** — last purchase, previously purchased products, and a bounded
+history of the five most recent lines. `historyLimit` is what distinguishes the
+lead from the customer profile, which still renders the whole ledger; one
+component answers both. "View profile" is a button rather than the text link it
+was, since it is the one navigation made from this page.
+
+Nothing about the integration changed. The same `useCustomerIntelligence` query,
+keyed on the phone so every lead one customer holds shares a single lookup and a
+single cache entry. The panel itself fetches nothing — no `useQuery`, no
+`fetch` — and a test asserts it.
+
+#### What the removal cost, stated plainly
+
+`telesales_leads.invoice_match_status` was written by the lead page and by
+nothing else. Removing the check means **the column keeps the verdicts already
+recorded and gains no new ones**, so the recommendation engine's
+`invoice_verified` supporting badge stays correct for leads verified before this
+change and will not appear on leads opened after it.
+
+That is a deliberate trade, not an oversight. The check cost a Shams MIS request
+on every lead open — the second of two — to render a badge an agent mid-call
+does not act on, and the reporting it fed was never built. Everything needed to
+restore it is intact and untouched: `lib/telesales/reconciliation.ts`,
+`useInvoiceVerification`, the `telesalesRecordInvoiceMatch` server function, the
+column, its index and its CHECK constraint. Re-enabling it is wiring the hook
+back to a panel, not rebuilding a feature.
+
+Invoice functionality **outside** telesales — the Orders module's own
+verification, `record_invoice_verification`, the KPI cards — shares only the
+word and was not touched.
 
 ### Recommended leads
 

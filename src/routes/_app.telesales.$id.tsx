@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import {
   ArrowLeft,
   ClipboardList,
@@ -10,6 +10,7 @@ import {
   PhoneOff,
   ShieldAlert,
   UserPlus,
+  UserRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,7 +22,6 @@ import { useAuth } from "@/lib/auth";
 import { fmtSAR } from "@/lib/branches";
 import { PHONE_REJECTION_LABELS, normalizeSaudiPhone, toSaudiPhone } from "@/lib/phone";
 import { LeadCallLookup } from "@/features/telesales/components/lead-call-lookup";
-import { telesalesRecordInvoiceMatch } from "@/lib/telesales.functions";
 import { hasPerm } from "@/lib/permissions";
 import { BUSINESS_TIMEZONE } from "@/lib/timezone";
 import { cn } from "@/lib/utils";
@@ -34,14 +34,11 @@ import {
   OUTCOME_BY_KEY,
   type ActivityType,
 } from "@/lib/telesales/types";
-import { LeadVerificationPanel } from "@/features/telesales/components/lead-verification-panel";
+import { LeadStockPanel } from "@/features/telesales/components/lead-stock-panel";
 import { MisCustomerPanel } from "@/features/telesales/components/mis-customer-panel";
 import { OutcomeDialog } from "@/features/telesales/components/outcome-dialog";
 import { useCustomerIntelligence } from "@/features/telesales/hooks/use-customer-intelligence";
-import {
-  useInvoiceVerification,
-  useLeadStock,
-} from "@/features/telesales/hooks/use-lead-verification";
+import { useLeadStock } from "@/features/telesales/hooks/use-lead-verification";
 import {
   DUE_TONE_STYLES,
   LEAD_STATUS_STYLES,
@@ -112,32 +109,19 @@ function LeadDetailPage() {
   const intel = useCustomerIntelligence(lead.data?.phone, canView);
 
   /*
-   * Invoice verification and branch stock.
+   * Branch stock — can this still be fulfilled?
    *
-   * Two requests, both on this page only and both under the Shams module’s own
-   * query keys, so they share a cache with the /shams Invoices and Stock tabs.
-   * The queue issues neither.
+   * One request, on this page only, under the Shams module's own query key, so
+   * it shares a cache with the /shams Stock tab. The queue issues none.
    *
-   * The customer history already loaded above is handed to the reconciler as a
-   * free cross-check: it is what lets a “not matched” answer name the branch
-   * where the document number actually appears.
+   * Invoice verification used to sit beside this and no longer does. It
+   * answered "did this lead convert", which is a reporting question the desk
+   * reads on the recommendation board, not something an agent needs while a
+   * customer is on the line — and it cost a second MIS request on every lead
+   * open to render a badge nobody acted on. `telesales_leads.invoice_match_status`
+   * and the reconciler behind it are untouched; see the note on the removal in
+   * docs/project.md.
    */
-  const reconcilableLead = lead.data
-    ? {
-        leadType: lead.data.lead_type,
-        documentNo: lead.data.document_no,
-        branchNo: lead.data.branch_no,
-        sourceDate: lead.data.source_date,
-        itemCode: lead.data.item_code,
-        itemName: lead.data.item_name,
-        quantity: lead.data.quantity,
-      }
-    : null;
-  const historyDocuments = (intel.data?.purchases ?? []).map((purchase) => ({
-    docNo: purchase.documentNo,
-    branchCode: purchase.branchCode,
-  }));
-  const invoiceCheck = useInvoiceVerification(reconcilableLead, canView, historyDocuments);
   const stockCheck = useLeadStock(
     {
       itemCode: lead.data?.item_code ?? null,
@@ -146,31 +130,6 @@ function LeadDetailPage() {
     },
     canView,
   );
-
-  /*
-   * Write the verdict down once, per lead, per visit.
-   *
-   * The panel above is already showing it — this only records it so a
-   * supervisor can report on it later. Guarded by a ref keyed on the lead so a
-   * re-render cannot produce a second write, and failures are swallowed: a
-   * reporting shadow must never disturb a page an agent is reading mid-call.
-   */
-  const recordedFor = useRef<string | null>(null);
-  const verdict = invoiceCheck.verification;
-  useEffect(() => {
-    if (!id || !verdict || invoiceCheck.state !== "ready") return;
-    if (recordedFor.current === id) return;
-    recordedFor.current = id;
-    void telesalesRecordInvoiceMatch({
-      data: {
-        leadId: id,
-        status: verdict.status,
-        docNo: verdict.invoice?.docNo ?? null,
-        branchNo: verdict.invoice?.branchCode ?? null,
-        discrepancies: verdict.discrepancies,
-      },
-    }).catch(() => {});
-  }, [id, verdict, invoiceCheck.state]);
 
   const [recording, setRecording] = useState(false);
   const [note, setNote] = useState("");
@@ -354,15 +313,18 @@ function LeadDetailPage() {
               </Field>
               <Field label="Customer">
                 {/* The consolidated identity. One customer, several
-                    opportunities -- the leads stay separate. */}
+                    opportunities -- the leads stay separate.
+
+                    A button rather than the text link it was: it is the one
+                    navigation an agent makes from this page, and it read as
+                    prose beside four static fields. */}
                 {l.customer_id ? (
-                  <Link
-                    to="/telesales/customers/$id"
-                    params={{ id: l.customer_id }}
-                    className="hover:underline"
-                  >
-                    View profile
-                  </Link>
+                  <Button asChild size="sm" variant="outline" className="h-7 px-2.5">
+                    <Link to="/telesales/customers/$id" params={{ id: l.customer_id }}>
+                      <UserRound className="mr-1.5 h-3.5 w-3.5" />
+                      View profile
+                    </Link>
+                  </Button>
                 ) : (
                   <span className="text-muted-foreground">Not linked</span>
                 )}
@@ -638,22 +600,17 @@ function LeadDetailPage() {
         </div>
       </div>
 
-      {/* Did the lead convert, and can we still fulfil it? Shams MIS answers both. */}
-      <LeadVerificationPanel
-        invoiceState={invoiceCheck.state}
-        verification={invoiceCheck.verification}
-        onRetryInvoice={invoiceCheck.refetch}
-        stockState={stockCheck.state}
-        stock={stockCheck.stock}
-        onRetryStock={stockCheck.refetch}
-      />
-
       {/*
-       * Customer intelligence, compact.
+       * Customer intelligence — the lead page's primary customer section.
        *
-       * The headline only -- loyalty, last purchase, what they have bought
-       * before. The full ledger lives on the customer profile; a lead page’s
-       * job is to get an agent onto a call.
+       * Promoted above stock and call history because it is what an agent reads
+       * while the phone is ringing: who this is, what they have bought, and
+       * when. `historyLimit` gives the recent lines rather than the ledger,
+       * which remains the customer profile's job.
+       *
+       * The same `useCustomerIntelligence` query as before — one request,
+       * keyed on the phone, shared by every lead this customer holds. Nothing
+       * here added an MIS call; removing invoice verification took one away.
        */}
       <MisCustomerPanel
         state={intel.state}
@@ -664,6 +621,24 @@ function LeadDetailPage() {
         telesalesName={l.customer_name}
         phone={l.phone}
         compact
+        historyLimit={5}
+        action={
+          l.customer_id ? (
+            <Button asChild size="sm" variant="outline">
+              <Link to="/telesales/customers/$id" params={{ id: l.customer_id }}>
+                <UserRound className="mr-1.5 h-4 w-4" />
+                View profile
+              </Link>
+            </Button>
+          ) : null
+        }
+      />
+
+      {/* Can this still be fulfilled? */}
+      <LeadStockPanel
+        state={stockCheck.state}
+        stock={stockCheck.stock}
+        onRetry={stockCheck.refetch}
       />
 
       {/*
