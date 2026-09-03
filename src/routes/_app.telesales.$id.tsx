@@ -34,10 +34,12 @@ import {
   OUTCOME_BY_KEY,
   type ActivityType,
 } from "@/lib/telesales/types";
+import { LeadCrossSellPanel } from "@/features/telesales/components/lead-cross-sell-panel";
 import { LeadStockPanel } from "@/features/telesales/components/lead-stock-panel";
 import { MisCustomerPanel } from "@/features/telesales/components/mis-customer-panel";
 import { OutcomeDialog } from "@/features/telesales/components/outcome-dialog";
 import { useCustomerIntelligence } from "@/features/telesales/hooks/use-customer-intelligence";
+import { useLeadCrossSell } from "@/features/telesales/hooks/use-lead-cross-sell";
 import { useLeadStock } from "@/features/telesales/hooks/use-lead-verification";
 import {
   DUE_TONE_STYLES,
@@ -107,6 +109,18 @@ function LeadDetailPage() {
    * The lead renders without waiting for it.
    */
   const intel = useCustomerIntelligence(lead.data?.phone, canView);
+
+  /*
+   * Configured cross-sells for this lead's product.
+   *
+   * Three bounded reads, all under the same query keys the Cross-sell and
+   * Product Identity screens use, so they are shared and cached rather than
+   * paid for per lead. No MIS request and no per-relation query — see the hook.
+   */
+  const crossSell = useLeadCrossSell(
+    lead.data ? { itemCode: lead.data.item_code, itemName: lead.data.item_name } : null,
+    canView,
+  );
 
   /*
    * Branch stock — can this still be fulfilled?
@@ -633,6 +647,16 @@ function LeadDetailPage() {
           ) : null
         }
       />
+
+      {/*
+       * What else this customer could be told about.
+       *
+       * Beside the product rather than behind the customer profile: an agent
+       * mid-call should not have to leave the lead to find out whether the desk
+       * configured a companion. Nothing here is inferred and nothing can be
+       * created from this panel — it renders the configured pairs and says so.
+       */}
+      <LeadCrossSellPanel {...crossSell} fallbackName={l.item_name} />
 
       {/* Can this still be fulfilled? */}
       <LeadStockPanel

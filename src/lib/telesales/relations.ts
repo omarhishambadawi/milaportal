@@ -1,3 +1,6 @@
+import { resolveTelesalesProductIdentity, type ProductIdentityIndex } from "./identity";
+import type { ProductRelation } from "./recommendations";
+
 /**
  * Cross-sell configuration: the rules for what may be configured at all.
  *
@@ -190,4 +193,80 @@ export function describeRelation(
 ): string {
   const from = catalog.get(relation.fromItemCode.trim());
   return `${from?.itemName ?? relation.fromItemCode} → ${relation.toItemName}`;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Which cross-sells apply to one lead                                       */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * The configured companions for the product a lead is about.
+ *
+ * ===========================================================================
+ * A different question from the recommendation engine's
+ * ===========================================================================
+ * `findRelation` in `recommendations.ts` picks the *single* cross-sell that
+ * becomes a lead's headline recommendation, and to do that it needs the
+ * customer's whole purchase history: it excludes companions they already own,
+ * and it considers every product they have ever bought as a possible source.
+ * That rule is unchanged and nothing here touches it.
+ *
+ * This answers the narrower question the lead page asks — *for the product in
+ * front of me, what has the desk configured?* — so it takes no history and
+ * makes no judgement about what the customer owns. An agent looking at the
+ * panel wants the configuration, not a ranked suggestion; the suggestion is
+ * what Recommended Leads is for.
+ *
+ * ===========================================================================
+ * Identity, not the raw code
+ * ===========================================================================
+ * A relation is always configured against a `telesales_products` code, because
+ * `validateRelation` accepts nothing else. A lead may carry an alias code from
+ * the source workbook's other numbering, so matching on the raw code alone
+ * would show nothing for the 88 leads that carry one. The canonical identity is
+ * resolved through `resolveTelesalesProductIdentity` — the module's one
+ * resolver — and the raw code is kept as well, so nothing that matched before
+ * can stop matching.
+ *
+ * Inactive relations are not filtered here. The caller reads them from the
+ * database with `active = true`, exactly as the recommendation engine does, and
+ * duplicating that filter in two places is how the two come to disagree.
+ */
+export function applicableCrossSell(input: {
+  /** The lead's product, as the lead carries it. */
+  product: { itemCode: string | null; itemName: string | null };
+  identity: ProductIdentityIndex;
+  /** Active relations, keyed by the product the customer already bought. */
+  relationsByItem: ReadonlyMap<string, readonly ProductRelation[]>;
+}): ProductRelation[] {
+  const raw = input.product.itemCode?.trim();
+  const canonical = resolveTelesalesProductIdentity(
+    input.identity,
+    input.product,
+  ).canonicalItemCode;
+
+  const sources = new Set<string>();
+  if (raw) sources.add(raw);
+  if (canonical) sources.add(canonical);
+  if (sources.size === 0) return [];
+
+  /*
+   * Deduplicated by target.
+   *
+   * A lead whose raw code and canonical code are both configured would
+   * otherwise list the same companion twice — which reads as two
+   * recommendations for one decision.
+   */
+  const byTarget = new Map<string, ProductRelation>();
+  for (const code of [...sources].sort()) {
+    for (const relation of input.relationsByItem.get(code) ?? []) {
+      const target = relation.toItemCode.trim();
+      if (!byTarget.has(target)) byTarget.set(target, relation);
+    }
+  }
+
+  // Sorted, so the same lead lists the same companions in the same order on
+  // every load — the ordering `findRelation` also insists on, for the same
+  // reason.
+  return [...byTarget.values()].sort((a, b) => a.toItemCode.localeCompare(b.toItemCode));
 }
