@@ -14,7 +14,7 @@
  */
 
 import type { LucideIcon } from "lucide-react";
-import { Activity, LayoutDashboard, RefreshCw, Stethoscope, Users } from "lucide-react";
+import { Activity, LayoutDashboard, RefreshCw, Settings2, Stethoscope, Users } from "lucide-react";
 
 export interface AdminNavItem {
   to: string;
@@ -33,6 +33,15 @@ export interface AdminNavItem {
    * full of pages that would refuse them.
    */
   adminOnly: boolean;
+  /**
+   * Whether this destination requires the owner role specifically.
+   *
+   * One entry needs it: call Configuration edits the PBX connection, which
+   * `/calls/configuration` gates on `isOwnerRole` rather than on
+   * `isAdministrator`. Listing it for every administrator would put a menu
+   * entry in front of people the page then refuses.
+   */
+  ownerOnly?: boolean;
 }
 
 export interface AdminNavGroup {
@@ -88,6 +97,44 @@ export const ADMIN_NAV: AdminNavGroup[] = [
       },
     ],
   },
+  {
+    /*
+     * The telephony consoles, moved here from the Calls menu.
+     *
+     * They were the last two entries in the Calls flyout, below a separator,
+     * and they never belonged there: Calls is where an agent reads their own
+     * queue, while these two configure the PBX and diagnose its connection.
+     * Neither is a page an agent opens, and both were already gated on
+     * administrator or owner.
+     *
+     * The routes do not move. `/calls/diagnostics` and `/calls/configuration`
+     * keep their URLs, their permissions and their pages; only which menu lists
+     * them changes. Re-homing the routes as well would break every existing
+     * link for a tidier path.
+     */
+    id: "telephony",
+    label: "Telephony",
+    items: [
+      {
+        to: "/calls/diagnostics",
+        label: "Diagnostics",
+        title: "Call diagnostics",
+        description:
+          "Connectivity, CDR retrieval and agent-mapping checks against the Yeastar PBX.",
+        icon: Activity,
+        adminOnly: true,
+      },
+      {
+        to: "/calls/configuration",
+        label: "Configuration",
+        title: "Call configuration",
+        description: "The PBX connection, queues and the call-centre environment.",
+        icon: Settings2,
+        adminOnly: true,
+        ownerOnly: true,
+      },
+    ],
+  },
 ];
 
 /** Flat list, for lookups. */
@@ -104,6 +151,28 @@ export function resolveAdminItem(pathname: string): AdminNavItem | null {
     (i) => pathname === i.to || pathname.startsWith(`${i.to}/`),
   );
   return matches.sort((a, b) => b.to.length - a.to.length)[0] ?? null;
+}
+
+/**
+ * The admin destinations one viewer may actually open.
+ *
+ * The single filter, used by the sidebar flyout and by the overview cards, so
+ * the menu and the page cannot disagree about what exists. Hiding an entry is a
+ * courtesy either way -- every one of these routes enforces its own permission
+ * in-page, so a hidden link is not the boundary.
+ */
+export function visibleAdminNav(access: { isAdmin: boolean; isOwner: boolean }): AdminNavGroup[] {
+  return ADMIN_NAV.map((g) => ({
+    ...g,
+    items: g.items.filter(
+      (i) => (access.isAdmin || !i.adminOnly) && (access.isOwner || !i.ownerOnly),
+    ),
+  })).filter((g) => g.items.length > 0);
+}
+
+/** The same list, flattened, for a menu that does not render group headings. */
+export function visibleAdminItems(access: { isAdmin: boolean; isOwner: boolean }): AdminNavItem[] {
+  return visibleAdminNav(access).flatMap((g) => g.items);
 }
 
 export { Activity as AdminActivityIcon };

@@ -17,7 +17,24 @@ const calls: NavItemData = {
     { to: "/calls/customer-care", label: "Customer Care", icon },
     { to: "/calls/telesales", label: "Telesales", icon },
     { to: "/calls/lookup", label: "Call Lookup", icon, separatorBefore: true },
-    { to: "/calls/diagnostics", label: "Diagnostics", icon },
+  ],
+};
+
+/**
+ * The second flyout, which is what made the trigger's alignment worth fixing.
+ *
+ * Administration lists its own pages plus the two telephony consoles, whose
+ * routes stay under `/calls` — so `resolveActivePath` has to match a child
+ * whose path does not sit under its parent's, which is the case this fixture
+ * exists for.
+ */
+const admin: NavItemData = {
+  to: "/admin",
+  label: "Administration",
+  icon,
+  children: [
+    { to: "/admin/users", label: "Users & roles", icon },
+    { to: "/calls/diagnostics", label: "Call diagnostics", icon },
   ],
 };
 

@@ -1,19 +1,20 @@
 /**
  * The administration shell: one frame every admin page sits inside.
  *
- * ## Why a rail and not a second sidebar
+ * ## It used to carry the navigation, and no longer does
  *
- * MilaPortal already has a global sidebar, and the brief asked both for an admin
- * sidebar *and* that the normal portal navigation not be disturbed. A second
- * full-height sidebar would compete with the first — two active states, two
- * collapse behaviours, and a permanent argument about which one owns the left
- * edge.
+ * Administration had a rail inside the content area — a grouped vertical list
+ * on wide screens, a horizontal scroller below `xl` — because a second
+ * full-height sidebar would have competed with the app's own. That reasoning
+ * was sound and the conclusion has been overtaken: the sidebar's Admin entry is
+ * now a flyout listing the same destinations, so the rail was a second menu
+ * open at the same time as the first, disagreeing about nothing but costing the
+ * reader a decision about which one to use.
  *
- * So the admin navigation is a **rail inside the content area**: a grouped
- * vertical list on wide screens, and a horizontal scroller below `xl`. It gives
- * administration its own information architecture without taking the app's
- * navigation away from it, and it disappears entirely for non-admin users
- * because they never reach these routes.
+ * The pages were always independent routes, so nothing had to move for that.
+ * What is left here is what this component always really was: a permission gate
+ * and a header. `ADMIN_NAV` is still the one list, now read by the sidebar and
+ * by the overview cards.
  *
  * ## The gate here is presentational
  *
@@ -25,127 +26,11 @@
  */
 
 import type { ReactNode } from "react";
-import { Link, useRouterState } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { ChevronRight, ShieldAlert } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { isAdministrator, useAuth } from "@/lib/auth";
-import { ADMIN_NAV, resolveAdminItem } from "@/features/admin/nav";
+import { resolveAdminItem } from "@/features/admin/nav";
 import { AdminCard } from "./primitives";
-
-/* -------------------------------------------------------------------------- */
-/* Navigation                                                                  */
-/* -------------------------------------------------------------------------- */
-
-/**
- * The rail a given viewer should see.
- *
- * A supervisor holds `manage_users` and reaches `/admin/users` legitimately, but
- * cannot open the Shams consoles. Showing them anyway would be a menu of
- * refusals, so administrator-only entries are filtered out and any group left
- * empty disappears with them.
- */
-function visibleGroups(isAdmin: boolean) {
-  return ADMIN_NAV.map((g) => ({
-    ...g,
-    items: g.items.filter((i) => isAdmin || !i.adminOnly),
-  })).filter((g) => g.items.length > 0);
-}
-
-function RailLink({
-  to,
-  label,
-  description,
-  icon: Icon,
-  active,
-  compact,
-}: {
-  to: string;
-  label: string;
-  description: string;
-  icon: React.ComponentType<{ className?: string }>;
-  active: boolean;
-  compact?: boolean;
-}) {
-  return (
-    <Link
-      to={to}
-      title={description}
-      aria-current={active ? "page" : undefined}
-      className={cn(
-        "group flex items-center gap-2.5 rounded-md border px-3 py-2 text-sm transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
-        compact ? "whitespace-nowrap" : "w-full",
-        active
-          ? "border-primary/30 bg-primary/10 font-medium text-primary-ink"
-          : "border-transparent text-muted-foreground hover:border-border hover:bg-muted/60 hover:text-foreground",
-      )}
-    >
-      <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-      <span className="truncate">{label}</span>
-    </Link>
-  );
-}
-
-function AdminRailDesktop({ pathname, isAdmin }: { pathname: string; isAdmin: boolean }) {
-  return (
-    <>
-      {/* Wide screens: a grouped vertical rail. */}
-      <nav aria-label="Administration" className="hidden w-56 shrink-0 xl:block">
-        <div className="sticky top-4 space-y-5">
-          {visibleGroups(isAdmin).map((group) => (
-            <div key={group.id} className="space-y-1.5">
-              <div className="px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                {group.label}
-              </div>
-              <div className="space-y-0.5">
-                {group.items.map((item) => (
-                  <RailLink
-                    key={item.to}
-                    {...item}
-                    active={
-                      pathname === item.to ||
-                      (item.to !== "/admin" && pathname.startsWith(`${item.to}/`))
-                    }
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </nav>
-    </>
-  );
-}
-
-/**
- * Below `xl` the rail becomes one horizontal strip above the page.
- *
- * Group labels are dropped rather than repeated inline: with four destinations
- * the headings cost more room than the structure they convey. It scrolls rather
- * than wrapping, so the header below it never shifts down a line as the set of
- * admin pages grows.
- */
-function AdminRailMobile({ pathname, isAdmin }: { pathname: string; isAdmin: boolean }) {
-  return (
-    <nav
-      aria-label="Administration"
-      className="-mx-1 mb-5 flex gap-1.5 overflow-x-auto px-1 pb-1 xl:hidden"
-    >
-      {visibleGroups(isAdmin)
-        .flatMap((g) => g.items)
-        .map((item) => (
-          <RailLink
-            key={item.to}
-            {...item}
-            compact
-            active={
-              pathname === item.to || (item.to !== "/admin" && pathname.startsWith(`${item.to}/`))
-            }
-          />
-        ))}
-    </nav>
-  );
-}
 
 /* -------------------------------------------------------------------------- */
 /* Page header                                                                 */
@@ -241,7 +126,6 @@ export function AdminShell({
 }) {
   const { role } = useAuth();
   const isAdmin = isAdministrator(role);
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
 
   if (requireAdministrator && !isAdmin) {
     return (
@@ -260,16 +144,16 @@ export function AdminShell({
     );
   }
 
-  return (
-    <div>
-      {/* Above the content on narrow screens, beside it on wide ones. */}
-      <AdminRailMobile pathname={pathname} isAdmin={isAdmin} />
-      <div className="flex gap-6">
-        <AdminRailDesktop pathname={pathname} isAdmin={isAdmin} />
-        <div className="min-w-0 flex-1 space-y-6">{children}</div>
-      </div>
-    </div>
-  );
+  /*
+   * No rail.
+   *
+   * Administration used to carry its own vertical navigation inside the content
+   * area, which meant two menus were open at once and the sidebar's Admin entry
+   * was a door into a second, differently-shaped menu. The pages are already
+   * independent routes, so the sidebar's own flyout can list them directly and
+   * this is left as what it always really was: a permission gate and a header.
+   */
+  return <div className="space-y-6">{children}</div>;
 }
 
 /** Header plus shell, which is how every admin page is composed. */

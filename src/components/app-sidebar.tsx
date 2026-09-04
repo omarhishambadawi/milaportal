@@ -216,10 +216,17 @@ const NavItem = memo(function NavItem({
         {shown}
       </span>
       {children.length > 0 && (
-        /* The submenu affordance. Hover and focus already open the panel, so
-           this exists for the deliberate click and for touch — which is also
-           why it stays a corner mark in the rail rather than a chevron parked
-           in the middle of a centred item. */
+        /*
+         * The submenu affordance. Hover and focus already open the panel, so
+         * this exists for the deliberate click and for touch.
+         *
+         * Centred on the item's right edge rather than pinned to its top
+         * corner. As a corner mark it sat level with the icon's top edge and
+         * read as misaligned against every other control in the rail — and with
+         * two of these now (Calls and Admin) the inconsistency was doubled.
+         * `top-1/2 -translate-y-1/2` centres it against the whole item, which
+         * is where the expanded variant's `ml-auto` already puts it.
+         */
         <span
           data-flyout-toggle
           role="button"
@@ -227,7 +234,7 @@ const NavItem = memo(function NavItem({
           aria-label={`Toggle ${item.label} menu`}
           className={cn(
             "grid shrink-0 place-items-center rounded",
-            rail ? "absolute right-0.5 top-0.5 h-4 w-4" : "ml-auto h-5 w-5",
+            rail ? "absolute right-0.5 top-1/2 h-4 w-4 -translate-y-1/2" : "ml-auto h-5 w-5",
           )}
         >
           <ChevronRight

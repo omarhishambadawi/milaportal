@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "r
 import { useAuth, isAdministrator, isOwnerRole } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import {
-  Activity,
   Building2,
   ChartColumn,
   ClipboardList,
@@ -17,13 +16,12 @@ import {
   PhoneOutgoing,
   Search,
   PhoneCall,
-  Settings2,
   ShieldAlert,
   ShieldCheck,
-  Users,
 } from "lucide-react";
 import { hasPerm, canViewCallCenter } from "@/lib/permissions";
 import { callsTeamForRole } from "@/lib/calls-access";
+import { visibleAdminItems } from "@/features/admin/nav";
 import { AppHeader } from "@/components/app-header";
 import { AppSidebar, resolveActivePath } from "@/components/app-sidebar";
 import { ForcePasswordChange } from "@/features/profile/components/force-password-change";
@@ -92,6 +90,25 @@ function AppLayout() {
   // entry points straight at it and the sibling pages are never rendered.
   const callsTeam = callsTeamForRole(role);
 
+  /**
+   * The admin destinations this viewer can actually open.
+   *
+   * From `ADMIN_NAV`, the same list the admin overview renders, filtered by the
+   * same rule — so the flyout cannot offer a page the overview does not, and
+   * neither can offer one the route would refuse. A supervisor holding
+   * `manage_users` sees only Users; an owner additionally sees call
+   * Configuration.
+   */
+  const adminItems = useMemo(
+    () =>
+      visibleAdminItems({ isAdmin: isAdministrator(role), isOwner: isOwnerRole(role) }).filter(
+        // `/admin/users` is gated on `manage_users` rather than on the role, so
+        // it is the one entry whose visibility is a permission question.
+        (i) => i.to !== "/admin/users" || canUsers,
+      ),
+    [role, canUsers],
+  );
+
   const nav = useMemo(
     () => [
       ...(canDashboard ? [{ to: "/dashboard", label: "Dashboard", icon: LayoutDashboard }] : []),
@@ -137,19 +154,14 @@ function AppLayout() {
                 // contact history, most useful to the agent with that customer
                 // on the line. See UNCONFINED_PAGES in calls-access.ts.
                 { to: "/calls/lookup", label: "Call Lookup", icon: Search, separatorBefore: true },
-                ...(isAdministrator(role)
-                  ? [
-                      {
-                        to: "/calls/diagnostics",
-                        label: "Diagnostics",
-                        icon: Activity,
-                        separatorBefore: true,
-                      },
-                    ]
-                  : []),
-                ...(isOwnerRole(role)
-                  ? [{ to: "/calls/configuration", label: "Configuration", icon: Settings2 }]
-                  : []),
+                /*
+                 * Diagnostics and Configuration used to sit here, below a
+                 * separator. They are administration rather than call handling —
+                 * one diagnoses the PBX connection, the other edits it — and
+                 * they now live in the Admin flyout. Their routes and their
+                 * permissions are unchanged; only the menu that lists them
+                 * moved, so every existing link still works.
+                 */
               ],
             },
           ]
@@ -176,15 +188,38 @@ function AppLayout() {
       // permission so it can be granted or withdrawn on its own.
       ...(canShams ? [{ to: "/shams", label: "Shams MIS", icon: PackageSearch }] : []),
       /*
-       * The administration area. Its own rail carries the pages inside it, so
-       * the global sidebar needs one entry rather than four — and the entry is
-       * administrator-only, while Users stays on `manage_users` so supervisors
-       * keep the link they have always had.
+       * Administration, as a flyout over the pages inside it.
+       *
+       * It used to be a single entry into a page carrying its own rail, with
+       * Users hoisted out beside it as a second top-level item. That put two
+       * menus on screen at once and gave one admin page a shortcut the others
+       * did not have. The children come from `ADMIN_NAV` — the same list the
+       * overview cards render — so the sidebar and the page cannot disagree
+       * about what exists.
+       *
+       * Shown to anyone who can open at least one of them, which keeps
+       * `/admin/users` reachable for a supervisor holding `manage_users`
+       * without giving them a menu of refusals: `visibleAdminItems` drops the
+       * administrator- and owner-only entries. Every one of these routes still
+       * enforces its own permission in-page.
        */
-      ...(isAdministrator(role)
-        ? [{ to: "/admin", label: "Administration", shortLabel: "Admin", icon: ShieldCheck }]
+      ...(adminItems.length > 0
+        ? [
+            {
+              // Supervisors cannot open `/admin` itself, so the parent points at
+              // the first page they can actually read.
+              to: isAdministrator(role) ? "/admin" : adminItems[0].to,
+              label: "Administration",
+              shortLabel: "Admin",
+              icon: ShieldCheck,
+              children: adminItems.map((i) => ({
+                to: i.to,
+                label: i.label === "Diagnostics" ? i.title : i.label,
+                icon: i.icon,
+              })),
+            },
+          ]
         : []),
-      ...(canUsers ? [{ to: "/admin/users", label: "Users", icon: Users }] : []),
       ...(canBranches ? [{ to: "/branches", label: "Branches", icon: Building2 }] : []),
     ],
     [
@@ -197,6 +232,7 @@ function AppLayout() {
       callsTeam,
       canTelesales,
       canShams,
+      adminItems,
       canUsers,
       canBranches,
       role,
