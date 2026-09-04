@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import type { ActorIdentity } from "@/lib/telesales/actions.server";
+import type { ShamsProduct } from "@/lib/shams/types";
 
 /**
  * The Telesales CRM write surface.
@@ -691,72 +692,203 @@ export const telesalesSetProductEligibility = createServerFn({ method: "POST" })
     return { ok: true as const };
   });
 
+/**
+ * Search Shams MIS Branch Stock, for the catalogue screen.
+ *
+ * The same `searchProducts` the `/shams` Stock tab calls, behind a different
+ * permission. `shamsSearchProducts` asserts `view_shams_mis`, which is the
+ * page-level key for the MIS module — and a telesales supervisor curating the
+ * CRM's product list is not necessarily granted that page.
+ *
+ * So this checks `manage_telesales`, which is the permission the *write* on the
+ * other side of this search already requires. Nothing is widened: the caller
+ * can already read every product in `telesales_products` and every item name on
+ * every lead, and what comes back here is an item code and a name.
+ *
+ * Read-only, and it writes nothing to the MIS.
+ */
+export const telesalesSearchCatalogSource = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => z.object({ q: z.string().trim().min(2).max(80) }).parse(d))
+  .handler(async ({ context, data }) => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await resolveActor(supabase, userId, "manage");
+
+    const { isConfigured } = await import("@/lib/shams/client.server");
+    if (!isConfigured()) {
+      return { ok: false as const, configured: false, products: [] as ShamsProduct[] };
+    }
+    const { searchProducts } = await import("@/lib/shams/catalog.server");
+    return { ok: true as const, configured: true, products: await searchProducts(data.q) };
+  });
+
+/**
+ * Add a product to the Telesales catalogue from Shams MIS Branch Stock.
+ *
+ * ===========================================================================
+ * Branch Stock is the source of truth for identity
+ * ===========================================================================
+ * The item code and the item name are read from the MIS by the code the
+ * operator picked, and the request's own name is ignored entirely. That is the
+ * whole point of the brief's rule: a curated local list of products the desk
+ * sells by phone, whose identity is the pharmacy's, not a supervisor's typing.
+ *
+ * The MIS is not asked to store anything and is not written to. This copies two
+ * fields into `telesales_products` so that eligibility, refill cycles and
+ * cross-sell pairs have something local and stable to hang off — an item code
+ * that has been withdrawn from the MIS must not take a configured cross-sell
+ * with it.
+ *
+ * ===========================================================================
+ * What is asked of the operator, and what is not
+ * ===========================================================================
+ * Not asked: the code and the name, which Branch Stock already knows.
+ * Asked: whether the desk sells it for Cash, whether it has a retention cycle,
+ * and how long that cycle is. None of those are properties of a product in the
+ * MIS — they are decisions about how this desk works — so there is nothing to
+ * look up and no honest default beyond "off".
+ *
+ * The family is proposed from the existing name patterns and can be overridden.
+ * Duplicates are impossible rather than checked: `item_code` is the primary
+ * key, and a second add of the same code updates the row it finds.
+ */
+export const telesalesAddCatalogProduct = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) =>
+    z
+      .object({
+        itemCode: z.string().trim().min(1).max(64),
+        family: z.string().trim().min(1).max(40),
+        eligibleCash: z.boolean(),
+        eligibleRetention: z.boolean(),
+        refillDays: z.number().int().min(1).max(365).nullable(),
+        notes: z.string().trim().max(300).nullable().optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ context, data }) => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await resolveActor(supabase, userId, "manage");
+
+    /*
+     * The name comes from the MIS, always.
+     *
+     * `getProductDetail` is the same cached read the Shams stock tab uses, so a
+     * product the operator has just looked at costs nothing to add. A code the
+     * MIS does not recognise is refused here rather than stored as a row whose
+     * name nobody can resolve.
+     */
+    const { getProductDetail } = await import("@/lib/shams/catalog.server");
+    const detail = await getProductDetail(data.itemCode);
+    if (!detail) {
+      throw new Error(
+        `Shams Branch Stock has no product with item code ${data.itemCode}. ` +
+          "Search for it by name and pick it from the list.",
+      );
+    }
+
+    const client = await admin();
+    const { error } = await client.from("telesales_products").upsert(
+      {
+        item_code: detail.itemCode,
+        item_name: detail.itemName,
+        family: data.family,
+        eligible_cash: data.eligibleCash,
+        eligible_retention: data.eligibleRetention,
+        refill_days: data.refillDays,
+        notes: data.notes ?? null,
+        active: true,
+        source: "branch_stock",
+        added_by: userId,
+      },
+      { onConflict: "item_code" },
+    );
+    if (error) throw new Error(error.message);
+
+    const { AUDIT_ACTIONS, logAdminAction } = await import("@/lib/audit.server");
+    await logAdminAction({
+      actorId: userId,
+      action: AUDIT_ACTIONS.telesalesProductAdded,
+      targetUserId: null,
+      details: {
+        item_code: detail.itemCode,
+        item_name: detail.itemName,
+        family: data.family,
+        eligible_cash: data.eligibleCash,
+        eligible_retention: data.eligibleRetention,
+      },
+    });
+
+    return { ok: true as const, itemCode: detail.itemCode, itemName: detail.itemName };
+  });
+
 /* ------------------------------------------------------------------------- */
-/* Management: archiving imports, and moving leads in bulk                    */
+/* Management: deleting imports, and moving leads in bulk                     */
 /* ------------------------------------------------------------------------- */
 
 /**
- * What archiving an import would do, before it is done.
+ * What deleting an import would take, before it is taken.
  *
- * Read-only, and the numbers the confirmation dialog quotes back to the
- * operator. Separate from the archive itself so the dialog cannot be the thing
- * that performs it.
+ * Read-only, and the numbers the confirmation dialog quotes. Separate from the
+ * delete itself so the dialog cannot be the thing that performs it — which
+ * matters more here than it did for the archive, because there is no undo.
  */
-export const telesalesArchiveImpact = createServerFn({ method: "POST" })
+export const telesalesDeleteImpact = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => z.object({ importId: uuid }).parse(d))
   .handler(async ({ context, data }) => {
     const { supabase, userId } = context as { supabase: any; userId: string };
     await resolveActor(supabase, userId, "manage");
-    const { describeArchiveImpact } = await import("@/lib/telesales/manage.server");
-    return { ok: true as const, impact: await describeArchiveImpact(await admin(), data.importId) };
+    const { describeDeleteImpact } = await import("@/lib/telesales/manage.server");
+    return { ok: true as const, impact: await describeDeleteImpact(await admin(), data.importId) };
   });
 
-export const telesalesArchiveImport = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
-  .inputValidator((d) =>
-    z.object({ importId: uuid, reason: z.string().trim().min(1).max(300) }).parse(d),
-  )
-  .handler(async ({ context, data }) => {
-    const { supabase, userId } = context as { supabase: any; userId: string };
-    const actor = await resolveActor(supabase, userId, "manage");
-    const { archiveImport } = await import("@/lib/telesales/manage.server");
-    const result = await archiveImport(await admin(), {
-      importId: data.importId,
-      reason: data.reason,
-      actor,
-    });
-
-    const { AUDIT_ACTIONS, logAdminAction } = await import("@/lib/audit.server");
-    await logAdminAction({
-      actorId: userId,
-      action: AUDIT_ACTIONS.telesalesImportArchived,
-      targetUserId: null,
-      details: { ...result, reason: data.reason },
-    });
-
-    return { ok: true as const, ...result };
-  });
-
-export const telesalesRestoreImport = createServerFn({ method: "POST" })
+/**
+ * Delete an import permanently.
+ *
+ * Not reversible, which is why it is confirmed against real counts and written
+ * to the admin audit log with them. After this runs, the audit entry is the
+ * only record that the file was ever uploaded.
+ *
+ * Leads somebody has worked survive it, detached from the file they came from —
+ * see `telesales_delete_import` for the rule and for the trigger that stops a
+ * mistake in it from destroying a call log.
+ */
+export const telesalesDeleteImport = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => z.object({ importId: uuid }).parse(d))
   .handler(async ({ context, data }) => {
     const { supabase, userId } = context as { supabase: any; userId: string };
     const actor = await resolveActor(supabase, userId, "manage");
-    const { restoreImport } = await import("@/lib/telesales/manage.server");
-    const result = await restoreImport(await admin(), { importId: data.importId, actor });
+    const { deleteImport } = await import("@/lib/telesales/manage.server");
+    const result = await deleteImport(await admin(), { importId: data.importId, actor });
 
     const { AUDIT_ACTIONS, logAdminAction } = await import("@/lib/audit.server");
     await logAdminAction({
       actorId: userId,
-      action: AUDIT_ACTIONS.telesalesImportRestored,
+      action: AUDIT_ACTIONS.telesalesImportDeleted,
       targetUserId: null,
-      details: { importId: data.importId, ...result },
+      details: { ...result },
     });
 
     return { ok: true as const, ...result };
   });
+
+/* ------------------------------------------------------------------------- */
+/* Management: archiving imports (legacy), and moving leads in bulk                   */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * `telesalesArchiveImpact`, `telesalesArchiveImport` and
+ * `telesalesRestoreImport` were here.
+ *
+ * Removing an import is a deletion now — see `telesalesDeleteImport` above —
+ * and keeping an archive path beside it would leave two ways to make a file
+ * stop counting, one of which the screen no longer offers. The SQL functions
+ * they called are left in place: production carries imports archived under the
+ * old behaviour, and `generate.server.ts` still refuses to read their source
+ * rows, which is what keeps a deliberately archived file from re-generating.
+ */
 
 /** Ids a bulk action may carry. Capped in `manage.server.ts` too; this is the
  *  boundary check so an oversized request is refused before it reaches a query. */
@@ -936,6 +1068,10 @@ export const telesalesSaveProductRelation = createServerFn({ method: "POST" })
       .object({
         fromItemCode: itemCode,
         toItemCode: itemCode,
+        // Validated against the enum in `relations.ts` rather than here, so the
+        // list of kinds has one home; an unrecognised value defaults to
+        // cross-sell rather than being refused.
+        kind: z.string().trim().max(20).optional(),
         note: z.string().trim().max(300).nullable().optional(),
       })
       .parse(d),
@@ -971,7 +1107,7 @@ export const telesalesSaveProductRelation = createServerFn({ method: "POST" })
 
     const { data: existingRows, error: existingError } = await client
       .from("telesales_product_relations")
-      .select("id,active,note,to_item_name")
+      .select("id,active,note,to_item_name,kind")
       .eq("from_item_code", next.fromItemCode)
       .eq("to_item_code", next.toItemCode)
       .limit(1);
@@ -980,7 +1116,12 @@ export const telesalesSaveProductRelation = createServerFn({ method: "POST" })
     const existing = ((existingRows as any[]) ?? [])[0] ?? null;
     const plan = planSave(
       existing
-        ? { active: existing.active, note: existing.note, toItemName: existing.to_item_name }
+        ? {
+            active: existing.active,
+            note: existing.note,
+            toItemName: existing.to_item_name,
+            kind: existing.kind === "up_sell" ? ("up_sell" as const) : ("cross_sell" as const),
+          }
         : null,
       next,
     );
@@ -994,6 +1135,7 @@ export const telesalesSaveProductRelation = createServerFn({ method: "POST" })
         from_item_code: next.fromItemCode,
         to_item_code: next.toItemCode,
         to_item_name: next.toItemName,
+        kind: next.kind,
         note: next.note,
         active: true,
         created_by: actor.userId,
@@ -1005,7 +1147,7 @@ export const telesalesSaveProductRelation = createServerFn({ method: "POST" })
       if (error) {
         throw new Error(
           error.code === "23505"
-            ? "That cross-sell was just configured by somebody else."
+            ? "That pair was just configured by somebody else."
             : error.message,
         );
       }
@@ -1016,6 +1158,7 @@ export const telesalesSaveProductRelation = createServerFn({ method: "POST" })
       .from("telesales_product_relations")
       .update({
         to_item_name: next.toItemName,
+        kind: next.kind,
         note: next.note,
         active: true,
         updated_by: actor.userId,

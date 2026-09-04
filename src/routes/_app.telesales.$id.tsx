@@ -21,6 +21,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
 import { fmtSAR } from "@/lib/branches";
 import { PHONE_REJECTION_LABELS, normalizeSaudiPhone, toSaudiPhone } from "@/lib/phone";
+import { OutcomeBadge } from "@/features/telesales/components/outcome-badge";
 import { LeadCallLookup } from "@/features/telesales/components/lead-call-lookup";
 import { hasPerm } from "@/lib/permissions";
 import { BUSINESS_TIMEZONE } from "@/lib/timezone";
@@ -31,7 +32,6 @@ import {
   ACTIVITY_LABELS,
   LEAD_STATUS_LABELS,
   LEAD_TYPE_LABELS,
-  OUTCOME_BY_KEY,
   type ActivityType,
 } from "@/lib/telesales/types";
 import { decodeQueueContext, validateLeadSearch } from "@/features/telesales/queue-search";
@@ -581,7 +581,9 @@ function LeadDetailPage() {
                   {l.last_contacted_at ? ` · last ${ts(l.last_contacted_at)}` : ""}
                 </p>
                 {l.last_outcome ? (
-                  <p>Last outcome: {OUTCOME_BY_KEY.get(l.last_outcome)?.label ?? l.last_outcome}</p>
+                  <p className="flex items-center gap-1.5">
+                    Last outcome: <OutcomeBadge outcome={l.last_outcome} />
+                  </p>
                 ) : null}
                 {l.converted_at ? (
                   <p>
@@ -727,7 +729,7 @@ function LeadDetailPage() {
                   </span>
                   {a.outcome ? (
                     <span className="text-sm text-muted-foreground">
-                      — {OUTCOME_BY_KEY.get(a.outcome)?.label ?? a.outcome}
+                      — <OutcomeBadge outcome={a.outcome} />
                     </span>
                   ) : null}
                   {a.note ? (

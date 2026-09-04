@@ -112,6 +112,7 @@ describe("planSave", () => {
   const next = {
     fromItemCode: MOUNJARO_5,
     toItemCode: LIBRE,
+    kind: "cross_sell" as const,
     toItemName: "FREESTYLE LIBRE 3 SENSOR",
     note: "desk decision",
   };
@@ -127,18 +128,33 @@ describe("planSave", () => {
      * original row back instead of failing on a constraint or creating a
      * second. The configuration's history survives being toggled.
      */
-    const existing = { active: false, note: "desk decision", toItemName: next.toItemName };
+    const existing = {
+      active: false,
+      kind: "cross_sell" as const,
+      note: "desk decision",
+      toItemName: next.toItemName,
+    };
     expect(planSave(existing, next)).toBe("reactivated");
   });
 
   it("updates when the note changed", () => {
-    const existing = { active: true, note: "older reason", toItemName: next.toItemName };
+    const existing = {
+      active: true,
+      kind: "cross_sell" as const,
+      note: "older reason",
+      toItemName: next.toItemName,
+    };
     expect(planSave(existing, next)).toBe("updated");
   });
 
   it("does nothing when the pair is already configured identically", () => {
     // Saving an unchanged pair must not bump `updated_at` and claim an edit.
-    const existing = { active: true, note: "desk decision", toItemName: next.toItemName };
+    const existing = {
+      active: true,
+      kind: "cross_sell" as const,
+      note: "desk decision",
+      toItemName: next.toItemName,
+    };
     expect(planSave(existing, next)).toBe("unchanged");
   });
 });

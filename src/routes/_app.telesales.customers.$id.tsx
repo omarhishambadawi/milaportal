@@ -15,12 +15,10 @@ import { BUSINESS_TIMEZONE } from "@/lib/timezone";
 import { cn } from "@/lib/utils";
 import { businessToday, describeRefill, formatBusinessDate } from "@/lib/telesales/dates";
 import { familyLabel } from "@/lib/telesales/products";
-import { LEAD_STATUS_LABELS, LEAD_TYPE_LABELS, OUTCOME_BY_KEY } from "@/lib/telesales/types";
-import {
-  LEAD_STATUS_STYLES,
-  REFILL_SEVERITY_STYLES,
-  STALE_BADGE_STYLE,
-} from "@/features/telesales/constants";
+import { LEAD_STATUS_LABELS, LEAD_TYPE_LABELS } from "@/lib/telesales/types";
+import { LEAD_STATUS_STYLES, STALE_BADGE_STYLE } from "@/features/telesales/constants";
+import { OutcomeBadge } from "@/features/telesales/components/outcome-badge";
+import { RefillBadge } from "@/features/telesales/components/refill-badge";
 import { MisCustomerPanel } from "@/features/telesales/components/mis-customer-panel";
 import { useCustomerIntelligence } from "@/features/telesales/hooks/use-customer-intelligence";
 
@@ -326,10 +324,10 @@ function CustomerProfilePage() {
             <ul className="divide-y divide-border">
               {[...open, ...closed].map((l) => {
                 const isStale = l.lifecycle === "stale";
-                const refill =
-                  !isStale && l.lead_type === "retention"
-                    ? describeRefill(l.next_followup_on, today)
-                    : null;
+                const showRefill =
+                  !isStale &&
+                  l.lead_type === "retention" &&
+                  describeRefill(l.next_followup_on, today).severity !== "none";
                 return (
                   <li
                     key={l.id}
@@ -370,16 +368,7 @@ function CustomerProfilePage() {
                         STALE
                       </span>
                     ) : null}
-                    {refill && refill.severity !== "none" ? (
-                      <span
-                        className={cn(
-                          "rounded border px-1.5 py-0.5 text-[10px]",
-                          REFILL_SEVERITY_STYLES[refill.severity],
-                        )}
-                      >
-                        {refill.label}
-                      </span>
-                    ) : null}
+                    {showRefill ? <RefillBadge dueOn={l.next_followup_on} today={today} /> : null}
                     <span className="ml-auto shrink-0 text-xs text-muted-foreground">
                       {formatBusinessDate(l.source_date)}
                       {l.archived_at ? " · archived" : ""}
@@ -412,7 +401,7 @@ function CustomerProfilePage() {
                 >
                   <span className="text-sm font-medium">{r.agent_name ?? "An agent"}</span>
                   <span className="text-sm text-muted-foreground">
-                    {r.outcome ? (OUTCOME_BY_KEY.get(r.outcome)?.label ?? r.outcome) : "Call"}
+                    {r.outcome ? <OutcomeBadge outcome={r.outcome} /> : "Call"}
                   </span>
                   <span className="text-xs text-muted-foreground">
                     {LEAD_TYPE_LABELS[r.lead_type as keyof typeof LEAD_TYPE_LABELS]}

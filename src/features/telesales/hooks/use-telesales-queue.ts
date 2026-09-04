@@ -91,7 +91,22 @@ export function useTelesalesQueue(
       if (filters.lifecycle === "archived") q = q.not("archived_at", "is", null);
       else q = q.is("archived_at", null);
 
-      if (filters.leadType !== "all") q = q.eq("lead_type", filters.leadType);
+      /*
+       * The domain scope, applied before anything the user can change.
+       *
+       * Cash and Wasfaty are separate desks now, and this is the clause that
+       * makes that true in the database rather than only in the navigation: a
+       * hand-edited `?type=wasfaty` on the Cash queue narrows within
+       * `cash,retention` and returns nothing, instead of quietly serving the
+       * other domain's leads.
+       */
+      const domain = filters.domain.split(",").filter(Boolean);
+      if (domain.length === 1) q = q.eq("lead_type", domain[0]);
+      else if (domain.length > 1) q = q.in("lead_type", domain);
+
+      if (filters.leadType !== "all" && domain.includes(filters.leadType)) {
+        q = q.eq("lead_type", filters.leadType);
+      }
 
       if (filters.status === "open") q = q.in("status", OPEN_LEAD_STATUSES);
       else if (filters.status !== "all") q = q.eq("status", filters.status);
@@ -106,6 +121,29 @@ export function useTelesalesQueue(
        */
       if (filters.lifecycle === "active") q = q.in("lifecycle", ["active", "none"]);
       else if (filters.lifecycle === "stale") q = q.eq("lifecycle", "stale");
+
+      /*
+       * The date range, on the lead's own business date.
+       *
+       * `source_date` is the invoice date for Cash and the next-dispense date
+       * for Wasfaty — the date the desk means when it says "last week" — and it
+       * is a real column on the table rather than something the view derives,
+       * so this is an index-usable range scan and not a filter the browser
+       * finishes. Both ends inclusive, and either may stand alone.
+       */
+      if (filters.dateFrom) q = q.gte("source_date", filters.dateFrom);
+      if (filters.dateTo) q = q.lte("source_date", filters.dateTo);
+
+      /*
+       * Worked, which is not a status.
+       *
+       * `last_outcome` is written the moment an agent records anything, and
+       * three of the eight Wasfaty actions leave the lead open afterwards — so
+       * a Worked Leads view built on `status` would miss every lead that was
+       * called, actioned and correctly left in the queue.
+       */
+      if (filters.worked === "worked") q = q.not("last_outcome", "is", null);
+      else if (filters.worked === "unworked") q = q.is("last_outcome", null);
 
       if (filters.branch !== "all") q = q.eq("branch_no", filters.branch);
       if (filters.family !== "all") q = q.eq("product_family", filters.family);
@@ -177,15 +215,19 @@ export function useTelesalesQueue(
  * dropdown and selecting it returned an empty queue -- a filter that looks
  * broken rather than one that is simply empty.
  */
-export function useTelesalesBranches(enabled: boolean) {
+export function useTelesalesBranches(enabled: boolean, domain: string) {
   return useQuery<string[]>({
-    queryKey: [...queryKeys.telesales.all(), "branch-options"],
+    queryKey: [...queryKeys.telesales.all(), "branch-options", domain],
     enabled,
     staleTime: 5 * 60_000,
     queryFn: async () => {
+      // Scoped to the domain for the same reason the queue is: the Cash desk's
+      // branch list should not offer the Wasfaty pharmacy numbers, which are a
+      // different identifier space entirely (see `branchCode` in `parse.ts`).
       const { data, error } = await (supabase as any)
         .from("telesales_leads")
         .select("branch_no")
+        .in("lead_type", domain.split(",").filter(Boolean))
         .not("branch_no", "is", null)
         .is("archived_at", null)
         .in("status", OPEN_LEAD_STATUSES)
@@ -239,9 +281,9 @@ export interface StaleBacklog {
   archived: number;
 }
 
-export function useStaleLeadCount(enabled: boolean, leadType: string) {
+export function useStaleLeadCount(enabled: boolean, domain: string, leadType: string) {
   return useQuery<StaleBacklog>({
-    queryKey: [...queryKeys.telesales.all(), "stale-backlog", leadType],
+    queryKey: [...queryKeys.telesales.all(), "stale-backlog", domain, leadType],
     enabled,
     staleTime: 60_000,
     queryFn: async () => {
@@ -258,7 +300,11 @@ export function useStaleLeadCount(enabled: boolean, leadType: string) {
        * system", which should not change because they happened to be looking
        * at one branch.
        */
-      const scope = (q: any) => (leadType === "all" ? q : q.eq("lead_type", leadType));
+      const types = domain.split(",").filter(Boolean);
+      const scope = (q: any) =>
+        leadType !== "all" && types.includes(leadType)
+          ? q.eq("lead_type", leadType)
+          : q.in("lead_type", types);
       const base = () =>
         scope(
           (supabase as any)

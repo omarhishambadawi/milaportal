@@ -174,6 +174,26 @@ export function proposeFollowup(
   if (input.outcomeKey === "reschedule") {
     return { dueOn: addDays(today, 1), reason: "Customer asked to be called back" };
   }
+  /*
+   * "Too soon" means the customer still has medication, so the honest proposal
+   * is the product's own cycle when the catalogue knows it. Two weeks otherwise,
+   * which is the shortest interval any product in the catalogue carries and
+   * therefore the one least likely to propose a call after the customer has run
+   * out.
+   */
+  if (input.outcomeKey === "refill_too_soon") {
+    return input.refillDays && input.refillDays > 0
+      ? {
+          dueOn: addDays(today, input.refillDays),
+          reason: `Still supplied — next cycle is ${input.refillDays} days`,
+        }
+      : { dueOn: addDays(today, 14), reason: "Still supplied — call back" };
+  }
+  // Stock, not the customer. Three days is the branch reservation period the
+  // Cash rule is built on, which is roughly how long a restock takes.
+  if (input.outcomeKey === "out_of_stock") {
+    return { dueOn: addDays(today, 3), reason: "Waiting on stock" };
+  }
   if (input.outcomeKey === "interested") {
     return { dueOn: addDays(today, 2), reason: "Interested — follow up" };
   }

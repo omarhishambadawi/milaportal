@@ -37,9 +37,41 @@ export interface RelationProduct {
   active: boolean;
 }
 
+/**
+ * What kind of thing the desk is asserting about the pair.
+ *
+ * Both are "tell this customer about that product" and both are typed by a
+ * person; they differ in what the agent says next. A cross-sell opens with a
+ * companion — you buy the pen, here is the sensor. An up-sell opens with more
+ * of the same — you buy the 4-pack monthly, here is the 12-week one.
+ *
+ * Naming the difference is the entire reason for the field: the recommendation
+ * strip reads it aloud to the agent, and "you might also want" is the wrong
+ * sentence for a larger pack of what is already in the basket.
+ */
+export const RELATION_KINDS = ["cross_sell", "up_sell"] as const;
+export type RelationKind = (typeof RELATION_KINDS)[number];
+
+export const RELATION_KIND_LABELS: Record<RelationKind, string> = {
+  cross_sell: "Cross-sell",
+  up_sell: "Up-sell",
+};
+
+/** How the agent is meant to open, per kind. Shown on the configuration screen
+ *  so the choice is made against what it will produce. */
+export const RELATION_KIND_HINTS: Record<RelationKind, string> = {
+  cross_sell: "A companion product — something that goes with what they bought.",
+  up_sell: "More of the same — a larger pack or a higher tier of what they buy.",
+};
+
+export function isRelationKind(value: unknown): value is RelationKind {
+  return typeof value === "string" && (RELATION_KINDS as readonly string[]).includes(value);
+}
+
 export interface RelationInput {
   fromItemCode: string;
   toItemCode: string;
+  kind?: string | null;
   note?: string | null;
 }
 
@@ -64,6 +96,7 @@ export const RELATION_REJECTION_LABELS: Record<RelationRejection, string> = {
 export interface ValidatedRelation {
   fromItemCode: string;
   toItemCode: string;
+  kind: RelationKind;
   /** Taken from the catalogue, never from user input — the agent reads this
    *  name as the explanation, so it has to be the pharmacy's own. */
   toItemName: string;
@@ -119,6 +152,9 @@ export function validateRelation(
     value: {
       fromItemCode: from,
       toItemCode: to,
+      // Defaulted rather than refused: every pair configured before this field
+      // existed is a cross-sell, and so is a request that omits it.
+      kind: isRelationKind(input.kind) ? input.kind : "cross_sell",
       toItemName: target.itemName,
       note: note || null,
     },
@@ -136,6 +172,7 @@ export interface ExistingRelation {
   active: boolean;
   note: string | null;
   toItemName: string;
+  kind: RelationKind;
 }
 
 /**
@@ -155,15 +192,21 @@ export interface ExistingRelation {
 export function planSave(existing: ExistingRelation | null, next: ValidatedRelation): SavePlan {
   if (!existing) return "created";
   if (!existing.active) return "reactivated";
-  if (existing.note !== next.note || existing.toItemName !== next.toItemName) return "updated";
+  if (
+    existing.note !== next.note ||
+    existing.toItemName !== next.toItemName ||
+    existing.kind !== next.kind
+  ) {
+    return "updated";
+  }
   return "unchanged";
 }
 
 export const SAVE_PLAN_LABELS: Record<SavePlan, string> = {
-  created: "Cross-sell added",
-  reactivated: "Cross-sell switched back on",
-  updated: "Cross-sell updated",
-  unchanged: "No change — that cross-sell is already configured",
+  created: "Recommendation added",
+  reactivated: "Recommendation switched back on",
+  updated: "Recommendation updated",
+  unchanged: "No change — that pair is already configured",
 };
 
 /* ------------------------------------------------------------------------- */

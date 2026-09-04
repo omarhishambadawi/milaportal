@@ -228,9 +228,15 @@ describe("the lead panel reuses what already exists", () => {
   });
 
   it("does not change the management screen", () => {
-    const page = source("routes/_app.telesales.relations.tsx");
-    expect(page).toContain("Add a cross-sell");
-    expect(page).toContain("validateRelation");
+    /*
+     * The screen moved into the unified Cross & Up-sell page and became a
+     * component rendered once per kind. What it does is unchanged, which is
+     * what this asserts: the same form, and the same server-side validator
+     * behind it.
+     */
+    const page = source("features/telesales/components/relation-manager.tsx");
+    expect(page).toContain("Add {label.toLowerCase()}");
+    expect(page).toContain("telesalesSaveProductRelation");
   });
 });
 

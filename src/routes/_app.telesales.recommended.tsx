@@ -22,6 +22,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
 import { hasPerm } from "@/lib/permissions";
 import { queryKeys } from "@/lib/query-keys";
+import { DOMAIN_LEAD_TYPES } from "@/lib/telesales/types";
 import { businessToday } from "@/lib/telesales/dates";
 import { familyLabel } from "@/lib/telesales/products";
 import { BAND_LABELS, type RecommendationBand } from "@/lib/telesales/recommendations";
@@ -104,7 +105,9 @@ function RecommendedLeadsPage() {
   const [recording, setRecording] = useState<RecommendedQueueLead | null>(null);
 
   const { rows, summary, isLoading, error, capped, refetch } = useRecommendedLeads(canView);
-  const branches = useTelesalesBranches(canView);
+  // Recommendations are a Cash-desk view: they rest on a purchase history and a
+  // configured companion, neither of which a Wasfaty prescription has.
+  const branches = useTelesalesBranches(canView, DOMAIN_LEAD_TYPES.cash.join(","));
   const families = useTelesalesFamilies(canView);
   const mutations = useLeadMutations();
   const today = businessToday();

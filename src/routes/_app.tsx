@@ -3,10 +3,12 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "r
 import { useAuth, isAdministrator, isOwnerRole } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import {
+  Banknote,
   Building2,
   ChartColumn,
   ClipboardList,
   ClipboardPlus,
+  FileText,
   Headphones,
   LayoutDashboard,
   LayoutList,
@@ -14,6 +16,7 @@ import {
   PackageSearch,
   Phone,
   PhoneOutgoing,
+  RefreshCw,
   Search,
   PhoneCall,
   ShieldAlert,
@@ -23,7 +26,7 @@ import { hasPerm, canViewCallCenter } from "@/lib/permissions";
 import { callsTeamForRole } from "@/lib/calls-access";
 import { visibleAdminItems } from "@/features/admin/nav";
 import { AppHeader } from "@/components/app-header";
-import { AppSidebar, resolveActivePath } from "@/components/app-sidebar";
+import { AppSidebar, navKey, resolveActivePath } from "@/components/app-sidebar";
 import { ForcePasswordChange } from "@/features/profile/components/force-password-change";
 import { TemporaryPasswordExpired } from "@/features/profile/components/temporary-password-expired";
 import { temporaryPasswordState } from "@/lib/password-policy";
@@ -183,7 +186,52 @@ function AppLayout() {
        * Hiding the item is a courtesy, never the boundary — `/telesales` gates
        * on the same permission in-page and every write re-checks it server-side.
        */
-      ...(canTelesales ? [{ to: "/telesales", label: "CRM", icon: PhoneCall }] : []),
+      ...(canTelesales
+        ? [
+            {
+              to: "/telesales",
+              label: "CRM",
+              icon: PhoneCall,
+              /*
+               * Two domains, and the flyout is where that becomes visible.
+               *
+               * Cash is a heading over two destinations because Cash and
+               * Retention are one desk's work seen two ways — the same
+               * customers, the same catalogue, and a Retention lead is
+               * literally the next cycle of a Cash conversion. Wasfaty is a
+               * sibling rather than a third entry under Cash: different
+               * identifiers, a different window, a different set of recorded
+               * actions, and a portal the Cash agents do not use.
+               *
+               * The first two are `/telesales` with a pipeline pinned rather
+               * than routes of their own, which is why `search` and `navKey`
+               * exist: one queue, asked two questions, and no duplicate route
+               * to keep in step with the parent.
+               */
+              children: [
+                {
+                  to: "/telesales",
+                  search: { type: "cash" },
+                  label: "Cash",
+                  icon: Banknote,
+                  groupLabel: "Cash",
+                },
+                {
+                  to: "/telesales",
+                  search: { type: "retention" },
+                  label: "Retention",
+                  icon: RefreshCw,
+                },
+                {
+                  to: "/telesales/wasfaty",
+                  label: "Wasfaty",
+                  icon: FileText,
+                  groupLabel: "Wasfaty",
+                },
+              ],
+            },
+          ]
+        : []),
       // Shams MIS reads the pharmacy's own system, behind its own page-level
       // permission so it can be granted or withdrawn on its own.
       ...(canShams ? [{ to: "/shams", label: "Shams MIS", icon: PackageSearch }] : []),
@@ -295,12 +343,18 @@ function AppLayout() {
 
   // Resolves against children as well as top-level items — see the note on
   // resolveActivePath for what breaks when it does not.
-  const activePath = resolveActivePath(nav, location.pathname);
+  // The search goes in too: two CRM children share `/telesales` and are told
+  // apart only by the pipeline they pin.
+  const activePath = resolveActivePath(
+    nav,
+    location.pathname,
+    location.search as Record<string, unknown>,
+  );
 
   // Still the top-level item, so the header keeps naming the section ("Calls")
   // rather than switching to the child's label.
   const activeItem = nav.find(
-    (n) => n.to === activePath || (n.children ?? []).some((c) => c.to === activePath),
+    (n) => navKey(n) === activePath || (n.children ?? []).some((c) => navKey(c) === activePath),
   );
 
   return (

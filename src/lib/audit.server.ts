@@ -72,6 +72,18 @@ export const AUDIT_ACTIONS = {
   telesalesImportArchived: "telesales.import_archived",
   /** An archived import was restored. */
   telesalesImportRestored: "telesales.import_restored",
+  /**
+   * An import was permanently deleted.
+   *
+   * Its own action rather than a variant of `import_archived`, because it is
+   * the one telesales operation with nothing to inspect afterwards: the import
+   * row, its source records and its untouched leads are gone. This entry and
+   * its counts are the only remaining evidence that the file existed, which is
+   * exactly why it is written.
+   */
+  telesalesImportDeleted: "telesales.import_deleted",
+  /** A product was added to the Telesales catalogue from Shams Branch Stock. */
+  telesalesProductAdded: "telesales.product_added",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

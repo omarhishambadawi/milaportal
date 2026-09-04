@@ -33,7 +33,19 @@ import { DEFAULT_QUEUE_FILTERS } from "../types";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const source = (rel: string) => readFileSync(join(ROOT, rel), "utf8");
 
+/**
+ * The queue is now two files, and the split is deliberate.
+ *
+ * The *route* owns the address bar: `validateSearch`, `Route.useSearch()`, and
+ * the `put` that navigates. The *component* owns the list and the controls, and
+ * takes the state as a prop — which is what lets the Cash desk and the three
+ * Wasfaty views share one implementation instead of four.
+ *
+ * So the wiring assertions below split too: URL handling is checked on the
+ * route, filter behaviour on the component.
+ */
 const QUEUE_PAGE = "routes/_app.telesales.index.tsx";
+const QUEUE_BODY = "features/telesales/components/lead-queue.tsx";
 const LEAD_PAGE = "routes/_app.telesales.$id.tsx";
 const ROW = "features/telesales/components/lead-row.tsx";
 
@@ -46,6 +58,8 @@ const DEFAULTS: QueueState = {
   followup: DEFAULT_QUEUE_FILTERS.followup,
   lifecycle: DEFAULT_QUEUE_FILTERS.lifecycle,
   term: "",
+  dateFrom: "",
+  dateTo: "",
   mineOnly: false,
   unassignedOnly: false,
   page: 0,
@@ -284,16 +298,25 @@ describe("the pages are wired to the URL", () => {
 
   it("typing does not push a history entry per keystroke", () => {
     // Otherwise Back from a lead steps backwards through the typed word.
-    const page = source(QUEUE_PAGE);
-    expect(page).toMatch(/put\(\{ term: v, page: 0 \}, true\)/);
+    const body = source(QUEUE_BODY);
+    expect(body).toMatch(/put\(\{ term: v, page: 0 \}, true\)/);
   });
 
   it("a filter change returns to the first page", () => {
     // Page 4 of a different result set is a page nobody asked for.
-    const page = source(QUEUE_PAGE);
+    const body = source(QUEUE_BODY);
     for (const setter of ["setStatus", "setBranch", "setFamily", "setFollowup", "setLifecycle"]) {
-      expect(page, setter).toMatch(new RegExp(`const ${setter} = .*page: 0`));
+      expect(body, setter).toMatch(new RegExp(`const ${setter} = .*page: 0`));
     }
+  });
+
+  it("the route pushes, and the component only decides what to push", () => {
+    // The component holds no router import at all, which is what makes it
+    // renderable from four different routes.
+    const body = source(QUEUE_BODY);
+    expect(body).not.toContain("Route.useSearch");
+    expect(body).not.toContain("useNavigate");
+    expect(body).not.toContain("validateSearch");
   });
 });
 
@@ -303,9 +326,9 @@ describe("the pages are wired to the URL", () => {
 
 describe("restoring state costs no request", () => {
   it("the queue's data loading is unchanged", () => {
-    const page = source(QUEUE_PAGE);
+    const body = source(QUEUE_BODY);
     // Same hook, same arguments, same shape.
-    expect(page).toContain("useTelesalesQueue(filters, page, pageSize, canView)");
+    expect(body).toContain("useTelesalesQueue(filters, page, pageSize, canView)");
   });
 
   it("the search module reaches nothing", () => {

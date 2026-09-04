@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Link } from "@tanstack/react-router";
-import { Archive, ListChecks, Loader2, RotateCcw } from "lucide-react";
+import { ListChecks, Loader2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -19,20 +19,27 @@ import { queryKeys } from "@/lib/query-keys";
 import { BUSINESS_TIMEZONE } from "@/lib/timezone";
 import { cn } from "@/lib/utils";
 import { SOURCE_TYPE_LABELS } from "@/lib/telesales/types";
-import {
-  telesalesArchiveImpact,
-  telesalesArchiveImport,
-  telesalesRestoreImport,
-} from "@/lib/telesales.functions";
+import { telesalesDeleteImpact, telesalesDeleteImport } from "@/lib/telesales.functions";
 
 /**
  * Imported source files, and what can be done with them.
  *
  * The counts are live rather than remembered: `live_leads` is what the import
  * still has in the queue *now*, which is the number that matters when deciding
- * whether to remove it. `worked_leads` is counted separately because archiving
- * six leads somebody has already called is a different decision from archiving
- * seven hundred nobody has touched, and the confirmation says so.
+ * whether to remove it. `worked_leads` is counted separately because it is the
+ * part a delete will not take.
+ *
+ * ===========================================================================
+ * Remove is a delete
+ * ===========================================================================
+ * It used to archive: the file stayed in this list behind a badge, its rows
+ * stamped and hidden, restorable. That protected the call history, but it
+ * answered a different question from the one being asked — a file uploaded by
+ * mistake stayed on screen forever, underneath the corrected one.
+ *
+ * The confirmation therefore has to be honest about two different fates in one
+ * sentence, which is why it quotes both numbers: the leads that go, and the
+ * leads that stay because somebody has already worked them.
  */
 
 interface ImportRow {
@@ -59,10 +66,10 @@ interface ImportRow {
 interface Impact {
   fileName: string;
   sourceRecords: number;
-  leads: number;
+  leadsDeleted: number;
+  leadsKept: number;
   followups: number;
-  leadsWithActivity: number;
-  customersAffected: number;
+  runs: number;
 }
 
 function ts(iso: string): string {
@@ -100,27 +107,21 @@ export function ImportHistory({ canManage }: { canManage: boolean }) {
 
   const sweep = () => qc.invalidateQueries({ queryKey: queryKeys.telesales.all() });
 
-  const archive = useMutation({
-    mutationFn: (input: { importId: string; reason: string }) =>
-      telesalesArchiveImport({ data: input }),
+  const remove = useMutation({
+    mutationFn: (input: { importId: string }) => telesalesDeleteImport({ data: input }),
     onSuccess: (r) => {
       sweep();
       toast.success(
-        `Archived ${r.sourceRecords.toLocaleString("en-US")} source records and ${r.leads.toLocaleString("en-US")} leads.`,
+        `Deleted ${r.fileName}: ${r.sourceRecords.toLocaleString("en-US")} source rows and ` +
+          `${r.leadsDeleted.toLocaleString("en-US")} leads.` +
+          (r.leadsKept > 0
+            ? ` ${r.leadsKept.toLocaleString("en-US")} worked leads were kept.`
+            : ""),
       );
       setPending(null);
       setImpact(null);
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "The archive failed."),
-  });
-
-  const restore = useMutation({
-    mutationFn: (input: { importId: string }) => telesalesRestoreImport({ data: input }),
-    onSuccess: (r) => {
-      sweep();
-      toast.success(`Restored ${r.leads.toLocaleString("en-US")} leads to the queue.`);
-    },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "The restore failed."),
+    onError: (e) => toast.error(e instanceof Error ? e.message : "The delete failed."),
   });
 
   /**
@@ -128,12 +129,12 @@ export function ImportHistory({ canManage }: { canManage: boolean }) {
    *
    * The dialog opens only once the numbers are in, because a confirmation whose
    * figures arrive a moment later is a confirmation somebody has already
-   * clicked through.
+   * clicked through — and this one cannot be undone.
    */
-  async function beginArchive(row: ImportRow) {
+  async function beginDelete(row: ImportRow) {
     setLoadingImpact(true);
     try {
-      const res = await telesalesArchiveImpact({ data: { importId: row.id } });
+      const res = await telesalesDeleteImpact({ data: { importId: row.id } });
       if (!res.impact) {
         toast.error("That import no longer exists.");
         return;
@@ -172,8 +173,17 @@ export function ImportHistory({ canManage }: { canManage: boolean }) {
                     h.source_type}
                   {h.sheet_name ? ` · ${h.sheet_name}` : ""}
                 </span>
+                {/*
+                 * Archived is a state nothing produces any more, and a handful
+                 * of imports in production still carry it from before removal
+                 * became a delete. Shown so those rows are not mysterious, and
+                 * they delete like any other.
+                 */}
                 {h.archived_at ? (
-                  <span className="rounded border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  <span
+                    className="rounded border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground"
+                    title="Archived under the previous behaviour. Its rows are out of the queue."
+                  >
                     Archived
                   </span>
                 ) : null}
@@ -210,31 +220,20 @@ export function ImportHistory({ canManage }: { canManage: boolean }) {
                     Review &amp; generate
                   </Link>
                 </Button>
-                {h.archived_at ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={restore.isPending}
-                    onClick={() => restore.mutate({ importId: h.id })}
-                  >
-                    <RotateCcw className="mr-1.5 h-4 w-4" />
-                    Restore
-                  </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={loadingImpact || archive.isPending}
-                    onClick={() => beginArchive(h)}
-                  >
-                    {loadingImpact ? (
-                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                    ) : (
-                      <Archive className="mr-1.5 h-4 w-4" />
-                    )}
-                    Remove import
-                  </Button>
-                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  disabled={loadingImpact || remove.isPending}
+                  onClick={() => beginDelete(h)}
+                >
+                  {loadingImpact ? (
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="mr-1.5 h-4 w-4" />
+                  )}
+                  Delete import
+                </Button>
               </div>
             </li>
           ))}
@@ -252,30 +251,35 @@ export function ImportHistory({ canManage }: { canManage: boolean }) {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove {impact?.fileName}?</AlertDialogTitle>
+            <AlertDialogTitle>Delete {impact?.fileName}?</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2 text-sm">
-                {/*
-                 * The sentence the brief asks for, with the real numbers, and
-                 * then the part that matters more: what is *not* destroyed.
-                 */}
                 <p>
-                  Removing this import will deactivate{" "}
-                  <strong>{(impact?.sourceRecords ?? 0).toLocaleString("en-US")}</strong> source
-                  records and <strong>{(impact?.leads ?? 0).toLocaleString("en-US")}</strong>{" "}
-                  associated leads, and cancel {(impact?.followups ?? 0).toLocaleString("en-US")}{" "}
-                  scheduled follow-ups.
+                  This permanently deletes{" "}
+                  <strong>{(impact?.sourceRecords ?? 0).toLocaleString("en-US")}</strong> imported
+                  source rows and{" "}
+                  <strong>{(impact?.leadsDeleted ?? 0).toLocaleString("en-US")}</strong> leads
+                  generated from them
+                  {impact && impact.followups > 0
+                    ? `, along with ${impact.followups.toLocaleString("en-US")} scheduled follow-up${
+                        impact.followups === 1 ? "" : "s"
+                      }`
+                    : ""}
+                  . The import disappears from this list.
                 </p>
-                {impact && impact.leadsWithActivity > 0 ? (
+                {impact && impact.leadsKept > 0 ? (
                   <p className="text-[#B45309] dark:text-amber-300">
-                    {impact.leadsWithActivity} of those leads have already been worked. Their call
-                    history is kept, but they leave the queue.
+                    {impact.leadsKept.toLocaleString("en-US")} lead
+                    {impact.leadsKept === 1 ? " has" : "s have"} already been worked. Those stay in
+                    the CRM with their full call history — they are no longer linked to this file.
                   </p>
                 ) : null}
                 <p className="text-muted-foreground">
-                  Nothing is deleted. Call history, notes and outcomes are preserved, customer
-                  records are left untouched, and leads from other imports are unaffected. You can
-                  restore this import afterwards.
+                  Customer records are untouched and leads from other imports are unaffected.
+                  {impact && impact.runs > 0
+                    ? ` ${impact.runs} generation run${impact.runs === 1 ? "" : "s"} stay in the history.`
+                    : ""}{" "}
+                  <strong>This cannot be undone.</strong>
                 </p>
               </div>
             </AlertDialogDescription>
@@ -283,15 +287,10 @@ export function ImportHistory({ canManage }: { canManage: boolean }) {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() =>
-                pending &&
-                archive.mutate({
-                  importId: pending.id,
-                  reason: `Import removed from the Telesales import screen`,
-                })
-              }
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => pending && remove.mutate({ importId: pending.id })}
             >
-              Remove import
+              Delete permanently
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

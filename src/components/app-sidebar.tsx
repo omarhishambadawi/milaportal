@@ -27,7 +27,38 @@ export type NavItemData = {
   children?: NavItemData[];
   /** Renders a divider above this child inside the flyout. */
   separatorBefore?: boolean;
+  /**
+   * A small heading above this child inside the flyout.
+   *
+   * The CRM needs it: Cash is a *group* of two destinations and Wasfaty is one
+   * destination, and a flat list of three cannot say that. A nested flyout
+   * could, but a submenu that opens out of a submenu on a 92px rail is a
+   * pointer-tracking problem nobody enjoys solving, and this reads the same.
+   */
+  groupLabel?: string;
+  /**
+   * Query parameters this entry carries.
+   *
+   * For children that are one route asked a different question — Cash and
+   * Retention are both `/telesales`, narrowed to a pipeline. Present in the
+   * link and in the active-state comparison, so two children sharing a path do
+   * not both light up.
+   */
+  search?: Record<string, string>;
 };
+
+/**
+ * The identity of a nav entry, path plus whatever query it pins.
+ *
+ * `to` alone stopped being unique the moment two children shared a route, and
+ * every active-state comparison in here is an equality test against one string.
+ * Keys are sorted so two equivalent entries cannot produce two different ids.
+ */
+export function navKey(item: Pick<NavItemData, "to" | "search">): string {
+  const entries = Object.entries(item.search ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  if (entries.length === 0) return item.to;
+  return `${item.to}?${entries.map(([k, v]) => `${k}=${v}`).join("&")}`;
+}
 
 type SidebarProps = {
   nav: NavItemData[];
@@ -111,8 +142,8 @@ const SECTIONS: { id: string; label: string; match: (to: string) => boolean }[] 
  * of its children, which is the one moment it most needs to look active.
  */
 export function isBranchActive(item: NavItemData, activePath: string): boolean {
-  if (activePath === item.to) return true;
-  return (item.children ?? []).some((c) => activePath === c.to);
+  if (activePath === navKey(item)) return true;
+  return (item.children ?? []).some((c) => activePath === navKey(c));
 }
 
 /**
@@ -130,10 +161,30 @@ export function isBranchActive(item: NavItemData, activePath: string): boolean {
  * never ran), and the flyout's close-on-navigate effect (which never fired when
  * moving between two siblings, because the value did not change).
  */
-export function resolveActivePath(nav: NavItemData[], pathname: string): string {
+export function resolveActivePath(
+  nav: NavItemData[],
+  pathname: string,
+  search: Record<string, unknown> = {},
+): string {
   const entries = nav.flatMap((m) => [m, ...(m.children ?? [])]);
-  const matches = entries.filter((m) => pathname === m.to || pathname.startsWith(m.to + "/"));
-  return matches.sort((a, b) => b.to.length - a.to.length)[0]?.to ?? "";
+  const matches = entries.filter((m) => {
+    if (pathname !== m.to && !pathname.startsWith(m.to + "/")) return false;
+    /*
+     * An entry that pins a query only matches when the address bar agrees.
+     *
+     * Without this, `/telesales` would light up Cash *and* Retention at once,
+     * and `/telesales` with no query would light up whichever came first — the
+     * entry would claim a filter the user has not applied.
+     */
+    return Object.entries(m.search ?? {}).every(([k, v]) => String(search[k] ?? "") === v);
+  });
+  // The more specific entry wins: a pinned query beats the bare route it
+  // narrows, and only then does the longer path win.
+  const best = matches.sort((a, b) => {
+    const pinned = Object.keys(b.search ?? {}).length - Object.keys(a.search ?? {}).length;
+    return pinned !== 0 ? pinned : b.to.length - a.to.length;
+  })[0];
+  return best ? navKey(best) : "";
 }
 
 export function groupNav(nav: NavItemData[]) {
@@ -183,6 +234,7 @@ const NavItem = memo(function NavItem({
   const link = (
     <Link
       to={item.to}
+      search={item.search}
       title={shown === item.label ? undefined : item.label}
       aria-current={active ? "page" : undefined}
       className={cn(

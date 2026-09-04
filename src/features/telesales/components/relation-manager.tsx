@@ -1,90 +1,69 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { toast } from "sonner";
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, Link2, Loader2, ShieldAlert } from "lucide-react";
+import { ArrowRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
-import { useAuth } from "@/lib/auth";
-import { hasPerm } from "@/lib/permissions";
 import { queryKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
-/*
- * `validateRelation` is no longer called here.
- *
- * It ran to give inline feedback on a single pair. The bulk form asks a
- * different question — which of these sources can take this target — and
- * `planBulkAssign` answers it for the two cases a supervisor can actually
- * reach: a self-relation, and a pair that is already active. The others it
- * checked are now unreachable rather than unchecked: the target picker offers
- * only live catalogue products, so an unknown or switched-off target cannot be
- * selected. Every queued pair still goes through the server function, which
- * runs the full validator.
- */
-import { buildRelationCatalog } from "@/lib/telesales/relations";
 import {
-  useProductRelations,
-  useRelationMutations,
-  useRelationProducts,
-} from "@/features/telesales/hooks/use-product-relations";
-import { useProductAliases } from "@/features/telesales/hooks/use-product-aliases";
-import { ProductPicker } from "@/features/telesales/components/product-picker";
+  RELATION_KIND_HINTS,
+  RELATION_KIND_LABELS,
+  buildRelationCatalog,
+  type RelationKind,
+} from "@/lib/telesales/relations";
 import {
   buildSearchIndex,
   groupBySource,
   planBulkAssign,
   queuedSources,
 } from "@/lib/telesales/relation-search";
-
-export const Route = createFileRoute("/_app/telesales/relations")({
-  head: () => ({ meta: [{ title: "Cross-sell configuration — MilaServ Portal" }] }),
-  component: ProductRelationsPage,
-});
+import { ProductPicker } from "@/features/telesales/components/product-picker";
+import {
+  useProductRelations,
+  useRelationMutations,
+  useRelationProducts,
+  type ProductRelationRow,
+} from "@/features/telesales/hooks/use-product-relations";
+import { useProductAliases } from "@/features/telesales/hooks/use-product-aliases";
 
 /**
- * Cross-sell configuration.
+ * Configuring one kind of recommendation.
  *
- * The whole screen exists to make one sentence enterable by a person:
- * *a customer who bought A is worth telling about B*. Nothing derives these
- * pairs — Phase 3 measured the co-purchase data and found nothing strong enough
- * to infer from — so this is the only way one can come into existence.
+ * Cross-sell and up-sell are the same operation on the same table, differing in
+ * one stored value and in the sentence an agent reads. So this is one component
+ * rendered twice rather than two screens: the form, the bulk plan, the grouped
+ * list and the switch-off behaviour are identical, and a second copy would be a
+ * second place to fix the next time any of them changes.
  *
- * Deliberately small. It is a list and a two-field form inside the Telesales
- * module, not an admin application: the desk configures a handful of pairs and
- * then leaves them alone for months.
+ * The rows are filtered by kind at the render rather than at the read, because
+ * both tabs are open in the same page and one bounded read of a table with tens
+ * of rows serves both.
+ *
+ * Nothing here infers a pair. The engine that reads these never invents one
+ * either — that was measured in Phase 3 and the data did not support it — so a
+ * relationship exists because somebody with `manage_telesales` typed it.
  */
-function ProductRelationsPage() {
-  const { profile, role } = useAuth();
-  const perms = profile?.permissions as string[] | null | undefined;
-  const canView = hasPerm(role, perms, "view_telesales");
-  const canManage = hasPerm(role, perms, "manage_telesales");
-
-  const relations = useProductRelations(canView);
-  const products = useRelationProducts(canView);
+export function RelationManager({ kind, canManage }: { kind: RelationKind; canManage: boolean }) {
+  const relations = useProductRelations(true);
+  const products = useRelationProducts(true);
+  const aliases = useProductAliases(true);
   const mutations = useRelationMutations();
 
   /*
    * Sources are a list, targets are one.
    *
    * The supervisor's real task is "Mounjaro, all six strengths, offer the Libre
-   * sensor". One target against many sources is the shape that removes; the
-   * reverse -- many targets for one source -- is already served by saving twice,
-   * and the pairs are directional so the two are not symmetrical.
+   * sensor". One target against many sources is the shape that removes work;
+   * the reverse is already served by saving twice, and the pairs are
+   * directional so the two are not symmetrical.
    */
   const [fromCodes, setFromCodes] = useState<string[]>([]);
   const [toCode, setToCode] = useState<string[]>([]);
   const [note, setNote] = useState("");
-
-  /*
-   * The alias codes, so a supervisor holding the retention workbook can paste
-   * `519914` and find the 5 MG pen. One bounded read the Product Identity screen
-   * already makes, under the same query key, so it is shared rather than paid
-   * for again.
-   */
-  const aliases = useProductAliases(canView);
 
   const catalog = useMemo(() => buildRelationCatalog(products.data ?? []), [products.data]);
 
@@ -96,13 +75,22 @@ function ProductRelationsPage() {
 
   const target = toCode[0] ?? "";
 
+  /** Only this kind's pairs. */
+  const rows = useMemo(
+    () =>
+      (relations.data ?? []).filter((r) =>
+        kind === "cross_sell" ? r.kind !== "up_sell" : r.kind === "up_sell",
+      ),
+    [relations.data, kind],
+  );
+
   /*
    * What the button is about to do, computed before it is pressed.
    *
-   * Self-relations and pairs that are already active are refusals the server
-   * would make too; showing them here turns six toasts after the click into one
-   * sentence before it. Neither is relaxed -- `validateRelation` still runs
-   * server-side for every pair and the unique key still arbitrates.
+   * The existing-pair check runs against *every* configured pair, not just this
+   * kind's: the unique key is on the pair alone, so configuring an up-sell for
+   * a pair already saved as a cross-sell changes the existing row rather than
+   * adding one, and the plan should say so rather than the toast afterwards.
    */
   const plan = useMemo(
     () =>
@@ -113,62 +101,11 @@ function ProductRelationsPage() {
   const refused = plan.filter((p) => p.status !== "queued");
 
   /** The configured pairs, gathered under the product they start from. */
-  const groups = useMemo(
-    () => groupBySource(relations.data ?? [], catalog),
-    [relations.data, catalog],
-  );
-
-  /**
-   * Apply the target to every queued source.
-   *
-   * One call per pair through the existing `telesalesSaveProductRelation`,
-   * because a pair is what that function configures and each carries its own
-   * validation and its own `planSave` verdict. Sequential rather than parallel:
-   * six writes against one unique index, and a supervisor reading the result
-   * wants a total, not a race.
-   */
-  async function applyBulk() {
-    if (!target || queued.length === 0) return;
-    let created = 0;
-    let reactivated = 0;
-    let failed = 0;
-    for (const source of queued) {
-      try {
-        const res = await mutations.save.mutateAsync({
-          fromItemCode: source,
-          toItemCode: target,
-          note: note.trim() || null,
-          // One summary at the end, not one message per pair.
-          silent: true,
-        });
-        const outcome = (res as { plan?: string }).plan;
-        if (outcome === "reactivated") reactivated++;
-        else if (outcome !== "unchanged") created++;
-      } catch {
-        // Counted, not thrown: one refused pair must not abandon the other five.
-        failed++;
-      }
-    }
-    // Refetch once, now that every write is done.
-    mutations.sweep();
-    toast.success(
-      [
-        created ? `${created} added` : null,
-        reactivated ? `${reactivated} switched back on` : null,
-        failed ? `${failed} could not be saved` : null,
-      ]
-        .filter(Boolean)
-        .join(", ") || "Nothing to change",
-    );
-    setFromCodes([]);
-    setToCode([]);
-    setNote("");
-  }
+  const groups = useMemo(() => groupBySource(rows, catalog), [rows, catalog]);
 
   /** Who created or changed each row, from one roster read. */
   const roster = useQuery<Map<string, string>>({
     queryKey: queryKeys.lookups.ordersDirectory(),
-    enabled: canView,
     staleTime: 5 * 60_000,
     queryFn: async () => {
       const { data } = await supabase.from("profiles").select("id,full_name").eq("active", true);
@@ -189,64 +126,72 @@ function ProductRelationsPage() {
         })
       : "—";
 
-  if (!canView) {
-    return (
-      <div className="py-16 text-center">
-        <ShieldAlert className="mx-auto h-10 w-10 text-destructive" />
-        <p className="mt-2 text-sm font-medium">Telesales is restricted</p>
-      </div>
-    );
-  }
+  const label = RELATION_KIND_LABELS[kind];
 
-  const rows = relations.data ?? [];
+  /**
+   * Apply the target to every queued source.
+   *
+   * One call per pair through `telesalesSaveProductRelation`, because a pair is
+   * what that function configures and each carries its own validation and its
+   * own `planSave` verdict. Sequential rather than parallel: several writes
+   * against one unique index, and a supervisor reading the result wants a
+   * total, not a race.
+   */
+  async function applyBulk() {
+    if (!target || queued.length === 0) return;
+    let created = 0;
+    let reactivated = 0;
+    let failed = 0;
+    for (const source of queued) {
+      try {
+        const res = await mutations.save.mutateAsync({
+          fromItemCode: source,
+          toItemCode: target,
+          kind,
+          note: note.trim() || null,
+          // One summary at the end, not one message per pair.
+          silent: true,
+        });
+        const outcome = (res as { plan?: string }).plan;
+        if (outcome === "reactivated") reactivated++;
+        else if (outcome !== "unchanged") created++;
+      } catch {
+        // Counted, not thrown: one refused pair must not abandon the rest.
+        failed++;
+      }
+    }
+    mutations.sweep();
+    toast.success(
+      [
+        created ? `${created} added` : null,
+        reactivated ? `${reactivated} switched back on` : null,
+        failed ? `${failed} could not be saved` : null,
+      ]
+        .filter(Boolean)
+        .join(", ") || "Nothing to change",
+    );
+    setFromCodes([]);
+    setToCode([]);
+    setNote("");
+  }
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <Link2 className="h-5 w-5 text-muted-foreground" />
-            <h1 className="text-xl font-semibold">Cross-sell configuration</h1>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            Pairs an authorized team lead has configured. Recommended Leads uses these; it never
-            invents them.
-          </p>
-        </div>
-        <div className="flex gap-2">
-          {/* The other product screen. Kept separate on purpose: identity says
-              two codes are one product, a cross-sell says one product is worth
-              mentioning alongside another, and neither ever creates the other. */}
-          <Button asChild variant="outline" size="sm">
-            <Link to="/telesales/identity">Product identity</Link>
-          </Button>
-          <Button asChild variant="outline" size="sm">
-            <Link to="/telesales">
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back to the queue
-            </Link>
-          </Button>
-        </div>
-      </div>
-
       {canManage ? (
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">Add a cross-sell</CardTitle>
+            <CardTitle className="text-base">Add {label.toLowerCase()}</CardTitle>
+            <p className="text-xs text-muted-foreground">{RELATION_KIND_HINTS[kind]}</p>
           </CardHeader>
           <CardContent className="space-y-3">
             {/*
              * The direction is the point, so it is spelled out rather than
              * implied by column order. A -> B does not mean B -> A, and a
              * supervisor configuring one should not have to guess that.
-             *
-             * Sources take a list because the task is usually a family: all six
-             * Mounjaro strengths offer the same sensor, and choosing the target
-             * six times was the work worth removing.
              */}
             <div className="grid gap-4 lg:grid-cols-[1fr_auto_1fr]">
               <div>
-                <Label className="text-xs" htmlFor="xsell-source">
+                <Label className="text-xs" htmlFor={`${kind}-source`}>
                   When the customer has bought
                   <span className="ml-1 font-normal text-muted-foreground">
                     (choose one or more)
@@ -254,7 +199,7 @@ function ProductRelationsPage() {
                 </Label>
                 <div className="mt-1.5">
                   <ProductPicker
-                    id="xsell-source"
+                    id={`${kind}-source`}
                     index={searchIndex}
                     selected={fromCodes}
                     onChange={setFromCodes}
@@ -275,12 +220,12 @@ function ProductRelationsPage() {
               </div>
 
               <div>
-                <Label className="text-xs" htmlFor="xsell-target">
+                <Label className="text-xs" htmlFor={`${kind}-target`}>
                   Recommend
                 </Label>
                 <div className="mt-1.5">
                   <ProductPicker
-                    id="xsell-target"
+                    id={`${kind}-target`}
                     index={searchIndex}
                     selected={toCode}
                     onChange={setToCode}
@@ -296,11 +241,11 @@ function ProductRelationsPage() {
             </div>
 
             <div>
-              <Label className="text-xs" htmlFor="relation-note">
+              <Label className="text-xs" htmlFor={`${kind}-note`}>
                 Why (shown to the agent)
               </Label>
               <Input
-                id="relation-note"
+                id={`${kind}-note`}
                 className="mt-1"
                 value={note}
                 maxLength={300}
@@ -321,7 +266,9 @@ function ProductRelationsPage() {
                 <p className="text-xs font-medium">
                   {queued.length === 0
                     ? "Nothing to add"
-                    : `Will configure ${queued.length} cross-sell${queued.length === 1 ? "" : "s"}`}
+                    : `Will configure ${queued.length} ${label.toLowerCase()}${
+                        queued.length === 1 ? "" : "s"
+                      }`}
                   {" → "}
                   {nameOf(target)}
                 </p>
@@ -351,7 +298,9 @@ function ProductRelationsPage() {
                 onClick={() => void applyBulk()}
               >
                 {mutations.busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                {queued.length > 1 ? `Apply to ${queued.length} products` : "Save cross-sell"}
+                {queued.length > 1
+                  ? `Apply to ${queued.length} products`
+                  : `Save ${label.toLowerCase()}`}
               </Button>
               <p className="text-xs text-muted-foreground">
                 Existing pairs are left alone. A pair that was switched off is switched back on
@@ -373,14 +322,15 @@ function ProductRelationsPage() {
             /*
              * The honest empty state. No sample pairs, no suggestions drawn
              * from co-purchase data — that data was measured and does not
-             * support them, and a plausible-looking example would be indis-
-             * tinguishable from a real configuration once somebody saved it.
+             * support them, and a plausible-looking example would be
+             * indistinguishable from a real configuration once somebody saved
+             * it.
              */
             <div className="space-y-2 py-14 text-center">
-              <p className="text-sm font-medium">No cross-sell relationships configured yet.</p>
+              <p className="text-sm font-medium">No {label.toLowerCase()} configured yet.</p>
               <p className="mx-auto max-w-lg text-xs text-muted-foreground">
-                Recommended Leads will show no cross-sell recommendations until a team lead
-                configures a pair here. Nothing is inferred from purchase history.
+                Recommended Leads shows nothing of this kind until a team lead configures a pair
+                here. Nothing is inferred from purchase history.
               </p>
             </div>
           ) : (
@@ -408,7 +358,7 @@ function ProductRelationsPage() {
                   </p>
 
                   <ul className="mt-2 space-y-1.5">
-                    {group.targets.map((r) => (
+                    {group.targets.map((r: ProductRelationRow) => (
                       <li
                         key={r.id}
                         className={cn(
@@ -470,12 +420,6 @@ function ProductRelationsPage() {
           )}
         </CardContent>
       </Card>
-
-      <p className="px-1 text-xs text-muted-foreground">
-        A cross-sell is business configuration, not a clinical suggestion. It never outranks a
-        refill, and it only reaches an agent when the customer has actually bought the first product
-        and has not already bought the second.
-      </p>
     </div>
   );
 }

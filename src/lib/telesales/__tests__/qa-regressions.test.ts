@@ -23,7 +23,7 @@ const GENERATE = "lib/telesales/generate.server.ts";
 const REVIEW = "routes/_app.telesales.imports.$id.tsx";
 const IMPORT_PAGE = "routes/_app.telesales.import.tsx";
 const RELATIONS_HOOK = "features/telesales/hooks/use-product-relations.ts";
-const RELATIONS_PAGE = "routes/_app.telesales.relations.tsx";
+const RELATIONS_PAGE = "features/telesales/components/relation-manager.tsx";
 
 /* ===================================================================== */
 /* 1. A retention run cannot claim a scope it did not honour             */

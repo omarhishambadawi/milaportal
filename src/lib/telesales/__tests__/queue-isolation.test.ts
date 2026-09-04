@@ -387,7 +387,7 @@ describe("cross-sell configuration is gated and cheap", () => {
     for (const file of [
       "lib/telesales/relations.ts",
       "features/telesales/hooks/use-product-relations.ts",
-      "routes/_app.telesales.relations.tsx",
+      "features/telesales/components/relation-manager.tsx",
     ]) {
       const text = source(file);
       // A seed would be relation-shaped data written into the source: a literal
@@ -601,7 +601,7 @@ describe("product identity is configuration, and it is not cross-sell", () => {
       "lib/telesales/identity.ts",
       "lib/telesales/aliases.ts",
       "features/telesales/hooks/use-product-aliases.ts",
-      "routes/_app.telesales.identity.tsx",
+      "features/telesales/components/product-catalog-panel.tsx",
     ]) {
       const text = source(file);
       for (const forbidden of MIS_IMPORTS) {

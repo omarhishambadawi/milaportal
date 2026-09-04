@@ -7,7 +7,6 @@ import { fmtSAR } from "@/lib/branches";
 import {
   daysBetween,
   describeDue,
-  describeRefill,
   formatBusinessDate,
   type BusinessDate,
 } from "@/lib/telesales/dates";
@@ -18,12 +17,13 @@ import {
   DUE_TONE_STYLES,
   LEAD_STATUS_STYLES,
   LEAD_TYPE_STYLES,
-  REFILL_SEVERITY_STYLES,
   STALE_BADGE_STYLE,
   formatPhone,
   relativeDays,
   telHref,
 } from "@/features/telesales/constants";
+import { OutcomeBadge } from "@/features/telesales/components/outcome-badge";
+import { RefillBadge } from "@/features/telesales/components/refill-badge";
 import type { QueueLead } from "@/features/telesales/types";
 
 /**
@@ -94,8 +94,7 @@ export function LeadRow({
    * the neutral "in N days", because for them the date is a callback the agent
    * chose rather than a dose the customer is running out of.
    */
-  const refill =
-    lead.lead_type === "retention" ? describeRefill(lead.next_followup_on, today) : null;
+  const showRefill = lead.lead_type === "retention";
 
   /*
    * The refill lifecycle.
@@ -166,14 +165,30 @@ export function LeadRow({
 
       {/* What */}
       <div className="min-w-0 sm:col-span-3">
-        <p className="truncate text-sm">
-          {lead.item_name ?? (lead.lead_type === "wasfaty" ? "Prescription" : "—")}
-        </p>
+        <div className="flex items-baseline gap-2">
+          <p className="min-w-0 flex-1 truncate text-sm">
+            {lead.item_name ?? (lead.lead_type === "wasfaty" ? "Prescription" : "—")}
+          </p>
+          {/*
+           * The value, on the row rather than inside the lead.
+           *
+           * It was the last fragment of a dot-joined secondary line, in muted
+           * grey at 12px, behind the family and the city — which meant deciding
+           * which of forty Wasfaty prescriptions to call first required opening
+           * forty of them. It is a number an agent prioritises by, so it is
+           * rendered as one: tabular figures, foreground ink, right of the
+           * product where the eye already stops.
+           */}
+          {lead.total_value != null ? (
+            <span className="shrink-0 text-sm font-medium tabular-nums">
+              {fmtSAR(lead.total_value)}
+            </span>
+          ) : null}
+        </div>
         <p className="truncate text-xs text-muted-foreground">
           {[familyLabel(lead.product_family), lead.city, formatBusinessDate(lead.source_date)]
             .filter((v) => v && v !== "—")
-            .join(" · ")}
-          {lead.total_value != null ? ` · ${fmtSAR(lead.total_value)}` : ""}
+            .join(" · ") || "—"}
         </p>
       </div>
 
@@ -195,6 +210,15 @@ export function LeadRow({
         >
           {LEAD_TYPE_LABELS[lead.lead_type]}
         </span>
+        {/*
+         * What was actually recorded, which the status alone does not say.
+         *
+         * Three of the eight Wasfaty actions land on `follow_up` and two on
+         * `closed_lost`, so a queue showing only the status collapses "out of
+         * stock" and "refill too soon" into one indistinguishable badge — and
+         * the Worked Leads view exists precisely to tell them apart.
+         */}
+        <OutcomeBadge outcome={lead.last_outcome} />
       </div>
 
       {/* When / who owns it */}
@@ -246,15 +270,8 @@ export function LeadRow({
               {daysSinceDue != null ? ` · ${daysSinceDue}d ago` : ""}
             </p>
           </>
-        ) : refill ? (
-          <span
-            className={cn(
-              "inline-block rounded border px-1.5 py-0.5 text-[10px] tracking-wide",
-              REFILL_SEVERITY_STYLES[refill.severity],
-            )}
-          >
-            {refill.label}
-          </span>
+        ) : showRefill ? (
+          <RefillBadge dueOn={lead.next_followup_on} today={today} />
         ) : (
           <p className={cn("text-xs", DUE_TONE_STYLES[due.tone])}>{due.label}</p>
         )}

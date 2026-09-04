@@ -348,8 +348,8 @@ const WASFATY: ImportTemplate = {
       required: true,
       type: "text",
       description:
-        "The prescription number. This is the lead's identity — the same prescription never becomes two leads.",
-      example: "J8952992",
+        "The prescription number, starting with a lowercase letter (a123456). This is the lead's identity — the same prescription never becomes two leads. Case matters: it is not corrected on import, because A123456 may not be the same prescription as a123456.",
+      example: "a8952992",
     },
     {
       header: "Patient Name",

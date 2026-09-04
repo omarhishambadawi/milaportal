@@ -312,14 +312,16 @@ Conventions are documented in `src/routes/README.md` (`$id` dynamic, `$` splat,
 | `/calls/diagnostics`                                | `isAdministrator(role)`                                                |
 | `/calls/configuration`                              | `isOwnerRole(role)`                                                    |
 | `/branches`, `/branches/import`                     | `view_branches` / `admin_access`                                       |
-| `/telesales`                                        | `view_telesales` (in-page)                                             |
+| `/telesales`                                        | `view_telesales` (in-page) — the **Cash CRM**: Cash + Retention        |
+| `/telesales/wasfaty`                                | `view_telesales` — Wasfaty Generated Leads (the desk's default)        |
+| `/telesales/wasfaty/all`                            | `view_telesales` — every Wasfaty lead                                  |
+| `/telesales/wasfaty/worked`                         | `view_telesales` — Wasfaty leads carrying a recorded action            |
 | `/telesales/$id`                                    | `view_telesales`; acting needs `work_telesales` + ownership            |
 | `/telesales/import`                                 | `manage_telesales`                                                     |
 | `/telesales/management`                             | `view_telesales`; runs panel needs `manage_telesales`                  |
 | `/telesales/customers/$id`                          | `view_telesales`                                                       |
 | `/telesales/recommended`                            | `view_telesales`; acting needs `work_telesales`                        |
-| `/telesales/relations`                              | `view_telesales`; configuring needs `manage_telesales`                 |
-| `/telesales/identity`                               | `view_telesales`; mapping needs `manage_telesales`                     |
+| `/telesales/catalog`                                | `view_telesales`; configuring needs `manage_telesales`                 |
 | `/telesales/imports/$id`                            | `manage_telesales`                                                     |
 | `/admin/users`                                      | `manage_users`                                                         |
 | `/profile`                                          | any signed-in user                                                     |
@@ -334,6 +336,14 @@ Conventions are documented in `src/routes/README.md` (`$id` dynamic, `$` splat,
 `/calls/analytics` (the Analytics Center) was **removed**, not redirected: it was
 an administrator-only KPI-validation surface whose figures had to be typed in by
 hand, and nothing else in the app linked to it.
+
+`/telesales/relations` (cross-sell configuration) and `/telesales/identity`
+(product identity mapping) were also **removed**. Both are now tabs of
+`/telesales/catalog`, which is the order the work actually happens in — a
+companion cannot be configured for a product the catalogue does not carry, and
+neither screen said so. `/telesales?type=wasfaty` _is_ redirected, to
+`/telesales/wasfaty`, carrying every other filter on the URL: it was a real
+bookmark, and the leads it names still exist one route along.
 
 ### Server routes
 
@@ -6799,12 +6809,13 @@ below — so a phone never scrolls sideways. Branch labels come from
 
 ## Telesales CRM Module
 
-**Routes:** `/telesales` (agent queue), `/telesales/recommended` (ranked
-opportunities), `/telesales/$id` (lead), `/telesales/customers/$id` (customer),
+**Routes:** `/telesales` (the Cash CRM queue: Cash + Retention),
+`/telesales/wasfaty`, `/telesales/wasfaty/all`, `/telesales/wasfaty/worked`
+(the three Wasfaty views), `/telesales/recommended` (ranked opportunities),
+`/telesales/$id` (lead), `/telesales/customers/$id` (customer),
 `/telesales/import` (import & generate), `/telesales/management` (team lead board),
-`/telesales/relations` (cross-sell configuration), `/telesales/identity`
-(product identity mapping), `/telesales/imports/$id` (import review &
-generation).
+`/telesales/catalog` (Cross & Up-sell: products, cross-sell, up-sell),
+`/telesales/imports/$id` (import review & generation).
 **Permissions:** `view_telesales`, `work_telesales`, `manage_telesales`.
 **Tables:** thirteen, all prefixed `telesales_` — twelve for the CRM, plus
 `telesales_scheduler_state` alongside the cron job. One view,
@@ -7178,42 +7189,58 @@ inside a wall of alarm. Applied to retention leads only — for Cash and Wasfaty
 the date is a callback the agent chose, not a dose the customer is running out
 of.
 
-### Removing an import
+### Deleting an import
 
-Soft, always. `telesales_archive_import` stamps `archived_at` on the import, its
-source records and the leads generated exclusively from it, and cancels their
-open follow-ups. `telesales_restore_import` is the inverse.
+**Delete means delete.** Removing an import used to archive it: rows were
+stamped `archived_at`, left the queue, and stayed in the history behind a badge,
+restorable. That protected the call history, but it answered a different
+question from the one the desk was asking — a file uploaded by mistake stayed on
+the screen forever, underneath the corrected file that replaced it.
 
-**Nothing is deleted, and the reason is structural:**
-`telesales_lead_activities.lead_id` is `ON DELETE CASCADE`, so a hard delete
-would take every call an agent ever logged with it — straight through the
-append-only trigger that exists to prevent exactly that.
+`telesales_delete_import` removes the import row, cascades to its source records,
+and deletes the leads it generated **that nobody has worked**. What survives:
 
-_Exclusively_ is load-bearing and has two edge cases. A **retention cycle** has
-no source record, so archiving the import that produced its parent would strand
-it; a lead with a live child is left alone and reported as retained. A
-**re-imported row** produces a source record whose lead already existed and still
-points at the first import, so joining through `source_record_id` correctly
-claims only the leads this import created.
+| Row                                                            | Fate                                |
+| -------------------------------------------------------------- | ----------------------------------- |
+| `telesales_imports`                                            | deleted                             |
+| `telesales_source_records`                                     | deleted (FK cascade)                |
+| a generated lead with no outcome, order, call or child cycle   | deleted                             |
+| a lead carrying an outcome, an order, a call, or a child cycle | **kept**, `source_record_id` → NULL |
+| `telesales_generation_runs`                                    | **kept**, `import_id` → NULL        |
+| `telesales_customers`                                          | **untouched**                       |
 
-**Customers are never archived.** A customer identity is shared across imports
-and pipelines by construction; removing a Cash import must not delete the
-identity a Wasfaty lead still points at.
+The schema was already built for this and says so: the first migration comments
+`source_record_id` as `ON DELETE SET NULL` "rather than CASCADE: deleting an
+import must never delete the work done on its leads".
 
-Verified against the live import, in a rolled-back transaction:
+**The append-only trigger is narrowed, not removed.**
+`telesales_lead_activities` refuses UPDATE and DELETE from a trigger so that a
+bug in a server function cannot rewrite a call log — and a lead delete cascades
+into that table. The trigger now permits a DELETE under **two** conditions
+together: `telesales.purge_import` is set (which only `telesales_delete_import`
+does, transaction-locally, via `set_config(..., true)`), **and** the row's
+`activity_type` is `created`. A `created` row is written by the generator with no
+actor: bookkeeping, not an interaction. UPDATE is still refused unconditionally.
 
-|                          | before | after archive | after restore |
-| ------------------------ | ------ | ------------- | ------------- |
-| live leads               | 712    | 0             | 712           |
-| live source records      | 745    | 0             | 745           |
-| activities               | 727    | **727**       | —             |
-| customers                | 656    | **656**       | —             |
-| stale `next_followup_on` | —      | **0**         | —             |
+That second condition is the safety property worth stating. If the
+lead-selection query were ever wrong and caught a lead somebody had called, the
+cascade would hit a `call` row and the whole transaction would abort with the
+original error rather than destroying the log. The failure mode is a refused
+deletion, which is the right way round.
 
-The confirmation dialog quotes `telesales_archive_impact` — one round trip, real
-numbers, and a separate count of leads somebody has already worked, because
-archiving 6 worked leads is a different decision from archiving 706 untouched
-ones.
+`telesales_delete_impact` is a separate read-only function, so the confirmation
+dialog cannot be the thing that performs the delete — which matters more here
+than it did for the archive, because there is no undo. The dialog quotes both
+numbers: the leads that go, and the leads that stay because somebody has already
+worked them. The delete is written to the admin audit log
+(`telesales.import_deleted`) with its counts; afterwards that entry is the only
+record that the file existed.
+
+**Archived imports from before this change** still exist in production and still
+render with their badge. They delete like any other row. `generate.server.ts`
+keeps its `archived_at IS NULL` guard on both source reads, which is
+load-bearing: the QA pass proved that without it a deliberately archived Wasfaty
+file would have re-created 47 leads on the next run.
 
 ### Bulk lead management
 
@@ -8193,10 +8220,219 @@ Attempted rather than assumed:
 
 ---
 
+## Telesales CRM — two domains, one lead record
+
+**Routes:** `/telesales` (Cash CRM), `/telesales/wasfaty`,
+`/telesales/wasfaty/all`, `/telesales/wasfaty/worked`, `/telesales/catalog`.
+**Shared component:** `src/features/telesales/components/lead-queue.tsx`.
+**Migration:** `20260912120000_telesales_crm_domains.sql`.
+
+### Cash and Wasfaty are two desks
+
+They shared one queue because they share one table, which is a storage fact
+rather than an operational one. An agent working Wasfaty filtered Cash away
+every morning; an agent working Cash saw prescriptions they had no portal access
+to.
+
+| Domain    | Pipelines           | Identified by               | Recorded actions |
+| --------- | ------------------- | --------------------------- | ---------------- |
+| `cash`    | `cash`, `retention` | name, invoice, item code    | the full list    |
+| `wasfaty` | `wasfaty`           | Patient ID, Prescription No | exactly eight    |
+
+Retention belongs to Cash by construction: a retention lead is the next cycle of
+a Cash conversion this system recorded — same customers, same catalogue, same
+question.
+
+**The split is enforced in the query, not only in the menu.** `QueueFilters`
+gained a `domain` field, comma-joined, which the queue applies **before**
+anything the user can change:
+
+```ts
+const domain = filters.domain.split(",").filter(Boolean);
+if (domain.length === 1) q = q.eq("lead_type", domain[0]);
+else if (domain.length > 1) q = q.in("lead_type", domain);
+if (filters.leadType !== "all" && domain.includes(filters.leadType)) …
+```
+
+A hand-edited `?type=wasfaty` on the Cash queue therefore narrows _within_
+`cash,retention` and returns nothing, rather than quietly serving the other
+domain. The branch dropdown and the stale-backlog counts are scoped the same
+way — Wasfaty branch numbers are a different identifier space and would be
+meaningless in a Cash filter.
+
+### The CRM flyout
+
+```
+CRM
+├── Cash
+│   ├── Cash        /telesales?type=cash
+│   └── Retention   /telesales?type=retention
+└── Wasfaty         /telesales/wasfaty
+```
+
+Cash is a **group heading over two destinations**, not a nested flyout: a submenu
+opening out of a submenu on a 92px rail is a pointer-tracking problem nobody
+enjoys solving, and a heading says the same thing. `NavItemData` gained
+`groupLabel` for that and `search` for the two children that are one route asked
+two questions.
+
+`search` forced a second change. Every active-state comparison in the sidebar was
+an equality test against `to`, and `to` stopped being unique the moment two
+children shared a route — both Cash and Retention would have lit up at once, and
+`/telesales` with no query would have lit up whichever came first. `navKey()` is
+now the identity (`/telesales?type=cash`), and `resolveActivePath` takes the
+current search, matches only entries whose pinned query the URL agrees with, and
+prefers the more specific one.
+
+### One Wasfaty lead, three views
+
+Defined as data in `src/features/telesales/wasfaty-views.ts`. Nothing copies,
+mirrors or re-generates a lead; these are three predicates over the same rows.
+
+| View            | Route                       | `status` / `lifecycle` default    | `worked` |
+| --------------- | --------------------------- | --------------------------------- | -------- |
+| Generated Leads | `/telesales/wasfaty`        | the queue's own (`open`/`active`) | `all`    |
+| All Leads       | `/telesales/wasfaty/all`    | `all` / `all`                     | `all`    |
+| Worked Leads    | `/telesales/wasfaty/worked` | `all` / `all`                     | `worked` |
+
+Generated Leads holds the queue's own defaults _by omission_ — it must not drift
+from what the daily generation run produces, and the daily logic is unchanged by
+this phase.
+
+**Worked is `last_outcome IS NOT NULL`, not a status test.** Three of the eight
+Wasfaty actions leave the lead open, so a status-based Worked view would omit
+every lead that was called, actioned and correctly left in the queue. Generated
+and Worked therefore overlap, and that is correct rather than a defect: a
+prescription recorded as "No Answer" this morning is both worked and still to do.
+
+Per-view defaults had to reach `validateSearch` as well as the reader.
+`searchFromQueueState` omits whatever equals the default, so if the writer and
+the reader disagreed about what the default is, choosing "Open" on All Leads
+would write nothing to the URL and read back as "All". `validateQueueSearch`,
+`queueStateFromSearch` and `searchFromQueueState` all take the view's defaults.
+
+### Date filtering
+
+`dateFrom` / `dateTo` on `QueueState`, inclusive, over `source_date` — the
+invoice date for Cash and the next-dispense date for Wasfaty, which is the date
+the desk means when it says "last week". Both become `gte` / `lte` clauses, so
+paging is correct across the filtered set rather than across a page that was
+filtered afterwards. A backwards range is swapped rather than refused (trivially
+reachable: pick the "to" first), and anything that is not `YYYY-MM-DD` collapses
+to "no filter" instead of reaching the database.
+
+Two partial indexes back the new predicates:
+`telesales_leads_type_date_idx (lead_type, source_date DESC) WHERE archived_at IS NULL`
+and `telesales_leads_worked_idx`, the same shape with `last_outcome IS NOT NULL`.
+
+### Wasfaty's eight recorded actions
+
+`WASFATY_OUTCOME_KEYS` is the authority; `outcomesForLeadType("wasfaty")` returns
+exactly these, in this order.
+
+| Label               | Stored key          | Status      | Colour       |
+| ------------------- | ------------------- | ----------- | ------------ |
+| Order Created       | `order_created`     | converted   | green        |
+| No Order            | `no_order`          | closed_lost | red          |
+| No Answer           | `no_answer`         | in_progress | yellow       |
+| Reschedule Call     | `reschedule`        | follow_up   | blue         |
+| Dispensed / Expired | `dispensed_expired` | closed_dup  | muted purple |
+| Below Threshold     | `low_price`         | closed_lost | amber        |
+| Refill Too Soon     | `refill_too_soon`   | follow_up   | cyan         |
+| Out of Stock        | `out_of_stock`      | follow_up   | orange       |
+
+**"Below Threshold" is stored as `low_price`.** The label changed; the key did
+not, because 1,437 historical Wasfaty rows carry it and a rename would either
+orphan them or require rewriting history to make a screen read better. Keys are
+storage, labels are language, and only one of the two is allowed to move. The
+old label spellings were added to `legacyLabels` so importing history still
+resolves them.
+
+`refill_too_soon` and `out_of_stock` are new and appear in no workbook, because
+the workbooks had no column that could hold them. Both leave the lead open and
+both require a follow-up date — "too soon" without "call back when" is
+indistinguishable from a lead nobody finished. `proposeFollowup` offers the
+product's own cycle for "too soon" (14 days when the catalogue has none) and
+three days for stock.
+
+Colours live in `OUTCOME_STYLES` and render through one `OutcomeBadge` component
+used by the queue row, the lead page and the customer profile, so the same action
+cannot be green in one place and grey in another.
+
+### Days to Refill
+
+One `RefillBadge` component, replacing two copies of the same three lines.
+
+- **Due today** — green, plus a 6px dot on a 2.6s ease-in-out breath
+  (`refill-today-dot` in `styles.css`). The _badge_ does not move: fifty badges
+  breathing in unison turns a work list into a slot machine. Reduced motion keeps
+  the dot and stops the animation.
+- **Due later** — light blue, informational.
+- **Overdue** — unchanged. It is the queue's one real alarm, and recolouring it
+  to tidy the set up would cost the queue that.
+
+### Cross & Up-sell
+
+One page (`/telesales/catalog`) with three tabs, replacing two screens.
+
+**Products.** The catalogue, curated from **Shams MIS Branch Stock**.
+`telesalesAddCatalogProduct` reads the name and code from the MIS by the code the
+operator picked and ignores anything the request claims about them — two people
+typing "Mounjaro 5mg" produce two rows and neither matches the import, which is
+the whole reason imported item codes resolve without a mapping step. Duplicates
+are impossible rather than checked: `item_code` is the primary key and a second
+add upserts. What the operator _is_ asked for is eligibility per pipeline, the
+refill cycle and the family, none of which the MIS has an opinion about.
+
+Search goes through `telesalesSearchCatalogSource`, which calls the same
+`searchProducts` the `/shams` Stock tab uses but checks `manage_telesales`
+instead of `view_shams_mis` — a telesales supervisor curating the CRM catalogue
+is not necessarily granted the MIS page, and what comes back is an item code and
+a name they can already read on every lead.
+
+**Cross-sell and Up-sell.** One table with a `kind` column, one `RelationManager`
+component rendered twice. A second table would have duplicated the pair key, the
+activation flag, the audit columns and the RLS policy, and then had to answer
+what a pair existing in both would mean. The pair key is unchanged, so one pair
+carries one kind and saving it under the other is an update.
+
+The Phase 8 rule survives all of it: **nothing is inferred.** "Up-sell" is the
+word that most invites breaking it — Mounjaro 5 MG to 10 MG is a prescribing
+decision, and being able to express it does not make it one the software may
+propose. Every row on all three tabs exists because a person holding
+`manage_telesales` typed it.
+
+### Prescription No validation
+
+`^[a-z][A-Za-z0-9]*$`, checked on Wasfaty import only. `A123456` and `123456` are
+reported by row number; the row is stored **unchanged**. Not corrected, and
+especially not lower-cased: `A123456` might be a different prescription from
+`a123456`, and rewriting an identifier to satisfy a format rule is how a call
+gets made about the wrong prescription.
+
+### Phone numbers stay optional
+
+Already true and now pinned by tests: 2,774 of the 3,952 rows in `Wasfaty Aug`
+have no number and the five per-city sheets have none at all, because the number
+is obtained by looking the patient up in the portal by Patient ID. An empty cell
+produces `phone: null` with no issue raised; only a cell holding something
+undialable is worth a row number, and nothing invents a number.
+
+---
+
 ## Telesales product identity
 
-**Table:** `telesales_product_aliases`. **Route:** `/telesales/identity`.
-**Resolver:** `src/lib/telesales/identity.ts`.
+**Table:** `telesales_product_aliases`. **Screen:** the Products tab of
+`/telesales/catalog`. **Resolver:** `src/lib/telesales/identity.ts`.
+
+> The standalone `/telesales/identity` screen is gone. Imported item codes
+> resolve against the catalogue deterministically — a Cash or Retention row
+> carries the pharmacy's own item code and the catalogue carries the same one —
+> so there is nothing routine left to map by hand. What could not be deleted
+> with the screen is the _data_: the retention source carries rows under an
+> older numbering system, and without those mappings a customer who bought under
+> the old code stops reading as a repeat buyer. The aliases are shown against
+> the product they mean, and a "Link an item code" dialog adds one.
 
 ### The problem
 
@@ -9355,7 +9591,7 @@ npm run check:permissions # SQL ↔ TypeScript permission parity
 npm test                 # vitest run
 ```
 
-Test suite as of writing: **1,054 tests across 32 files, all passing.**
+Test suite as of writing: **3,863 tests across 137 files, all passing.**
 
 Test coverage is concentrated on pure logic — `permissions`, `roles`,
 `authorization-invariants`, `calls-access`, `password-policy`, `floating-card`,

@@ -1,7 +1,7 @@
 import type { ActorIdentity } from "./actions.server";
 
 /**
- * Management operations: archiving an import, and moving leads in bulk.
+ * Management operations: deleting an import, and moving leads in bulk.
  *
  * Server-only, `service_role`, one authorization check per entry point in
  * `telesales.functions.ts`. Everything here is an operation a supervisor
@@ -9,80 +9,60 @@ import type { ActorIdentity } from "./actions.server";
  * it is a separate module from `actions.server.ts`.
  *
  * ===========================================================================
- * Nothing here deletes anything
+ * Delete used to mean archive, and no longer does
  * ===========================================================================
- * "Remove this import" is implemented as an archive, and that is not timidity —
- * it is the only option that does not destroy the audit trail the module was
- * built to keep.
+ * "Remove this import" was implemented as an archive: rows were stamped
+ * `archived_at`, left the queue, and stayed in the history behind a badge. The
+ * reasoning was sound — `telesales_lead_activities` is append-only precisely so
+ * that a tidy-up cannot erase the record of somebody having spoken to a
+ * customer — but it answered a different question from the one the desk was
+ * asking. A file uploaded by mistake stayed on the screen forever, underneath
+ * the corrected file that replaced it.
  *
- * `telesales_lead_activities.lead_id` is `ON DELETE CASCADE`, so a hard
- * `DELETE FROM telesales_leads` would silently take every call an agent ever
- * logged with it, straight through the append-only trigger that exists to stop
- * exactly that. A supervisor tidying up last month's import would erase the
- * record that somebody spoke to a customer, and nothing would say so.
+ * So the distinction moved from *what the operation is* to *which rows it may
+ * take*:
  *
- * So rows are stamped `archived_at`, they leave the queue, and their history
- * stays readable. `restoreImport` exists because a reversible operation is the
- * only kind worth offering on a production dataset.
+ *   - A lead nobody has touched is an artefact of the import. It goes.
+ *   - A lead somebody has called, actioned, converted, or raised a retention
+ *     cycle from has become independent CRM activity. It stays, detached from
+ *     the file it came from by the `ON DELETE SET NULL` the schema has carried
+ *     since the first migration for exactly this reason.
+ *
+ * The call history the archive existed to protect is still protected, by the
+ * same trigger, which now permits a delete only for the generator's own
+ * `created` bookkeeping rows and only inside the purge. A mistake in the
+ * selection above aborts the transaction rather than destroying a log.
  */
 
-/** What an archive would touch, counted before anything is written. */
-export interface ArchiveImpact {
+/** What a delete would take, counted before anything is written. */
+export interface DeleteImpact {
   importId: string;
   fileName: string;
   sourceType: string;
-  alreadyArchived: boolean;
+  /** Parsed rows, which go with the import unconditionally. */
   sourceRecords: number;
-  /** Leads generated *exclusively* from this import's rows. */
-  leads: number;
-  /** Open follow-ups on those leads. */
+  /** Leads that would be removed: generated, never worked. */
+  leadsDeleted: number;
+  /** Leads that would be kept and detached: worked, converted, or a parent. */
+  leadsKept: number;
+  /** Scheduled follow-ups on the leads that would be removed. */
   followups: number;
-  /**
-   * Leads this import produced that have since been worked — a call logged, an
-   * outcome recorded, or a conversion. Counted separately because archiving
-   * them is a different decision from archiving 700 untouched rows, and the
-   * confirmation dialog says so.
-   */
-  leadsWithActivity: number;
-  /** Customers whose only leads come from this import. They are *not* archived
-   *  — see `archiveImport` — but the count tells the operator what will empty. */
-  customersAffected: number;
+  /** Generation runs that would lose their import reference but survive. */
+  runs: number;
 }
 
-/**
- * Which leads belong exclusively to one import.
- *
- * "Exclusively" is the load-bearing word in the brief and it is not decoration.
- * A lead points at one `source_record_id`, so ownership looks unambiguous — but
- * a *retention cycle* generated from a converted lead has no source record at
- * all, and re-importing an overlapping file leaves a second source row whose
- * lead was refused by the dedup index and therefore still points at the first
- * import.
- *
- * So the rule is: a lead belongs to this import when its source record does,
- * **and** it has no child cycle that would be orphaned by archiving it. A lead
- * with a child is left alone; archiving it would strand a retention cycle whose
- * parent had vanished from the queue.
- *
- * The set itself is computed in `telesales_archive_impact` /
- * `telesales_archive_import` rather than here, because the archive has to be
- * atomic across three tables and a half-applied archive is a desk in a state no
- * screen describes.
- */
-
-/** Count what an archive would do, without doing it. */
-export async function describeArchiveImpact(
+export async function describeDeleteImpact(
   supabase: any,
   importId: string,
-): Promise<ArchiveImpact | null> {
+): Promise<DeleteImpact | null> {
   const { data: imp } = await supabase
     .from("telesales_imports")
-    .select("id,file_name,source_type,archived_at")
+    .select("id,file_name,source_type")
     .eq("id", importId)
     .maybeSingle();
   if (!imp) return null;
 
-  const { data, error } = await supabase.rpc("telesales_archive_impact", {
+  const { data, error } = await supabase.rpc("telesales_delete_impact", {
     _import_id: importId,
   });
   if (error) throw new Error(error.message);
@@ -92,74 +72,51 @@ export async function describeArchiveImpact(
     importId,
     fileName: imp.file_name,
     sourceType: imp.source_type,
-    alreadyArchived: Boolean(imp.archived_at),
     sourceRecords: Number(row.source_records ?? 0),
-    leads: Number(row.leads ?? 0),
+    leadsDeleted: Number(row.leads_deleted ?? 0),
+    leadsKept: Number(row.leads_kept ?? 0),
     followups: Number(row.followups ?? 0),
-    leadsWithActivity: Number(row.leads_with_activity ?? 0),
-    customersAffected: Number(row.customers_affected ?? 0),
+    runs: Number(row.runs ?? 0),
   };
 }
 
-export interface ArchiveResult {
+export interface DeleteResult {
   importId: string;
+  fileName: string;
   sourceRecords: number;
-  leads: number;
-  followups: number;
+  leadsDeleted: number;
+  leadsKept: number;
 }
 
 /**
- * Archive an import and everything generated exclusively from it.
+ * Delete an import, its rows, and the leads nobody worked.
  *
- * Order matters. Follow-ups are cancelled first so the
- * `telesales_followups_sync_lead` trigger clears `next_followup_on` while the
- * lead is still visible; archiving the lead first would leave a stale date on a
- * row nobody can see, which resurfaces the moment it is restored.
- *
- * Customers are deliberately **not** archived. A customer identity is shared
- * across imports and pipelines by construction — that is the whole point of
- * consolidating on the phone number — so removing a Cash import must not delete
- * the identity a Wasfaty lead is still pointing at. A customer whose leads have
- * all gone simply has no open work, which is a state the profile renders
- * correctly and which costs one row.
+ * The impact is read first and returned in the result, because after the RPC
+ * runs there is nothing left to count and the audit entry is the only record
+ * that the file existed. One RPC does the work: it touches four tables and a
+ * half-applied delete would leave source records pointing at an import that is
+ * gone.
  */
-export async function archiveImport(
+export async function deleteImport(
   supabase: any,
-  input: { importId: string; reason: string; actor: ActorIdentity },
-): Promise<ArchiveResult> {
-  const impact = await describeArchiveImpact(supabase, input.importId);
+  input: { importId: string; actor: ActorIdentity },
+): Promise<DeleteResult> {
+  const impact = await describeDeleteImpact(supabase, input.importId);
   if (!impact) throw new Error("That import no longer exists.");
-  if (impact.alreadyArchived) throw new Error("That import is already archived.");
 
-  const now = new Date().toISOString();
-  const { data, error } = await supabase.rpc("telesales_archive_import", {
+  const { data, error } = await supabase.rpc("telesales_delete_import", {
     _import_id: input.importId,
-    _actor: input.actor.userId,
-    _reason: input.reason,
-    _at: now,
   });
   if (error) throw new Error(error.message);
   const row = (data as any[])?.[0] ?? {};
 
   return {
     importId: input.importId,
+    fileName: impact.fileName,
     sourceRecords: Number(row.source_records ?? 0),
-    leads: Number(row.leads ?? 0),
-    followups: Number(row.followups ?? 0),
+    leadsDeleted: Number(row.leads_deleted ?? 0),
+    leadsKept: Number(row.leads_kept ?? 0),
   };
-}
-
-/** Put an archived import back. The inverse, because a one-way operation on a
- *  production dataset is a trap. */
-export async function restoreImport(
-  supabase: any,
-  input: { importId: string; actor: ActorIdentity },
-): Promise<{ leads: number }> {
-  const { data, error } = await supabase.rpc("telesales_restore_import", {
-    _import_id: input.importId,
-  });
-  if (error) throw new Error(error.message);
-  return { leads: Number((data as any[])?.[0]?.leads ?? 0) };
 }
 
 /* ------------------------------------------------------------------------- */

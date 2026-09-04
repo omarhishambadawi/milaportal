@@ -149,6 +149,16 @@ export interface ProductRelation {
   fromItemCode: string;
   toItemCode: string;
   toItemName: string;
+  /**
+   * "cross_sell" | "up_sell". Carried purely so the agent is told which
+   * sentence to open with — a companion product and a larger pack of what is
+   * already in the basket are not the same offer. Nothing in this engine
+   * branches on it; ranking, exclusion and stock are identical for both.
+   *
+   * Optional because a pair configured before the field existed has none, and
+   * the reader treats an absent value as a cross-sell.
+   */
+  kind?: string | null;
   note: string | null;
 }
 

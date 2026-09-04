@@ -1098,6 +1098,54 @@ html.theme-vt * {
  *
  * Everything below is print-only and changes nothing on screen.
  * ------------------------------------------------------------------------- */
+/* ==========================================================================
+ * Days to Refill — the "due today" dot
+ * ==========================================================================
+ * The one animated thing in the lead queue, and it had to survive a page of
+ * fifty rows without becoming wallpaper.
+ *
+ * A pulsing *badge* was the obvious version and it is the wrong one: fifty
+ * badges breathing in unison turns a work list into a slot machine, and the
+ * brief asks for noticeable, not aggressive. So the badge is still, and a 6px
+ * dot beside the label carries the motion — small enough that a screenful of
+ * them reads as texture, distinct enough that one of them in a page of
+ * light-blue rows catches the eye.
+ *
+ * 2.6s, symmetric ease-in-out, opacity and a hair of scale. Slower than a
+ * heartbeat on purpose: anything near 1s reads as an alert, and this is the
+ * good news.
+ *
+ * Colour comes from `currentColor`, so the dot is the badge's own green in
+ * both themes and there is no second value to keep in step.
+ */
+@keyframes refill-today-dot {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.82);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.refill-today-dot {
+  animation: refill-today-dot 2600ms cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/*
+ * Reduced motion keeps the dot and stops it moving. Removing it entirely would
+ * take the marker with the animation, and the marker is what says "today".
+ */
+@media (prefers-reduced-motion: reduce) {
+  .refill-today-dot {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @media print {
   /*
    * A4 portrait, with margins wide enough to survive a stapled corner and a

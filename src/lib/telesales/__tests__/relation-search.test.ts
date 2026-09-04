@@ -208,10 +208,11 @@ describe("applying one target to several sources", () => {
     expect(queuedSources(planBulkAssign({ sources: [M5], target: LIBRE, existing }))).toEqual([M5]);
     expect(
       planSave(
-        { active: false, note: null, toItemName: "x" },
+        { active: false, kind: "cross_sell" as const, note: null, toItemName: "x" },
         {
           fromItemCode: M5,
           toItemCode: LIBRE,
+          kind: "cross_sell" as const,
           toItemName: "x",
           note: null,
         },
@@ -286,10 +287,16 @@ describe("the existing safeguards still decide", () => {
   it("saving an unchanged pair is still a no-op", () => {
     expect(
       planSave(
-        { active: true, note: "why", toItemName: "FREESTYLE LIBRE 3 SENSOR" },
+        {
+          active: true,
+          kind: "cross_sell" as const,
+          note: "why",
+          toItemName: "FREESTYLE LIBRE 3 SENSOR",
+        },
         {
           fromItemCode: M5,
           toItemCode: LIBRE,
+          kind: "cross_sell" as const,
           toItemName: "FREESTYLE LIBRE 3 SENSOR",
           note: "why",
         },
@@ -303,7 +310,7 @@ describe("the existing safeguards still decide", () => {
      * `telesalesSaveProductRelation`, which re-runs `validateRelation` and
      * lets the unique key arbitrate.
      */
-    const page = source("routes/_app.telesales.relations.tsx");
+    const page = source("features/telesales/components/relation-manager.tsx");
     expect(page).toContain("mutations.save.mutateAsync");
     expect(page).not.toMatch(
       /\.from\("telesales_product_relations"\)[\s\S]{0,200}\.(insert|update)/,
@@ -399,7 +406,7 @@ describe("no second catalogue and no second search API", () => {
   });
 
   it("the screen writes through the existing server function only", () => {
-    const page = source("routes/_app.telesales.relations.tsx");
+    const page = source("features/telesales/components/relation-manager.tsx");
     expect(page).toContain("useRelationMutations");
     expect(page).not.toContain("supabaseAdmin");
     // The catalogue and the aliases are the reads the other product screens make.

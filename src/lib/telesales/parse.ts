@@ -292,6 +292,31 @@ function branchCode(value: unknown, sourceType: SourceType): string | null {
 }
 
 /**
+ * What a Wasfaty Prescription No looks like.
+ *
+ * A lowercase English letter, then letters and digits: `a123456`. Not
+ * `A123456`, not `123456`.
+ *
+ * The rule is the desk's, and the two failures it catches are different. A row
+ * with no leading letter is a truncated or mistyped identifier — it will not be
+ * found in the portal, and an agent will spend the call looking for it. A row
+ * with an uppercase leading letter is a spreadsheet that has been through
+ * somebody's "clean up the data" pass, which matters because the identifier is
+ * case-sensitive where it is used.
+ *
+ * Neither is corrected here, and the uppercase one especially is not
+ * lower-cased: `A123456` might be a different prescription from `a123456`, and
+ * quietly rewriting an identifier to satisfy a format rule is how a call gets
+ * made about the wrong prescription. The row is stored exactly as it arrived
+ * and reported by row number so the file can be fixed at source.
+ */
+export const PRESCRIPTION_NO_PATTERN = /^[a-z][A-Za-z0-9]*$/;
+
+export function isValidPrescriptionNo(value: string | null | undefined): boolean {
+  return typeof value === "string" && PRESCRIPTION_NO_PATTERN.test(value);
+}
+
+/**
  * A row that is present but says nothing.
  *
  * The workbooks are full of these — trailing blank rows Excel keeps because a
@@ -512,6 +537,24 @@ export function parseSheet(grid: Grid, options: ParseOptions = {}): ParsedWorkbo
         rowNumber,
       );
       continue;
+    }
+
+    /*
+     * The prescription number's format, checked but never corrected.
+     *
+     * Reported and stored, exactly like an unreadable date: the row may still
+     * be worked — a Patient ID alone identifies the patient in the portal — and
+     * dropping it would make the correction impossible. Only checked for
+     * Wasfaty, because the rule is the Wasfaty portal's; a Cash invoice number
+     * has nothing to do with it.
+     */
+    if (sourceType === "wasfaty" && prescriptionNo && !isValidPrescriptionNo(prescriptionNo)) {
+      issues.count("invalid_prescription_no");
+      issues.add(
+        "invalid_prescription_no",
+        "Prescription No must start with a lowercase letter (e.g. a123456); the row is stored unchanged",
+        rowNumber,
+      );
     }
 
     const rawDateCell = cell(row, columns, primaryDateField);

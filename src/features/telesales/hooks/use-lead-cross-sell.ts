@@ -78,6 +78,7 @@ export function useLeadCrossSell(
             fromItemCode: r.from_item_code,
             toItemCode: r.to_item_code,
             toItemName: r.to_item_name,
+            kind: r.kind,
             note: r.note,
           })),
       ),

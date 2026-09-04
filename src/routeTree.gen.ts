@@ -32,11 +32,10 @@ import { Route as AppComplaintsIndexRouteImport } from './routes/_app.complaints
 import { Route as AppCallsIndexRouteImport } from './routes/_app.calls.index'
 import { Route as AppBranchesIndexRouteImport } from './routes/_app.branches.index'
 import { Route as AppAdminIndexRouteImport } from './routes/_app.admin.index'
-import { Route as AppTelesalesRelationsRouteImport } from './routes/_app.telesales.relations'
 import { Route as AppTelesalesRecommendedRouteImport } from './routes/_app.telesales.recommended'
 import { Route as AppTelesalesManagementRouteImport } from './routes/_app.telesales.management'
 import { Route as AppTelesalesImportRouteImport } from './routes/_app.telesales.import'
-import { Route as AppTelesalesIdentityRouteImport } from './routes/_app.telesales.identity'
+import { Route as AppTelesalesCatalogRouteImport } from './routes/_app.telesales.catalog'
 import { Route as AppTelesalesIdRouteImport } from './routes/_app.telesales.$id'
 import { Route as AppOrdersNewRouteImport } from './routes/_app.orders.new'
 import { Route as AppOrdersIdRouteImport } from './routes/_app.orders.$id'
@@ -57,10 +56,13 @@ import { Route as AppAdminShamsDiagnosticsRouteImport } from './routes/_app.admi
 import { Route as AppAdminBranchesRouteImport } from './routes/_app.admin.branches'
 import { Route as Char91DotmcpChar93InvokeToolToolRouteImport } from './routes/[.mcp]/invoke-tool/$tool'
 import { Route as DotlovableOauthConsentRouteImport } from './routes/[.]lovable.oauth.consent'
+import { Route as AppTelesalesWasfatyIndexRouteImport } from './routes/_app.telesales.wasfaty.index'
 import { Route as LovableEmailQueueProcessRouteImport } from './routes/lovable/email/queue/process'
 import { Route as LovableEmailAuthWebhookRouteImport } from './routes/lovable/email/auth/webhook'
 import { Route as LovableEmailAuthPreviewRouteImport } from './routes/lovable/email/auth/preview'
 import { Route as ApiPublicCdrProgressJobIdRouteImport } from './routes/api/public/cdr-progress.$jobId'
+import { Route as AppTelesalesWasfatyWorkedRouteImport } from './routes/_app.telesales.wasfaty.worked'
+import { Route as AppTelesalesWasfatyAllRouteImport } from './routes/_app.telesales.wasfaty.all'
 import { Route as AppTelesalesImportsIdRouteImport } from './routes/_app.telesales.imports.$id'
 import { Route as AppTelesalesCustomersIdRouteImport } from './routes/_app.telesales.customers.$id'
 
@@ -180,11 +182,6 @@ const AppAdminIndexRoute = AppAdminIndexRouteImport.update({
   path: '/admin/',
   getParentRoute: () => AppRoute,
 } as any)
-const AppTelesalesRelationsRoute = AppTelesalesRelationsRouteImport.update({
-  id: '/telesales/relations',
-  path: '/telesales/relations',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppTelesalesRecommendedRoute = AppTelesalesRecommendedRouteImport.update({
   id: '/telesales/recommended',
   path: '/telesales/recommended',
@@ -200,9 +197,9 @@ const AppTelesalesImportRoute = AppTelesalesImportRouteImport.update({
   path: '/telesales/import',
   getParentRoute: () => AppRoute,
 } as any)
-const AppTelesalesIdentityRoute = AppTelesalesIdentityRouteImport.update({
-  id: '/telesales/identity',
-  path: '/telesales/identity',
+const AppTelesalesCatalogRoute = AppTelesalesCatalogRouteImport.update({
+  id: '/telesales/catalog',
+  path: '/telesales/catalog',
   getParentRoute: () => AppRoute,
 } as any)
 const AppTelesalesIdRoute = AppTelesalesIdRouteImport.update({
@@ -308,6 +305,12 @@ const DotlovableOauthConsentRoute = DotlovableOauthConsentRouteImport.update({
   path: '/.lovable/oauth/consent',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppTelesalesWasfatyIndexRoute =
+  AppTelesalesWasfatyIndexRouteImport.update({
+    id: '/telesales/wasfaty/',
+    path: '/telesales/wasfaty/',
+    getParentRoute: () => AppRoute,
+  } as any)
 const LovableEmailQueueProcessRoute =
   LovableEmailQueueProcessRouteImport.update({
     id: '/lovable/email/queue/process',
@@ -330,6 +333,17 @@ const ApiPublicCdrProgressJobIdRoute =
     path: '/api/public/cdr-progress/$jobId',
     getParentRoute: () => rootRouteImport,
   } as any)
+const AppTelesalesWasfatyWorkedRoute =
+  AppTelesalesWasfatyWorkedRouteImport.update({
+    id: '/telesales/wasfaty/worked',
+    path: '/telesales/wasfaty/worked',
+    getParentRoute: () => AppRoute,
+  } as any)
+const AppTelesalesWasfatyAllRoute = AppTelesalesWasfatyAllRouteImport.update({
+  id: '/telesales/wasfaty/all',
+  path: '/telesales/wasfaty/all',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppTelesalesImportsIdRoute = AppTelesalesImportsIdRouteImport.update({
   id: '/telesales/imports/$id',
   path: '/telesales/imports/$id',
@@ -378,11 +392,10 @@ export interface FileRoutesByFullPath {
   '/orders/$id': typeof AppOrdersIdRoute
   '/orders/new': typeof AppOrdersNewRoute
   '/telesales/$id': typeof AppTelesalesIdRoute
-  '/telesales/identity': typeof AppTelesalesIdentityRoute
+  '/telesales/catalog': typeof AppTelesalesCatalogRoute
   '/telesales/import': typeof AppTelesalesImportRoute
   '/telesales/management': typeof AppTelesalesManagementRoute
   '/telesales/recommended': typeof AppTelesalesRecommendedRoute
-  '/telesales/relations': typeof AppTelesalesRelationsRoute
   '/admin/': typeof AppAdminIndexRoute
   '/branches/': typeof AppBranchesIndexRoute
   '/calls/': typeof AppCallsIndexRoute
@@ -391,10 +404,13 @@ export interface FileRoutesByFullPath {
   '/telesales/': typeof AppTelesalesIndexRoute
   '/telesales/customers/$id': typeof AppTelesalesCustomersIdRoute
   '/telesales/imports/$id': typeof AppTelesalesImportsIdRoute
+  '/telesales/wasfaty/all': typeof AppTelesalesWasfatyAllRoute
+  '/telesales/wasfaty/worked': typeof AppTelesalesWasfatyWorkedRoute
   '/api/public/cdr-progress/$jobId': typeof ApiPublicCdrProgressJobIdRoute
   '/lovable/email/auth/preview': typeof LovableEmailAuthPreviewRoute
   '/lovable/email/auth/webhook': typeof LovableEmailAuthWebhookRoute
   '/lovable/email/queue/process': typeof LovableEmailQueueProcessRoute
+  '/telesales/wasfaty/': typeof AppTelesalesWasfatyIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -433,11 +449,10 @@ export interface FileRoutesByTo {
   '/orders/$id': typeof AppOrdersIdRoute
   '/orders/new': typeof AppOrdersNewRoute
   '/telesales/$id': typeof AppTelesalesIdRoute
-  '/telesales/identity': typeof AppTelesalesIdentityRoute
+  '/telesales/catalog': typeof AppTelesalesCatalogRoute
   '/telesales/import': typeof AppTelesalesImportRoute
   '/telesales/management': typeof AppTelesalesManagementRoute
   '/telesales/recommended': typeof AppTelesalesRecommendedRoute
-  '/telesales/relations': typeof AppTelesalesRelationsRoute
   '/admin': typeof AppAdminIndexRoute
   '/branches': typeof AppBranchesIndexRoute
   '/calls': typeof AppCallsIndexRoute
@@ -446,10 +461,13 @@ export interface FileRoutesByTo {
   '/telesales': typeof AppTelesalesIndexRoute
   '/telesales/customers/$id': typeof AppTelesalesCustomersIdRoute
   '/telesales/imports/$id': typeof AppTelesalesImportsIdRoute
+  '/telesales/wasfaty/all': typeof AppTelesalesWasfatyAllRoute
+  '/telesales/wasfaty/worked': typeof AppTelesalesWasfatyWorkedRoute
   '/api/public/cdr-progress/$jobId': typeof ApiPublicCdrProgressJobIdRoute
   '/lovable/email/auth/preview': typeof LovableEmailAuthPreviewRoute
   '/lovable/email/auth/webhook': typeof LovableEmailAuthWebhookRoute
   '/lovable/email/queue/process': typeof LovableEmailQueueProcessRoute
+  '/telesales/wasfaty': typeof AppTelesalesWasfatyIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -490,11 +508,10 @@ export interface FileRoutesById {
   '/_app/orders/$id': typeof AppOrdersIdRoute
   '/_app/orders/new': typeof AppOrdersNewRoute
   '/_app/telesales/$id': typeof AppTelesalesIdRoute
-  '/_app/telesales/identity': typeof AppTelesalesIdentityRoute
+  '/_app/telesales/catalog': typeof AppTelesalesCatalogRoute
   '/_app/telesales/import': typeof AppTelesalesImportRoute
   '/_app/telesales/management': typeof AppTelesalesManagementRoute
   '/_app/telesales/recommended': typeof AppTelesalesRecommendedRoute
-  '/_app/telesales/relations': typeof AppTelesalesRelationsRoute
   '/_app/admin/': typeof AppAdminIndexRoute
   '/_app/branches/': typeof AppBranchesIndexRoute
   '/_app/calls/': typeof AppCallsIndexRoute
@@ -503,10 +520,13 @@ export interface FileRoutesById {
   '/_app/telesales/': typeof AppTelesalesIndexRoute
   '/_app/telesales/customers/$id': typeof AppTelesalesCustomersIdRoute
   '/_app/telesales/imports/$id': typeof AppTelesalesImportsIdRoute
+  '/_app/telesales/wasfaty/all': typeof AppTelesalesWasfatyAllRoute
+  '/_app/telesales/wasfaty/worked': typeof AppTelesalesWasfatyWorkedRoute
   '/api/public/cdr-progress/$jobId': typeof ApiPublicCdrProgressJobIdRoute
   '/lovable/email/auth/preview': typeof LovableEmailAuthPreviewRoute
   '/lovable/email/auth/webhook': typeof LovableEmailAuthWebhookRoute
   '/lovable/email/queue/process': typeof LovableEmailQueueProcessRoute
+  '/_app/telesales/wasfaty/': typeof AppTelesalesWasfatyIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -547,11 +567,10 @@ export interface FileRouteTypes {
     | '/orders/$id'
     | '/orders/new'
     | '/telesales/$id'
-    | '/telesales/identity'
+    | '/telesales/catalog'
     | '/telesales/import'
     | '/telesales/management'
     | '/telesales/recommended'
-    | '/telesales/relations'
     | '/admin/'
     | '/branches/'
     | '/calls/'
@@ -560,10 +579,13 @@ export interface FileRouteTypes {
     | '/telesales/'
     | '/telesales/customers/$id'
     | '/telesales/imports/$id'
+    | '/telesales/wasfaty/all'
+    | '/telesales/wasfaty/worked'
     | '/api/public/cdr-progress/$jobId'
     | '/lovable/email/auth/preview'
     | '/lovable/email/auth/webhook'
     | '/lovable/email/queue/process'
+    | '/telesales/wasfaty/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -602,11 +624,10 @@ export interface FileRouteTypes {
     | '/orders/$id'
     | '/orders/new'
     | '/telesales/$id'
-    | '/telesales/identity'
+    | '/telesales/catalog'
     | '/telesales/import'
     | '/telesales/management'
     | '/telesales/recommended'
-    | '/telesales/relations'
     | '/admin'
     | '/branches'
     | '/calls'
@@ -615,10 +636,13 @@ export interface FileRouteTypes {
     | '/telesales'
     | '/telesales/customers/$id'
     | '/telesales/imports/$id'
+    | '/telesales/wasfaty/all'
+    | '/telesales/wasfaty/worked'
     | '/api/public/cdr-progress/$jobId'
     | '/lovable/email/auth/preview'
     | '/lovable/email/auth/webhook'
     | '/lovable/email/queue/process'
+    | '/telesales/wasfaty'
   id:
     | '__root__'
     | '/'
@@ -658,11 +682,10 @@ export interface FileRouteTypes {
     | '/_app/orders/$id'
     | '/_app/orders/new'
     | '/_app/telesales/$id'
-    | '/_app/telesales/identity'
+    | '/_app/telesales/catalog'
     | '/_app/telesales/import'
     | '/_app/telesales/management'
     | '/_app/telesales/recommended'
-    | '/_app/telesales/relations'
     | '/_app/admin/'
     | '/_app/branches/'
     | '/_app/calls/'
@@ -671,10 +694,13 @@ export interface FileRouteTypes {
     | '/_app/telesales/'
     | '/_app/telesales/customers/$id'
     | '/_app/telesales/imports/$id'
+    | '/_app/telesales/wasfaty/all'
+    | '/_app/telesales/wasfaty/worked'
     | '/api/public/cdr-progress/$jobId'
     | '/lovable/email/auth/preview'
     | '/lovable/email/auth/webhook'
     | '/lovable/email/queue/process'
+    | '/_app/telesales/wasfaty/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -861,13 +887,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAdminIndexRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/telesales/relations': {
-      id: '/_app/telesales/relations'
-      path: '/telesales/relations'
-      fullPath: '/telesales/relations'
-      preLoaderRoute: typeof AppTelesalesRelationsRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/telesales/recommended': {
       id: '/_app/telesales/recommended'
       path: '/telesales/recommended'
@@ -889,11 +908,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppTelesalesImportRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/telesales/identity': {
-      id: '/_app/telesales/identity'
-      path: '/telesales/identity'
-      fullPath: '/telesales/identity'
-      preLoaderRoute: typeof AppTelesalesIdentityRouteImport
+    '/_app/telesales/catalog': {
+      id: '/_app/telesales/catalog'
+      path: '/telesales/catalog'
+      fullPath: '/telesales/catalog'
+      preLoaderRoute: typeof AppTelesalesCatalogRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/telesales/$id': {
@@ -1036,6 +1055,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DotlovableOauthConsentRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/telesales/wasfaty/': {
+      id: '/_app/telesales/wasfaty/'
+      path: '/telesales/wasfaty'
+      fullPath: '/telesales/wasfaty/'
+      preLoaderRoute: typeof AppTelesalesWasfatyIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/lovable/email/queue/process': {
       id: '/lovable/email/queue/process'
       path: '/lovable/email/queue/process'
@@ -1063,6 +1089,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/public/cdr-progress/$jobId'
       preLoaderRoute: typeof ApiPublicCdrProgressJobIdRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_app/telesales/wasfaty/worked': {
+      id: '/_app/telesales/wasfaty/worked'
+      path: '/telesales/wasfaty/worked'
+      fullPath: '/telesales/wasfaty/worked'
+      preLoaderRoute: typeof AppTelesalesWasfatyWorkedRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/telesales/wasfaty/all': {
+      id: '/_app/telesales/wasfaty/all'
+      path: '/telesales/wasfaty/all'
+      fullPath: '/telesales/wasfaty/all'
+      preLoaderRoute: typeof AppTelesalesWasfatyAllRouteImport
+      parentRoute: typeof AppRoute
     }
     '/_app/telesales/imports/$id': {
       id: '/_app/telesales/imports/$id'
@@ -1105,11 +1145,10 @@ interface AppRouteChildren {
   AppOrdersIdRoute: typeof AppOrdersIdRoute
   AppOrdersNewRoute: typeof AppOrdersNewRoute
   AppTelesalesIdRoute: typeof AppTelesalesIdRoute
-  AppTelesalesIdentityRoute: typeof AppTelesalesIdentityRoute
+  AppTelesalesCatalogRoute: typeof AppTelesalesCatalogRoute
   AppTelesalesImportRoute: typeof AppTelesalesImportRoute
   AppTelesalesManagementRoute: typeof AppTelesalesManagementRoute
   AppTelesalesRecommendedRoute: typeof AppTelesalesRecommendedRoute
-  AppTelesalesRelationsRoute: typeof AppTelesalesRelationsRoute
   AppAdminIndexRoute: typeof AppAdminIndexRoute
   AppBranchesIndexRoute: typeof AppBranchesIndexRoute
   AppCallsIndexRoute: typeof AppCallsIndexRoute
@@ -1118,6 +1157,9 @@ interface AppRouteChildren {
   AppTelesalesIndexRoute: typeof AppTelesalesIndexRoute
   AppTelesalesCustomersIdRoute: typeof AppTelesalesCustomersIdRoute
   AppTelesalesImportsIdRoute: typeof AppTelesalesImportsIdRoute
+  AppTelesalesWasfatyAllRoute: typeof AppTelesalesWasfatyAllRoute
+  AppTelesalesWasfatyWorkedRoute: typeof AppTelesalesWasfatyWorkedRoute
+  AppTelesalesWasfatyIndexRoute: typeof AppTelesalesWasfatyIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -1144,11 +1186,10 @@ const AppRouteChildren: AppRouteChildren = {
   AppOrdersIdRoute: AppOrdersIdRoute,
   AppOrdersNewRoute: AppOrdersNewRoute,
   AppTelesalesIdRoute: AppTelesalesIdRoute,
-  AppTelesalesIdentityRoute: AppTelesalesIdentityRoute,
+  AppTelesalesCatalogRoute: AppTelesalesCatalogRoute,
   AppTelesalesImportRoute: AppTelesalesImportRoute,
   AppTelesalesManagementRoute: AppTelesalesManagementRoute,
   AppTelesalesRecommendedRoute: AppTelesalesRecommendedRoute,
-  AppTelesalesRelationsRoute: AppTelesalesRelationsRoute,
   AppAdminIndexRoute: AppAdminIndexRoute,
   AppBranchesIndexRoute: AppBranchesIndexRoute,
   AppCallsIndexRoute: AppCallsIndexRoute,
@@ -1157,6 +1198,9 @@ const AppRouteChildren: AppRouteChildren = {
   AppTelesalesIndexRoute: AppTelesalesIndexRoute,
   AppTelesalesCustomersIdRoute: AppTelesalesCustomersIdRoute,
   AppTelesalesImportsIdRoute: AppTelesalesImportsIdRoute,
+  AppTelesalesWasfatyAllRoute: AppTelesalesWasfatyAllRoute,
+  AppTelesalesWasfatyWorkedRoute: AppTelesalesWasfatyWorkedRoute,
+  AppTelesalesWasfatyIndexRoute: AppTelesalesWasfatyIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

@@ -27,6 +27,40 @@ export const LEAD_TYPE_LABELS: Record<LeadType, string> = {
 };
 
 /**
+ * The two business domains, and why the module is now split by them.
+ *
+ * Cash and Retention are one desk's work: the same customer, the same
+ * catalogue, the same "did they buy it again" question, and Retention is
+ * literally generated from a converted Cash lead. Wasfaty is a different
+ * business — a government prescription channel with its own identifiers
+ * (Patient ID, Prescription No), its own daily window, its own vocabulary for
+ * what happened on the call, and no product catalogue involvement at all.
+ *
+ * They shared one queue because they share one table, which is a storage fact
+ * rather than an operational one. An agent working Wasfaty filtered Cash away
+ * every morning; an agent working Cash saw Wasfaty rows they had no portal
+ * access to. The split is navigational — one lead record, two front doors — so
+ * nothing here changes what a lead *is*.
+ */
+export const LEAD_DOMAINS = ["cash", "wasfaty"] as const;
+export type LeadDomain = (typeof LEAD_DOMAINS)[number];
+
+export const LEAD_DOMAIN_LABELS: Record<LeadDomain, string> = {
+  cash: "Cash",
+  wasfaty: "Wasfaty",
+};
+
+/** Which pipelines belong to each domain. The Cash domain is two of them. */
+export const DOMAIN_LEAD_TYPES: Record<LeadDomain, LeadType[]> = {
+  cash: ["cash", "retention"],
+  wasfaty: ["wasfaty"],
+};
+
+export function domainOfLeadType(leadType: LeadType): LeadDomain {
+  return leadType === "wasfaty" ? "wasfaty" : "cash";
+}
+
+/**
  * The file shapes an operator can upload.
  *
  * `retention` is here for the cutover only. A retention lead is normally the
@@ -130,12 +164,12 @@ export interface OutcomeDef {
 export const OUTCOMES: OutcomeDef[] = [
   {
     key: "no_answer",
-    label: "No answer / busy",
+    label: "No Answer",
     status: "in_progress",
     terminal: false,
     requiresFollowup: false,
     connected: false,
-    legacyLabels: ["No Answer or Busy"],
+    legacyLabels: ["No Answer or Busy", "No answer / busy"],
   },
   {
     key: "interested",
@@ -149,7 +183,7 @@ export const OUTCOMES: OutcomeDef[] = [
   },
   {
     key: "reschedule",
-    label: "Reschedule call",
+    label: "Reschedule Call",
     status: "follow_up",
     terminal: false,
     requiresFollowup: true,
@@ -158,21 +192,21 @@ export const OUTCOMES: OutcomeDef[] = [
   },
   {
     key: "order_created",
-    label: "Order created",
+    label: "Order Created",
     status: "converted",
     terminal: true,
     requiresFollowup: false,
     connected: true,
-    legacyLabels: ["Answered - Order Created"],
+    legacyLabels: ["Answered - Order Created", "Order created"],
   },
   {
     key: "no_order",
-    label: "Answered — no order",
+    label: "No Order",
     status: "closed_lost",
     terminal: true,
     requiresFollowup: false,
     connected: true,
-    legacyLabels: ["Answered - No Order"],
+    legacyLabels: ["Answered - No Order", "Answered — no order"],
   },
   {
     key: "not_interested",
@@ -219,12 +253,12 @@ export const OUTCOMES: OutcomeDef[] = [
    */
   {
     key: "dispensed_expired",
-    label: "Dispensed / expired",
+    label: "Dispensed / Expired",
     status: "closed_duplicate",
     terminal: true,
     requiresFollowup: false,
     connected: false,
-    legacyLabels: ["Dispensed / Expired"],
+    legacyLabels: ["Dispensed / Expired", "Dispensed / expired"],
   },
   {
     key: "rejected",
@@ -235,23 +269,88 @@ export const OUTCOMES: OutcomeDef[] = [
     connected: true,
     legacyLabels: ["Rejected"],
   },
+  /*
+   * Two outcomes the desk asked for that no workbook contains, because the
+   * workbooks had no column that could hold them: both are reasons a
+   * prescription is real and simply cannot be dispensed *today*, and in Excel
+   * they were written into the notes or left blank. Neither closes the lead --
+   * that is the whole point of naming them -- so both carry a follow-up date.
+   */
+  {
+    key: "refill_too_soon",
+    label: "Refill Too Soon",
+    status: "follow_up",
+    terminal: false,
+    // The date is the outcome here. "Too soon" without "call back when" is
+    // indistinguishable from a lead nobody finished.
+    requiresFollowup: true,
+    connected: true,
+    legacyLabels: [],
+  },
+  {
+    key: "out_of_stock",
+    label: "Out of Stock",
+    status: "follow_up",
+    terminal: false,
+    requiresFollowup: true,
+    // A supply fact, which an agent may record before reaching anybody. Not
+    // counted as contact, so the contact rate stays a measure of conversations.
+    connected: false,
+    legacyLabels: [],
+  },
   {
     key: "low_price",
-    label: "Low value",
+    label: "Below Threshold",
     status: "closed_lost",
     terminal: true,
     requiresFollowup: false,
     connected: false,
-    legacyLabels: ["Low Price"],
+    legacyLabels: ["Low Price", "Low value"],
   },
 ];
 
 export const OUTCOME_BY_KEY: Map<string, OutcomeDef> = new Map(OUTCOMES.map((o) => [o.key, o]));
 
+/**
+ * The eight actions a Wasfaty call can end in, in the order the desk reads them.
+ *
+ * Exactly eight, and this list is the authority: the Wasfaty dialog offers
+ * these and nothing else. The Cash vocabulary underneath it is longer because
+ * Cash has outcomes Wasfaty cannot have -- there is no "wrong number" on a
+ * prescription worked through the portal, and no "duplicate lead" now that the
+ * dedup key arbitrates.
+ *
+ * `low_price` is deliberately *not* renamed to `below_threshold`. The label
+ * changed; the stored value did not, because 1,437 historical Wasfaty rows
+ * carry it and a rename would either orphan them or require rewriting history
+ * to make a screen read better. Keys are storage, labels are language, and
+ * only one of the two is allowed to move.
+ */
+export const WASFATY_OUTCOME_KEYS: readonly string[] = [
+  "order_created",
+  "no_order",
+  "no_answer",
+  "reschedule",
+  "dispensed_expired",
+  "low_price",
+  "refill_too_soon",
+  "out_of_stock",
+];
+
 /** Outcomes an agent may pick for a lead of this type. */
 export function outcomesForLeadType(leadType: LeadType): OutcomeDef[] {
-  const wasfatyOnly = new Set(["dispensed_expired", "low_price"]);
-  return OUTCOMES.filter((o) => leadType === "wasfaty" || !wasfatyOnly.has(o.key));
+  if (leadType === "wasfaty") {
+    // Ordered by the list, not by the table, so the dialog reads the way the
+    // brief specifies rather than the way the vocabulary happens to be written.
+    return WASFATY_OUTCOME_KEYS.map((k) => OUTCOME_BY_KEY.get(k)!).filter(Boolean);
+  }
+  const wasfatyOnly = new Set([
+    "dispensed_expired",
+    "low_price",
+    "refill_too_soon",
+    "out_of_stock",
+  ]);
+  return OUTCOMES.filter((o) => !wasfatyOnly.has(o.key));
 }
 
 /* ------------------------------------------------------------------------- */
@@ -385,6 +484,7 @@ export interface ImportIssue {
     | "unparseable_date"
     | "missing_date"
     | "missing_identity"
+    | "invalid_prescription_no"
     | "missing_product"
     | "duplicate_row"
     | "unusable_phone"

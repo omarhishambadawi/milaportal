@@ -139,6 +139,18 @@ export interface PatientContact {
 /** The filter set that identifies a queue query. Part of the React Query key,
  *  so every field must be a primitive. */
 export interface QueueFilters {
+  /**
+   * The pipelines this queue may show *at all*, comma-joined.
+   *
+   * Not a filter the user sets — it is which front door they came through. The
+   * Cash CRM is `"cash,retention"` and Wasfaty is `"wasfaty"`, and neither page
+   * can be talked into showing the other's leads by editing a query string.
+   * `leadType` below is the user's choice *within* that scope.
+   *
+   * A string rather than an array because this is part of the React Query key
+   * and every field in it has to be a primitive.
+   */
+  domain: string;
   leadType: string;
   status: string;
   agent: string;
@@ -154,6 +166,26 @@ export interface QueueFilters {
    * other.
    */
   lifecycle: string;
+  /**
+   * A business-date range over the lead's own source date — the invoice date
+   * for Cash, the next-dispense date for Wasfaty. `""` means unbounded.
+   *
+   * The source date rather than `created_at`: a supervisor asking "what was
+   * dispensed last week" means the prescription's week, not the week the
+   * generator happened to run. Both ends are inclusive, and both become a
+   * `WHERE` clause — the whole population is never in the browser.
+   */
+  dateFrom: string;
+  dateTo: string;
+  /**
+   * "all" | "worked" | "unworked".
+   *
+   * Worked means an action has been recorded — `last_outcome IS NOT NULL` —
+   * which is a different question from `status`. Three of the eight Wasfaty
+   * actions leave the lead open, so "has somebody dealt with this" cannot be
+   * read off the status column.
+   */
+  worked: string;
   /** Free text over customer name, phone, patient id, prescription, invoice. */
   term: string;
   mineOnly: boolean;
@@ -162,6 +194,9 @@ export interface QueueFilters {
 }
 
 export const DEFAULT_QUEUE_FILTERS: Omit<QueueFilters, "userId"> = {
+  // Overridden by whichever page mounts the queue; "" would mean "no scope",
+  // which is not a state any page should be able to reach by omission.
+  domain: "cash,retention",
   leadType: "all",
   // "open" rather than "all": an agent opening the queue wants work, not an
   // archive. The workbooks had no such distinction, which is why a sheet from
@@ -181,6 +216,9 @@ export const DEFAULT_QUEUE_FILTERS: Omit<QueueFilters, "userId"> = {
    * click away, so this prioritises rather than hides.
    */
   lifecycle: "active",
+  dateFrom: "",
+  dateTo: "",
+  worked: "all",
   term: "",
   mineOnly: false,
   unassignedOnly: false,

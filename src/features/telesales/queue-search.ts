@@ -59,6 +59,9 @@ export interface QueueSearch {
   lifecycle?: string;
   /** Free-text search over name, phone, patient id, prescription, invoice. */
   q?: string;
+  /** Inclusive business-date range over the lead's source date, `YYYY-MM-DD`. */
+  dateFrom?: string;
+  dateTo?: string;
   mine?: boolean;
   unassigned?: boolean;
   /** Zero-based, as the queue holds it; written to the URL one-based. */
@@ -75,6 +78,8 @@ export interface QueueState {
   followup: string;
   lifecycle: string;
   term: string;
+  dateFrom: string;
+  dateTo: string;
   mineOnly: boolean;
   unassignedOnly: boolean;
   page: number;
@@ -93,6 +98,46 @@ const CODE = /^[A-Za-z0-9 ._/-]{1,64}$/;
 const MAX_TERM = 80;
 /** A page number no realistic queue reaches; bounds a hand-edited URL. */
 const MAX_PAGE = 10_000;
+
+/**
+ * A business date, or nothing.
+ *
+ * Shape-checked rather than parsed: `2026-02-31` is refused by Postgres and
+ * would come back as an error, but `?dateFrom=yesterday` should collapse to "no
+ * filter" here rather than reach the database at all. The queue sends this
+ * straight into a `gte`, so an unrecognised value must become absence and not a
+ * guess.
+ */
+function businessDate(value: unknown): string {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value.trim()) ? value.trim() : "";
+}
+
+/**
+ * The two filters whose resting position differs between views.
+ *
+ * Generated Leads is "open work, still current" — the same defaults the Cash
+ * queue has always had. All Leads and Worked Leads are retrospective, so their
+ * resting position is "everything", and a URL that omits `status` on those
+ * pages must mean *their* default rather than the queue's.
+ *
+ * Passing them through rather than hard-coding is what keeps the round trip
+ * honest: `searchFromQueueState` omits whatever equals the default, so if the
+ * writer and the reader disagreed about what the default is, choosing "Open" on
+ * All Leads would write nothing to the URL and read back as "All".
+ */
+export interface QueueDefaults {
+  status: string;
+  lifecycle: string;
+}
+
+const GLOBAL_DEFAULTS: QueueDefaults = {
+  status: DEFAULT_QUEUE_FILTERS.status,
+  lifecycle: DEFAULT_QUEUE_FILTERS.lifecycle,
+};
+
+function defaultsOf(d?: Partial<QueueDefaults>): QueueDefaults {
+  return { ...GLOBAL_DEFAULTS, ...d };
+}
 
 function oneOf(value: unknown, allowed: string[], fallback: string): string {
   return typeof value === "string" && allowed.includes(value) ? value : fallback;
@@ -117,14 +162,18 @@ function flag(value: unknown): boolean {
  * Returns only what differs from the default, so the URL stays short and the
  * router does not consider two equivalent states different.
  */
-export function validateQueueSearch(s: Record<string, unknown>): QueueSearch {
+export function validateQueueSearch(
+  s: Record<string, unknown>,
+  viewDefaults?: Partial<QueueDefaults>,
+): QueueSearch {
+  const d = defaultsOf(viewDefaults);
   const out: QueueSearch = {};
 
   const type = oneOf(s.type, TYPE_VALUES, DEFAULT_QUEUE_FILTERS.leadType);
   if (type !== DEFAULT_QUEUE_FILTERS.leadType) out.type = type;
 
-  const status = oneOf(s.status, STATUS_VALUES, DEFAULT_QUEUE_FILTERS.status);
-  if (status !== DEFAULT_QUEUE_FILTERS.status) out.status = status;
+  const status = oneOf(s.status, STATUS_VALUES, d.status);
+  if (status !== d.status) out.status = status;
 
   const branch = code(s.branch);
   if (branch !== "all") out.branch = branch;
@@ -135,8 +184,8 @@ export function validateQueueSearch(s: Record<string, unknown>): QueueSearch {
   const followup = oneOf(s.followup, FOLLOWUP_VALUES, DEFAULT_QUEUE_FILTERS.followup);
   if (followup !== DEFAULT_QUEUE_FILTERS.followup) out.followup = followup;
 
-  const lifecycle = oneOf(s.lifecycle, LIFECYCLE_VALUES, DEFAULT_QUEUE_FILTERS.lifecycle);
-  if (lifecycle !== DEFAULT_QUEUE_FILTERS.lifecycle) out.lifecycle = lifecycle;
+  const lifecycle = oneOf(s.lifecycle, LIFECYCLE_VALUES, d.lifecycle);
+  if (lifecycle !== d.lifecycle) out.lifecycle = lifecycle;
 
   /*
    * Stored whenever the raw value is non-empty, not only when it has non-space
@@ -149,6 +198,24 @@ export function validateQueueSearch(s: Record<string, unknown>): QueueSearch {
    */
   const q = typeof s.q === "string" ? s.q.slice(0, MAX_TERM) : "";
   if (q !== "") out.q = q;
+
+  const dateFrom = businessDate(s.dateFrom);
+  const dateTo = businessDate(s.dateTo);
+  /*
+   * A backwards range is corrected rather than refused.
+   *
+   * Two date inputs make it trivially reachable — pick the "to" first, then a
+   * "from" after it — and an empty queue with two dates on screen looks like a
+   * bug in the data rather than a range nobody meant. Swapping shows the rows
+   * between the two dates the user actually chose.
+   */
+  if (dateFrom && dateTo && dateFrom > dateTo) {
+    out.dateFrom = dateTo;
+    out.dateTo = dateFrom;
+  } else {
+    if (dateFrom) out.dateFrom = dateFrom;
+    if (dateTo) out.dateTo = dateTo;
+  }
 
   if (flag(s.mine)) out.mine = true;
   if (flag(s.unassigned)) out.unassigned = true;
@@ -176,15 +243,21 @@ export function validateQueueSearch(s: Record<string, unknown>): QueueSearch {
 /* ------------------------------------------------------------------------- */
 
 /** The search params, expanded into the state the page renders from. */
-export function queueStateFromSearch(s: QueueSearch): QueueState {
+export function queueStateFromSearch(
+  s: QueueSearch,
+  viewDefaults?: Partial<QueueDefaults>,
+): QueueState {
+  const d = defaultsOf(viewDefaults);
   return {
     leadType: s.type ?? DEFAULT_QUEUE_FILTERS.leadType,
-    status: s.status ?? DEFAULT_QUEUE_FILTERS.status,
+    status: s.status ?? d.status,
     branch: s.branch ?? "all",
     family: s.family ?? "all",
     followup: s.followup ?? DEFAULT_QUEUE_FILTERS.followup,
-    lifecycle: s.lifecycle ?? DEFAULT_QUEUE_FILTERS.lifecycle,
+    lifecycle: s.lifecycle ?? d.lifecycle,
     term: s.q ?? "",
+    dateFrom: s.dateFrom ?? "",
+    dateTo: s.dateTo ?? "",
     mineOnly: s.mine === true,
     unassignedOnly: s.unassigned === true,
     page: s.page ? s.page - 1 : 0,
@@ -199,20 +272,28 @@ export function queueStateFromSearch(s: QueueSearch): QueueState {
  * a state that survives one and then the other must come back identical, or
  * returning from a lead would silently drop a filter.
  */
-export function searchFromQueueState(state: QueueState): QueueSearch {
-  return validateQueueSearch({
-    type: state.leadType,
-    status: state.status,
-    branch: state.branch,
-    family: state.family,
-    followup: state.followup,
-    lifecycle: state.lifecycle,
-    q: state.term,
-    mine: state.mineOnly,
-    unassigned: state.unassignedOnly,
-    page: state.page + 1,
-    size: state.pageSize,
-  });
+export function searchFromQueueState(
+  state: QueueState,
+  viewDefaults?: Partial<QueueDefaults>,
+): QueueSearch {
+  return validateQueueSearch(
+    {
+      type: state.leadType,
+      status: state.status,
+      branch: state.branch,
+      family: state.family,
+      followup: state.followup,
+      lifecycle: state.lifecycle,
+      q: state.term,
+      dateFrom: state.dateFrom,
+      dateTo: state.dateTo,
+      mine: state.mineOnly,
+      unassigned: state.unassignedOnly,
+      page: state.page + 1,
+      size: state.pageSize,
+    },
+    viewDefaults,
+  );
 }
 
 /** Is this the untouched queue? Used to decide whether a Back link needs to
@@ -247,7 +328,7 @@ export function encodeQueueContext(s: QueueSearch): string | undefined {
   return json.length <= MAX_CONTEXT ? json : undefined;
 }
 
-/** How long a `from` value may be. Nine short filters and a search term. */
+/** How long a `from` value may be. A dozen short filters and a search term. */
 const MAX_CONTEXT = 400;
 
 export function decodeQueueContext(value: unknown): QueueSearch {

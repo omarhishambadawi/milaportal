@@ -27,6 +27,9 @@ export interface ProductRelationRow {
   from_item_code: string;
   to_item_code: string;
   to_item_name: string;
+  /** "cross_sell" | "up_sell". Defaulted in the database, so a row configured
+   *  before the field existed reads as a cross-sell. */
+  kind: string;
   note: string | null;
   active: boolean;
   created_by: string | null;
@@ -45,7 +48,7 @@ export function useProductRelations(enabled: boolean) {
       const { data, error } = await (supabase as any)
         .from("telesales_product_relations")
         .select(
-          "id,from_item_code,to_item_code,to_item_name,note,active,created_by,created_at,updated_by,updated_at",
+          "id,from_item_code,to_item_code,to_item_name,kind,note,active,created_by,created_at,updated_by,updated_at",
         )
         .order("active", { ascending: false })
         .order("from_item_code", { ascending: true })
@@ -102,6 +105,7 @@ export function useRelationMutations() {
     mutationFn: (input: {
       fromItemCode: string;
       toItemCode: string;
+      kind?: string;
       note?: string | null;
       /**
        * Report nothing and refetch nothing; the caller will.
@@ -138,7 +142,7 @@ export function useRelationMutations() {
       telesalesSetProductRelationActive({ data: input }),
     onSuccess: (_r, vars) => {
       sweep();
-      toast.success(vars.active ? "Cross-sell switched on" : "Cross-sell switched off");
+      toast.success(vars.active ? "Recommendation switched on" : "Recommendation switched off");
     },
     onError: fail,
   });

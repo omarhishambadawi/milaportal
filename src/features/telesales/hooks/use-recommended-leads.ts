@@ -194,7 +194,7 @@ function useRecommendationData(enabled: boolean) {
           .eq("active", true),
         (supabase as any)
           .from("telesales_product_relations")
-          .select("from_item_code,to_item_code,to_item_name,note")
+          .select("from_item_code,to_item_code,to_item_name,kind,note")
           .eq("active", true),
         /*
          * The identity mappings. One bounded read of a table that holds 88 rows,
@@ -216,6 +216,7 @@ function useRecommendationData(enabled: boolean) {
             fromItemCode: r.from_item_code,
             toItemCode: r.to_item_code,
             toItemName: r.to_item_name,
+            kind: r.kind,
             note: r.note,
           }));
 

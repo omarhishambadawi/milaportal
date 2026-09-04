@@ -93,7 +93,18 @@ export function LeadCrossSellPanel({
                 <li key={r.toItemCode} className="flex items-start gap-3 p-3">
                   <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                   <div className="min-w-0">
-                    <p className="text-sm font-medium">{r.toItemName}</p>
+                    <p className="flex flex-wrap items-baseline gap-2 text-sm font-medium">
+                      {r.toItemName}
+                      {/*
+                       * Which sentence to open with. A companion product and a
+                       * larger pack of what is already in the basket are not
+                       * the same offer, and the agent is the one who has to say
+                       * the difference out loud.
+                       */}
+                      <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
+                        {r.kind === "up_sell" ? "Up-sell" : "Cross-sell"}
+                      </span>
+                    </p>
                     <p className="mt-0.5 font-mono text-xs text-muted-foreground">{r.toItemCode}</p>
                     {/* The desk's own words for why the pair exists. */}
                     {r.note ? <p className="mt-1 text-xs text-muted-foreground">{r.note}</p> : null}
