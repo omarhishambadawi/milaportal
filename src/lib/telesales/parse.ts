@@ -187,6 +187,15 @@ interface HeaderResult {
   columns: Map<Field, number>;
 }
 
+/** A row's cells as header text: collapsed whitespace, trimmed. */
+function headerCells(row: unknown[]): string[] {
+  return row.map((c) =>
+    String(c ?? "")
+      .replace(/\s+/g, " ")
+      .trim(),
+  );
+}
+
 function locateHeader(grid: Grid): HeaderResult | null {
   const depth = Math.min(HEADER_SCAN_DEPTH, grid.length);
   for (let index = 0; index < depth; index++) {
@@ -200,15 +209,7 @@ function locateHeader(grid: Grid): HeaderResult | null {
       if (field && !columns.has(field)) columns.set(field, col);
     }
     if (columns.size >= HEADER_MIN_MATCHES) {
-      return {
-        index,
-        headers: row.map((c) =>
-          String(c ?? "")
-            .replace(/\s+/g, " ")
-            .trim(),
-        ),
-        columns,
-      };
+      return { index, headers: headerCells(row), columns };
     }
   }
   return null;
@@ -348,6 +349,16 @@ class Issues {
 /* The parser                                                                */
 /* ------------------------------------------------------------------------- */
 
+/**
+ * A hand-made column mapping, laid over the detected one.
+ *
+ * `field -> column index`, or `field -> null` to unmap a column the header
+ * names would otherwise have claimed. Only the fields present are touched;
+ * everything else keeps whatever `locateHeader` found, which is what makes this
+ * an override rather than a replacement.
+ */
+export type ColumnOverrides = Partial<Record<Field, number | null>>;
+
 export interface ParseOptions {
   /** Override the detected type. The import screen's dropdown. */
   sourceType?: SourceType;
@@ -355,6 +366,15 @@ export interface ParseOptions {
    *  gives no evidence and whose neighbours disagree. */
   dateOrder?: DateOrder;
   sheetName?: string;
+  /**
+   * The operator's own column mapping.
+   *
+   * Auto-detection runs first and stays the default; this is applied on top,
+   * for the file whose headers are spelled a way `HEADER_ALIASES` has never
+   * seen. Supplying it also lets a sheet with no recognisable header row be
+   * parsed at all — see the fallback below.
+   */
+  columnOverrides?: ColumnOverrides;
 }
 
 /**
@@ -365,13 +385,37 @@ export interface ParseOptions {
  * unambiguous beside two hundred neighbours (see `inferDayFirst`).
  */
 export function parseSheet(grid: Grid, options: ParseOptions = {}): ParsedWorkbook {
-  const located = locateHeader(grid);
+  const detected = locateHeader(grid);
+
+  /*
+   * A sheet whose headers nothing recognises is still mappable by hand.
+   *
+   * `locateHeader` needs four recognised columns before it will call a row the
+   * header, which is right for detection and wrong as a precondition for the
+   * manual escape hatch: an arbitrary export spells every column differently
+   * and would therefore be unmappable precisely when mapping is what it needs.
+   * So when the operator has supplied a mapping, the first row is taken as the
+   * header row and their choices are read against it.
+   */
+  const hasOverrides = Object.keys(options.columnOverrides ?? {}).length > 0;
+  const located =
+    detected ??
+    (hasOverrides
+      ? { index: 0, headers: headerCells(grid[0] ?? []), columns: new Map<Field, number>() }
+      : null);
+
   if (!located) {
     return {
       sourceType: options.sourceType ?? "cash",
       sheetName: options.sheetName ?? "",
-      headers: [],
+      /*
+       * The first row's cells, so the import screen can offer them to map from.
+       * Detection failed; the operator has not been given the chance to try
+       * yet, and an empty list would leave them nothing to work with.
+       */
+      headers: headerCells(grid[0] ?? []),
       mappedFields: [],
+      mappedColumns: {},
       records: [],
       issues: [
         {
@@ -386,7 +430,21 @@ export function parseSheet(grid: Grid, options: ParseOptions = {}): ParsedWorkbo
     };
   }
 
-  const { columns, headers, index: headerIndex } = located;
+  const { headers, index: headerIndex } = located;
+
+  /*
+   * Detection first, the operator second.
+   *
+   * A field they mapped wins; a field they did not mention keeps what the
+   * headers said. `null` is how a column is taken *away* — an operator who sees
+   * `Customer` claimed as the channel and knows this file means the customer's
+   * name needs a way to say "not that one".
+   */
+  const columns = new Map(located.columns);
+  for (const [field, index] of Object.entries(options.columnOverrides ?? {})) {
+    if (index == null) columns.delete(field as Field);
+    else if (Number.isInteger(index) && index >= 0) columns.set(field as Field, index);
+  }
   const sourceType = options.sourceType ?? detectSourceType(columns) ?? "cash";
   const body = grid.slice(headerIndex + 1);
 
@@ -609,6 +667,7 @@ export function parseSheet(grid: Grid, options: ParseOptions = {}): ParsedWorkbo
     // Sorted, so the reported mapping is a set rather than an artefact of
     // whichever order the header columns happened to appear in.
     mappedFields: [...columns.keys()].sort(),
+    mappedColumns: Object.fromEntries([...columns.entries()].sort()),
     records,
     issues: issues.list(),
     rowsSeen,

@@ -358,6 +358,18 @@ export const telesalesImportWorkbook = createServerFn({ method: "POST" })
         // browser because that is where parsing happens; stored with the import
         // so "what did it map" is answerable after the fact.
         mappedFields: z.array(z.string().max(64)).max(100).default([]),
+        mappedColumns: z.record(z.string().max(64), z.number().int().min(0).max(1000)).default({}),
+        /*
+         * The mapping as a person would read it -- "Mobile Number -> Phone" --
+         * recorded with the import so what was used stays answerable. Per
+         * import; nothing reads it back to pre-fill a later upload.
+         */
+        columnMapping: z
+          .record(
+            z.string().max(120),
+            z.object({ column: z.string().max(200).nullable(), auto: z.boolean() }),
+          )
+          .optional(),
         records: z.array(SourceRecordSchema).max(200_000),
         issues: z
           .array(
@@ -383,6 +395,7 @@ export const telesalesImportWorkbook = createServerFn({ method: "POST" })
         sheetName: data.sheetName,
         headers: data.headers,
         mappedFields: data.mappedFields,
+        mappedColumns: data.mappedColumns,
         records: data.records as any,
         issues: data.issues as any,
         rowsSeen: data.rowsSeen,
@@ -393,6 +406,7 @@ export const telesalesImportWorkbook = createServerFn({ method: "POST" })
         fileSize: data.fileSize,
         importedBy: userId,
         actorRole: actor.role,
+        columnMapping: data.columnMapping ?? null,
       },
     );
 

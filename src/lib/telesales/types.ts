@@ -412,6 +412,14 @@ export interface ParsedWorkbook {
    * plain strings here so this module stays free of the parser.
    */
   mappedFields: string[];
+  /**
+   * Which column each field was resolved from, after any manual override.
+   *
+   * `mappedFields` says *what* was understood; this says *from where*, which is
+   * what a mapping screen needs in order to show the current answer and let it
+   * be changed. Indices into `headers`.
+   */
+  mappedColumns: Record<string, number>;
   records: SourceRecordInput[];
   issues: ImportIssue[];
   rowsSeen: number;

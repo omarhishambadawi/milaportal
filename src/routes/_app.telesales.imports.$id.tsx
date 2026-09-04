@@ -96,7 +96,7 @@ function ImportReviewPage() {
         .from("telesales_imports")
         .select(
           "id,file_name,source_type,sheet_name,status,rows_total,rows_stored,rows_rejected," +
-            "imported_at,archived_at",
+            "imported_at,archived_at,column_mapping",
         )
         .eq("id", id)
         .maybeSingle();
@@ -164,6 +164,14 @@ function ImportReviewPage() {
       hasPhone: phoneFilter === "any" ? null : phoneFilter === "with",
     };
   }, [id, branchFilter, cityFilter, phoneFilter]);
+
+  /*
+   * The fields a person mapped themselves, if any. Detected ones are not shown
+   * -- see the panel below.
+   */
+  const manualMapping = Object.entries(
+    (meta.data?.column_mapping ?? {}) as Record<string, { column: string | null; auto: boolean }>,
+  ).filter(([, m]) => m && m.auto === false);
 
   const filtered =
     Boolean(filters.branchNos) || Boolean(filters.cities) || filters.hasPhone != null;
@@ -347,6 +355,42 @@ function ImportReviewPage() {
           ) : null}
         </CardContent>
       </Card>
+
+      {/* ---------------------------------------------------------------- */}
+      {/* How the columns were read                                         */}
+      {/* ---------------------------------------------------------------- */}
+      {/*
+       * Only when somebody chose a column by hand.
+       *
+       * A file whose headers the importer recognised needs no explanation, and
+       * showing the detected mapping for every import would bury the one case
+       * that matters: the file that needed a person to say which column was the
+       * dispense date. That is the import whose counts get questioned later.
+       */}
+      {manualMapping.length > 0 ? (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Column mapping</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-sm text-muted-foreground">
+              {manualMapping.length} field{manualMapping.length === 1 ? " was" : "s were"} mapped by
+              hand when this file was imported. The rest were detected from the header row.
+            </p>
+            <ul className="divide-y divide-border rounded-md border border-border">
+              {manualMapping.map(([label, m]) => (
+                <li key={label} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+                  <span className="font-medium">{label}</span>
+                  <span className="text-muted-foreground">read from</span>
+                  <span className="font-mono text-xs">
+                    {m.column ?? <span className="text-muted-foreground">nothing</span>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {/* ---------------------------------------------------------------- */}
       {/* Generation                                                        */}

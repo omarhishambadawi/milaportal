@@ -49,6 +49,9 @@ import {
 } from "@/lib/telesales/templates";
 import { TEMPLATE_DATA_SHEET, downloadTemplate } from "@/lib/telesales/template-file";
 import { UploadProgress, type UploadStage } from "@/features/telesales/components/upload-progress";
+import { ColumnMappingPanel } from "@/features/telesales/components/column-mapping-panel";
+import { buildMapping, storedMapping, validateMapping } from "@/lib/telesales/column-mapping";
+import type { ColumnOverrides } from "@/lib/telesales/parse";
 
 export const Route = createFileRoute("/_app/telesales/import")({
   head: () => ({ meta: [{ title: "Telesales Import — MilaServ Portal" }] }),
@@ -113,6 +116,16 @@ function TelesalesImportPage() {
   const [downloading, setDownloading] = useState<string | null>(null);
 
   /*
+   * The operator's own column choices, for this file only.
+   *
+   * Empty is the normal case: detection answered and nobody disagreed. Cleared
+   * whenever a new file or a new sheet is read, because a mapping is about a
+   * particular set of columns and carrying it to a different one would apply
+   * silently to the wrong file.
+   */
+  const [overrides, setOverrides] = useState<ColumnOverrides>({});
+
+  /*
    * One boolean derived from the stage, rather than a second piece of state
    * that can disagree with it. A duplicate submit is prevented by the stage
    * machine itself — there is no state in which the button is enabled and work
@@ -133,7 +146,20 @@ function TelesalesImportPage() {
     );
   }
 
-  async function readFile(f: File, sheet?: string) {
+  /**
+   * Read the file again with a different mapping.
+   *
+   * The same `parseWorkbookFile` and the same options object — the override is
+   * one more field on it, so there is one parser and one code path, and a file
+   * parsed with no overrides is byte-for-byte the file parsed before this
+   * feature existed.
+   */
+  async function applyMapping(next: ColumnOverrides) {
+    setOverrides(next);
+    if (file) await readFile(file, sheetName || undefined, next);
+  }
+
+  async function readFile(f: File, sheet?: string, mapping: ColumnOverrides = overrides) {
     setParsing(true);
     setStage("reading");
     setStageDetail(`${f.name} · ${formatBytes(f.size)}`);
@@ -147,10 +173,16 @@ function TelesalesImportPage() {
        * the click do nothing, which is the exact complaint this addresses.
        */
       await new Promise((resolve) => setTimeout(resolve, 0));
-      const parsed = await parseWorkbookFile(f, sheet ? { sheetName: sheet } : {});
+      const parsed = await parseWorkbookFile(f, {
+        ...(sheet ? { sheetName: sheet } : {}),
+        ...(Object.keys(mapping).length > 0 ? { columnOverrides: mapping } : {}),
+      });
       setPreview(parsed);
       setFile(f);
-      setSourceType(parsed.sourceType);
+      // The detected type only leads when nothing has been mapped by hand:
+      // re-parsing after a mapping change must not undo the operator's choice
+      // of source type.
+      if (Object.keys(mapping).length === 0) setSourceType(parsed.sourceType);
       setSheetName(parsed.sheetName);
       setStage("idle");
       setStageDetail(null);
@@ -172,6 +204,7 @@ function TelesalesImportPage() {
     setPreview(null);
     setFile(null);
     setSheetName("");
+    setOverrides({});
     setStage("idle");
     setStageDetail(null);
     if (inputRef.current) inputRef.current.value = "";
@@ -184,6 +217,19 @@ function TelesalesImportPage() {
    * an external spreadsheet that spells a column differently still counts as
    * supplying it. The template is the reliable path, not the only one.
    */
+  /*
+   * The mapping as it stands: what detection found, with the operator's choices
+   * laid over it, against the template's own field list for this source type.
+   */
+  const mappingRows = preview
+    ? buildMapping(
+        sourceType as "cash" | "retention" | "wasfaty",
+        new Map(Object.entries(preview.mappedColumns)),
+        overrides,
+      )
+    : [];
+  const mappingVerdict = validateMapping(mappingRows, preview?.headers ?? []);
+
   const mapping: MappingCheck | null = preview
     ? checkMapping(
         templateFor(sourceType as "cash" | "retention" | "wasfaty"),
@@ -237,6 +283,8 @@ function TelesalesImportPage() {
           rowsSeen: preview.rowsSeen,
           headers: preview.headers,
           mappedFields: preview.mappedFields,
+          mappedColumns: preview.mappedColumns,
+          columnMapping: storedMapping(mappingRows, preview.headers),
           records: preview.records.map((r) => ({ ...r, sourceType })) as any,
           issues: preview.issues,
         },
@@ -441,7 +489,10 @@ function TelesalesImportPage() {
                     value={sheetName}
                     onValueChange={(v) => {
                       setSheetName(v);
-                      if (file) void readFile(file, v);
+                      // A different sheet is a different set of columns, so a
+                      // mapping made against the old one cannot carry over.
+                      setOverrides({});
+                      if (file) void readFile(file, v, {});
                     }}
                   >
                     <SelectTrigger>
@@ -510,6 +561,25 @@ function TelesalesImportPage() {
                   imported fine and produced nothing" stops being a surprise
                   discovered a day later.
                   ------------------------------------------------------------ */}
+              {/* ------------------------------------------------------------
+                  The manual mapping.
+
+                  Below the detected summary rather than instead of it: the
+                  summary says what the importer understood, and this is where
+                  it gets corrected. Auto-detection remains the default and a
+                  field nobody touches keeps what the headers said.
+                  ------------------------------------------------------------ */}
+              {preview.headers.length > 0 ? (
+                <ColumnMappingPanel
+                  rows={mappingRows}
+                  headers={preview.headers}
+                  verdict={mappingVerdict}
+                  disabled={busy || parsing}
+                  onChange={(field, column) => void applyMapping({ ...overrides, [field]: column })}
+                  onReset={() => void applyMapping({})}
+                />
+              ) : null}
+
               {mapping ? (
                 <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
                   <p className="text-xs font-medium">
@@ -562,7 +632,18 @@ function TelesalesImportPage() {
               ) : null}
 
               <div className="flex flex-wrap items-center gap-2">
-                <Button disabled={busy || preview.records.length === 0} onClick={apply}>
+                {/*
+                 * Blocked on an invalid mapping, not on a warning.
+                 *
+                 * A required field with no column, or one column claimed by two
+                 * fields, produces rows that either cannot become leads or are
+                 * quietly wrong -- and both are far cheaper to fix here than
+                 * after 3,937 rows are stored.
+                 */}
+                <Button
+                  disabled={busy || preview.records.length === 0 || !mappingVerdict.ok}
+                  onClick={apply}
+                >
                   {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   Import {preview.records.length.toLocaleString("en-US")} rows
                 </Button>

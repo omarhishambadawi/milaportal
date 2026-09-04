@@ -111,6 +111,14 @@ export async function storeImport(
     fileSize: number | null;
     importedBy: string;
     actorRole: string | null;
+    /**
+     * How the file's columns were read, in the operator's words.
+     *
+     * Stored so "which column did this import treat as the dispense date" is
+     * answerable afterwards, which matters most for the file that needed a
+     * manual mapping in the first place. Null when nothing was recorded.
+     */
+    columnMapping?: Record<string, { column: string | null; auto: boolean }> | null;
   },
 ): Promise<ImportOutcome> {
   const previousImportId = await findPreviousImport(
@@ -138,6 +146,7 @@ export async function storeImport(
       rows_total: parsed.rowsSeen,
       imported_by: meta.importedBy,
       actor_role: meta.actorRole,
+      column_mapping: meta.columnMapping ?? null,
     })
     .select("id")
     .single();
