@@ -1892,6 +1892,7 @@ export type Database = {
           created_by: string | null
           from_item_code: string
           id: string
+          kind: string
           note: string | null
           to_item_code: string
           to_item_name: string
@@ -1904,6 +1905,7 @@ export type Database = {
           created_by?: string | null
           from_item_code: string
           id?: string
+          kind?: string
           note?: string | null
           to_item_code: string
           to_item_name: string
@@ -1916,6 +1918,7 @@ export type Database = {
           created_by?: string | null
           from_item_code?: string
           id?: string
+          kind?: string
           note?: string | null
           to_item_code?: string
           to_item_name?: string
@@ -1927,6 +1930,7 @@ export type Database = {
       telesales_products: {
         Row: {
           active: boolean
+          added_by: string | null
           category: string | null
           created_at: string
           eligible_cash: boolean
@@ -1936,11 +1940,13 @@ export type Database = {
           item_name: string
           notes: string | null
           refill_days: number | null
+          source: string
           strength: string | null
           updated_at: string
         }
         Insert: {
           active?: boolean
+          added_by?: string | null
           category?: string | null
           created_at?: string
           eligible_cash?: boolean
@@ -1950,11 +1956,13 @@ export type Database = {
           item_name: string
           notes?: string | null
           refill_days?: number | null
+          source?: string
           strength?: string | null
           updated_at?: string
         }
         Update: {
           active?: boolean
+          added_by?: string | null
           category?: string | null
           created_at?: string
           eligible_cash?: boolean
@@ -1964,6 +1972,7 @@ export type Database = {
           item_name?: string
           notes?: string | null
           refill_days?: number | null
+          source?: string
           strength?: string | null
           updated_at?: string
         }
@@ -3677,6 +3686,24 @@ export type Database = {
           note: string
           occurred_at: string
           outcome: string
+        }[]
+      }
+      telesales_delete_impact: {
+        Args: { _import_id: string }
+        Returns: {
+          followups: number
+          leads_deleted: number
+          leads_kept: number
+          runs: number
+          source_records: number
+        }[]
+      }
+      telesales_delete_import: {
+        Args: { _import_id: string }
+        Returns: {
+          leads_deleted: number
+          leads_kept: number
+          source_records: number
         }[]
       }
       telesales_generation_tick: { Args: never; Returns: number }
