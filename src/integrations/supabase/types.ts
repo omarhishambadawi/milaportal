@@ -1025,8 +1025,11 @@ export type Database = {
           id: string
           last_observed_at: string | null
           pages_fetched: number | null
+          requested_by: string | null
           rows_changed: number | null
           rows_seen: number | null
+          schedule_slot_id: string | null
+          scheduled_for: string | null
           shams_run_id: string | null
           skip_reason: string | null
           source_timestamps_corrected: boolean
@@ -1047,8 +1050,11 @@ export type Database = {
           id?: string
           last_observed_at?: string | null
           pages_fetched?: number | null
+          requested_by?: string | null
           rows_changed?: number | null
           rows_seen?: number | null
+          schedule_slot_id?: string | null
+          scheduled_for?: string | null
           shams_run_id?: string | null
           skip_reason?: string | null
           source_timestamps_corrected?: boolean
@@ -1069,8 +1075,11 @@ export type Database = {
           id?: string
           last_observed_at?: string | null
           pages_fetched?: number | null
+          requested_by?: string | null
           rows_changed?: number | null
           rows_seen?: number | null
+          schedule_slot_id?: string | null
+          scheduled_for?: string | null
           shams_run_id?: string | null
           skip_reason?: string | null
           source_timestamps_corrected?: boolean
@@ -1079,6 +1088,48 @@ export type Database = {
           sync_type?: string
           triggered_at?: string
           updated_at?: string
+        }
+        Relationships: []
+      }
+      shams_sync_schedule_slots: {
+        Row: {
+          created_at: string
+          enabled: boolean
+          id: string
+          last_scheduled_for: string | null
+          local_time: string
+          next_due_at: string | null
+          sync_promotions: boolean
+          sync_stock: boolean
+          time_zone: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          created_at?: string
+          enabled?: boolean
+          id?: string
+          last_scheduled_for?: string | null
+          local_time: string
+          next_due_at?: string | null
+          sync_promotions?: boolean
+          sync_stock?: boolean
+          time_zone?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          created_at?: string
+          enabled?: boolean
+          id?: string
+          last_scheduled_for?: string | null
+          local_time?: string
+          next_due_at?: string | null
+          sync_promotions?: boolean
+          sync_stock?: boolean
+          time_zone?: string
+          updated_at?: string
+          updated_by?: string | null
         }
         Relationships: []
       }
@@ -1112,6 +1163,27 @@ export type Database = {
           last_request_id?: number | null
           last_task?: string | null
           updated_at?: string
+        }
+        Relationships: []
+      }
+      shams_sync_settings: {
+        Row: {
+          automation_enabled: boolean
+          id: number
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          automation_enabled?: boolean
+          id?: number
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          automation_enabled?: boolean
+          id?: number
+          updated_at?: string
+          updated_by?: string | null
         }
         Relationships: []
       }
@@ -1162,6 +1234,922 @@ export type Database = {
           reason?: string
         }
         Relationships: []
+      }
+      telesales_customers: {
+        Row: {
+          alternate_names: string[]
+          created_at: string
+          display_name: string | null
+          first_seen_at: string
+          id: string
+          last_seen_at: string
+          mis_customer_id: string | null
+          mis_synced_at: string | null
+          phone: string
+          updated_at: string
+        }
+        Insert: {
+          alternate_names?: string[]
+          created_at?: string
+          display_name?: string | null
+          first_seen_at?: string
+          id?: string
+          last_seen_at?: string
+          mis_customer_id?: string | null
+          mis_synced_at?: string | null
+          phone: string
+          updated_at?: string
+        }
+        Update: {
+          alternate_names?: string[]
+          created_at?: string
+          display_name?: string | null
+          first_seen_at?: string
+          id?: string
+          last_seen_at?: string
+          mis_customer_id?: string | null
+          mis_synced_at?: string | null
+          phone?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      telesales_followups: {
+        Row: {
+          assigned_to: string | null
+          completed_at: string | null
+          completed_by: string | null
+          created_at: string
+          created_by: string | null
+          due_on: string
+          due_time: string | null
+          id: string
+          lead_id: string
+          notes: string | null
+          reason: string | null
+          result: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          assigned_to?: string | null
+          completed_at?: string | null
+          completed_by?: string | null
+          created_at?: string
+          created_by?: string | null
+          due_on: string
+          due_time?: string | null
+          id?: string
+          lead_id: string
+          notes?: string | null
+          reason?: string | null
+          result?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          assigned_to?: string | null
+          completed_at?: string | null
+          completed_by?: string | null
+          created_at?: string
+          created_by?: string | null
+          due_on?: string
+          due_time?: string | null
+          id?: string
+          lead_id?: string
+          notes?: string | null
+          reason?: string | null
+          result?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "telesales_followups_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "telesales_lead_lifecycle"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "telesales_followups_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "telesales_leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      telesales_generation_runs: {
+        Row: {
+          actor_id: string | null
+          anchor_date: string
+          candidates: number
+          completed_at: string | null
+          error_summary: string | null
+          errors: number
+          execution_source: string
+          filters: Json | null
+          id: string
+          import_id: string | null
+          lead_type: string
+          leads_created: number
+          skipped_duplicate: number
+          skipped_ineligible: number
+          started_at: string
+          status: string
+          window_from: string | null
+          window_to: string | null
+        }
+        Insert: {
+          actor_id?: string | null
+          anchor_date: string
+          candidates?: number
+          completed_at?: string | null
+          error_summary?: string | null
+          errors?: number
+          execution_source?: string
+          filters?: Json | null
+          id?: string
+          import_id?: string | null
+          lead_type: string
+          leads_created?: number
+          skipped_duplicate?: number
+          skipped_ineligible?: number
+          started_at?: string
+          status?: string
+          window_from?: string | null
+          window_to?: string | null
+        }
+        Update: {
+          actor_id?: string | null
+          anchor_date?: string
+          candidates?: number
+          completed_at?: string | null
+          error_summary?: string | null
+          errors?: number
+          execution_source?: string
+          filters?: Json | null
+          id?: string
+          import_id?: string | null
+          lead_type?: string
+          leads_created?: number
+          skipped_duplicate?: number
+          skipped_ineligible?: number
+          started_at?: string
+          status?: string
+          window_from?: string | null
+          window_to?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "telesales_generation_runs_import_id_fkey"
+            columns: ["import_id"]
+            isOneToOne: false
+            referencedRelation: "telesales_imports"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      telesales_imports: {
+        Row: {
+          actor_role: string | null
+          archive_reason: string | null
+          archived_at: string | null
+          archived_by: string | null
+          archived_followups: number | null
+          archived_leads: number | null
+          archived_source_records: number | null
+          column_mapping: Json | null
+          content_digest: string | null
+          error_summary: string | null
+          file_name: string
+          file_size: number | null
+          id: string
+          imported_at: string
+          imported_by: string | null
+          issues: Json
+          rows_duplicate: number
+          rows_rejected: number
+          rows_stored: number
+          rows_total: number
+          sheet_name: string | null
+          source_type: string
+          status: string
+        }
+        Insert: {
+          actor_role?: string | null
+          archive_reason?: string | null
+          archived_at?: string | null
+          archived_by?: string | null
+          archived_followups?: number | null
+          archived_leads?: number | null
+          archived_source_records?: number | null
+          column_mapping?: Json | null
+          content_digest?: string | null
+          error_summary?: string | null
+          file_name: string
+          file_size?: number | null
+          id?: string
+          imported_at?: string
+          imported_by?: string | null
+          issues?: Json
+          rows_duplicate?: number
+          rows_rejected?: number
+          rows_stored?: number
+          rows_total?: number
+          sheet_name?: string | null
+          source_type: string
+          status?: string
+        }
+        Update: {
+          actor_role?: string | null
+          archive_reason?: string | null
+          archived_at?: string | null
+          archived_by?: string | null
+          archived_followups?: number | null
+          archived_leads?: number | null
+          archived_source_records?: number | null
+          column_mapping?: Json | null
+          content_digest?: string | null
+          error_summary?: string | null
+          file_name?: string
+          file_size?: number | null
+          id?: string
+          imported_at?: string
+          imported_by?: string | null
+          issues?: Json
+          rows_duplicate?: number
+          rows_rejected?: number
+          rows_stored?: number
+          rows_total?: number
+          sheet_name?: string | null
+          source_type?: string
+          status?: string
+        }
+        Relationships: []
+      }
+      telesales_lead_activities: {
+        Row: {
+          activity_type: string
+          actor_id: string | null
+          actor_name: string | null
+          actor_role: string | null
+          created_at: string
+          from_status: string | null
+          id: string
+          lead_id: string
+          metadata: Json
+          note: string | null
+          outcome: string | null
+          to_status: string | null
+        }
+        Insert: {
+          activity_type: string
+          actor_id?: string | null
+          actor_name?: string | null
+          actor_role?: string | null
+          created_at?: string
+          from_status?: string | null
+          id?: string
+          lead_id: string
+          metadata?: Json
+          note?: string | null
+          outcome?: string | null
+          to_status?: string | null
+        }
+        Update: {
+          activity_type?: string
+          actor_id?: string | null
+          actor_name?: string | null
+          actor_role?: string | null
+          created_at?: string
+          from_status?: string | null
+          id?: string
+          lead_id?: string
+          metadata?: Json
+          note?: string | null
+          outcome?: string | null
+          to_status?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "telesales_lead_activities_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "telesales_lead_lifecycle"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "telesales_lead_activities_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "telesales_leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      telesales_leads: {
+        Row: {
+          archive_reason: string | null
+          archived_at: string | null
+          archived_by: string | null
+          assigned_at: string | null
+          assigned_by: string | null
+          assigned_to: string | null
+          branch_no: string | null
+          channel: string | null
+          city: string | null
+          closed_at: string | null
+          closed_reason: string | null
+          contact_attempts: number
+          converted_at: string | null
+          converted_value: number | null
+          created_at: string
+          customer_id: string | null
+          customer_name: string | null
+          customer_ref: string | null
+          cycle_number: number
+          dedup_key: string
+          document_no: string | null
+          facility: string | null
+          first_contacted_at: string | null
+          generation_reason: string | null
+          generation_run_id: string | null
+          id: string
+          invoice_checked_at: string | null
+          invoice_discrepancies: string[]
+          invoice_match_status: string | null
+          invoice_matched_branch_no: string | null
+          invoice_matched_doc_no: string | null
+          item_code: string | null
+          item_name: string | null
+          last_contacted_at: string | null
+          last_contacted_by: string | null
+          last_outcome: string | null
+          lead_type: string
+          next_followup_on: string | null
+          order_id: string | null
+          parent_lead_id: string | null
+          patient_id: string | null
+          phone: string | null
+          phone_alternates: string[]
+          prescription_no: string | null
+          priority: number
+          product_family: string | null
+          product_strength: string | null
+          quantity: number | null
+          source_date: string | null
+          source_record_id: string | null
+          status: string
+          total_value: number | null
+          updated_at: string
+        }
+        Insert: {
+          archive_reason?: string | null
+          archived_at?: string | null
+          archived_by?: string | null
+          assigned_at?: string | null
+          assigned_by?: string | null
+          assigned_to?: string | null
+          branch_no?: string | null
+          channel?: string | null
+          city?: string | null
+          closed_at?: string | null
+          closed_reason?: string | null
+          contact_attempts?: number
+          converted_at?: string | null
+          converted_value?: number | null
+          created_at?: string
+          customer_id?: string | null
+          customer_name?: string | null
+          customer_ref?: string | null
+          cycle_number?: number
+          dedup_key: string
+          document_no?: string | null
+          facility?: string | null
+          first_contacted_at?: string | null
+          generation_reason?: string | null
+          generation_run_id?: string | null
+          id?: string
+          invoice_checked_at?: string | null
+          invoice_discrepancies?: string[]
+          invoice_match_status?: string | null
+          invoice_matched_branch_no?: string | null
+          invoice_matched_doc_no?: string | null
+          item_code?: string | null
+          item_name?: string | null
+          last_contacted_at?: string | null
+          last_contacted_by?: string | null
+          last_outcome?: string | null
+          lead_type: string
+          next_followup_on?: string | null
+          order_id?: string | null
+          parent_lead_id?: string | null
+          patient_id?: string | null
+          phone?: string | null
+          phone_alternates?: string[]
+          prescription_no?: string | null
+          priority?: number
+          product_family?: string | null
+          product_strength?: string | null
+          quantity?: number | null
+          source_date?: string | null
+          source_record_id?: string | null
+          status?: string
+          total_value?: number | null
+          updated_at?: string
+        }
+        Update: {
+          archive_reason?: string | null
+          archived_at?: string | null
+          archived_by?: string | null
+          assigned_at?: string | null
+          assigned_by?: string | null
+          assigned_to?: string | null
+          branch_no?: string | null
+          channel?: string | null
+          city?: string | null
+          closed_at?: string | null
+          closed_reason?: string | null
+          contact_attempts?: number
+          converted_at?: string | null
+          converted_value?: number | null
+          created_at?: string
+          customer_id?: string | null
+          customer_name?: string | null
+          customer_ref?: string | null
+          cycle_number?: number
+          dedup_key?: string
+          document_no?: string | null
+          facility?: string | null
+          first_contacted_at?: string | null
+          generation_reason?: string | null
+          generation_run_id?: string | null
+          id?: string
+          invoice_checked_at?: string | null
+          invoice_discrepancies?: string[]
+          invoice_match_status?: string | null
+          invoice_matched_branch_no?: string | null
+          invoice_matched_doc_no?: string | null
+          item_code?: string | null
+          item_name?: string | null
+          last_contacted_at?: string | null
+          last_contacted_by?: string | null
+          last_outcome?: string | null
+          lead_type?: string
+          next_followup_on?: string | null
+          order_id?: string | null
+          parent_lead_id?: string | null
+          patient_id?: string | null
+          phone?: string | null
+          phone_alternates?: string[]
+          prescription_no?: string | null
+          priority?: number
+          product_family?: string | null
+          product_strength?: string | null
+          quantity?: number | null
+          source_date?: string | null
+          source_record_id?: string | null
+          status?: string
+          total_value?: number | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "telesales_leads_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "telesales_customers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "telesales_leads_generation_run_id_fkey"
+            columns: ["generation_run_id"]
+            isOneToOne: false
+            referencedRelation: "telesales_generation_runs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "telesales_leads_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "telesales_leads_parent_lead_id_fkey"
+            columns: ["parent_lead_id"]
+            isOneToOne: false
+            referencedRelation: "telesales_lead_lifecycle"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "telesales_leads_parent_lead_id_fkey"
+            columns: ["parent_lead_id"]
+            isOneToOne: false
+            referencedRelation: "telesales_leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "telesales_leads_source_record_id_fkey"
+            columns: ["source_record_id"]
+            isOneToOne: false
+            referencedRelation: "telesales_source_records"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      telesales_patient_contacts: {
+        Row: {
+          added_at: string
+          added_by: string | null
+          id: string
+          notes: string | null
+          patient_id: string
+          phone: string
+          phone_raw: string | null
+          prescription_no: string | null
+          source: string
+          superseded_at: string | null
+          superseded_by: string | null
+        }
+        Insert: {
+          added_at?: string
+          added_by?: string | null
+          id?: string
+          notes?: string | null
+          patient_id: string
+          phone: string
+          phone_raw?: string | null
+          prescription_no?: string | null
+          source?: string
+          superseded_at?: string | null
+          superseded_by?: string | null
+        }
+        Update: {
+          added_at?: string
+          added_by?: string | null
+          id?: string
+          notes?: string | null
+          patient_id?: string
+          phone?: string
+          phone_raw?: string | null
+          prescription_no?: string | null
+          source?: string
+          superseded_at?: string | null
+          superseded_by?: string | null
+        }
+        Relationships: []
+      }
+      telesales_product_aliases: {
+        Row: {
+          active: boolean
+          alias_item_code: string
+          alias_name_snapshot: string | null
+          canonical_item_code: string
+          created_at: string
+          created_by: string | null
+          id: string
+          note: string | null
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          active?: boolean
+          alias_item_code: string
+          alias_name_snapshot?: string | null
+          canonical_item_code: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          note?: string | null
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          active?: boolean
+          alias_item_code?: string
+          alias_name_snapshot?: string | null
+          canonical_item_code?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          note?: string | null
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "telesales_product_aliases_canonical_item_code_fkey"
+            columns: ["canonical_item_code"]
+            isOneToOne: false
+            referencedRelation: "telesales_products"
+            referencedColumns: ["item_code"]
+          },
+        ]
+      }
+      telesales_product_patterns: {
+        Row: {
+          active: boolean
+          created_at: string
+          eligible: boolean
+          family: string
+          id: string
+          notes: string | null
+          pattern: string
+          priority: number
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          eligible?: boolean
+          family: string
+          id?: string
+          notes?: string | null
+          pattern: string
+          priority?: number
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          eligible?: boolean
+          family?: string
+          id?: string
+          notes?: string | null
+          pattern?: string
+          priority?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      telesales_product_relations: {
+        Row: {
+          active: boolean
+          created_at: string
+          created_by: string | null
+          from_item_code: string
+          id: string
+          kind: string
+          note: string | null
+          to_item_code: string
+          to_item_name: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          created_by?: string | null
+          from_item_code: string
+          id?: string
+          kind?: string
+          note?: string | null
+          to_item_code: string
+          to_item_name: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          created_by?: string | null
+          from_item_code?: string
+          id?: string
+          kind?: string
+          note?: string | null
+          to_item_code?: string
+          to_item_name?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: []
+      }
+      telesales_products: {
+        Row: {
+          active: boolean
+          added_by: string | null
+          category: string | null
+          created_at: string
+          eligible_cash: boolean
+          eligible_retention: boolean
+          family: string
+          item_code: string
+          item_name: string
+          notes: string | null
+          refill_days: number | null
+          source: string
+          strength: string | null
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          added_by?: string | null
+          category?: string | null
+          created_at?: string
+          eligible_cash?: boolean
+          eligible_retention?: boolean
+          family: string
+          item_code: string
+          item_name: string
+          notes?: string | null
+          refill_days?: number | null
+          source?: string
+          strength?: string | null
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          added_by?: string | null
+          category?: string | null
+          created_at?: string
+          eligible_cash?: boolean
+          eligible_retention?: boolean
+          family?: string
+          item_code?: string
+          item_name?: string
+          notes?: string | null
+          refill_days?: number | null
+          source?: string
+          strength?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      telesales_scheduler_state: {
+        Row: {
+          id: number
+          last_anchor: string | null
+          last_error: string | null
+          last_outcome: string | null
+          last_poke_at: string | null
+          last_request_id: number | null
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          last_anchor?: string | null
+          last_error?: string | null
+          last_outcome?: string | null
+          last_poke_at?: string | null
+          last_request_id?: number | null
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          last_anchor?: string | null
+          last_error?: string | null
+          last_outcome?: string | null
+          last_poke_at?: string | null
+          last_request_id?: number | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      telesales_settings: {
+        Row: {
+          automation_enabled: boolean
+          cash_window_days: number
+          cash_window_lag_days: number
+          generation_hour: number
+          id: boolean
+          retention_overdue_grace_days: number
+          updated_at: string
+          updated_by: string | null
+          wasfaty_window_days: number
+        }
+        Insert: {
+          automation_enabled?: boolean
+          cash_window_days?: number
+          cash_window_lag_days?: number
+          generation_hour?: number
+          id?: boolean
+          retention_overdue_grace_days?: number
+          updated_at?: string
+          updated_by?: string | null
+          wasfaty_window_days?: number
+        }
+        Update: {
+          automation_enabled?: boolean
+          cash_window_days?: number
+          cash_window_lag_days?: number
+          generation_hour?: number
+          id?: boolean
+          retention_overdue_grace_days?: number
+          updated_at?: string
+          updated_by?: string | null
+          wasfaty_window_days?: number
+        }
+        Relationships: []
+      }
+      telesales_source_records: {
+        Row: {
+          archived_at: string | null
+          branch_no: string | null
+          callback_date: string | null
+          channel: string | null
+          city: string | null
+          content_hash: string
+          created_at: string
+          customer_name: string | null
+          customer_ref: string | null
+          dispense_time: string | null
+          document_no: string | null
+          facility: string | null
+          fill_date: string | null
+          id: string
+          import_id: string
+          item_code: string | null
+          item_name: string | null
+          patient_id: string | null
+          phone: string | null
+          phone_alternates: string[]
+          phone_raw: string | null
+          phone_rejection: string | null
+          prescription_no: string | null
+          quantity: number | null
+          raw: Json
+          row_number: number
+          source_date: string | null
+          source_type: string
+          total_value: number | null
+          unit_price: number | null
+        }
+        Insert: {
+          archived_at?: string | null
+          branch_no?: string | null
+          callback_date?: string | null
+          channel?: string | null
+          city?: string | null
+          content_hash: string
+          created_at?: string
+          customer_name?: string | null
+          customer_ref?: string | null
+          dispense_time?: string | null
+          document_no?: string | null
+          facility?: string | null
+          fill_date?: string | null
+          id?: string
+          import_id: string
+          item_code?: string | null
+          item_name?: string | null
+          patient_id?: string | null
+          phone?: string | null
+          phone_alternates?: string[]
+          phone_raw?: string | null
+          phone_rejection?: string | null
+          prescription_no?: string | null
+          quantity?: number | null
+          raw?: Json
+          row_number: number
+          source_date?: string | null
+          source_type: string
+          total_value?: number | null
+          unit_price?: number | null
+        }
+        Update: {
+          archived_at?: string | null
+          branch_no?: string | null
+          callback_date?: string | null
+          channel?: string | null
+          city?: string | null
+          content_hash?: string
+          created_at?: string
+          customer_name?: string | null
+          customer_ref?: string | null
+          dispense_time?: string | null
+          document_no?: string | null
+          facility?: string | null
+          fill_date?: string | null
+          id?: string
+          import_id?: string
+          item_code?: string | null
+          item_name?: string | null
+          patient_id?: string | null
+          phone?: string | null
+          phone_alternates?: string[]
+          phone_raw?: string | null
+          phone_rejection?: string | null
+          prescription_no?: string | null
+          quantity?: number | null
+          raw?: Json
+          row_number?: number
+          source_date?: string | null
+          source_type?: string
+          total_value?: number | null
+          unit_price?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "telesales_source_records_import_id_fkey"
+            columns: ["import_id"]
+            isOneToOne: false
+            referencedRelation: "telesales_imports"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       user_roles: {
         Row: {
@@ -1290,6 +2278,114 @@ export type Database = {
           type?: string | null
         }
         Relationships: []
+      }
+      telesales_lead_lifecycle: {
+        Row: {
+          archive_reason: string | null
+          archived_at: string | null
+          archived_by: string | null
+          assigned_at: string | null
+          assigned_by: string | null
+          assigned_to: string | null
+          branch_no: string | null
+          canonical_item_code: string | null
+          canonical_via: string | null
+          channel: string | null
+          city: string | null
+          closed_at: string | null
+          closed_reason: string | null
+          contact_attempts: number | null
+          converted_at: string | null
+          converted_value: number | null
+          created_at: string | null
+          customer_id: string | null
+          customer_name: string | null
+          customer_ref: string | null
+          cycle_number: number | null
+          dedup_key: string | null
+          document_no: string | null
+          facility: string | null
+          first_contacted_at: string | null
+          generation_reason: string | null
+          generation_run_id: string | null
+          id: string | null
+          invoice_checked_at: string | null
+          invoice_discrepancies: string[] | null
+          invoice_match_status: string | null
+          invoice_matched_branch_no: string | null
+          invoice_matched_doc_no: string | null
+          item_code: string | null
+          item_name: string | null
+          last_contacted_at: string | null
+          last_contacted_by: string | null
+          last_outcome: string | null
+          last_purchased_on: string | null
+          lead_type: string | null
+          lifecycle: string | null
+          next_followup_on: string | null
+          order_id: string | null
+          parent_lead_id: string | null
+          patient_id: string | null
+          phone: string | null
+          phone_alternates: string[] | null
+          prescription_no: string | null
+          priority: number | null
+          product_family: string | null
+          product_strength: string | null
+          quantity: number | null
+          refill_cycle_days: number | null
+          refill_due_on: string | null
+          source_date: string | null
+          source_record_id: string | null
+          stale_after: string | null
+          status: string | null
+          total_value: number | null
+          updated_at: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "telesales_leads_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "telesales_customers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "telesales_leads_generation_run_id_fkey"
+            columns: ["generation_run_id"]
+            isOneToOne: false
+            referencedRelation: "telesales_generation_runs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "telesales_leads_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "telesales_leads_parent_lead_id_fkey"
+            columns: ["parent_lead_id"]
+            isOneToOne: false
+            referencedRelation: "telesales_lead_lifecycle"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "telesales_leads_parent_lead_id_fkey"
+            columns: ["parent_lead_id"]
+            isOneToOne: false
+            referencedRelation: "telesales_leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "telesales_leads_source_record_id_fkey"
+            columns: ["source_record_id"]
+            isOneToOne: false
+            referencedRelation: "telesales_source_records"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Functions: {
@@ -1812,6 +2908,7 @@ export type Database = {
           _status?: string
           _team?: string
           _to: string
+          _verification?: string
         }
         Returns: Json
       }
@@ -1959,7 +3056,7 @@ export type Database = {
         Args: { _password: string; _user_id: string }
         Returns: string
       }
-      shams_sync_due: { Args: { task?: string }; Returns: number }
+      shams_sync_tick: { Args: never; Returns: number }
       st_3dclosestpoint: {
         Args: { geom1: unknown; geom2: unknown }
         Returns: unknown
@@ -2541,6 +3638,112 @@ export type Database = {
         Args: { geom: unknown; move: number; wrap: number }
         Returns: unknown
       }
+      telesales_agent_workload: {
+        Args: { _day?: string }
+        Returns: {
+          agent_id: string
+          agent_name: string
+          contacted_today: number
+          converted_today: number
+          followups_due: number
+          followups_overdue: number
+          open_leads: number
+        }[]
+      }
+      telesales_archive_impact: {
+        Args: { _import_id: string }
+        Returns: {
+          customers_affected: number
+          followups: number
+          leads: number
+          leads_retained: number
+          leads_with_activity: number
+          source_records: number
+        }[]
+      }
+      telesales_archive_import: {
+        Args: {
+          _actor: string
+          _at?: string
+          _import_id: string
+          _reason: string
+        }
+        Returns: {
+          followups: number
+          leads: number
+          source_records: number
+        }[]
+      }
+      telesales_contact_history: {
+        Args: { _limit?: number; _phone: string }
+        Returns: {
+          activity_id: string
+          agent_id: string
+          agent_name: string
+          item_name: string
+          lead_id: string
+          lead_type: string
+          note: string
+          occurred_at: string
+          outcome: string
+        }[]
+      }
+      telesales_delete_impact: {
+        Args: { _import_id: string }
+        Returns: {
+          followups: number
+          leads_deleted: number
+          leads_kept: number
+          runs: number
+          source_records: number
+        }[]
+      }
+      telesales_delete_import: {
+        Args: { _import_id: string }
+        Returns: {
+          leads_deleted: number
+          leads_kept: number
+          source_records: number
+        }[]
+      }
+      telesales_generation_tick: { Args: never; Returns: number }
+      telesales_import_summary: {
+        Args: { _limit?: number }
+        Returns: {
+          actor_role: string
+          archive_reason: string
+          archived_at: string
+          archived_leads: number
+          file_name: string
+          id: string
+          imported_at: string
+          imported_by: string
+          importer_name: string
+          live_leads: number
+          live_source_records: number
+          rows_duplicate: number
+          rows_rejected: number
+          rows_stored: number
+          rows_total: number
+          sheet_name: string
+          source_type: string
+          status: string
+          worked_leads: number
+        }[]
+      }
+      telesales_management_summary: {
+        Args: { _day?: string }
+        Returns: {
+          metric: string
+          value: number
+        }[]
+      }
+      telesales_restore_import: {
+        Args: { _import_id: string }
+        Returns: {
+          leads: number
+        }[]
+      }
       unlockrows: { Args: { "": string }; Returns: number }
       updategeometrysrid: {
         Args: {
@@ -2585,12 +3788,12 @@ export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -2614,11 +3817,11 @@ export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -2639,11 +3842,11 @@ export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -2664,11 +3867,11 @@ export type Enums<
   DefaultSchemaEnumNameOrOptions extends
     | keyof DefaultSchema["Enums"]
     | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -2681,11 +3884,11 @@ export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
     | keyof DefaultSchema["CompositeTypes"]
     | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never = never,
+    : never) = never,
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
