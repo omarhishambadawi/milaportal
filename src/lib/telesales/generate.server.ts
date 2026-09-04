@@ -648,6 +648,26 @@ export async function runGeneration(
       result = generateWasfatyLeads(anchorDate, records, settings, phones);
       result = { ...result, window };
     } else {
+      /*
+       * Retention cycles cannot be scoped, and say so rather than pretending.
+       *
+       * A cycle is raised from a *converted lead's* due follow-up, not from an
+       * import's source rows -- cycle 2 has no source record at all. So there is
+       * nothing here for `import_id`, a branch or a phone filter to narrow, and
+       * the reads below deliberately take none.
+       *
+       * Refused rather than ignored. Accepting a filter and not applying it
+       * would record a run stamped with a scope it never honoured, which is
+       * worse than an error: the run history is what "why did this create 400
+       * leads" is answered from. Seeding a retention *import* is
+       * `runRetentionBacklog`, which is import-scoped and is what the review
+       * screen calls.
+       */
+      if (input.filters && Object.keys(input.filters).length > 0) {
+        throw new Error(
+          "Retention cycles are raised from due follow-ups, not from an import, so they cannot be filtered. Seed the retention backlog from the import instead.",
+        );
+      }
       const catalog = await loadCatalog(supabase);
       const window = (await import("./dates")).retentionWindow(anchorDate, {
         graceDays: settings.retentionOverdueGraceDays,
@@ -721,6 +741,17 @@ export async function runRetentionBacklog(
         .from("telesales_source_records")
         .select(SOURCE_COLUMNS)
         .eq("import_id", input.importId)
+        /*
+         * Live rows only, matching `fetchWindow`.
+         *
+         * Archiving an import takes its rows and its leads out of the desk's
+         * view; re-seeding from them would read rows that are no longer
+         * supposed to exist. The unique index would refuse the resulting
+         * duplicates today, so this is a latent hazard rather than a live bug --
+         * but it is the same omission that was fixed in the windowed read, and
+         * leaving one of the two uncorrected is how it comes back.
+         */
+        .is("archived_at", null)
         .order("row_number", { ascending: true })
         .range(page * READ_PAGE, page * READ_PAGE + READ_PAGE - 1);
       if (error) throw new Error(error.message);

@@ -138,6 +138,8 @@ function ProductRelationsPage() {
           fromItemCode: source,
           toItemCode: target,
           note: note.trim() || null,
+          // One summary at the end, not one message per pair.
+          silent: true,
         });
         const outcome = (res as { plan?: string }).plan;
         if (outcome === "reactivated") reactivated++;
@@ -147,6 +149,8 @@ function ProductRelationsPage() {
         failed++;
       }
     }
+    // Refetch once, now that every write is done.
+    mutations.sweep();
     toast.success(
       [
         created ? `${created} added` : null,

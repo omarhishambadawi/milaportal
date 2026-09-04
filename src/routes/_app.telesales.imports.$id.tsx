@@ -31,7 +31,11 @@ import {
   type DiagnosisReason,
 } from "@/lib/telesales/diagnostics";
 import { SOURCE_TYPE_LABELS } from "@/lib/telesales/types";
-import { telesalesDiagnoseImport, telesalesGenerate } from "@/lib/telesales.functions";
+import {
+  telesalesDiagnoseImport,
+  telesalesGenerate,
+  telesalesSeedRetentionBacklog,
+} from "@/lib/telesales.functions";
 
 export const Route = createFileRoute("/_app/telesales/imports/$id")({
   head: () => ({ meta: [{ title: "Import review — MilaServ Portal" }] }),
@@ -180,10 +184,27 @@ function ImportReviewPage() {
     if (!sourceType || generating) return;
     setGenerating(true);
     try {
-      const res = await telesalesGenerate({
-        data: { leadType: sourceType, anchorDate, filters },
-      });
-      const run = res.runs[0];
+      /*
+       * Retention is a different operation, and the screen was calling the
+       * wrong one.
+       *
+       * The report above judges this import's rows by the *backlog* rules --
+       * `judgeRetentionBacklogRecord`, no date window -- because that is what a
+       * retention import produces. `telesalesGenerate` raises retention
+       * *cycles* instead, from due follow-ups on converted leads, which are not
+       * scoped to any import and ignored the filters entirely. So the button
+       * generated something the report did not describe and the scope was a
+       * fiction.
+       *
+       * `runRetentionBacklog` is the import-scoped operation, it is what the
+       * import screen already runs on upload, and it is idempotent through the
+       * same unique index -- so pressing this again is safe.
+       */
+      const res =
+        sourceType === "retention"
+          ? await telesalesSeedRetentionBacklog({ data: { importId: id } })
+          : await telesalesGenerate({ data: { leadType: sourceType, anchorDate, filters } });
+      const run = "runs" in res ? res.runs[0] : res.summary;
       if (!run) {
         toast.error("Generation returned no run.");
         return;
@@ -407,47 +428,61 @@ function ImportReviewPage() {
               refused.
             </p>
 
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs" htmlFor="f-branch">
-                  Branches
-                </Label>
-                <Input
-                  id="f-branch"
-                  className="h-9 w-[180px]"
-                  placeholder="P0001, P0503"
-                  value={branchFilter}
-                  onChange={(e) => setBranchFilter(e.target.value)}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs" htmlFor="f-city">
-                  Cities
-                </Label>
-                <Input
-                  id="f-city"
-                  className="h-9 w-[180px]"
-                  placeholder="Riyadh, Jeddah"
-                  value={cityFilter}
-                  onChange={(e) => setCityFilter(e.target.value)}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs">Phone</Label>
-                <div className="flex gap-1">
-                  {(["any", "with", "without"] as const).map((v) => (
-                    <Button
-                      key={v}
-                      size="sm"
-                      variant={phoneFilter === v ? "default" : "outline"}
-                      onClick={() => setPhoneFilter(v)}
-                    >
-                      {v === "any" ? "Any" : v === "with" ? "Has one" : "None"}
-                    </Button>
-                  ))}
+            {sourceType === "retention" ? (
+              /*
+               * No filters for retention, because there is nothing for them to
+               * narrow: the backlog is every row of this import, taken as it
+               * stands. Offering boxes that do nothing is worse than offering
+               * none.
+               */
+              <p className="text-sm text-muted-foreground">
+                The retention backlog is seeded from every eligible row in this import — there is no
+                date window and nothing to filter. Running it again adds only rows that are not
+                already leads.
+              </p>
+            ) : (
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs" htmlFor="f-branch">
+                    Branches
+                  </Label>
+                  <Input
+                    id="f-branch"
+                    className="h-9 w-[180px]"
+                    placeholder="P0001, P0503"
+                    value={branchFilter}
+                    onChange={(e) => setBranchFilter(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs" htmlFor="f-city">
+                    Cities
+                  </Label>
+                  <Input
+                    id="f-city"
+                    className="h-9 w-[180px]"
+                    placeholder="Riyadh, Jeddah"
+                    value={cityFilter}
+                    onChange={(e) => setCityFilter(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Phone</Label>
+                  <div className="flex gap-1">
+                    {(["any", "with", "without"] as const).map((v) => (
+                      <Button
+                        key={v}
+                        size="sm"
+                        variant={phoneFilter === v ? "default" : "outline"}
+                        onClick={() => setPhoneFilter(v)}
+                      >
+                        {v === "any" ? "Any" : v === "with" ? "Has one" : "None"}
+                      </Button>
+                    ))}
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
             <div className="flex flex-wrap items-center gap-3">
               <Button disabled={generating || !sourceType} onClick={() => void generate()}>
@@ -456,7 +491,9 @@ function ImportReviewPage() {
                 ) : (
                   <Play className="mr-2 h-4 w-4" />
                 )}
-                Generate{filtered ? " (filtered)" : ""}
+                {sourceType === "retention"
+                  ? "Seed the retention backlog"
+                  : `Generate${filtered ? " (filtered)" : ""}`}
               </Button>
               {/* A filter can only ever shrink the set. Saying so stops it being
                   mistaken for a way to reach rows the window excludes. */}

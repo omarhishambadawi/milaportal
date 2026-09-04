@@ -99,9 +99,27 @@ export function useRelationMutations() {
     toast.error(err instanceof Error ? err.message : "That change could not be saved.");
 
   const save = useMutation({
-    mutationFn: (input: { fromItemCode: string; toItemCode: string; note?: string | null }) =>
-      telesalesSaveProductRelation({ data: input }),
-    onSuccess: (r) => {
+    mutationFn: (input: {
+      fromItemCode: string;
+      toItemCode: string;
+      note?: string | null;
+      /**
+       * Report nothing and refetch nothing; the caller will.
+       *
+       * Applying one companion to six strengths is six calls, and each one
+       * announcing itself produced six toasts and six cache sweeps before the
+       * caller's own summary — so the supervisor read seven messages about one
+       * action, and the list refetched underneath them while the writes were
+       * still going. The bulk path says it once, at the end.
+       */
+      silent?: boolean;
+    }) => {
+      // Client-side only: the server function takes no such field.
+      const { silent: _silent, ...payload } = input;
+      return telesalesSaveProductRelation({ data: payload });
+    },
+    onSuccess: (r, vars) => {
+      if (vars.silent) return;
       sweep();
       // Says which of the four things actually happened -- created, switched
       // back on, edited, or nothing at all.
@@ -109,7 +127,10 @@ export function useRelationMutations() {
       if (plan === "unchanged") toast.info(SAVE_PLAN_LABELS[plan]);
       else toast.success(SAVE_PLAN_LABELS[plan]);
     },
-    onError: fail,
+    onError: (err, vars) => {
+      if (vars.silent) return;
+      fail(err);
+    },
   });
 
   const setActive = useMutation({
@@ -122,5 +143,7 @@ export function useRelationMutations() {
     onError: fail,
   });
 
-  return { save, setActive, busy: save.isPending || setActive.isPending };
+  // `sweep` is exposed so a bulk caller can refetch once when it is done
+  // rather than after every write.
+  return { save, setActive, sweep, busy: save.isPending || setActive.isPending };
 }

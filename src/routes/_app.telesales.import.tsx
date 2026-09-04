@@ -159,7 +159,13 @@ function TelesalesImportPage() {
     if (file) await readFile(file, sheetName || undefined, next);
   }
 
-  async function readFile(f: File, sheet?: string, mapping: ColumnOverrides = overrides) {
+  async function readFile(
+    f: File,
+    sheet?: string,
+    mapping: ColumnOverrides = overrides,
+    /** Force the type, when the operator has just overridden it. */
+    forcedType?: string,
+  ) {
     setParsing(true);
     setStage("reading");
     setStageDetail(`${f.name} · ${formatBytes(f.size)}`);
@@ -176,13 +182,14 @@ function TelesalesImportPage() {
       const parsed = await parseWorkbookFile(f, {
         ...(sheet ? { sheetName: sheet } : {}),
         ...(Object.keys(mapping).length > 0 ? { columnOverrides: mapping } : {}),
+        ...(forcedType ? { sourceType: forcedType as "cash" | "retention" | "wasfaty" } : {}),
       });
       setPreview(parsed);
       setFile(f);
       // The detected type only leads when nothing has been mapped by hand:
       // re-parsing after a mapping change must not undo the operator's choice
       // of source type.
-      if (Object.keys(mapping).length === 0) setSourceType(parsed.sourceType);
+      if (!forcedType && Object.keys(mapping).length === 0) setSourceType(parsed.sourceType);
       setSheetName(parsed.sheetName);
       setStage("idle");
       setStageDetail(null);
@@ -509,7 +516,28 @@ function TelesalesImportPage() {
                 </div>
                 <div className="space-y-1.5">
                   <Label>Detected as</Label>
-                  <Select value={sourceType} onValueChange={setSourceType}>
+                  {/*
+                   * Overriding the type re-reads the file.
+                   *
+                   * It used to set the label and nothing else, so the rows kept
+                   * whatever rules the *detected* type had parsed them under —
+                   * and for Wasfaty that is a different date column entirely
+                   * (`primaryDateField` takes the next-dispense or fill date,
+                   * where Cash and Retention take the invoice date). A file
+                   * detected as Cash and switched to Wasfaty was imported with
+                   * invoice dates standing in for dispense dates, which the
+                   * today-and-tomorrow window then judged.
+                   *
+                   * The mapping is kept: it is keyed by field, and a field the
+                   * new type does not use is simply not read.
+                   */}
+                  <Select
+                    value={sourceType}
+                    onValueChange={(v) => {
+                      setSourceType(v);
+                      if (file) void readFile(file, sheetName || undefined, overrides, v);
+                    }}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
