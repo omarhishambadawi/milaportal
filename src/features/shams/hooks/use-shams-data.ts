@@ -16,14 +16,15 @@
  *   3. An invoice lookup runs only once submitted, never while typing.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
 import { queryKeys } from "@/lib/query-keys";
-import { mergeInvoiceBranchMatches } from "@/lib/shams/search";
+import { branchSearchText, mergeInvoiceBranchMatches } from "@/lib/shams/search";
 import { stripLeadingZeros } from "@/lib/shams/normalize";
 import { cityEnglish } from "@/features/branches/normalize";
+import { extractDistrict } from "@/features/branches/district";
 import {
   shamsFindInvoiceBranches,
   shamsGetCustomerHistory,
@@ -148,18 +149,44 @@ export function useDebounced(value: string, delayMs = DEBOUNCE_MS): string {
 
 export interface BranchLabel {
   branchNo: string;
+  /** As stored, in Arabic — `جدة`. This is what Branch Stock displays. */
   city: string;
+  /** `Jeddah`, when the alias table knows the city. Kept for search and maps. */
   cityEnglish: string | null;
+  /**
+   * The حي, in Arabic — `حي الحزم`.
+   *
+   * Derived from the same `branches` row's address by `extractDistrict`, which
+   * is the directory's own rule and returns null rather than guessing. There is
+   * no district column and this does not add one: a value an agent reads aloud
+   * to a customer looking for the shop must be the directory's answer or
+   * nothing.
+   */
+  district: string | null;
+  /**
+   * Every label above, folded once, for the branch filter.
+   *
+   * Computed here rather than per row per keystroke. ~140 rows × four fields ×
+   * ten regex passes is work with a fixed answer, and the branch directory
+   * settled this pattern already (`decorate` in `use-branch-directory`).
+   */
+  search: string;
 }
 
 /**
- * MilaServ's own branch names, keyed by `branch_no`.
+ * MilaServ's own branch directory, keyed by `branch_no`.
  *
  * The MIS returns `branchName` identical to `branchCode` on every row, so it
  * carries no display value. The portal already knows these branches — discovery
  * confirmed `branchCode` and `branches.branch_no` are the same identifier space
- * — so the stock table resolves its labels here rather than showing a code
- * twice.
+ * — so the stock table resolves its city and district here rather than showing a
+ * code twice.
+ *
+ * `address` joined `branch_no,city` on the **same** select rather than in a
+ * second query: the district is read out of the address, and asking twice for
+ * two columns of one row is the kind of duplicate this page exists to avoid.
+ * This is also the only branch source Branch Stock has — nothing here maintains
+ * a parallel list of cities or districts.
  *
  * Read straight from Supabase under RLS like every other lookup on the site,
  * and parked under `lookups` so a Shams read never invalidates it.
@@ -168,13 +195,21 @@ export function useBranchLabels() {
   return useQuery({
     queryKey: [...queryKeys.lookups.all(), "shams-branches"] as const,
     queryFn: async (): Promise<Map<string, BranchLabel>> => {
-      const { data } = await supabase.from("branches").select("branch_no,city");
-      const rows = (data ?? []) as { branch_no: string; city: string }[];
+      const { data } = await supabase.from("branches").select("branch_no,city,address");
+      const rows = (data ?? []) as { branch_no: string; city: string; address: string | null }[];
       return new Map(
-        rows.map((b) => [
-          b.branch_no,
-          { branchNo: b.branch_no, city: b.city, cityEnglish: cityEnglish(b.city) },
-        ]),
+        rows.map((b) => {
+          const label = {
+            branchNo: b.branch_no,
+            city: b.city,
+            cityEnglish: cityEnglish(b.city),
+            district: extractDistrict(b.address, b.city),
+          };
+          return [
+            b.branch_no,
+            { ...label, search: branchSearchText({ ...label, branchCode: b.branch_no }) },
+          ];
+        }),
       );
     },
     // Reference data. It changes when someone imports the branch sheet, which
@@ -271,6 +306,55 @@ export function useProductOffers(itemCode: string | null, enabled = true) {
     refetchOnWindowFocus: false,
     retry: false,
   });
+}
+
+/**
+ * Start an opened product's offer read at the moment it is picked.
+ *
+ * ## Why this exists
+ *
+ * `useProductOffers` cannot fire until the tab is re-rendered with a selection,
+ * and a selection is a **router navigation**: the click writes `?item=`, the
+ * route re-renders, `openProduct` finally agrees with the URL, and only then
+ * does the query mount. Until that whole cycle finished, the slowest thing on
+ * the page — a ~62 KB CRM `available-branches` read — had not been asked for.
+ * Called from the click handler, the request leaves while the navigation is
+ * still happening, so the two overlap instead of queueing.
+ *
+ * ## Why this is not an extra request
+ *
+ * It is the **same query key** the hook uses, so React Query treats the two as
+ * one: the observer that mounts a moment later attaches to the request already
+ * in flight, or reads what it returned. `prefetchQuery` is also a no-op while
+ * the entry is still fresh, so re-opening a product inside the 60 s window asks
+ * for nothing at all.
+ *
+ * The code is handed to `productOffers` **verbatim**, exactly as
+ * `useProductOffers` does, and only the emptiness guard trims. Normalizing it
+ * here and not there is how "one key" quietly becomes two, and two keys for one
+ * item is the duplicate this function exists to avoid.
+ *
+ * Deliberately **not** wired to hover or to keyboard highlight. Each of these is
+ * its own 62 KB upstream read, and prefetching a list as a cursor moves down it
+ * is exactly the traffic `MAX_OFFER_SCOPE_ITEMS` exists to prevent. One product,
+ * one deliberate click.
+ */
+export function usePrefetchProductOffers() {
+  const offersFn = useServerFn(shamsGetProductOffers);
+  const queryClient = useQueryClient();
+
+  return useCallback(
+    (itemCode: string | null | undefined) => {
+      if (!itemCode?.trim()) return;
+      void queryClient.prefetchQuery({
+        queryKey: queryKeys.shams.productOffers(itemCode),
+        queryFn: () => offersFn({ data: { itemCode } }),
+        staleTime: OFFERS_STALE_MS,
+        retry: false,
+      });
+    },
+    [offersFn, queryClient],
+  );
 }
 
 /* -------------------------------------------------------------------------- */

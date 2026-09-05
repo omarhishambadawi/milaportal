@@ -3695,15 +3695,36 @@ An opened product gets its scope from the same response as its per-branch
 prices (`shamsGetProductOffers` returns both), so the header badge and the price
 rows cannot disagree, and no second request is made.
 
-### Branch stock — status cards
+### Branch stock — the summary card and the register
 
-The per-branch view is a responsive card grid rather than a table. As a table,
-branch code, city, quantity and status all sat at roughly the same small muted
-weight, so nothing could be scanned and a 137-row table had nowhere to go on a
-phone. Each card now fixes one hierarchy — **branch → status → quantity →
-offer** — with the quantity as the largest element and the offer as a footer
-line only where one exists. Cards reflow rather than scroll sideways at any
-width.
+**The card answers the call.** An agent on the phone is asked four things: what
+does it cost, is there an offer, how many are there, and where. `ProductSummaryCard`
+states all four the moment a product opens — **price · applied offer · units ·
+branches with stock** — and three of them cost **no request at all**:
+
+- `retailPrice` and the name travel on the search row the agent clicked (and, for
+  a restored `?item=`, on the detail the route already loaded), so the price is
+  on screen in the same frame as the product name;
+- units and branch counts are `summariseStock` over the MIS rows the table below
+  is drawing anyway.
+
+Only the offer waits on anything, and its **coverage is usually already known**:
+the result list classified it for this exact item a moment earlier, from the same
+upstream response, so the card can say "15% OFF · all branches" before the
+per-branch read lands and refine nothing when it does. See "Fast offers" below.
+
+**Three states, never two.** `FigureState` is `loading | ready | unavailable`,
+because "not loaded yet" and "could not be asked" are different from each other
+and neither is an answer. A failed stock read renders an em dash rather than
+`summariseStock([])`, which is a truthful zero about an empty array and a
+falsehood about the chain — "0 units, 0 of 0 branches" is what an agent would
+have read out. The error panel beneath carries the reason and the Retry.
+
+**The per-branch view is a table**, not a card grid. One product against ~140
+branches is a register, read by scanning a column; a surface per branch is five
+screens of scrolling and reads like a storefront. The grid experiment is over —
+see "Branch Stock table" below for the columns and how they fold on small
+screens.
 
 ### CRM Sales History — `GET /api/v2/crm/data`
 
@@ -6846,12 +6867,36 @@ reshuffle under the agent's cursor.
 
 #### Branch Stock table
 
-Filter box over the loaded rows — code (`P0221`), bare number (`0221`), English
-city (`Jeddah`) or Arabic city (`جدة`) — filtered client-side with no request,
-through `filterBranchStock`. **The summary recomputes from the rows on screen**
-(`summariseStock` takes an array, so a filtered table and its counts cannot
-disagree); when a filter is active the first count reads "matching branches" and
-a line beneath gives the chain-wide figures, so neither can be read as the other.
+**Seven columns, `table-fixed`:** Branch (mono) · City · District · Units
+(right, tabular) · Status · Price (right, tabular) · Applied Offer.
+
+**Price and Applied Offer are separate and adjacent.** They are the pair an agent
+reads out together — "it's 512, and 435 on offer at that branch" — and folding
+the discount into the price column loses whichever half the customer actually
+asked for. A branch with an offer is priced from **its own CRM row**
+(`offer.price` beside `offer.afterOfferPrice`, so the two cannot disagree about
+what is being discounted); a branch the CRM did not price shows the product's MIS
+retail price, which is the same figure the card above states. **No price on this
+page is ever computed from a percentage** — rounding is Shams's to decide.
+
+**City is the stored Arabic name and District is the حي**, both from MilaServ's
+own branch directory. `useBranchLabels` selects `branch_no,city,address` in the
+**same** query it already made and derives the district with
+`extractDistrict` — the Branch Directory's own conservative rule, which returns
+null rather than guessing. There is no district column and no second list of
+places; a value an agent reads aloud to a customer is the directory's answer or
+an em dash. The English city name rides in the row's `title`.
+
+**Filtering is Arabic-aware.** Code (`P0221`), bare number (`0221` — and `٠٢٢١`),
+English city (`Jeddah`), Arabic city (`جدة`) and Arabic district (`حي الحمراء`),
+client-side with no request through `filterBranchStock`. Both sides go through
+the branch directory's `foldText`, so `جده` finds `جدة`, `الاندلس` finds
+`الأندلس` and `المصطفي` finds `المصطفى` — harakat, tatweel, hamza forms, ة/ه,
+ى/ي and Arabic-Indic digits all fold. One normalizer, borrowed rather than
+rewritten: two Arabic folds in one codebase is two answers to "does this match".
+Each branch's haystack is folded **once** when the directory loads
+(`branchSearchText`), not per row per keystroke, the same way
+`use-branch-directory` decorates its own rows.
 
 **`areaName` is not searched and not displayed.** It is a coarse MIS region label
 that duplicates the city for most branches and disagrees with it for others, so
@@ -6860,11 +6905,64 @@ The field stays on `ShamsBranchStock` because it is what the API returns; nothin
 in the UI reads it. `LZ Quantity` was removed earlier for the same kind of
 reason — never verified, zero in all 275 captured rows.
 
-Four columns, `table-fixed`: Branch (mono) · City · Qty (right, `text-base`
-tabular) · Status. Quantity is the number being scanned so it carries the weight;
-zero renders as a **destructive** `Out of Stock` badge and a stocked branch gets
-a quiet `In stock` mark rather than a second loud badge. Still no "low stock"
-band: the application defines no threshold.
+Quantity is the number being scanned so it carries the weight; zero renders
+destructive and a stocked branch gets a quiet `In stock` mark. Still no "low
+stock" band: the application defines no threshold. Long branch and district names
+**truncate with a `title`** rather than wrapping, so one paragraph-length address
+cannot set the row height for the other 139.
+
+**Folding on small screens.** Status drops first (`hidden lg:table-cell`), where
+the quantity's own colour still carries availability; below `md` the table is
+replaced by a three-line list per branch — code and Arabic city, then the حي,
+then status, price and offer. The page never scrolls sideways and there is no
+`overflow-x` anywhere in the branch view.
+
+**The chain-wide figures live on the card, not over the table.** What is
+genuinely about the table is how much of it a filter is hiding, so a filter shows
+one line — "12 of 137 branches · 9 in stock · 240 units matching …" — rather than
+a second four-figure strip repeating the first. `summariseStock` still takes an
+array, so a filtered count and the rows under it cannot disagree.
+
+#### Fast offers
+
+**Root cause of the wait.** Opening a product cost a *second, serialized* browser
+round trip before anything about the offer could be drawn. `shamsGetProductOffers`
+could not begin until the router had committed `?item=`, the tab had re-rendered
+and the query had mounted — and its answer, the ~62 KB CRM `available-branches`
+read, was the only thing on the page that could say whether the product was
+discounted. Everything an agent needed *first* was already in the browser and was
+being thrown away and re-asked for: the price on the search row they clicked, and
+the offer's coverage in the result list's own `shamsGetOfferScopes` response.
+
+Two changes, no new architecture and no new cache:
+
+1. **The card renders from data already in hand.** Price from `ShamsProduct`;
+   coverage from `offersQuery.data.scope` when it has landed and otherwise from
+   `scopes.byItemCode.get(selected.itemCode)` — the same `classifyOfferScope`
+   over the same upstream response, classified server-side moments earlier. The
+   authoritative source wins as soon as it arrives, so the card and the per-branch
+   rows below it cannot disagree.
+2. **The CRM read starts on the click** (`usePrefetchProductOffers`), so it
+   overlaps the router navigation instead of queueing behind it. It is **the same
+   query key** the hook uses, so React Query treats the two as one observer on one
+   request — and `prefetchQuery` is a no-op while the 60 s entry is still fresh.
+   Deliberately **not** wired to hover or keyboard highlight: each is its own
+   62 KB upstream read, and prefetching a list as a cursor runs down it is exactly
+   the traffic `MAX_OFFER_SCOPE_ITEMS` exists to prevent.
+
+**No duplicate upstream request was found to remove, and none was added.** The
+server side already fans out under one browser request, single-flights concurrent
+reads per item code and shares one 60 s cache between coverage and per-branch
+prices, so a result set of twelve or fewer has the opened product's offers warm
+before the agent clicks. What was removed is the *round trip on the critical
+path*, not a request. `src/features/shams/__tests__/branch-stock.test.ts` pins
+this: one `useProductOffers` call in the tab, one `useBranchLabels`, one
+`from("branches")` select, and the prefetch keyed identically to the hook.
+
+**Nothing polls.** No `refetchInterval`, no `setInterval`, `refetchOnWindowFocus`
+off. Live stock is still Shams MIS `product/stock` on its 60 s server cache, and
+Shams CRM is still not a stock source — its `available_qty` is read server-side
+as the denominator for offer scope, consumed there and dropped.
 
 #### Invoice lookup — number first, branch discovered
 
@@ -6966,6 +7064,12 @@ Decisions worth keeping:
   read on the page and it happens after a selection, never for a result set.
 - **Detail and stock are one query.** The server function already overlaps them,
   so "View branch stock" reads a warm cache entry.
+- **The summary card costs three of its four figures nothing.** Price comes off
+  the row the agent clicked; units and branch counts come off the stock rows the
+  table is already drawing. Only the offer waits, and its coverage is usually
+  already classified — see "Fast offers".
+- **The offer read starts on the click, not after the navigation**, on the same
+  query key, so it overlaps the route change without becoming a second request.
 - **No date filter on invoices.** The API's date parameters are NOT VERIFIED —
   the MIS frontend only ever sends them empty.
 - **Branch is required for an invoice lookup.** A document number is unique only
@@ -6990,7 +7094,9 @@ Decisions worth keeping:
 Tables render twice — a real `<table>` from `md` up, the same rows as cards
 below — so a phone never scrolls sideways. Branch labels come from
 `branches.branch_no` via the portal's own directory, because the MIS's
-`branchName` only ever duplicates its `branchCode`.
+`branchName` only ever duplicates its `branchCode`; that directory now carries
+the Arabic city, the English name and the حي, all off one `branch_no,city,address`
+select (`BranchLabel`).
 
 ---
 

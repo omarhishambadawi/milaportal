@@ -8,9 +8,13 @@
  *      full Shams CRM catalog, which is the only source that holds every
  *      product; neither backend offers a wildcard syntax of its own.
  *   2. **Branch row filtering** — narrowing an already-loaded stock result to
- *      one branch or city, run client-side because the rows are already there.
+ *      one branch, city or district, run client-side because the rows are
+ *      already there. Arabic is folded through the branch directory's own
+ *      `foldText`, so `جده` finds `جدة` and the portal has one answer to what
+ *      counts as the same word rather than two.
  */
 
+import { foldText } from "@/features/branches/normalize";
 import type { InvoiceBranchMatch, ShamsBranchStock, ShamsProduct } from "./types";
 
 /* -------------------------------------------------------------------------- */
@@ -292,52 +296,85 @@ export function mergeInvoiceBranchMatches(
  * A branch row and whatever the portal knows it is called.
  *
  * The MIS supplies `branchCode` only — its `branchName` merely repeats the code
- * — so the human-readable city comes from MilaServ's own directory and is
- * passed in rather than looked up here.
+ * — so the human-readable labels come from MilaServ's own branch directory and
+ * are passed in rather than looked up here. That directory is the single source:
+ * the Arabic city is the stored `branches.city`, and the district is the حي
+ * `extractDistrict` reads out of the same row's address. Nothing here maintains
+ * a second list of places.
  */
 export interface BranchRowText {
   branchCode: string;
+  /** As stored, in Arabic — `جدة`. */
   city?: string | null;
   cityEnglish?: string | null;
+  /** The حي, in Arabic — `حي الحزم`. Null when the address does not state one. */
+  district?: string | null;
+  /**
+   * A precomputed `branchSearchText`, when the caller already has one.
+   *
+   * Folding four fields for ~140 rows on every keystroke is work with a known
+   * answer, so the directory folds each branch once when it loads and hands the
+   * result down. Absent, this is built on demand — the two paths call the same
+   * function, so a precomputed haystack and a derived one cannot disagree.
+   */
+  search?: string | null;
+}
+
+/**
+ * Everything a branch is searchable by, folded once.
+ *
+ * `foldText` is the portal's Arabic normalizer, borrowed from the branch
+ * directory rather than re-written here — it is what makes `جده` find `جدة`,
+ * `الحزم` find `الحزم` written with a hamza, and `٠٢٢١` find `0221`. Reusing it
+ * is the point: two Arabic folds in one codebase is two answers to "does this
+ * match", and the branch directory's is the one agents are already used to.
+ */
+export function branchSearchText(row: BranchRowText): string {
+  return foldText(
+    [row.branchCode, row.city ?? "", row.cityEnglish ?? "", row.district ?? ""].join(" "),
+  );
 }
 
 /**
  * Does this branch row match what the agent typed?
  *
- * A plain case-insensitive substring test across the labels an agent actually
- * knows a branch by: code (`P0221`), the bare number (`0221`, which is a
- * substring of the code), the English city (`Jeddah`) and the Arabic city
- * (`جدة`).
+ * A substring test across the labels an agent actually knows a branch by: code
+ * (`P0221`), the bare number (`0221`, which is a substring of the code), the
+ * English city (`Jeddah`), the Arabic city (`جدة`) and the Arabic district
+ * (`حي الحزم`).
+ *
+ * Both sides go through `foldText`, which is what makes the Arabic half work in
+ * practice. A customer says `جده` and the sheet stores `جدة`; an agent types
+ * `الاندلس` where the address writes `الأندلس`. Those are the same word, and
+ * before this they were two different queries. Case-insensitivity and whitespace
+ * collapsing are unchanged — `foldText` does both — so every existing Latin
+ * match still holds.
  *
  * The MIS `areaName` is deliberately **not** searched. It is a coarse region
  * label that duplicates the city for most branches and contradicts it for some,
  * so including it made queries match rows whose visible text had nothing to do
- * with what was typed. It is no longer displayed either; the field stays on the
- * model because it is what the API returns.
+ * with what was typed. It is not displayed either; the field stays on the model
+ * because it is what the API returns.
  */
 export function matchesBranchQuery(row: BranchRowText, query: string): boolean {
-  const needle = normalizeForSearch(query);
+  const needle = foldText(query);
   if (needle === "") return true;
-  const haystack = normalizeForSearch(
-    [row.branchCode, row.city ?? "", row.cityEnglish ?? ""].join(" "),
-  );
-  return haystack.includes(needle);
+  return (row.search ?? branchSearchText(row)).includes(needle);
 }
+
+/** What the branch directory supplies for one code. */
+export type BranchRowLabels = Omit<BranchRowText, "branchCode">;
 
 /** A stock row plus its resolved labels, filtered by one query. */
 export function filterBranchStock<T extends ShamsBranchStock>(
   rows: T[],
   query: string,
-  labelsFor: (code: string) => { city?: string | null; cityEnglish?: string | null } | undefined,
+  labelsFor: (code: string) => BranchRowLabels | undefined,
 ): T[] {
-  if (normalizeForSearch(query) === "") return rows;
-  return rows.filter((row) => {
-    const label = labelsFor(row.branchCode);
-    return matchesBranchQuery(
-      { branchCode: row.branchCode, city: label?.city, cityEnglish: label?.cityEnglish },
-      query,
-    );
-  });
+  if (foldText(query) === "") return rows;
+  return rows.filter((row) =>
+    matchesBranchQuery({ ...labelsFor(row.branchCode), branchCode: row.branchCode }, query),
+  );
 }
 
 /**

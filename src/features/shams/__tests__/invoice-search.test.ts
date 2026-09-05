@@ -203,19 +203,32 @@ describe("CRM offer pricing sits beside MIS stock, never on top of it", () => {
   });
 
   it("shows an offer only on the branch that actually has one", () => {
-    // The rule has outlived two layouts — a conditional column, then a card
-    // footer, now a table cell. A branch with no promotion renders no offer at
-    // all, and the cell is left blank rather than filled with a dash that would
-    // read as data.
-    expect(stockTab).toContain("{offer ? <OfferPrice offer={offer} /> : null}");
-    expect(stockTab).toContain("{offer && <OfferPrice offer={offer} />}");
+    // The rule has outlived three layouts — a conditional column, a card
+    // footer, and now `OfferCell`, which both the table and the mobile list
+    // render. A promotional price appears if and only if the CRM named that
+    // branch code.
+    expect(stockTab).toContain("if (offer) return <OfferPrice offer={offer} />;");
+    expect(stockTab).toContain("<OfferCell offer={offer} state={offerState} />");
+  });
+
+  it("tells a branch with no offer apart from a branch nobody asked about", () => {
+    /*
+     * The distinction the blank cell used to lose. A CRM that answered and
+     * found no promotion is a real answer and gets a real em dash; a CRM that
+     * could not be asked renders nothing and the table says why once, above,
+     * rather than shrugging on 140 rows. Neither is ever the other.
+     */
+    expect(stockTab).toContain('if (state === "unavailable") return null;');
+    expect(stockTab).toContain('return <span className="text-muted-foreground">—</span>;');
+    expect(stockTab).toContain("Offer pricing is unavailable");
   });
 
   it("keeps the branch view a table rather than a surface per branch", () => {
     // ~140 branches is a register, not a gallery: one table with fixed columns,
     // and a dense list below `md` instead of a sideways-scrolling table.
     expect(stockTab).toContain("const BranchStockTable = memo(");
-    expect(stockTab).toContain("<BranchStockTable rows={visible}");
+    expect(stockTab).toContain("<BranchStockTable");
+    expect(stockTab).toContain("rows={visible}");
     expect(stockTab).not.toContain("BranchStockCards");
     expect(stockTab).toContain("md:hidden");
     // No `overflow-x` anywhere in the branch view — the page must never scroll

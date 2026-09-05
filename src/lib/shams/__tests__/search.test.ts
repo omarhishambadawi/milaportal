@@ -9,6 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  branchSearchText,
   filterBranchStock,
   isWildcardQuery,
   looksLikeItemCode,
@@ -264,6 +265,7 @@ const ROW = {
   branchCode: "P0221",
   city: "جدة",
   cityEnglish: "Jeddah",
+  district: "حي الحمراء",
 };
 
 describe("matchesBranchQuery", () => {
@@ -313,6 +315,75 @@ describe("matchesBranchQuery", () => {
   it("treats an empty query as no filter", () => {
     expect(matchesBranchQuery(ROW, "   ")).toBe(true);
   });
+
+  it("matches the Arabic district", () => {
+    expect(matchesBranchQuery(ROW, "الحمراء")).toBe(true);
+    expect(matchesBranchQuery(ROW, "حي الحمراء")).toBe(true);
+  });
+
+  it("does not match a district that belongs to another branch", () => {
+    expect(matchesBranchQuery(ROW, "الحزم")).toBe(false);
+  });
+
+  /*
+   * The Arabic half of the filter, and the reason it goes through the branch
+   * directory's `foldText` rather than a plain lowercase. Every pair below is
+   * one word written two ways: a customer says it one way, the master sheet
+   * stores it the other, and before this they were two different queries.
+   */
+  describe("folds Arabic the way the branch directory does", () => {
+    it("ignores ة / ه", () => {
+      expect(matchesBranchQuery(ROW, "جده")).toBe(true);
+    });
+
+    it("ignores hamza forms on the alef", () => {
+      expect(matchesBranchQuery({ ...ROW, district: "حي الأندلس" }, "الاندلس")).toBe(true);
+      expect(matchesBranchQuery({ ...ROW, district: "حي الاندلس" }, "الأندلس")).toBe(true);
+    });
+
+    it("ignores ى / ي", () => {
+      expect(matchesBranchQuery({ ...ROW, district: "حي المصطفى" }, "المصطفي")).toBe(true);
+    });
+
+    it("ignores harakat and tatweel", () => {
+      expect(matchesBranchQuery({ ...ROW, city: "جـدة" }, "جدة")).toBe(true);
+      expect(matchesBranchQuery({ ...ROW, city: "جُدة" }, "جدة")).toBe(true);
+    });
+
+    it("reads Arabic-Indic digits as digits", () => {
+      expect(matchesBranchQuery(ROW, "٠٢٢١")).toBe(true);
+    });
+  });
+
+  /*
+   * Folding widens what counts as the same word; it must not widen what counts
+   * as a match. Every pre-existing rule above still holds, and these pin the
+   * two that folding could plausibly have broken.
+   */
+  it("still refuses a query that names nothing on the row", () => {
+    expect(matchesBranchQuery(ROW, "Riyadh")).toBe(false);
+    expect(matchesBranchQuery(ROW, "الرياض")).toBe(false);
+  });
+
+  it("builds the same haystack whether it is precomputed or derived", () => {
+    // The directory folds each branch once and passes `search` down; a caller
+    // without one falls back to building it. Two paths, one function, so a
+    // precomputed row and a bare row cannot disagree about a match.
+    const precomputed = { ...ROW, search: branchSearchText(ROW) };
+    for (const q of ["P0221", "جده", "الحمراء", "Jeddah", "٠٢٢١", "Riyadh"]) {
+      expect(matchesBranchQuery(precomputed, q)).toBe(matchesBranchQuery(ROW, q));
+    }
+  });
+});
+
+describe("branchSearchText", () => {
+  it("covers the code, both city spellings and the district", () => {
+    expect(branchSearchText(ROW)).toBe("p0221 جده jeddah حي الحمراء");
+  });
+
+  it("omits the labels the directory does not know", () => {
+    expect(branchSearchText({ branchCode: "P0999" })).toBe("p0999");
+  });
 });
 
 const stockRow = (branchCode: string, areaName: string, quantity: number): ShamsBranchStock => ({
@@ -330,11 +401,11 @@ const STOCK = [
   stockRow("P0304", "QASIM", 7),
 ];
 
-const LABELS: Record<string, { city: string; cityEnglish: string }> = {
-  P0001: { city: "الرياض", cityEnglish: "Riyadh" },
-  P0221: { city: "جدة", cityEnglish: "Jeddah" },
-  P0222: { city: "جدة", cityEnglish: "Jeddah" },
-  P0304: { city: "بريدة", cityEnglish: "Buraydah" },
+const LABELS: Record<string, { city: string; cityEnglish: string; district: string | null }> = {
+  P0001: { city: "الرياض", cityEnglish: "Riyadh", district: "حي الحزم" },
+  P0221: { city: "جدة", cityEnglish: "Jeddah", district: "حي الحمراء" },
+  P0222: { city: "جدة", cityEnglish: "Jeddah", district: "حي اليرموك" },
+  P0304: { city: "بريدة", cityEnglish: "Buraydah", district: null },
 };
 
 const labelsFor = (code: string) => LABELS[code];
@@ -360,6 +431,41 @@ describe("filterBranchStock", () => {
 
   it("returns every row when the query is empty", () => {
     expect(filterBranchStock(STOCK, "", labelsFor)).toHaveLength(4);
+  });
+
+  it("narrows the rows to one city named in Arabic", () => {
+    expect(filterBranchStock(STOCK, "جدة", labelsFor).map((r) => r.branchCode)).toEqual([
+      "P0221",
+      "P0222",
+    ]);
+    // The same city, spelled the way a customer says it.
+    expect(filterBranchStock(STOCK, "جده", labelsFor).map((r) => r.branchCode)).toEqual([
+      "P0221",
+      "P0222",
+    ]);
+  });
+
+  it("narrows the rows to one district", () => {
+    expect(filterBranchStock(STOCK, "اليرموك", labelsFor).map((r) => r.branchCode)).toEqual([
+      "P0222",
+    ]);
+  });
+
+  it("keeps a branch whose district the directory could not read", () => {
+    // P0304 has no district. It must still be findable by everything else it
+    // has, because a missing حي is a gap in the address, not a missing branch.
+    expect(filterBranchStock(STOCK, "بريدة", labelsFor).map((r) => r.branchCode)).toEqual([
+      "P0304",
+    ]);
+  });
+
+  it("keeps a branch the directory does not know at all", () => {
+    // Only when nothing is typed: an unknown code has no city or district to
+    // match, so a filter naming one correctly excludes it.
+    expect(filterBranchStock(STOCK, "", () => undefined)).toHaveLength(4);
+    expect(filterBranchStock(STOCK, "P0304", () => undefined).map((r) => r.branchCode)).toEqual([
+      "P0304",
+    ]);
   });
 });
 
