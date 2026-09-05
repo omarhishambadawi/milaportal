@@ -72,6 +72,7 @@ import {
   Loader2,
   MapPin,
   PackageCheck,
+  RefreshCw,
   Send,
   Truck,
 } from "lucide-react";
@@ -100,8 +101,10 @@ import {
   alshrouqCancelScheduledDispatch,
   alshrouqDispatchContext,
   alshrouqDispatchOrder,
+  alshrouqOrderStatus,
   alshrouqResolveDispatch,
 } from "@/lib/shams.functions";
+import type { AlShrouqOrderStatus } from "@/lib/shams-crm/alshrouq-status.server";
 import {
   ALSHROUQ_RESOLUTION_OUTCOMES,
   RESOLUTION_NOTE_MAX,
@@ -385,6 +388,57 @@ export function AlShrouqDispatchSection({
       toast.error("The delivery could not be cancelled. Nothing was changed.");
     },
     onSettled: () => setConfirmingCancel(false),
+  });
+
+  /**
+   * "Where is this delivery?" — asked on demand, never on a timer.
+   *
+   * One GET against the CRM's AlShrouq record, behind a button an agent presses
+   * while a customer is on the phone. There is deliberately no `refetchInterval`
+   * and no call on mount: the answer changes when a driver moves, which is not
+   * something a page load can predict, and polling it would spend a request a
+   * second to re-render a badge nobody is watching. The same reasoning that
+   * keeps `useOrderAlShrouqDispatch` un-polled.
+   *
+   * The result is held here rather than written to the dispatch row. Two of the
+   * fields are a third party's name, phone and position — the identities
+   * `sanitizeResponseBody` already refuses to let into a log — and there is no
+   * column for any of them. So it is shown to the agent who asked and forgotten
+   * on unmount.
+   */
+  const [liveStatus, setLiveStatus] = useState<AlShrouqOrderStatus | null>(null);
+  const statusFn = useServerFn(alshrouqOrderStatus);
+  const checkStatus = useMutation({
+    mutationFn: () => statusFn({ data: { dispatchId: current!.id } }),
+    onSuccess: (r) => {
+      if (r.kind === "ok") {
+        setLiveStatus(r.status);
+        toast.success("Delivery status updated from AlShrouq.");
+        return;
+      }
+      // Every other outcome leaves whatever was last shown in place: a failed
+      // check is not evidence that the previous answer became wrong.
+      if (r.kind === "not_found") {
+        toast.error("AlShrouq has no record of this delivery.");
+      } else if (r.kind === "no_reference") {
+        toast.info("This delivery has no AlShrouq reference yet, so there is nothing to check.");
+      } else if (r.kind === "dispatch_not_found") {
+        toast.error("That dispatch could not be found.");
+      } else if (r.kind === "forbidden") {
+        toast.error("Shams CRM rejected the portal's session. Contact an administrator.");
+      } else if (r.kind === "not_configured") {
+        toast.error("The Shams CRM connection is not configured on this deployment.");
+      } else if (r.kind === "unavailable") {
+        toast.error("Could not reach AlShrouq. Try again in a moment.");
+      } else {
+        toast.error("The delivery status could not be checked.");
+      }
+    },
+    onError: () => {
+      // Includes the permission refusal, which the server throws rather than
+      // returning, so it cannot be mistaken for a delivery outcome.
+      toast.error("The delivery status could not be checked.");
+    },
   });
 
   /**
@@ -942,6 +996,62 @@ export function AlShrouqDispatchSection({
           </Band>
         )}
 
+        {/* The answer to "where is the driver", shown only once an agent has
+            asked for it. Ordered as it is read aloud on a call: what the courier
+            calls the delivery, then the latest tracking event when it says
+            something different, then who is coming and where they are. Absent
+            fields are omitted rather than rendered as dashes — a driver who has
+            not been assigned yet is not a blank field, it is no field. */}
+        {liveStatus && (
+          <Band icon={Truck} tone="info">
+            <p className="font-medium text-foreground">
+              {liveStatus.statusLabel ?? liveStatus.lastTrackingStatus ?? "Status not reported"}
+            </p>
+            {liveStatus.lastTrackingStatus &&
+              liveStatus.lastTrackingStatus !== liveStatus.statusLabel && (
+                <p className="mt-0.5">Latest tracking: {liveStatus.lastTrackingStatus}</p>
+              )}
+            {(liveStatus.driverName || liveStatus.driverPhone) && (
+              <p className="mt-0.5">
+                Driver{liveStatus.driverName ? ` ${liveStatus.driverName}` : ""}
+                {liveStatus.driverPhone && (
+                  <>
+                    {" — "}
+                    <a
+                      href={`tel:${liveStatus.driverPhone}`}
+                      className="font-mono font-medium text-foreground underline underline-offset-2"
+                    >
+                      {liveStatus.driverPhone}
+                    </a>
+                  </>
+                )}
+              </p>
+            )}
+            {liveStatus.driverLat !== null && liveStatus.driverLng !== null && (
+              <p className="mt-0.5 flex items-center gap-1">
+                <MapPin className="h-3 w-3 shrink-0" aria-hidden="true" />
+                <span className="font-mono">
+                  {liveStatus.driverLat.toFixed(5)}, {liveStatus.driverLng.toFixed(5)}
+                </span>
+              </p>
+            )}
+            {/* Only when this read produced a URL the persisted row did not
+                already publish — the action row's own button covers that one. */}
+            {liveStatus.trackingUrl && liveStatus.trackingUrl !== summary.trackingUrl && (
+              <p className="mt-0.5">
+                <a
+                  href={liveStatus.trackingUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-medium text-foreground underline underline-offset-2"
+                >
+                  Open tracking
+                </a>
+              </p>
+            )}
+          </Band>
+        )}
+
         <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border/50 px-4 py-3">
           {summary.handedOver ? (
             <>
@@ -972,6 +1082,26 @@ export function AlShrouqDispatchSection({
                     <ExternalLink className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                     Open tracking
                   </a>
+                </Button>
+              )}
+              {/* The read. Present for any handed-over dispatch, because "where
+                  is it" is asked of delivered and undelivered orders alike. Only
+                  this button is disabled while it runs; the rest of the card
+                  stays usable, and the request is bounded server-side so the
+                  spinner always ends. */}
+              {current && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => checkStatus.mutate()}
+                  disabled={checkStatus.isPending}
+                >
+                  {checkStatus.isPending ? (
+                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <RefreshCw className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                  )}
+                  {checkStatus.isPending ? "Checking…" : "Check status"}
                 </Button>
               )}
               {/* Only for a dispatch the machine gave up on and nobody has

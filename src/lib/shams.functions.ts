@@ -49,6 +49,7 @@ import type {
   ScheduleResult,
 } from "@/lib/shams-crm/alshrouq-scheduler.server";
 import type { ResolveDispatchResult } from "@/lib/shams-crm/alshrouq-resolve.server";
+import type { AlShrouqStatusResult } from "@/lib/shams-crm/alshrouq-status.server";
 import type { AlShrouqLocationResult } from "@/features/alshrouq/location";
 import type { AgentSetupSummary, ExistingAgentLink } from "@/lib/shams-crm/agent-setup.server";
 import type { ShamsCrmOffer, ShamsOfferScope } from "@/lib/shams-crm/types";
@@ -1054,6 +1055,99 @@ export const alshrouqCancelScheduledDispatch = createServerFn({ method: "POST" }
  * derived here — there is no field through which a browser could attribute a
  * resolution to somebody else, backdate one, or ask for a lifecycle transition.
  */
+/**
+ * The outcome the AlShrouq card renders for a status check.
+ *
+ * Widens the transport's result with the two refusals that are decided here
+ * rather than at the CRM: a dispatch this caller may not see, and one that has
+ * no CRM reference to ask about yet.
+ */
+export type AlShrouqOrderStatusResult =
+  | AlShrouqStatusResult
+  /** No such dispatch, or not one this caller is entitled to see. */
+  | { kind: "dispatch_not_found" }
+  /**
+   * The dispatch exists but was never reconciled, so MilaPortal holds no CRM row
+   * id. Distinct from `not_found`: there is nothing to ask about yet, which is a
+   * different sentence to an agent than "AlShrouq has never heard of it".
+   */
+  | { kind: "no_reference" };
+
+/**
+ * Where is this delivery, right now?
+ *
+ * The read half of the AlShrouq integration, and the first thing in it that can
+ * answer "where is the driver" without somebody telephoning the courier.
+ *
+ * ## It cannot send anything
+ *
+ * `refreshAlShrouqOrderStatus` issues one GET and its module imports no create
+ * transport, so no outcome here — not a timeout, not a 404 — has a branch that
+ * dispatches, re-dispatches or cancels. That is the same rule
+ * `alshrouqResolveDispatch` is built around, met the same way: by not importing
+ * the thing that could break it.
+ *
+ * ## The caller names a dispatch, never a CRM order
+ *
+ * The input is MilaPortal's own `dispatchId`, and the CRM row id is read from
+ * that row on the server. A caller who could pass a raw CRM id could ask about
+ * any delivery in the chain, including other pharmacies' — so they cannot.
+ *
+ * ## The gate
+ *
+ * The same rule as `alshrouqDispatchContext`: `edit_all_orders`, or
+ * `edit_orders` on an order the caller is assigned. Reusing it keeps one answer
+ * to "may this person act on this order's delivery", and this action is strictly
+ * weaker than the dispatch it sits beside — it is a read that changes nothing.
+ * The dispatch row is fetched through the caller's own client first, so RLS
+ * decides visibility before any permission is consulted.
+ */
+export const alshrouqOrderStatus = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => z.object({ dispatchId: z.string().uuid() }).parse(d))
+  .handler(async ({ context, data }): Promise<AlShrouqOrderStatusResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+
+    /*
+     * Read on the caller's client: `alshrouq_dispatches` carries a SELECT policy
+     * qualified by the order's own visibility, so a dispatch this agent cannot
+     * see is absent rather than forbidden — the same reading
+     * `alshrouqResolveDispatch` takes.
+     */
+    const { data: row } = await (supabase as any)
+      .from("alshrouq_dispatches")
+      .select("id,order_id,local_id")
+      .eq("id", data.dispatchId)
+      .maybeSingle();
+    if (!row) return { kind: "dispatch_not_found" };
+
+    const { data: order } = await supabase
+      .from("orders")
+      .select("id,agent_id")
+      .eq("id", row.order_id)
+      .maybeSingle();
+    if (!order) return { kind: "dispatch_not_found" };
+
+    const { data: canAll } = await supabase.rpc("has_permission", {
+      _user_id: userId,
+      _permission: "edit_all_orders",
+    });
+    const { data: canOwn } = await supabase.rpc("has_permission", {
+      _user_id: userId,
+      _permission: "edit_orders",
+    });
+    const owns = order.agent_id === userId;
+    if (!canAll && !(owns && canOwn)) throw new Error("Forbidden: insufficient permissions");
+
+    // Never reconciled, so there is no CRM row to refresh. Reported rather than
+    // guessed at from the AlShrouq reference, which is a different identifier.
+    const localId = typeof row.local_id === "string" ? row.local_id : null;
+    if (!localId) return { kind: "no_reference" };
+
+    const { refreshAlShrouqOrderStatus } = await import("@/lib/shams-crm/alshrouq-status.server");
+    return refreshAlShrouqOrderStatus(localId);
+  });
+
 export const alshrouqResolveDispatch = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) =>
