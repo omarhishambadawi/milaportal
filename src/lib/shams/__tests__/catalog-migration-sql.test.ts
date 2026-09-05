@@ -114,23 +114,37 @@ describe("access", () => {
 
 describe("indexes", () => {
   it("indexes the name for substring and ordered-fragment matching", () => {
-    expect(sql).toContain(
-      "ON public.shams_product_catalog USING gin (search_name extensions.gin_trgm_ops)",
-    );
+    expect(sql).toContain("ON public.shams_product_catalog USING gin (search_name gin_trgm_ops)");
   });
 
   it("indexes the item code both ways the search reaches for it", () => {
     // A wildcard written against a code has no anchored prefix, so it needs
     // trigrams; a partial code is a prefix, so it needs text_pattern_ops. The
     // primary key answers neither.
-    expect(sql).toContain(
-      "ON public.shams_product_catalog USING gin (item_code extensions.gin_trgm_ops)",
-    );
+    expect(sql).toContain("ON public.shams_product_catalog USING gin (item_code gin_trgm_ops)");
     expect(sql).toContain("ON public.shams_product_catalog (item_code text_pattern_ops)");
   });
 
   it("installs pg_trgm in the same schema the rest of the project uses", () => {
     expect(sql).toContain("CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA extensions");
+  });
+
+  it("resolves gin_trgm_ops through the search path rather than hardcoding its schema", () => {
+    /*
+     * `WITH SCHEMA extensions` only places the extension when that statement is
+     * the one installing it. Where pg_trgm already exists elsewhere — `public`,
+     * as PostGIS does on this deployment — `IF NOT EXISTS` is a no-op and a
+     * hardcoded `extensions.gin_trgm_ops` would fail to resolve and take the
+     * whole migration down with it. Every other object stays qualified, so
+     * widening the path costs nothing.
+     */
+    expect(sql).toContain("SET LOCAL search_path = public, extensions;");
+    // The statements, not the prose: the comment above them names the schema
+    // precisely to explain why the indexes must not.
+    for (const line of sql.split("\n").filter((l) => l.includes("gin_trgm_ops"))) {
+      if (line.trim().startsWith("--")) continue;
+      expect(line).not.toContain("extensions.gin_trgm_ops");
+    }
   });
 });
 

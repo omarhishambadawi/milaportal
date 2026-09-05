@@ -34,9 +34,23 @@
 BEGIN;
 
 -- `LIKE '%needle%'` is the shape of every name search on this table, and a
--- leading `%` is unindexable by btree. Same extension, same schema and the same
--- reasoning as `20260818120000_search_trigram_indexes.sql`.
+-- leading `%` is unindexable by btree. Same extension and the same reasoning as
+-- `20260818120000_search_trigram_indexes.sql`.
 CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA extensions;
+
+-- ---------------------------------------------------------------------------
+-- Find `gin_trgm_ops` wherever it actually lives
+-- ---------------------------------------------------------------------------
+-- `WITH SCHEMA extensions` only places the extension when this statement is the
+-- one that installs it. On a database where pg_trgm already exists somewhere
+-- else -- `public`, as PostGIS is here -- the `IF NOT EXISTS` makes it a no-op,
+-- and a hardcoded `extensions.gin_trgm_ops` below would then fail to resolve and
+-- take the whole migration with it.
+--
+-- So the opclass is referenced unqualified and resolved through the search path.
+-- Every other object in this file stays schema-qualified, so widening the path
+-- changes nothing else. `SET LOCAL` confines it to this transaction.
+SET LOCAL search_path = public, extensions;
 
 -- ===========================================================================
 -- 1. The catalogue
@@ -102,12 +116,12 @@ CREATE TABLE IF NOT EXISTS public.shams_product_catalog (
 
 -- Name substring and ordered-fragment wildcards.
 CREATE INDEX IF NOT EXISTS shams_product_catalog_search_name_trgm_idx
-  ON public.shams_product_catalog USING gin (search_name extensions.gin_trgm_ops);
+  ON public.shams_product_catalog USING gin (search_name gin_trgm_ops);
 
 -- A wildcard written against the item code -- `104*746`. Trigram, because this
 -- pattern has no anchored prefix either.
 CREATE INDEX IF NOT EXISTS shams_product_catalog_item_code_trgm_idx
-  ON public.shams_product_catalog USING gin (item_code extensions.gin_trgm_ops);
+  ON public.shams_product_catalog USING gin (item_code gin_trgm_ops);
 
 -- Partial item code -- `LIKE '104%'`. The primary key answers `=` but not a
 -- prefix pattern, because the default btree opclass for text uses the database
