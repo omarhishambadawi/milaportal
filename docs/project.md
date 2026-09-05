@@ -3888,6 +3888,44 @@ without contacting `shams-crm.cloud`. Its prices are as old as the build they
 came from and `source_updated_at` says so; the first successful refresh replaces
 every row that has moved.
 
+### Migrations are not applied by pushing
+
+A migration file in `supabase/migrations/` is a file. Pushing it to `main` does
+**not** run it against the Lovable Cloud database, and nothing in the build fails
+if it never runs — the application simply meets a schema that does not have the
+objects it expects.
+
+That is not hypothetical. The catalogue shipped with its two migrations
+unapplied, so `shams_product_catalog` and `shams_search_product_catalog` did not
+exist in production and every product search returned
+`catalog_unavailable`. The code was correct; the database had never heard of it.
+
+The ledger is not a reliable check either: `supabase_migrations.schema_migrations`
+held 105 rows against 148 files at the time, and objects from several of the
+missing 43 (`shams_sync_runs`, for one) plainly did exist. Lovable applies
+migrations through its own path and the version stamps do not always line up, so
+**the ledger can be wrong in both directions**.
+
+So verify the *objects*, never the ledger, after shipping schema:
+
+```sql
+SELECT to_regclass('public.shams_product_catalog') AS tbl,
+       (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname = 'shams_search_product_catalog') AS fn;
+```
+
+Two related traps found the same day, both worth keeping in mind for any future
+migration:
+
+- **`CREATE EXTENSION IF NOT EXISTS … WITH SCHEMA extensions` does not move an
+  extension that already exists elsewhere.** It is a no-op, and a hardcoded
+  `extensions.gin_trgm_ops` then fails to resolve and takes the migration with
+  it. Reference the opclass unqualified under a `SET LOCAL search_path`.
+- **Deploying is a separate act from pushing.** `main` can be several commits
+  ahead of what `milaportal.live` serves, and the scheduler pokes the *published*
+  Worker — so a `pg_cron` job can report HTTP 200 every minute while running code
+  that predates the feature being debugged.
+
 **Health.** `shamsCatalogHealth` (any `view_shams_mis` holder) reads one row of
 `shams_catalog_state` and contacts Shams not at all, so it still answers during
 the outage it would be consulted about. It reports row count, freshness, last
