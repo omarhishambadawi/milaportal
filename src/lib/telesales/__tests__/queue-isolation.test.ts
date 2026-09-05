@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -754,5 +754,91 @@ describe("the suite does not assert on wall-clock time", () => {
       );
       expect(text).not.toMatch(/performance\.now\(\)/);
     }
+  });
+});
+
+/* ===================================================================== */
+/* The lifecycle view keeps its product resolution                       */
+/* ===================================================================== */
+
+const MIGRATIONS = join(ROOT, "..", "supabase", "migrations");
+
+/**
+ * Whichever migration defines `telesales_lead_lifecycle` last.
+ *
+ * Deliberately not a fixed filename. The view selects `l.*`, and that list is
+ * expanded at creation time -- so every new column on `telesales_leads` forces
+ * another DROP and CREATE, and the definition moves to a new migration each
+ * time. What must not move is what the definition *says*.
+ */
+function currentLifecycleView(): { file: string; body: string } {
+  const files = readdirSync(MIGRATIONS)
+    .filter((f) => f.endsWith(".sql"))
+    .sort()
+    .reverse();
+  for (const file of files) {
+    const sql = readFileSync(join(MIGRATIONS, file), "utf8");
+    const at = sql.indexOf("CREATE VIEW public.telesales_lead_lifecycle");
+    if (at === -1) continue;
+    /*
+     * The definition only, with its `--` comments removed -- the same technique
+     * `identityStatements` uses above, and for the same reason: these
+     * migrations explain themselves at length and quote the very SQL they
+     * replaced, so matching the raw file would assert against the prose.
+     */
+    const body = sql
+      .slice(at)
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("--"))
+      .join("\n");
+    return { file, body };
+  }
+  throw new Error("No migration defines telesales_lead_lifecycle");
+}
+
+describe("the lifecycle view resolves a product identity", () => {
+  /*
+   * A guard for a regression that already happened.
+   *
+   * `20260913120000` needed the view rebuilt for a new column and rebuilt it
+   * from `20260906120000`'s text -- three migrations old -- silently reverting
+   * the alias and product-name resolution `20260909120000` had added. Nothing
+   * errored: the columns it dropped were read by nobody and the ones it kept
+   * still had the right names, so 91 live leads simply stopped resolving a
+   * refill cycle and 13 carried a wrong `last_purchased_on`.
+   * `20260914120000` restored it.
+   *
+   * The next person to add a column to `telesales_leads` has to recreate this
+   * view again, and copying the wrong ancestor will be exactly as easy as it
+   * was the first time. So this reads the *newest* migration that defines the
+   * view and asserts what that definition must still contain -- which is the
+   * one thing a fixed-filename test could not do.
+   */
+  const { file, body } = currentLifecycleView();
+
+  it(`${file} exposes the resolved product identity`, () => {
+    expect(body).toContain("canonical_item_code");
+    expect(body).toContain("canonical_via");
+  });
+
+  it(`${file} resolves by item code, then active alias, then product name`, () => {
+    expect(body).toContain("telesales_product_aliases");
+    expect(body).toMatch(/pc\.active AND pc\.item_code = l\.item_code/);
+    expect(body).toMatch(/al\.active AND al\.alias_item_code = l\.item_code/);
+    expect(body).toMatch(/regexp_replace\(pn\.item_name/);
+  });
+
+  it(`${file} matches purchases across every equivalent code`, () => {
+    expect(body).toContain("codeset");
+    expect(body).toMatch(/item_code = ANY\(COALESCE\(cs\.codes/);
+    // Not the raw-code comparison the regression reverted to, which is what
+    // put 13 leads on the wrong `last_purchased_on`.
+    expect(body).not.toMatch(/s\.item_code = l\.item_code/);
+  });
+
+  it(`${file} keeps the view a lens rather than a bypass`, () => {
+    // Without this the view runs as its owner and hands every caller every
+    // lead, straight past the policies on `telesales_leads`.
+    expect(body).toContain("security_invoker = true");
   });
 });

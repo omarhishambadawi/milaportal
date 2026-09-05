@@ -8248,7 +8248,9 @@ redirects; see **Retired routes kept as redirects**.
 **Shared component:** `src/features/telesales/components/lead-queue.tsx`.
 **Migrations:** `20260912120000_telesales_crm_domains.sql` (the split),
 `20260913120000_telesales_cycles_and_lead_deletion.sql` (import cycles, and
-deleting one lead).
+deleting one lead), `20260914120000_restore_lifecycle_product_resolution.sql`
+(repairs the lifecycle view that the previous one rebuilt from a stale
+ancestor).
 
 ### Cash and Wasfaty are two desks
 
@@ -8379,6 +8381,38 @@ Per-view defaults had to reach `validateSearch` as well as the reader.
 the reader disagreed about what the default is, choosing "Open" on All Leads
 would write nothing to the URL and read back as "All". `validateQueueSearch`,
 `queueStateFromSearch` and `searchFromQueueState` all take the view's defaults.
+
+#### The lifecycle view was rebuilt twice
+
+`telesales_lead_lifecycle` selects `l.*`, and that list is expanded at creation
+time — a new column on `telesales_leads` stays invisible until the view is
+recreated, and `CREATE OR REPLACE` cannot insert a column into the middle of a
+view's output list. So `20260913120000` recreated the view in order to expose
+`import_id`.
+
+It recreated it from the wrong ancestor: `20260906120000`'s text, three
+migrations old, which silently reverted `20260908120000` and `20260909120000`.
+Nothing errored — the dropped columns were read by nobody and the surviving ones
+kept their names — so the view simply began answering differently. Measured on
+production: **91 live leads lost their refill cycle** (88 that resolve through an
+active alias, 3 through an exact product name) and read `lifecycle = 'none'`
+instead of `active`/`stale`; **13 carried a wrong `last_purchased_on`**, the
+purchase lookup having reverted to an exact-code comparison; and
+`canonical_item_code` / `canonical_via` were gone from the view.
+
+`20260914120000_restore_lifecycle_product_resolution.sql` restores
+`20260909120000`'s definition verbatim. `import_id` needs no mention there — it
+arrives through `l.*` now that the column exists, which is why restoring the
+correct ancestor is sufficient rather than merging two definitions. The header
+comment inside `20260913120000` still describes its own rebuild as faithful;
+applied migrations are not rewritten, so read it alongside this note.
+
+**Whatever migration defines this view last must keep** `canonical_item_code`,
+`canonical_via`, resolution by item code → active alias → exact product name,
+and the `codeset` purchase lookup
+(`s.item_code = ANY(COALESCE(cs.codes, ARRAY[l.item_code]))`) rather than a raw
+`s.item_code = l.item_code` comparison. `queue-isolation.test.ts` reads whichever
+migration defines the view last and fails if any of those is missing.
 
 ### Date filtering
 
