@@ -104,6 +104,7 @@ function LeadDetailPage() {
    * them on the default queue — the behaviour before this existed.
    */
   const backToQueue = decodeQueueContext(Route.useSearch().from);
+  const fromWasfaty = Route.useSearch().dom === "wasfaty";
   const { profile, role, session } = useAuth();
   const userId = session?.user?.id;
   const perms = profile?.permissions as string[] | null | undefined;
@@ -214,7 +215,10 @@ function LeadDetailPage() {
       <div className="py-16 text-center">
         <p className="text-sm font-medium">This lead no longer exists</p>
         <Button asChild className="mt-4" variant="outline" size="sm">
-          <Link to="/telesales" search={backToQueue}>
+          {/* The desk comes from the URL here, because there is no lead left to
+              read a type from — which is exactly the case a deleted Wasfaty
+              lead produces. */}
+          <Link to={fromWasfaty ? "/crm/wasfaty" : "/crm/cash"} search={backToQueue}>
             Back to the queue
           </Link>
         </Button>
@@ -233,7 +237,15 @@ function LeadDetailPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Button asChild variant="ghost" size="sm">
-          <Link to="/telesales" search={backToQueue}>
+          {/*
+           * Back to the desk this lead belongs to.
+           *
+           * It used to be `/telesales` unconditionally, which after the split
+           * meant a Wasfaty agent finishing a prescription landed on the Cash
+           * queue. The lead knows its own type, so it answers; the URL's `dom`
+           * is the fallback for the row above, where there is no lead.
+           */}
+          <Link to={l.lead_type === "wasfaty" ? "/crm/wasfaty" : "/crm/cash"} search={backToQueue}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             Queue
           </Link>
@@ -586,9 +598,14 @@ function LeadDetailPage() {
                   </p>
                 ) : null}
                 {l.converted_at ? (
+                  /* The Wasfaty Order Created result carries no order value —
+                     see `showOrderValue` in the outcome dialog. Cash keeps it:
+                     a Cash conversion is priced here and nowhere else. */
                   <p>
                     Converted {ts(l.converted_at)}
-                    {l.converted_value != null ? ` · ${fmtSAR(l.converted_value)}` : ""}
+                    {l.lead_type !== "wasfaty" && l.converted_value != null
+                      ? ` · ${fmtSAR(l.converted_value)}`
+                      : ""}
                   </p>
                 ) : null}
                 {l.closed_at ? (

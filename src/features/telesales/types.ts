@@ -186,6 +186,24 @@ export interface QueueFilters {
    * read off the status column.
    */
   worked: string;
+  /**
+   * The recorded action, or `"all"`.
+   *
+   * `last_outcome`, which is what the Wasfaty desk calls a status: three of its
+   * eight actions leave the lead open, so "what was recorded" and "what state
+   * is it in" are two different questions and the Wasfaty filter asks the first.
+   */
+  outcome: string;
+  /**
+   * The import cycle, as the comma-joined ids of the batches in it. `""` means
+   * every cycle.
+   *
+   * Ids rather than a period string because the period is a *label* over one or
+   * more import batches, and the queue filters on `telesales_leads.import_id`.
+   * A string rather than an array because this is part of the React Query key
+   * and every field in it has to be a primitive.
+   */
+  importIds: string;
   /** Free text over customer name, phone, patient id, prescription, invoice. */
   term: string;
   mineOnly: boolean;
@@ -219,6 +237,8 @@ export const DEFAULT_QUEUE_FILTERS: Omit<QueueFilters, "userId"> = {
   dateFrom: "",
   dateTo: "",
   worked: "all",
+  outcome: "all",
+  importIds: "",
   term: "",
   mineOnly: false,
   unassignedOnly: false,

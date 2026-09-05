@@ -92,6 +92,10 @@ export interface TelesalesQueueFilters {
   followup: string;
   /** "active" | "stale" | "all". Derived, and orthogonal to `status`. */
   lifecycle: string;
+  /** The recorded action, or "all". Wasfaty's status vocabulary. */
+  outcome: string;
+  /** The import cycle, as comma-joined batch ids. "" is every cycle. */
+  importIds: string;
   term: string;
   mineOnly: boolean;
   unassignedOnly: boolean;

@@ -54,6 +54,16 @@ import { buildMapping, storedMapping, validateMapping } from "@/lib/telesales/co
 import type { ColumnOverrides } from "@/lib/telesales/parse";
 
 export const Route = createFileRoute("/_app/telesales/import")({
+  /*
+   * Which desk sent the operator here.
+   *
+   * One parameter, one value. The import screen is shared — it takes a Cash,
+   * Wasfaty or Retention workbook — so it cannot infer the desk, and a Wasfaty
+   * supervisor who uploaded October's file should land back on Wasfaty rather
+   * than on the Cash queue.
+   */
+  validateSearch: (s: Record<string, unknown>) =>
+    s.from === "wasfaty" ? { from: "wasfaty" as const } : {},
   head: () => ({ meta: [{ title: "Telesales Import — MilaServ Portal" }] }),
   component: TelesalesImportPage,
 });
@@ -98,6 +108,8 @@ type Preview = ParsedWorkbook & { availableSheets: string[] };
  * before anything is written either way.
  */
 function TelesalesImportPage() {
+  // Where "Queue" goes back to. See `validateSearch` above.
+  const fromWasfaty = Route.useSearch().from === "wasfaty";
   const { profile, role } = useAuth();
   const perms = profile?.permissions as string[] | null | undefined;
   const canManage = hasPerm(role, perms, "manage_telesales");
@@ -368,7 +380,7 @@ function TelesalesImportPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Button asChild variant="ghost" size="sm">
-            <Link to="/telesales">
+            <Link to={fromWasfaty ? "/crm/wasfaty" : "/crm/cash"}>
               <ArrowLeft className="mr-2 h-4 w-4" />
               Queue
             </Link>

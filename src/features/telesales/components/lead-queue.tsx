@@ -2,6 +2,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Inbox, Loader2, Search, X } from "lucide-react";
+import { DateRangePicker } from "@/components/date-range-picker";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -21,7 +32,7 @@ import { queryKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 import { businessToday } from "@/lib/telesales/dates";
 import { familyLabel } from "@/lib/telesales/products";
-import { LEAD_TYPE_LABELS, type LeadType } from "@/lib/telesales/types";
+import { LEAD_TYPE_LABELS, OUTCOME_BY_KEY, type LeadType } from "@/lib/telesales/types";
 import { BulkActionBar } from "@/features/telesales/components/bulk-action-bar";
 import { LeadRow } from "@/features/telesales/components/lead-row";
 import { OutcomeDialog } from "@/features/telesales/components/outcome-dialog";
@@ -35,12 +46,13 @@ import {
   useAssignableAgents,
   useBulkLeadActions,
 } from "@/features/telesales/hooks/use-bulk-actions";
-import { useLeadMutations } from "@/features/telesales/hooks/use-lead-detail";
+import { useDeleteLead, useLeadMutations } from "@/features/telesales/hooks/use-lead-detail";
 import {
   useStaleLeadCount,
   useTelesalesBranches,
   useTelesalesFamilies,
   useTelesalesQueue,
+  type WasfatyCycle,
 } from "@/features/telesales/hooks/use-telesales-queue";
 import { DEFAULT_QUEUE_FILTERS, type QueueLead } from "@/features/telesales/types";
 import { useDebounced } from "@/features/shams/hooks/use-shams-data";
@@ -72,6 +84,24 @@ import type { QueueState } from "@/features/telesales/queue-search";
  * owns the address bar; this component owns the list.
  */
 
+/**
+ * `YYYY-MM-DD` to a local `Date`, and back.
+ *
+ * The queue speaks business dates — plain calendar days, stored and filtered as
+ * `date` in Postgres — and `DateRangePicker` speaks `Date`. `new Date("2026-09-05")`
+ * would parse as midnight UTC and render as the 4th anywhere west of Greenwich,
+ * so the parts are handed to the local constructor instead.
+ */
+function parseBusinessDate(iso: string): Date {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, (m ?? 1) - 1, d ?? 1);
+}
+
+function isoOf(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 export interface LeadQueueProps {
   /** Comma-joined lead types this queue may show. See `QueueFilters.domain`. */
   domain: string;
@@ -87,6 +117,36 @@ export interface LeadQueueProps {
   queueContext?: string;
   /** Offer the date range. On by default. */
   showDateFilter?: boolean;
+  /**
+   * Which vocabulary the leftmost filter speaks.
+   *
+   * `"status"` is the workflow state, which is what the Cash desk tracks.
+   * `"outcome"` is the recorded action, which is what the Wasfaty desk calls a
+   * status — and the two are genuinely different questions, so this picks one
+   * rather than showing both.
+   */
+  statusFilter?: "status" | "outcome";
+  /** The actions offered when `statusFilter` is `"outcome"`. */
+  outcomeKeys?: readonly string[];
+  /** Offer the lifecycle (Active / Stale / Archived) control. On by default. */
+  showLifecycleFilter?: boolean;
+  /** Offer the product-family control. On by default. */
+  showProductFilter?: boolean;
+  /**
+   * The import cycles, when this queue has them. Renders the Period control.
+   *
+   * Wasfaty only: a Cash lead comes from a rolling daily window rather than
+   * from a monthly file, so there is no cycle to pick.
+   */
+  cycles?: WasfatyCycle[];
+  /** The resolved period the Period control shows — `"all"` or a `YYYY-MM`. */
+  cyclePeriod?: string;
+  /** The batches in that period, comma-joined. `""` is every cycle. */
+  importIds?: string;
+  /** Where the date range rests, so "Any date" can put it back. */
+  dateDefaults?: { from: string; to: string };
+  /** Offer the administrator's per-lead Delete. */
+  canDelete?: boolean;
   /** What to say when an unfiltered queue is empty. */
   emptyTitle?: string;
   emptyHint?: string;
@@ -100,6 +160,15 @@ export function LeadQueue({
   put,
   queueContext,
   showDateFilter = true,
+  statusFilter = "status",
+  outcomeKeys,
+  showLifecycleFilter = true,
+  showProductFilter = true,
+  cycles,
+  cyclePeriod = "all",
+  importIds = "",
+  dateDefaults = { from: "", to: "" },
+  canDelete = false,
   emptyTitle = "The queue is clear",
   emptyHint,
 }: LeadQueueProps) {
@@ -114,6 +183,8 @@ export function LeadQueue({
   const {
     leadType,
     status,
+    outcome,
+    agent,
     branch,
     family,
     followup,
@@ -135,6 +206,8 @@ export function LeadQueue({
    * setter itself, so it cannot be forgotten at a call site.
    */
   const setStatus = (v: string) => put({ status: v, page: 0 });
+  const setOutcome = (v: string) => put({ outcome: v, page: 0 });
+  const setAgent = (v: string) => put({ agent: v, page: 0 });
   const setBranch = (v: string) => put({ branch: v, page: 0 });
   const setFamily = (v: string) => put({ family: v, page: 0 });
   const setFollowup = (v: string) => put({ followup: v, page: 0 });
@@ -168,6 +241,16 @@ export function LeadQueue({
 
   const [recording, setRecording] = useState<QueueLead | null>(null);
   /*
+   * The lead an administrator has asked to delete, held until they confirm.
+   *
+   * A destructive action with no undo, so it is a two-step: the row raises the
+   * intent, the dialog states what will happen to *this* lead — deleted, or
+   * archived because it carries a call log that is not ours to destroy — and
+   * only then does anything run.
+   */
+  const [deleting, setDeleting] = useState<QueueLead | null>(null);
+  const deleteLead = useDeleteLead();
+  /*
    * Selection lives on the page rather than in the URL.
    *
    * It is scoped to the rows currently on screen: changing a filter or a page
@@ -184,7 +267,9 @@ export function LeadQueue({
       domain,
       leadType,
       status,
-      agent: "all",
+      outcome,
+      importIds,
+      agent,
       branch,
       family,
       followup,
@@ -201,6 +286,9 @@ export function LeadQueue({
       domain,
       leadType,
       status,
+      outcome,
+      importIds,
+      agent,
       branch,
       family,
       followup,
@@ -263,11 +351,16 @@ export function LeadQueue({
   const filtersActive =
     leadType !== "all" ||
     status !== DEFAULT_QUEUE_FILTERS.status ||
+    outcome !== "all" ||
+    agent !== "all" ||
     branch !== "all" ||
     family !== "all" ||
     followup !== "all" ||
-    dateFrom !== "" ||
-    dateTo !== "" ||
+    // Against the *view's* resting range, not against "no dates". Generated
+    // Leads rests on today and tomorrow, and a page that opened on its own
+    // default should not claim the agent has filtered anything.
+    dateFrom !== dateDefaults.from ||
+    dateTo !== dateDefaults.to ||
     term.trim() !== "" ||
     mineOnly ||
     unassignedOnly;
@@ -287,11 +380,16 @@ export function LeadQueue({
     put({
       leadType: DEFAULT_QUEUE_FILTERS.leadType,
       status: DEFAULT_QUEUE_FILTERS.status,
+      outcome: "all",
+      agent: "all",
       branch: "all",
       family: "all",
       followup: "all",
-      dateFrom: "",
-      dateTo: "",
+      // Back to the view's resting range, not to "no dates": Generated Leads
+      // rests on the daily window, and clearing filters there should return the
+      // agent to today's work rather than to every prescription ever imported.
+      dateFrom: dateDefaults.from,
+      dateTo: dateDefaults.to,
       term: "",
       mineOnly: false,
       unassignedOnly: false,
@@ -384,18 +482,43 @@ export function LeadQueue({
                 />
               </div>
 
-              <Select value={status} onValueChange={setStatus}>
-                <SelectTrigger className="w-[150px]" aria-label="Status">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {STATUS_FILTER_OPTIONS.map((o) => (
-                    <SelectItem key={o.value} value={o.value}>
-                      {o.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {statusFilter === "outcome" ? (
+                /*
+                 * The Wasfaty status filter is the Recorded Action vocabulary.
+                 *
+                 * Not a second list that happens to look like it: the options
+                 * are `OUTCOME_BY_KEY` entries, so the filter and the badge on
+                 * the row read from one definition and the stored keys are the
+                 * historical ones — `low_price` still, labelled "Below
+                 * Threshold".
+                 */
+                <Select value={outcome} onValueChange={setOutcome}>
+                  <SelectTrigger className="w-[170px]" aria-label="Recorded action">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All actions</SelectItem>
+                    {(outcomeKeys ?? []).map((key) => (
+                      <SelectItem key={key} value={key}>
+                        {OUTCOME_BY_KEY.get(key)?.label ?? key}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Select value={status} onValueChange={setStatus}>
+                  <SelectTrigger className="w-[150px]" aria-label="Status">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {STATUS_FILTER_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
 
               <Select value={followup} onValueChange={setFollowup}>
                 <SelectTrigger className="w-[150px]" aria-label="Follow-up">
@@ -415,23 +538,50 @@ export function LeadQueue({
                * because a lead can be `follow_up` and stale at the same time and
                * a single dropdown cannot say both.
                */}
-              <Select value={lifecycle} onValueChange={setLifecycle}>
-                <SelectTrigger className="w-[190px]" aria-label="Lifecycle">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {LIFECYCLE_FILTER_OPTIONS.map((o) => (
-                    <SelectItem key={o.value} value={o.value}>
-                      {o.label}
-                      {o.value === "stale" && backlog.data
-                        ? ` · ${backlog.data.stale.toLocaleString("en-US")}`
-                        : o.value === "archived" && backlog.data
-                          ? ` · ${backlog.data.archived.toLocaleString("en-US")}`
-                          : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {showLifecycleFilter ? (
+                <Select value={lifecycle} onValueChange={setLifecycle}>
+                  <SelectTrigger className="w-[190px]" aria-label="Lifecycle">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {LIFECYCLE_FILTER_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                        {o.value === "stale" && backlog.data
+                          ? ` · ${backlog.data.stale.toLocaleString("en-US")}`
+                          : o.value === "archived" && backlog.data
+                            ? ` · ${backlog.data.archived.toLocaleString("en-US")}`
+                            : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : null}
+
+              {/*
+               * Which agent's leads.
+               *
+               * The assignment, not the last person to record something: those
+               * are two columns and two questions, and "how many leads did this
+               * agent receive" is the one a supervisor is asking. Offered only
+               * to somebody who can manage the desk — an agent has "My leads"
+               * beside it, which is the same question asked of themselves.
+               */}
+              {canManage ? (
+                <Select value={agent} onValueChange={setAgent}>
+                  <SelectTrigger className="w-[180px]" aria-label="Telesales agent">
+                    <SelectValue placeholder="Agent" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All agents</SelectItem>
+                    {(assignableAgents.data ?? []).map((a) => (
+                      <SelectItem key={a.id} value={a.id}>
+                        {a.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : null}
 
               <Select value={branch} onValueChange={setBranch}>
                 <SelectTrigger className="w-[140px]" aria-label="Branch">
@@ -447,19 +597,21 @@ export function LeadQueue({
                 </SelectContent>
               </Select>
 
-              <Select value={family} onValueChange={setFamily}>
-                <SelectTrigger className="w-[160px]" aria-label="Product">
-                  <SelectValue placeholder="Product" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All products</SelectItem>
-                  {(families.data ?? []).map((f) => (
-                    <SelectItem key={f} value={f}>
-                      {familyLabel(f)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {showProductFilter ? (
+                <Select value={family} onValueChange={setFamily}>
+                  <SelectTrigger className="w-[160px]" aria-label="Product">
+                    <SelectValue placeholder="Product" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All products</SelectItem>
+                    {(families.data ?? []).map((f) => (
+                      <SelectItem key={f} value={f}>
+                        {familyLabel(f)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : null}
 
               {filtersActive ? (
                 <Button variant="ghost" size="sm" onClick={resetFilters}>
@@ -479,37 +631,77 @@ export function LeadQueue({
              * clause, so paging stays correct across the filtered set rather
              * than across a page that was filtered afterwards.
              */}
-            {showDateFilter ? (
+            {showDateFilter || cycles ? (
               <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
-                <Label htmlFor="queue-date-from" className="text-xs text-muted-foreground">
-                  Dates
-                </Label>
-                <Input
-                  id="queue-date-from"
-                  type="date"
-                  className="h-9 w-[160px]"
-                  value={dateFrom}
-                  max={dateTo || undefined}
-                  onChange={(e) => put({ dateFrom: e.target.value, page: 0 })}
-                />
-                <span className="text-xs text-muted-foreground">to</span>
-                <Input
-                  id="queue-date-to"
-                  type="date"
-                  className="h-9 w-[160px]"
-                  value={dateTo}
-                  min={dateFrom || undefined}
-                  onChange={(e) => put({ dateTo: e.target.value, page: 0 })}
-                  aria-label="To date"
-                />
-                {dateFrom || dateTo ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => put({ dateFrom: "", dateTo: "", page: 0 })}
-                  >
-                    Any date
-                  </Button>
+                {/*
+                 * The period, when this queue has cycles.
+                 *
+                 * Wasfaty arrives as a monthly file and the desk works one
+                 * month at a time, so the resting position is the current cycle
+                 * rather than everything ever imported. Historical months stay
+                 * here, one click away, which is the whole reason this is a
+                 * control and not a hard-coded window.
+                 */}
+                {cycles ? (
+                  <>
+                    <Label className="text-xs text-muted-foreground">Period</Label>
+                    <Select value={cyclePeriod} onValueChange={(v) => put({ cycle: v, page: 0 })}>
+                      <SelectTrigger className="h-9 w-[190px]" aria-label="Import period">
+                        <SelectValue placeholder="Period" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {cycles.map((c) => (
+                          <SelectItem key={c.period} value={c.period}>
+                            {c.label} · {c.leads.toLocaleString("en-US")}
+                          </SelectItem>
+                        ))}
+                        <SelectItem value="all">All periods</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <span className="mx-1 h-5 w-px bg-border" aria-hidden />
+                  </>
+                ) : null}
+
+                {/*
+                 * The date range, through the portal's own calendar.
+                 *
+                 * The same `DateRangePicker` the Dashboard and Orders use,
+                 * presets and all, rather than the pair of native date inputs
+                 * that used to be here — one calendar in the product means an
+                 * agent who has picked "Last month" on Orders already knows how
+                 * to pick it here.
+                 */}
+                {showDateFilter ? (
+                  <>
+                    <Label className="text-xs text-muted-foreground">Dates</Label>
+                    <DateRangePicker
+                      size="sm"
+                      range={
+                        dateFrom || dateTo
+                          ? {
+                              from: parseBusinessDate(dateFrom || dateTo),
+                              to: parseBusinessDate(dateTo || dateFrom),
+                            }
+                          : undefined
+                      }
+                      onChange={(r) =>
+                        put({
+                          dateFrom: r?.from ? isoOf(r.from) : "",
+                          dateTo: r?.to ? isoOf(r.to) : r?.from ? isoOf(r.from) : "",
+                          page: 0,
+                        })
+                      }
+                    />
+                    {dateFrom || dateTo ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => put({ dateFrom: "", dateTo: "", page: 0 })}
+                      >
+                        Any date
+                      </Button>
+                    ) : null}
+                  </>
                 ) : null}
               </div>
             ) : null}
@@ -655,6 +847,8 @@ export function LeadQueue({
                       mutations.assign.mutate({ leadId: l.id, assigneeId: userId ?? null })
                     }
                     onRecord={(l) => setRecording(l)}
+                    canDelete={canDelete}
+                    onDelete={(l) => setDeleting(l)}
                   />
                 ))}
               </div>
@@ -744,6 +938,48 @@ export function LeadQueue({
           </div>
         </div>
       ) : null}
+
+      <AlertDialog open={Boolean(deleting)} onOpenChange={(open) => !open && setDeleting(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this lead?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleting
+                ? `${[deleting.customer_name, deleting.prescription_no, deleting.item_name]
+                    .filter(Boolean)
+                    .join(" · ")} will disappear from Generated, All and Worked Leads.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {/*
+           * Said before it happens, not after.
+           *
+           * A lead nobody has worked is deleted outright. A lead carrying a call
+           * log is archived instead, because the activity table is append-only
+           * and that guarantee is not something a screen gets to spend. Either
+           * way it leaves the operational views, which is what was asked for —
+           * and the toast afterwards says which of the two occurred.
+           */}
+          <p className="text-sm text-muted-foreground">
+            A lead nobody has worked is removed permanently. One that carries call history is
+            archived instead, so its recorded actions survive. This cannot be undone.
+          </p>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteLead.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleteLead.isPending}
+              onClick={(e) => {
+                e.preventDefault();
+                if (!deleting) return;
+                deleteLead.mutate({ leadId: deleting.id }, { onSuccess: () => setDeleting(null) });
+              }}
+            >
+              {deleteLead.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <OutcomeDialog
         open={Boolean(recording)}

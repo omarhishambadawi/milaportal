@@ -84,6 +84,14 @@ export const AUDIT_ACTIONS = {
   telesalesImportDeleted: "telesales.import_deleted",
   /** A product was added to the Telesales catalogue from Shams Branch Stock. */
   telesalesProductAdded: "telesales.product_added",
+  /**
+   * An administrator removed one lead from the operational views.
+   *
+   * The entry records which of the two outcomes occurred -- deleted outright, or
+   * archived because the lead carried a call log that is not ours to destroy --
+   * so "where did that lead go" has an answer after the row is no longer there.
+   */
+  telesalesLeadDeleted: "telesales.lead_deleted",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

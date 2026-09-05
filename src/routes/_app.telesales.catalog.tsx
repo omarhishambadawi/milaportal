@@ -71,7 +71,7 @@ function CatalogPage() {
           </p>
         </div>
         <Button asChild variant="outline" size="sm">
-          <Link to="/telesales">
+          <Link to="/crm/cash">
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back to the Cash CRM
           </Link>

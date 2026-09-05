@@ -16,7 +16,6 @@ import {
   PackageSearch,
   Phone,
   PhoneOutgoing,
-  RefreshCw,
   Search,
   PhoneCall,
   ShieldAlert,
@@ -174,10 +173,11 @@ function AppLayout() {
        * Pharmacies is the account whose desk it runs, and a second account
        * would add rows here rather than a second menu entry.
        *
-       * The label is the only thing that says "CRM" — the route, the tables and
-       * the permission keys stay `telesales`, because renaming those would be a
-       * migration and a re-grant of every user to change a string nobody
-       * outside the code reads.
+       * The routes say `/crm/cash` and `/crm/wasfaty`; the tables and the
+       * permission keys stay `telesales`, because those are storage and
+       * renaming them would be a migration and a re-grant of every user to
+       * change a string nobody outside the code reads. `/telesales` still
+       * answers, as a redirect, so no existing bookmark breaks.
        *
        * Visibility is `view_telesales` through `hasPerm`, exactly like every
        * other item here, so Rules decide it: Owner, Admin, Supervisor and
@@ -189,45 +189,29 @@ function AppLayout() {
       ...(canTelesales
         ? [
             {
-              to: "/telesales",
+              to: "/crm/cash",
               label: "CRM",
               icon: PhoneCall,
               /*
-               * Two domains, and the flyout is where that becomes visible.
+               * Two destinations, because there are two desks.
                *
-               * Cash is a heading over two destinations because Cash and
-               * Retention are one desk's work seen two ways — the same
-               * customers, the same catalogue, and a Retention lead is
-               * literally the next cycle of a Cash conversion. Wasfaty is a
-               * sibling rather than a third entry under Cash: different
-               * identifiers, a different window, a different set of recorded
-               * actions, and a portal the Cash agents do not use.
+               * Retention used to be a third entry here, pinned to
+               * `/telesales?type=retention`. It is not a third desk: a
+               * Retention lead is literally the next cycle of a Cash
+               * conversion this system recorded, worked by the same people
+               * from the same catalogue, and the Cash page carries it as a
+               * chip. A top-level destination that lands on the same queue
+               * with one filter applied is a menu entry pretending to be a
+               * place.
                *
-               * The first two are `/telesales` with a pipeline pinned rather
-               * than routes of their own, which is why `search` and `navKey`
-               * exist: one queue, asked two questions, and no duplicate route
-               * to keep in step with the parent.
+               * So the sidebar states the domains and nothing else, and the
+               * pinned-query machinery (`search`, `navKey`) is no longer
+               * needed to tell two children on one route apart — there are no
+               * longer two children on one route.
                */
               children: [
-                {
-                  to: "/telesales",
-                  search: { type: "cash" },
-                  label: "Cash",
-                  icon: Banknote,
-                  groupLabel: "Cash",
-                },
-                {
-                  to: "/telesales",
-                  search: { type: "retention" },
-                  label: "Retention",
-                  icon: RefreshCw,
-                },
-                {
-                  to: "/telesales/wasfaty",
-                  label: "Wasfaty",
-                  icon: FileText,
-                  groupLabel: "Wasfaty",
-                },
+                { to: "/crm/cash", label: "Cash", icon: Banknote },
+                { to: "/crm/wasfaty", label: "Wasfaty", icon: FileText },
               ],
             },
           ]

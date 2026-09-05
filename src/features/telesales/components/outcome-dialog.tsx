@@ -74,6 +74,16 @@ export function OutcomeDialog({
   const def = outcomeKey ? OUTCOME_BY_KEY.get(outcomeKey) : undefined;
   const needsFollowup = def?.requiresFollowup ?? false;
   const isConversion = def?.status === "converted";
+  /*
+   * Order Created carries no Order Value on the Wasfaty desk.
+   *
+   * A Wasfaty order is placed in the Wasfaty portal and priced there; the figure
+   * typed here was a second, unverified copy of a number the desk does not own,
+   * and the row already shows the prescription's own value. The field is gone
+   * from this presentation, not from the schema — `converted_value` still holds
+   * what Cash conversions record, and the server function still accepts it.
+   */
+  const showOrderValue = isConversion && leadType !== "wasfaty";
 
   // Reset when the dialog closes, so the next call does not inherit the last
   // one's note. An agent who reopens the dialog after a misclick expects a
@@ -157,19 +167,21 @@ export function OutcomeDialog({
           ) : null}
 
           {isConversion ? (
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="ts-order-value">Order value (SAR)</Label>
-                <Input
-                  id="ts-order-value"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  inputMode="decimal"
-                  value={orderValue}
-                  onChange={(e) => setOrderValue(e.target.value)}
-                />
-              </div>
+            <div className={showOrderValue ? "grid grid-cols-2 gap-3" : "grid gap-3"}>
+              {showOrderValue ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="ts-order-value">Order value (SAR)</Label>
+                  <Input
+                    id="ts-order-value"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    inputMode="decimal"
+                    value={orderValue}
+                    onChange={(e) => setOrderValue(e.target.value)}
+                  />
+                </div>
+              ) : null}
               <div className="space-y-1.5">
                 <Label htmlFor="ts-next-refill">Next refill</Label>
                 <Input
@@ -212,7 +224,7 @@ export function OutcomeDialog({
                 note: note.trim() || undefined,
                 followupDueOn: dueOn || null,
                 followupTime: dueTime || null,
-                orderValue: orderValue ? Number(orderValue) : null,
+                orderValue: showOrderValue && orderValue ? Number(orderValue) : null,
               })
             }
           >

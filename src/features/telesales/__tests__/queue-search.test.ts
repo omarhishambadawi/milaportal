@@ -44,7 +44,7 @@ const source = (rel: string) => readFileSync(join(ROOT, rel), "utf8");
  * So the wiring assertions below split too: URL handling is checked on the
  * route, filter behaviour on the component.
  */
-const QUEUE_PAGE = "routes/_app.telesales.index.tsx";
+const QUEUE_PAGE = "routes/_app.crm.cash.tsx";
 const QUEUE_BODY = "features/telesales/components/lead-queue.tsx";
 const LEAD_PAGE = "routes/_app.telesales.$id.tsx";
 const ROW = "features/telesales/components/lead-row.tsx";
@@ -53,6 +53,10 @@ const ROW = "features/telesales/components/lead-row.tsx";
 const DEFAULTS: QueueState = {
   leadType: DEFAULT_QUEUE_FILTERS.leadType,
   status: DEFAULT_QUEUE_FILTERS.status,
+  outcome: "all",
+  agent: "all",
+  // "" is "the current cycle", which only the data knows. Absent from the URL.
+  cycle: "",
   branch: "all",
   family: "all",
   followup: DEFAULT_QUEUE_FILTERS.followup,
@@ -261,19 +265,25 @@ describe("the pages are wired to the URL", () => {
     expect(page).not.toMatch(/const \[page, setPage\] = useState/);
   });
 
-  it("a row links to the lead carrying the queue context", () => {
+  it("a row links to the lead carrying the queue context and the desk", () => {
     const row = source(ROW);
     expect(row).toContain("queueContext");
-    expect(row).toMatch(/search=\{queueContext \? \{ from: queueContext \} : \{\}\}/);
+    expect(row).toContain("...(queueContext ? { from: queueContext } : {})");
+    // The desk, so a deleted Wasfaty lead's "Back" still knows where to go.
+    expect(row).toContain('lead.lead_type === "wasfaty" ? { dom: "wasfaty" as const } : {}');
   });
 
-  it("the lead's Back action returns to that context", () => {
+  it("the lead's Back action returns to that context, on the right desk", () => {
     const lead = source(LEAD_PAGE);
     expect(lead).toContain("validateSearch: validateLeadSearch");
     expect(lead).toContain("decodeQueueContext");
-    // Both back links, not just one.
-    const backLinks = lead.match(/<Link to="\/telesales" search=\{backToQueue\}>/g) ?? [];
+    // Both back links carry the context, and neither is hard-wired to Cash:
+    // a Wasfaty lead's Queue button returns to Wasfaty.
+    const backLinks = lead.match(/search=\{backToQueue\}/g) ?? [];
     expect(backLinks).toHaveLength(2);
+    expect(lead).toContain('l.lead_type === "wasfaty" ? "/crm/wasfaty" : "/crm/cash"');
+    expect(lead).toContain('fromWasfaty ? "/crm/wasfaty" : "/crm/cash"');
+    expect(lead).not.toContain('to="/telesales" search={backToQueue}');
   });
 
   it("the lead page does not read inside the context", () => {

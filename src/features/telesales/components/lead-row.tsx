@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { Phone, PhoneOff, UserPlus } from "lucide-react";
+import { Phone, PhoneOff, Trash2, UserPlus } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -61,6 +61,9 @@ export interface LeadRowProps {
   onClaim: (lead: QueueLead) => void;
   onRecord: (lead: QueueLead) => void;
   claiming: boolean;
+  /** Administrators only. The queue decides; the row only draws the button. */
+  canDelete?: boolean;
+  onDelete?: (lead: QueueLead) => void;
   /**
    * The queue's current filters, as one opaque string, so the lead can offer a
    * Back that returns here rather than to the default queue.
@@ -86,6 +89,8 @@ export function LeadRow({
   onClaim,
   onRecord,
   claiming,
+  canDelete = false,
+  onDelete,
   queueContext,
 }: LeadRowProps) {
   const due = describeDue(lead.next_followup_on, today);
@@ -149,7 +154,12 @@ export function LeadRow({
           <Link
             to="/telesales/$id"
             params={{ id: lead.id }}
-            search={queueContext ? { from: queueContext } : {}}
+            /* `dom` so the lead's own Queue button returns to the desk this row
+               was on, rather than defaulting a Wasfaty agent onto Cash. */
+            search={{
+              ...(queueContext ? { from: queueContext } : {}),
+              ...(lead.lead_type === "wasfaty" ? { dom: "wasfaty" as const } : {}),
+            }}
             className="truncate font-medium hover:underline"
           >
             {lead.customer_name || (lead.lead_type === "wasfaty" ? "Wasfaty patient" : "No name")}
@@ -338,6 +348,27 @@ export function LeadRow({
         {canWork ? (
           <Button size="sm" onClick={() => onRecord(lead)}>
             Record
+          </Button>
+        ) : null}
+
+        {/*
+         * Delete, for an administrator.
+         *
+         * Last in the row and ghost-weighted, because it is the one action here
+         * that cannot be taken back and it should not sit under a thumb aimed at
+         * Record. The confirmation lives in the queue, which is also what states
+         * whether this lead will be deleted or archived.
+         */}
+        {canDelete && onDelete ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-muted-foreground hover:text-destructive"
+            onClick={() => onDelete(lead)}
+            title="Delete this lead"
+          >
+            <Trash2 className="h-4 w-4" />
+            <span className="sr-only">Delete lead</span>
           </Button>
         ) : null}
       </div>

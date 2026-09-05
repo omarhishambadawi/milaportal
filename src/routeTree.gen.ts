@@ -39,6 +39,7 @@ import { Route as AppTelesalesCatalogRouteImport } from './routes/_app.telesales
 import { Route as AppTelesalesIdRouteImport } from './routes/_app.telesales.$id'
 import { Route as AppOrdersNewRouteImport } from './routes/_app.orders.new'
 import { Route as AppOrdersIdRouteImport } from './routes/_app.orders.$id'
+import { Route as AppCrmCashRouteImport } from './routes/_app.crm.cash'
 import { Route as AppComplaintsNewRouteImport } from './routes/_app.complaints.new'
 import { Route as AppComplaintsIdRouteImport } from './routes/_app.complaints.$id'
 import { Route as AppCallsTelesalesRouteImport } from './routes/_app.calls.telesales'
@@ -57,6 +58,7 @@ import { Route as AppAdminBranchesRouteImport } from './routes/_app.admin.branch
 import { Route as Char91DotmcpChar93InvokeToolToolRouteImport } from './routes/[.mcp]/invoke-tool/$tool'
 import { Route as DotlovableOauthConsentRouteImport } from './routes/[.]lovable.oauth.consent'
 import { Route as AppTelesalesWasfatyIndexRouteImport } from './routes/_app.telesales.wasfaty.index'
+import { Route as AppCrmWasfatyIndexRouteImport } from './routes/_app.crm.wasfaty.index'
 import { Route as LovableEmailQueueProcessRouteImport } from './routes/lovable/email/queue/process'
 import { Route as LovableEmailAuthWebhookRouteImport } from './routes/lovable/email/auth/webhook'
 import { Route as LovableEmailAuthPreviewRouteImport } from './routes/lovable/email/auth/preview'
@@ -65,6 +67,8 @@ import { Route as AppTelesalesWasfatyWorkedRouteImport } from './routes/_app.tel
 import { Route as AppTelesalesWasfatyAllRouteImport } from './routes/_app.telesales.wasfaty.all'
 import { Route as AppTelesalesImportsIdRouteImport } from './routes/_app.telesales.imports.$id'
 import { Route as AppTelesalesCustomersIdRouteImport } from './routes/_app.telesales.customers.$id'
+import { Route as AppCrmWasfatyWorkedRouteImport } from './routes/_app.crm.wasfaty.worked'
+import { Route as AppCrmWasfatyAllRouteImport } from './routes/_app.crm.wasfaty.all'
 
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
   id: '/reset-password',
@@ -217,6 +221,11 @@ const AppOrdersIdRoute = AppOrdersIdRouteImport.update({
   path: '/orders/$id',
   getParentRoute: () => AppRoute,
 } as any)
+const AppCrmCashRoute = AppCrmCashRouteImport.update({
+  id: '/crm/cash',
+  path: '/crm/cash',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppComplaintsNewRoute = AppComplaintsNewRouteImport.update({
   id: '/complaints/new',
   path: '/complaints/new',
@@ -311,6 +320,11 @@ const AppTelesalesWasfatyIndexRoute =
     path: '/telesales/wasfaty/',
     getParentRoute: () => AppRoute,
   } as any)
+const AppCrmWasfatyIndexRoute = AppCrmWasfatyIndexRouteImport.update({
+  id: '/crm/wasfaty/',
+  path: '/crm/wasfaty/',
+  getParentRoute: () => AppRoute,
+} as any)
 const LovableEmailQueueProcessRoute =
   LovableEmailQueueProcessRouteImport.update({
     id: '/lovable/email/queue/process',
@@ -354,6 +368,16 @@ const AppTelesalesCustomersIdRoute = AppTelesalesCustomersIdRouteImport.update({
   path: '/telesales/customers/$id',
   getParentRoute: () => AppRoute,
 } as any)
+const AppCrmWasfatyWorkedRoute = AppCrmWasfatyWorkedRouteImport.update({
+  id: '/crm/wasfaty/worked',
+  path: '/crm/wasfaty/worked',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppCrmWasfatyAllRoute = AppCrmWasfatyAllRouteImport.update({
+  id: '/crm/wasfaty/all',
+  path: '/crm/wasfaty/all',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -389,6 +413,7 @@ export interface FileRoutesByFullPath {
   '/calls/telesales': typeof AppCallsTelesalesRoute
   '/complaints/$id': typeof AppComplaintsIdRoute
   '/complaints/new': typeof AppComplaintsNewRoute
+  '/crm/cash': typeof AppCrmCashRoute
   '/orders/$id': typeof AppOrdersIdRoute
   '/orders/new': typeof AppOrdersNewRoute
   '/telesales/$id': typeof AppTelesalesIdRoute
@@ -402,6 +427,8 @@ export interface FileRoutesByFullPath {
   '/complaints/': typeof AppComplaintsIndexRoute
   '/orders/': typeof AppOrdersIndexRoute
   '/telesales/': typeof AppTelesalesIndexRoute
+  '/crm/wasfaty/all': typeof AppCrmWasfatyAllRoute
+  '/crm/wasfaty/worked': typeof AppCrmWasfatyWorkedRoute
   '/telesales/customers/$id': typeof AppTelesalesCustomersIdRoute
   '/telesales/imports/$id': typeof AppTelesalesImportsIdRoute
   '/telesales/wasfaty/all': typeof AppTelesalesWasfatyAllRoute
@@ -410,6 +437,7 @@ export interface FileRoutesByFullPath {
   '/lovable/email/auth/preview': typeof LovableEmailAuthPreviewRoute
   '/lovable/email/auth/webhook': typeof LovableEmailAuthWebhookRoute
   '/lovable/email/queue/process': typeof LovableEmailQueueProcessRoute
+  '/crm/wasfaty/': typeof AppCrmWasfatyIndexRoute
   '/telesales/wasfaty/': typeof AppTelesalesWasfatyIndexRoute
 }
 export interface FileRoutesByTo {
@@ -446,6 +474,7 @@ export interface FileRoutesByTo {
   '/calls/telesales': typeof AppCallsTelesalesRoute
   '/complaints/$id': typeof AppComplaintsIdRoute
   '/complaints/new': typeof AppComplaintsNewRoute
+  '/crm/cash': typeof AppCrmCashRoute
   '/orders/$id': typeof AppOrdersIdRoute
   '/orders/new': typeof AppOrdersNewRoute
   '/telesales/$id': typeof AppTelesalesIdRoute
@@ -459,6 +488,8 @@ export interface FileRoutesByTo {
   '/complaints': typeof AppComplaintsIndexRoute
   '/orders': typeof AppOrdersIndexRoute
   '/telesales': typeof AppTelesalesIndexRoute
+  '/crm/wasfaty/all': typeof AppCrmWasfatyAllRoute
+  '/crm/wasfaty/worked': typeof AppCrmWasfatyWorkedRoute
   '/telesales/customers/$id': typeof AppTelesalesCustomersIdRoute
   '/telesales/imports/$id': typeof AppTelesalesImportsIdRoute
   '/telesales/wasfaty/all': typeof AppTelesalesWasfatyAllRoute
@@ -467,6 +498,7 @@ export interface FileRoutesByTo {
   '/lovable/email/auth/preview': typeof LovableEmailAuthPreviewRoute
   '/lovable/email/auth/webhook': typeof LovableEmailAuthWebhookRoute
   '/lovable/email/queue/process': typeof LovableEmailQueueProcessRoute
+  '/crm/wasfaty': typeof AppCrmWasfatyIndexRoute
   '/telesales/wasfaty': typeof AppTelesalesWasfatyIndexRoute
 }
 export interface FileRoutesById {
@@ -505,6 +537,7 @@ export interface FileRoutesById {
   '/_app/calls/telesales': typeof AppCallsTelesalesRoute
   '/_app/complaints/$id': typeof AppComplaintsIdRoute
   '/_app/complaints/new': typeof AppComplaintsNewRoute
+  '/_app/crm/cash': typeof AppCrmCashRoute
   '/_app/orders/$id': typeof AppOrdersIdRoute
   '/_app/orders/new': typeof AppOrdersNewRoute
   '/_app/telesales/$id': typeof AppTelesalesIdRoute
@@ -518,6 +551,8 @@ export interface FileRoutesById {
   '/_app/complaints/': typeof AppComplaintsIndexRoute
   '/_app/orders/': typeof AppOrdersIndexRoute
   '/_app/telesales/': typeof AppTelesalesIndexRoute
+  '/_app/crm/wasfaty/all': typeof AppCrmWasfatyAllRoute
+  '/_app/crm/wasfaty/worked': typeof AppCrmWasfatyWorkedRoute
   '/_app/telesales/customers/$id': typeof AppTelesalesCustomersIdRoute
   '/_app/telesales/imports/$id': typeof AppTelesalesImportsIdRoute
   '/_app/telesales/wasfaty/all': typeof AppTelesalesWasfatyAllRoute
@@ -526,6 +561,7 @@ export interface FileRoutesById {
   '/lovable/email/auth/preview': typeof LovableEmailAuthPreviewRoute
   '/lovable/email/auth/webhook': typeof LovableEmailAuthWebhookRoute
   '/lovable/email/queue/process': typeof LovableEmailQueueProcessRoute
+  '/_app/crm/wasfaty/': typeof AppCrmWasfatyIndexRoute
   '/_app/telesales/wasfaty/': typeof AppTelesalesWasfatyIndexRoute
 }
 export interface FileRouteTypes {
@@ -564,6 +600,7 @@ export interface FileRouteTypes {
     | '/calls/telesales'
     | '/complaints/$id'
     | '/complaints/new'
+    | '/crm/cash'
     | '/orders/$id'
     | '/orders/new'
     | '/telesales/$id'
@@ -577,6 +614,8 @@ export interface FileRouteTypes {
     | '/complaints/'
     | '/orders/'
     | '/telesales/'
+    | '/crm/wasfaty/all'
+    | '/crm/wasfaty/worked'
     | '/telesales/customers/$id'
     | '/telesales/imports/$id'
     | '/telesales/wasfaty/all'
@@ -585,6 +624,7 @@ export interface FileRouteTypes {
     | '/lovable/email/auth/preview'
     | '/lovable/email/auth/webhook'
     | '/lovable/email/queue/process'
+    | '/crm/wasfaty/'
     | '/telesales/wasfaty/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -621,6 +661,7 @@ export interface FileRouteTypes {
     | '/calls/telesales'
     | '/complaints/$id'
     | '/complaints/new'
+    | '/crm/cash'
     | '/orders/$id'
     | '/orders/new'
     | '/telesales/$id'
@@ -634,6 +675,8 @@ export interface FileRouteTypes {
     | '/complaints'
     | '/orders'
     | '/telesales'
+    | '/crm/wasfaty/all'
+    | '/crm/wasfaty/worked'
     | '/telesales/customers/$id'
     | '/telesales/imports/$id'
     | '/telesales/wasfaty/all'
@@ -642,6 +685,7 @@ export interface FileRouteTypes {
     | '/lovable/email/auth/preview'
     | '/lovable/email/auth/webhook'
     | '/lovable/email/queue/process'
+    | '/crm/wasfaty'
     | '/telesales/wasfaty'
   id:
     | '__root__'
@@ -679,6 +723,7 @@ export interface FileRouteTypes {
     | '/_app/calls/telesales'
     | '/_app/complaints/$id'
     | '/_app/complaints/new'
+    | '/_app/crm/cash'
     | '/_app/orders/$id'
     | '/_app/orders/new'
     | '/_app/telesales/$id'
@@ -692,6 +737,8 @@ export interface FileRouteTypes {
     | '/_app/complaints/'
     | '/_app/orders/'
     | '/_app/telesales/'
+    | '/_app/crm/wasfaty/all'
+    | '/_app/crm/wasfaty/worked'
     | '/_app/telesales/customers/$id'
     | '/_app/telesales/imports/$id'
     | '/_app/telesales/wasfaty/all'
@@ -700,6 +747,7 @@ export interface FileRouteTypes {
     | '/lovable/email/auth/preview'
     | '/lovable/email/auth/webhook'
     | '/lovable/email/queue/process'
+    | '/_app/crm/wasfaty/'
     | '/_app/telesales/wasfaty/'
   fileRoutesById: FileRoutesById
 }
@@ -936,6 +984,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppOrdersIdRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/crm/cash': {
+      id: '/_app/crm/cash'
+      path: '/crm/cash'
+      fullPath: '/crm/cash'
+      preLoaderRoute: typeof AppCrmCashRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/complaints/new': {
       id: '/_app/complaints/new'
       path: '/complaints/new'
@@ -1062,6 +1117,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppTelesalesWasfatyIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/crm/wasfaty/': {
+      id: '/_app/crm/wasfaty/'
+      path: '/crm/wasfaty'
+      fullPath: '/crm/wasfaty/'
+      preLoaderRoute: typeof AppCrmWasfatyIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/lovable/email/queue/process': {
       id: '/lovable/email/queue/process'
       path: '/lovable/email/queue/process'
@@ -1118,6 +1180,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppTelesalesCustomersIdRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/crm/wasfaty/worked': {
+      id: '/_app/crm/wasfaty/worked'
+      path: '/crm/wasfaty/worked'
+      fullPath: '/crm/wasfaty/worked'
+      preLoaderRoute: typeof AppCrmWasfatyWorkedRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/crm/wasfaty/all': {
+      id: '/_app/crm/wasfaty/all'
+      path: '/crm/wasfaty/all'
+      fullPath: '/crm/wasfaty/all'
+      preLoaderRoute: typeof AppCrmWasfatyAllRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
@@ -1142,6 +1218,7 @@ interface AppRouteChildren {
   AppCallsTelesalesRoute: typeof AppCallsTelesalesRoute
   AppComplaintsIdRoute: typeof AppComplaintsIdRoute
   AppComplaintsNewRoute: typeof AppComplaintsNewRoute
+  AppCrmCashRoute: typeof AppCrmCashRoute
   AppOrdersIdRoute: typeof AppOrdersIdRoute
   AppOrdersNewRoute: typeof AppOrdersNewRoute
   AppTelesalesIdRoute: typeof AppTelesalesIdRoute
@@ -1155,10 +1232,13 @@ interface AppRouteChildren {
   AppComplaintsIndexRoute: typeof AppComplaintsIndexRoute
   AppOrdersIndexRoute: typeof AppOrdersIndexRoute
   AppTelesalesIndexRoute: typeof AppTelesalesIndexRoute
+  AppCrmWasfatyAllRoute: typeof AppCrmWasfatyAllRoute
+  AppCrmWasfatyWorkedRoute: typeof AppCrmWasfatyWorkedRoute
   AppTelesalesCustomersIdRoute: typeof AppTelesalesCustomersIdRoute
   AppTelesalesImportsIdRoute: typeof AppTelesalesImportsIdRoute
   AppTelesalesWasfatyAllRoute: typeof AppTelesalesWasfatyAllRoute
   AppTelesalesWasfatyWorkedRoute: typeof AppTelesalesWasfatyWorkedRoute
+  AppCrmWasfatyIndexRoute: typeof AppCrmWasfatyIndexRoute
   AppTelesalesWasfatyIndexRoute: typeof AppTelesalesWasfatyIndexRoute
 }
 
@@ -1183,6 +1263,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppCallsTelesalesRoute: AppCallsTelesalesRoute,
   AppComplaintsIdRoute: AppComplaintsIdRoute,
   AppComplaintsNewRoute: AppComplaintsNewRoute,
+  AppCrmCashRoute: AppCrmCashRoute,
   AppOrdersIdRoute: AppOrdersIdRoute,
   AppOrdersNewRoute: AppOrdersNewRoute,
   AppTelesalesIdRoute: AppTelesalesIdRoute,
@@ -1196,10 +1277,13 @@ const AppRouteChildren: AppRouteChildren = {
   AppComplaintsIndexRoute: AppComplaintsIndexRoute,
   AppOrdersIndexRoute: AppOrdersIndexRoute,
   AppTelesalesIndexRoute: AppTelesalesIndexRoute,
+  AppCrmWasfatyAllRoute: AppCrmWasfatyAllRoute,
+  AppCrmWasfatyWorkedRoute: AppCrmWasfatyWorkedRoute,
   AppTelesalesCustomersIdRoute: AppTelesalesCustomersIdRoute,
   AppTelesalesImportsIdRoute: AppTelesalesImportsIdRoute,
   AppTelesalesWasfatyAllRoute: AppTelesalesWasfatyAllRoute,
   AppTelesalesWasfatyWorkedRoute: AppTelesalesWasfatyWorkedRoute,
+  AppCrmWasfatyIndexRoute: AppCrmWasfatyIndexRoute,
   AppTelesalesWasfatyIndexRoute: AppTelesalesWasfatyIndexRoute,
 }
 

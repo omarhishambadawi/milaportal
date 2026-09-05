@@ -78,7 +78,7 @@ describe("Cross & Up-sell is one screen", () => {
   });
 
   it("the Cash page offers it as one button", () => {
-    const page = source("routes/_app.telesales.index.tsx");
+    const page = source("routes/_app.crm.cash.tsx");
     expect(page).toContain('to="/telesales/catalog"');
     expect(page).toContain("Cross &amp; Up-sell");
     // And no longer as two links, which required visiting them in the right

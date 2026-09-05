@@ -63,6 +63,7 @@ export const AUDIT_ACTION_LABEL = {
   "telesales.import_restored": "Restored a telesales import",
   "telesales.import_deleted": "Deleted a telesales import permanently",
   "telesales.product_added": "Added a product to the telesales catalogue",
+  "telesales.lead_deleted": "Removed a telesales lead from the queue",
 } as const satisfies Record<AuditAction, string>;
 
 /**

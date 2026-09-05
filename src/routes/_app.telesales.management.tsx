@@ -136,7 +136,7 @@ function TelesalesManagementPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Button asChild variant="ghost" size="sm">
-            <Link to="/telesales">
+            <Link to="/crm/cash">
               <ArrowLeft className="mr-2 h-4 w-4" />
               Queue
             </Link>

@@ -21,7 +21,13 @@ import {
   searchFromQueueState,
   validateQueueSearch,
 } from "@/features/telesales/queue-search";
-import { WASFATY_VIEWS, wasfatyView } from "@/features/telesales/wasfaty-views";
+import {
+  WASFATY_VIEWS,
+  generatedLeadsWindow,
+  wasfatyView,
+} from "@/features/telesales/wasfaty-views";
+import { resolveCycle } from "@/features/telesales/hooks/use-telesales-queue";
+import { addDays, businessToday, wasfatyWindow } from "../dates";
 import { OUTCOME_STYLES, REFILL_SEVERITY_STYLES } from "@/features/telesales/constants";
 import { navKey, resolveActivePath, type NavItemData } from "@/components/app-sidebar";
 
@@ -47,10 +53,23 @@ const source = (rel: string) => readFileSync(join(ROOT, rel), "utf8");
 
 const QUEUE_HOOK = "features/telesales/hooks/use-telesales-queue.ts";
 const QUEUE_BODY = "features/telesales/components/lead-queue.tsx";
-const CASH_PAGE = "routes/_app.telesales.index.tsx";
+const CASH_PAGE = "routes/_app.crm.cash.tsx";
+const LEGACY_PAGE = "routes/_app.telesales.index.tsx";
 const WASFATY_PAGE = "features/telesales/components/wasfaty-page.tsx";
 const LAYOUT = "routes/_app.tsx";
 const ROW = "features/telesales/components/lead-row.tsx";
+
+/** This phase's migration, read the same way every other rule here is. */
+const MIGRATION = readFileSync(
+  join(
+    ROOT,
+    "..",
+    "supabase",
+    "migrations",
+    "20260913120000_telesales_cycles_and_lead_deletion.sql",
+  ),
+  "utf8",
+);
 
 const icon = () => null;
 
@@ -95,9 +114,28 @@ describe("Cash and Wasfaty are separate domains", () => {
     // a fourth pipeline tomorrow cannot put it on this page by accident.
     expect(page).not.toMatch(/\bLEAD_TYPES\b(?!\s*\.)/);
     expect(page).not.toMatch(/import \{[^}]*\bLEAD_TYPES\b/);
-    // An old bookmark is redirected rather than silently widened or narrowed.
-    expect(page).toContain('search.type === "wasfaty"');
-    expect(page).toContain('redirect({ to: "/telesales/wasfaty"');
+    // The redirect moved off this page with the route rename; it is the legacy
+    // route's whole job now, and there is one implementation of the queue.
+    expect(page).not.toContain("redirect(");
+    expect(page).toContain('createFileRoute("/_app/crm/cash")');
+  });
+
+  it("the old /telesales route redirects rather than duplicating the page", () => {
+    /*
+     * Bookmark compatibility without a second implementation. `/telesales` is
+     * where the CRM lived; it forwards to the desk the query names, carrying
+     * every other filter with it, and renders nothing of its own.
+     */
+    const legacy = source(LEGACY_PAGE);
+    expect(legacy).toContain('search.type === "wasfaty"');
+    expect(legacy).toContain('redirect({ to: "/crm/wasfaty"');
+    expect(legacy).toContain('redirect({ to: "/crm/cash"');
+    // Filters travel with the redirect.
+    expect(legacy).toMatch(/redirect\(\{ to: "\/crm\/wasfaty", search: rest/);
+    expect(legacy).toMatch(/redirect\(\{ to: "\/crm\/cash", search/);
+    // And it is a redirect, not a page: nothing renders here.
+    expect(legacy).not.toContain("<LeadQueue");
+    expect(legacy).not.toContain("component:");
   });
 
   it("the Wasfaty pages carry only Wasfaty", () => {
@@ -135,18 +173,69 @@ describe("the three Wasfaty views", () => {
     expect(page).not.toMatch(/\.(insert|upsert|update)\(/);
   });
 
-  it("Generated Leads is the default page and keeps the queue's own defaults", () => {
+  it("Generated Leads is the default page and opens on the daily window", () => {
     const generated = wasfatyView("generated");
-    expect(generated.to).toBe("/telesales/wasfaty");
-    // Empty, deliberately: this view must not drift from what the daily run
-    // produces, so it inherits rather than restates.
-    expect(generated.defaults).toEqual({});
+    expect(generated.to).toBe("/crm/wasfaty");
     expect(generated.worked).toBe("all");
+    // A day and its successor, from the same function the generator runs.
+    const d = generated.defaults();
+    expect(d).toEqual(generatedLeadsWindow());
+    expect(d.dateFrom).toBe(businessToday());
+    expect(d.dateTo).toBe(addDays(businessToday(), 1));
+    // Status and lifecycle are inherited, not restated: this view must not
+    // drift from what the daily process produces.
+    expect(d.status).toBeUndefined();
+    expect(d.lifecycle).toBeUndefined();
+    // A daily question, so it is not narrowed to a monthly cycle as well.
+    expect(generated.cycles).toBe(false);
   });
 
-  it("All Leads widens both narrowing defaults and nothing else", () => {
-    expect(wasfatyView("all").defaults).toEqual({ status: "all", lifecycle: "all" });
+  it("the daily window follows the rule rather than restating it", () => {
+    // The brief's worked example: on 5 September the page opens on 5 → 6.
+    expect(wasfatyWindow("2026-09-05", { days: 2 })).toEqual({
+      from: "2026-09-05",
+      to: "2026-09-06",
+    });
+  });
+
+  it("All Leads widens both narrowing defaults and works one cycle at a time", () => {
+    expect(wasfatyView("all").defaults()).toEqual({ status: "all", lifecycle: "all" });
     expect(wasfatyView("all").worked).toBe("all");
+    expect(wasfatyView("all").cycles).toBe(true);
+    expect(wasfatyView("worked").cycles).toBe(true);
+  });
+
+  it("All Leads is the current cycle, not every lead ever generated", () => {
+    // The sentence the page shows is the definition the brief corrects.
+    expect(wasfatyView("all").description).toContain("selected import cycle");
+    expect(wasfatyView("all").description).not.toContain("ever generated");
+    expect(wasfatyView("generated").description).toContain("current daily cycle");
+    expect(wasfatyView("worked").description).toContain("selected cycle");
+  });
+
+  it("the cycle is a filter over the one lead table, not a table per month", () => {
+    const hook = source(QUEUE_HOOK);
+    // One `import_id` predicate, server-side, on the same rows every view reads.
+    expect(hook).toContain('q.eq("import_id", importIds[0])');
+    expect(hook).toContain('q.in("import_id", importIds)');
+    expect(hook).not.toMatch(/from\("telesales_leads_\w+"\)/);
+  });
+
+  it("an unknown or deleted cycle widens rather than showing an empty month", () => {
+    const cycles = [
+      { period: "2026-10", label: "October 2026", importIds: ["a"], leads: 3500 },
+      { period: "2026-09", label: "September 2026", importIds: ["b"], leads: 3400 },
+    ];
+    // Absent means the current cycle, which is the newest one.
+    expect(resolveCycle(cycles, "")).toEqual({ period: "2026-10", importIds: "a" });
+    // A historical cycle stays reachable.
+    expect(resolveCycle(cycles, "2026-09")).toEqual({ period: "2026-09", importIds: "b" });
+    // "All periods" asks for no cycle clause at all.
+    expect(resolveCycle(cycles, "all")).toEqual({ period: "all", importIds: "" });
+    // A month that no longer exists is not an empty page with a date on it.
+    expect(resolveCycle(cycles, "2020-01")).toEqual({ period: "all", importIds: "" });
+    // Before the list arrives, nothing is narrowed.
+    expect(resolveCycle(undefined, "").importIds).toBe("");
   });
 
   it("Worked Leads asks about the recorded action, not the status", () => {
@@ -161,13 +250,21 @@ describe("the three Wasfaty views", () => {
     expect(hook).toContain('q.not("last_outcome", "is", null)');
   });
 
-  it("each view is a real URL", () => {
+  it("each view is a real URL, and its old one still answers", () => {
     for (const v of WASFATY_VIEWS) {
       const file =
         v.id === "generated"
+          ? "routes/_app.crm.wasfaty.index.tsx"
+          : `routes/_app.crm.wasfaty.${v.id}.tsx`;
+      expect(existsSync(join(ROOT, file)), v.to).toBe(true);
+
+      // The pre-rename path is kept as a redirect, so bookmarks survive.
+      const legacy =
+        v.id === "generated"
           ? "routes/_app.telesales.wasfaty.index.tsx"
           : `routes/_app.telesales.wasfaty.${v.id}.tsx`;
-      expect(existsSync(join(ROOT, file)), v.to).toBe(true);
+      expect(existsSync(join(ROOT, legacy)), legacy).toBe(true);
+      expect(source(legacy)).toContain(`redirect({ to: "${v.to}"`);
     }
   });
 
@@ -177,7 +274,7 @@ describe("the three Wasfaty views", () => {
      * so if the writer and the reader disagreed about what the default is,
      * choosing "Open" on All Leads would write nothing and read back as "All".
      */
-    const d = wasfatyView("all").defaults;
+    const d = wasfatyView("all").defaults();
     const state = queueStateFromSearch({}, d);
     expect(state.status).toBe("all");
 
@@ -234,8 +331,22 @@ describe("the date range", () => {
   it("changing a date returns to the first page", () => {
     // Page 4 of a narrower range is a page nobody asked for, and usually empty.
     const body = source(QUEUE_BODY);
-    expect(body).toMatch(/dateFrom: e\.target\.value, page: 0/);
-    expect(body).toMatch(/dateTo: e\.target\.value, page: 0/);
+    expect(body).toMatch(/dateFrom: r\?\.from \? isoOf\(r\.from\) : ""/);
+    expect(body).toMatch(/page: 0,\s*\}\)\s*\}\s*\/>/);
+  });
+
+  it("the date range is the portal's own calendar, not a second one", () => {
+    /*
+     * The same `DateRangePicker` the Dashboard and Orders mount, presets and
+     * all. It replaced a pair of native date inputs that were this module's own
+     * invention — one calendar in the product means an agent who has picked
+     * "Last month" on Orders already knows how to pick it here.
+     */
+    const body = source(QUEUE_BODY);
+    expect(body).toContain('from "@/components/date-range-picker"');
+    expect(body).toContain("<DateRangePicker");
+    // And no bespoke replacement left behind.
+    expect(body).not.toMatch(/<Input[\s\S]{0,120}type="date"/);
   });
 });
 
@@ -246,38 +357,40 @@ describe("the date range", () => {
 describe("the CRM navigation", () => {
   const layout = source(LAYOUT);
 
-  it("groups Cash over its two pipelines and stands Wasfaty beside them", () => {
-    expect(layout).toMatch(/label: "CRM"[\s\S]{0,1600}groupLabel: "Cash"/);
-    expect(layout).toMatch(/search: \{ type: "cash" \}/);
-    expect(layout).toMatch(/search: \{ type: "retention" \}/);
-    expect(layout).toMatch(/to: "\/telesales\/wasfaty"[\s\S]{0,200}groupLabel: "Wasfaty"/);
+  it("offers Cash and Wasfaty, and nothing else", () => {
+    expect(layout).toMatch(/label: "CRM"[\s\S]{0,1600}to: "\/crm\/cash", label: "Cash"/);
+    expect(layout).toMatch(/to: "\/crm\/wasfaty", label: "Wasfaty"/);
+    /*
+     * Retention is not a third destination. It is the next cycle of a Cash
+     * conversion, worked by the same desk from the same catalogue, and it is a
+     * chip on the Cash page — a sidebar entry that lands on the same queue with
+     * one filter applied is a menu entry pretending to be a place.
+     */
+    expect(layout).not.toMatch(/label: "Retention"/);
+    expect(layout).not.toMatch(/search: \{ type: "retention" \}/);
+    // And no Telesales label survives in the CRM menu.
+    expect(layout).not.toMatch(/to: "\/telesales"/);
   });
 
-  it("Cash and Retention are one route asked two questions", () => {
-    // Not two routes: a second one would have to be kept in step with the
-    // parent, and there is nothing different about it to keep.
+  it("each desk is its own route, and lights up on it", () => {
     const crm: NavItemData = {
-      to: "/telesales",
+      to: "/crm/cash",
       label: "CRM",
       icon,
       children: [
-        { to: "/telesales", search: { type: "cash" }, label: "Cash", icon },
-        { to: "/telesales", search: { type: "retention" }, label: "Retention", icon },
-        { to: "/telesales/wasfaty", label: "Wasfaty", icon },
+        { to: "/crm/cash", label: "Cash", icon },
+        { to: "/crm/wasfaty", label: "Wasfaty", icon },
       ],
     };
-    expect(navKey(crm.children![0])).toBe("/telesales?type=cash");
-    expect(navKey(crm.children![1])).toBe("/telesales?type=retention");
-    expect(navKey(crm.children![2])).toBe("/telesales/wasfaty");
+    expect(navKey(crm.children![0])).toBe("/crm/cash");
+    expect(navKey(crm.children![1])).toBe("/crm/wasfaty");
 
-    // Only the one whose pin matches lights up.
-    expect(resolveActivePath([crm], "/telesales", { type: "cash" })).toBe("/telesales?type=cash");
-    expect(resolveActivePath([crm], "/telesales", { type: "retention" })).toBe(
-      "/telesales?type=retention",
-    );
-    // And with no pin, the parent — not whichever child happened to be first.
-    expect(resolveActivePath([crm], "/telesales", {})).toBe("/telesales");
-    expect(resolveActivePath([crm], "/telesales/wasfaty", {})).toBe("/telesales/wasfaty");
+    expect(resolveActivePath([crm], "/crm/cash", {})).toBe("/crm/cash");
+    expect(resolveActivePath([crm], "/crm/wasfaty", {})).toBe("/crm/wasfaty");
+    // The three Wasfaty views are one destination: All Leads must not light up
+    // Cash on the way past.
+    expect(resolveActivePath([crm], "/crm/wasfaty/all", {})).toBe("/crm/wasfaty");
+    expect(resolveActivePath([crm], "/crm/wasfaty/worked", {})).toBe("/crm/wasfaty");
   });
 
   it("the layout passes the search in, or the two children could never differ", () => {
@@ -540,5 +653,214 @@ describe("the Prescription No format", () => {
       { sourceType: "cash" },
     );
     expect(parsed.issues.map((i) => i.code)).not.toContain("invalid_prescription_no");
+  });
+});
+
+/* ===================================================================== */
+/* F. The Wasfaty filter row                                             */
+/* ===================================================================== */
+
+describe("Wasfaty's filters", () => {
+  const page = source(WASFATY_PAGE);
+  const body = source(QUEUE_BODY);
+
+  it("speaks the Recorded Action vocabulary, not a second status list", () => {
+    /*
+     * The brief's list, in the brief's order, with the brief's labels. Asserted
+     * against `WASFATY_OUTCOME_KEYS` rather than retyped, because a filter that
+     * carried its own copy of the vocabulary is exactly how a screen ends up
+     * offering an action the dialog cannot record.
+     */
+    expect(page).toContain('statusFilter="outcome"');
+    expect(page).toContain("outcomeKeys={WASFATY_OUTCOME_KEYS}");
+    expect(WASFATY_OUTCOME_KEYS.map((k) => OUTCOME_BY_KEY.get(k)!.label)).toEqual([
+      "Order Created",
+      "No Order",
+      "No Answer",
+      "Reschedule Call",
+      "Dispensed / Expired",
+      "Below Threshold",
+      "Refill Too Soon",
+      "Out of Stock",
+    ]);
+    // The stored keys are the historical ones. `low_price` is still `low_price`.
+    expect(WASFATY_OUTCOME_KEYS).toContain("low_price");
+  });
+
+  it("filters on the recorded action server-side", () => {
+    const hook = source(QUEUE_HOOK);
+    expect(hook).toContain('filters.outcome !== "all"');
+    expect(hook).toContain('q.eq("last_outcome", filters.outcome)');
+  });
+
+  it("has dropped Active Leads and All Products", () => {
+    expect(page).toContain("showLifecycleFilter={false}");
+    expect(page).toContain("showProductFilter={false}");
+    // Gone rather than hidden: the controls are conditional in one place, so
+    // there is no orphan state or query parameter left behind.
+    expect(body).toContain("{showLifecycleFilter ? (");
+    expect(body).toContain("{showProductFilter ? (");
+  });
+
+  it("offers a Telesales Agent filter, server-side and paged", () => {
+    const hook = source(QUEUE_HOOK);
+    // The assignment, which is the existing model — not the last person to
+    // record something, which is a different column and a different question.
+    expect(hook).toContain('q.eq("assigned_to", filters.agent)');
+    expect(body).toContain('aria-label="Telesales agent"');
+    expect(body).toContain("setAgent");
+    // Part of `filters`, so it is in the query key, in the count and in the
+    // range — the pager cannot disagree with the rows.
+    expect(body).toMatch(/const filters = useMemo\(\s*\(\) => \(\{[\s\S]{0,400}\bagent,/);
+    // A supervisor's control. An agent has "My leads", which asks the same
+    // question of themselves.
+    expect(body).toMatch(/\{canManage \? \([\s\S]{0,400}aria-label="Telesales agent"/);
+  });
+
+  it("validates an agent id rather than trusting the URL", () => {
+    const id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+    expect(validateQueueSearch({ agent: id }).agent).toBe(id);
+    expect(validateQueueSearch({ agent: "'; drop table" }).agent).toBeUndefined();
+    expect(validateQueueSearch({ agent: "all" }).agent).toBeUndefined();
+  });
+
+  it("validates a cycle rather than trusting the URL", () => {
+    expect(validateQueueSearch({ cycle: "2026-10" }).cycle).toBe("2026-10");
+    expect(validateQueueSearch({ cycle: "all" }).cycle).toBe("all");
+    expect(validateQueueSearch({ cycle: "october" }).cycle).toBeUndefined();
+    // Absent means the current cycle, which is a datum. It writes nothing.
+    expect(validateQueueSearch({}).cycle).toBeUndefined();
+  });
+});
+
+/* ===================================================================== */
+/* G. Order Created carries no order value on Wasfaty                    */
+/* ===================================================================== */
+
+describe("the Order Created result", () => {
+  it("does not ask a Wasfaty agent for an order value", () => {
+    const dialog = source("features/telesales/components/outcome-dialog.tsx");
+    expect(dialog).toContain('const showOrderValue = isConversion && leadType !== "wasfaty"');
+    expect(dialog).toContain("{showOrderValue ? (");
+    // And nothing is posted for it either, so the field is genuinely absent
+    // rather than invisibly submitting whatever was last typed.
+    expect(dialog).toContain(
+      "orderValue: showOrderValue && orderValue ? Number(orderValue) : null",
+    );
+  });
+
+  it("keeps the field for Cash, and keeps the column either way", () => {
+    /*
+     * A Cash conversion is priced here and nowhere else, so removing it there
+     * would lose the number. The Wasfaty order is priced in the Wasfaty portal;
+     * what was typed here was a second, unverified copy.
+     */
+    const lead = source("routes/_app.telesales.$id.tsx");
+    expect(lead).toContain('l.lead_type !== "wasfaty" && l.converted_value != null');
+    // The backend field survives — only the presentation changed.
+    expect(source("lib/telesales/actions.server.ts")).toContain("update.converted_value");
+  });
+});
+
+/* ===================================================================== */
+/* H. Deleting one lead                                                  */
+/* ===================================================================== */
+
+describe("an administrator can remove a lead", () => {
+  const fn = source("lib/telesales.functions.ts");
+
+  it("is administrators only, and not merely hidden from everybody else", () => {
+    // `manage_telesales` first, because that is the module's boundary, and then
+    // the role, because this is the one write here that cannot be undone.
+    expect(fn).toMatch(
+      /telesalesDeleteLead[\s\S]{0,900}resolveActor\(supabase, userId, "manage"\)/,
+    );
+    expect(fn).toMatch(/telesalesDeleteLead[\s\S]{0,1200}isAdministrator\(actor\.role/);
+    expect(fn).toMatch(/telesalesDeleteLead[\s\S]{0,1400}Forbidden: administrator access required/);
+    // The UI offers it on the same test, so the two cannot drift apart.
+    expect(source(WASFATY_PAGE)).toContain("canDelete={isAdministrator(role)}");
+  });
+
+  it("is confirmed before anything runs", () => {
+    const body = source(QUEUE_BODY);
+    expect(body).toContain("<AlertDialog");
+    expect(body).toContain("Delete this lead?");
+    expect(body).toMatch(/onDelete=\{\(l\) => setDeleting\(l\)\}/);
+    // The row raises the intent; nothing mutates until the dialog's action.
+    expect(source(ROW)).not.toContain("useDeleteLead");
+  });
+
+  it("never destroys a call log to satisfy the UI", () => {
+    /*
+     * The append-only guarantee decides the outcome rather than being worked
+     * around by it: a lead nobody worked is deleted, a lead carrying history is
+     * archived so the timeline underneath survives. The trigger is untouched —
+     * DELETE is still only permitted for a 'created' row while the purge flag is
+     * set, so a wrong answer aborts the transaction instead of erasing evidence.
+     */
+    expect(MIGRATION).toContain("CREATE OR REPLACE FUNCTION public.telesales_delete_lead");
+    expect(MIGRATION).toContain(
+      "archive_reason = COALESCE(archive_reason, 'Deleted by an administrator')",
+    );
+    expect(MIGRATION).toContain("activity_type <> 'created'");
+    expect(MIGRATION).toContain("set_config('telesales.purge_import', 'on', true)");
+    // The invariant itself is not redefined here.
+    expect(MIGRATION).not.toContain("telesales_activity_is_immutable");
+    // service_role only; the administrator check is in the server function.
+    expect(MIGRATION).toMatch(
+      /REVOKE ALL ON FUNCTION public\.telesales_delete_lead\(uuid, uuid\) FROM PUBLIC, anon, authenticated/,
+    );
+  });
+
+  it("takes the lead out of every operational view", () => {
+    // Both paths land on a row the queue cannot return: deleted, or carrying
+    // `archived_at`, which every working read excludes before any other filter.
+    expect(source(QUEUE_HOOK)).toContain('q.is("archived_at", null)');
+    // And Wasfaty has no lifecycle control any more, so an archived lead cannot
+    // be reached from those three pages at all.
+    expect(source(WASFATY_PAGE)).toContain("showLifecycleFilter={false}");
+  });
+});
+
+/* ===================================================================== */
+/* I. The cycle, in the database                                         */
+/* ===================================================================== */
+
+describe("the import cycle", () => {
+  it("is carried on the lead, kept by the database rather than by the caller", () => {
+    expect(MIGRATION).toContain("ADD COLUMN IF NOT EXISTS import_id uuid");
+    // ON DELETE SET NULL, for the same reason `source_record_id` is: deleting an
+    // import must never delete the work done on its leads.
+    expect(MIGRATION).toContain("REFERENCES public.telesales_imports(id) ON DELETE SET NULL");
+    expect(MIGRATION).toContain("CREATE TRIGGER telesales_leads_inherit_import");
+    // Backfilled, so historical leads belong to the cycle that raised them.
+    expect(MIGRATION).toMatch(
+      /UPDATE public\.telesales_leads l\s*\n\s*SET import_id = s\.import_id/,
+    );
+  });
+
+  it("does not duplicate a lead per month", () => {
+    // One row per prescription, still. A prescription that appears again next
+    // month is the same lead — see `wasfatyKey` — and stays in the cycle that
+    // raised it.
+    expect(MIGRATION).not.toMatch(/CREATE TABLE[\s\S]{0,80}telesales_leads_\d/);
+    expect(MIGRATION).not.toContain("INSERT INTO public.telesales_leads");
+  });
+
+  it("lets an agent choose a period without granting them the raw import table", () => {
+    /*
+     * `telesales_imports` is `manage_telesales` only — a source record is the
+     * pharmacy's whole month, and the least-privilege reading is that the raw
+     * drop stays with the people who manage it. Which *batch* raised a lead is
+     * not the raw drop, so the period list comes through a definer function that
+     * returns the month, its label, the ids and a count. Nothing else.
+     */
+    expect(MIGRATION).toContain("CREATE OR REPLACE FUNCTION public.telesales_wasfaty_cycles");
+    expect(MIGRATION).toContain("public.has_permission(auth.uid(), 'view_telesales')");
+    expect(MIGRATION).toMatch(
+      /GRANT EXECUTE ON FUNCTION public\.telesales_wasfaty_cycles\(\) TO authenticated/,
+    );
+    expect(MIGRATION).not.toContain("i.file_name");
+    expect(MIGRATION).not.toContain("i.imported_by");
   });
 });

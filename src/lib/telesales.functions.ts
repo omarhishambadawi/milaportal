@@ -874,6 +874,48 @@ export const telesalesDeleteImport = createServerFn({ method: "POST" })
     return { ok: true as const, ...result };
   });
 
+/**
+ * Delete one lead. Administrators only.
+ *
+ * Narrower than `manage_telesales` on purpose. Every other write in this module
+ * is an operational one a team lead performs daily — assign, archive, restore —
+ * and each of them is reversible. This one is not: a lead nobody has worked is
+ * gone, and the audit entry is the only remaining evidence that it existed. That
+ * is an owner's or an administrator's call, not a supervisor's, and the check is
+ * here rather than in the RPC because `resolveActor` is where this module reads
+ * the actor's role.
+ *
+ * A lead carrying call history is archived rather than destroyed — see
+ * `telesales_delete_lead`. The result says which happened, and the toast repeats
+ * it, because "deleted" and "archived, log kept" are different facts and the
+ * person who pressed the button is entitled to know which one they caused.
+ */
+export const telesalesDeleteLead = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => z.object({ leadId: uuid }).parse(d))
+  .handler(async ({ context, data }) => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    const actor = await resolveActor(supabase, userId, "manage");
+    const { isAdministrator } = await import("@/lib/auth");
+    if (!isAdministrator(actor.role as any)) {
+      console.warn("[telesales/authz] refused lead deletion", { userId, role: actor.role });
+      throw new Error("Forbidden: administrator access required");
+    }
+
+    const { deleteLead } = await import("@/lib/telesales/manage.server");
+    const result = await deleteLead(await admin(), { leadId: data.leadId, actor });
+
+    const { AUDIT_ACTIONS, logAdminAction } = await import("@/lib/audit.server");
+    await logAdminAction({
+      actorId: userId,
+      action: AUDIT_ACTIONS.telesalesLeadDeleted,
+      targetUserId: null,
+      details: { ...result },
+    });
+
+    return { ok: true as const, ...result };
+  });
+
 /* ------------------------------------------------------------------------- */
 /* Management: archiving imports (legacy), and moving leads in bulk                   */
 /* ------------------------------------------------------------------------- */

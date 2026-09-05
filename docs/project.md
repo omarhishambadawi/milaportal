@@ -312,10 +312,10 @@ Conventions are documented in `src/routes/README.md` (`$id` dynamic, `$` splat,
 | `/calls/diagnostics`                                | `isAdministrator(role)`                                                |
 | `/calls/configuration`                              | `isOwnerRole(role)`                                                    |
 | `/branches`, `/branches/import`                     | `view_branches` / `admin_access`                                       |
-| `/telesales`                                        | `view_telesales` (in-page) — the **Cash CRM**: Cash + Retention        |
-| `/telesales/wasfaty`                                | `view_telesales` — Wasfaty Generated Leads (the desk's default)        |
-| `/telesales/wasfaty/all`                            | `view_telesales` — every Wasfaty lead                                  |
-| `/telesales/wasfaty/worked`                         | `view_telesales` — Wasfaty leads carrying a recorded action            |
+| `/crm/cash`                                         | `view_telesales` (in-page) — the **Cash CRM**: Cash + Retention        |
+| `/crm/wasfaty`                                      | `view_telesales` — Wasfaty Generated Leads (the desk's default)        |
+| `/crm/wasfaty/all`                                  | `view_telesales` — the selected Wasfaty import cycle                   |
+| `/crm/wasfaty/worked`                               | `view_telesales` — that cycle's leads carrying a recorded action       |
 | `/telesales/$id`                                    | `view_telesales`; acting needs `work_telesales` + ownership            |
 | `/telesales/import`                                 | `manage_telesales`                                                     |
 | `/telesales/management`                             | `view_telesales`; runs panel needs `manage_telesales`                  |
@@ -341,9 +341,29 @@ hand, and nothing else in the app linked to it.
 (product identity mapping) were also **removed**. Both are now tabs of
 `/telesales/catalog`, which is the order the work actually happens in — a
 companion cannot be configured for a product the catalogue does not carry, and
-neither screen said so. `/telesales?type=wasfaty` _is_ redirected, to
-`/telesales/wasfaty`, carrying every other filter on the URL: it was a real
-bookmark, and the leads it names still exist one route along.
+neither screen said so.
+
+**The CRM's own routes moved to `/crm`.** The desk is a CRM with two domains and
+the address bar should say which one you are on; `telesales` remains the name of
+the tables, the permission keys and the feature folder, because those are storage
+and renaming them would be a migration and a re-grant to change a string nobody
+outside the code reads. The four old paths are redirects, not second
+implementations:
+
+```
+/telesales               → /crm/cash
+/telesales?type=wasfaty  → /crm/wasfaty
+/telesales/wasfaty       → /crm/wasfaty
+/telesales/wasfaty/all   → /crm/wasfaty/all
+/telesales/wasfaty/worked→ /crm/wasfaty/worked
+```
+
+Each validates the incoming search first and forwards every other filter, so a
+saved "overdue, page 3" lands as exactly that. The auxiliary CRM screens —
+`/telesales/$id`, `/telesales/import`, `/telesales/catalog`,
+`/telesales/management`, `/telesales/recommended`, `/telesales/customers/$id`,
+`/telesales/imports/$id` — did **not** move: they are one screen each rather than
+a domain, and moving them would have been churn with no reader-facing gain.
 
 ### Server routes
 
@@ -6809,8 +6829,8 @@ below — so a phone never scrolls sideways. Branch labels come from
 
 ## Telesales CRM Module
 
-**Routes:** `/telesales` (the Cash CRM queue: Cash + Retention),
-`/telesales/wasfaty`, `/telesales/wasfaty/all`, `/telesales/wasfaty/worked`
+**Routes:** `/crm/cash` (the Cash CRM queue: Cash + Retention),
+`/crm/wasfaty`, `/crm/wasfaty/all`, `/crm/wasfaty/worked`
 (the three Wasfaty views), `/telesales/recommended` (ranked opportunities),
 `/telesales/$id` (lead), `/telesales/customers/$id` (customer),
 `/telesales/import` (import & generate), `/telesales/management` (team lead board),
@@ -8222,10 +8242,13 @@ Attempted rather than assumed:
 
 ## Telesales CRM — two domains, one lead record
 
-**Routes:** `/telesales` (Cash CRM), `/telesales/wasfaty`,
-`/telesales/wasfaty/all`, `/telesales/wasfaty/worked`, `/telesales/catalog`.
+**Routes:** `/crm/cash`, `/crm/wasfaty`, `/crm/wasfaty/all`,
+`/crm/wasfaty/worked`, `/telesales/catalog`. The old `/telesales…` paths are
+redirects; see **Retired routes kept as redirects**.
 **Shared component:** `src/features/telesales/components/lead-queue.tsx`.
-**Migration:** `20260912120000_telesales_crm_domains.sql`.
+**Migrations:** `20260912120000_telesales_crm_domains.sql` (the split),
+`20260913120000_telesales_cycles_and_lead_deletion.sql` (import cycles, and
+deleting one lead).
 
 ### Cash and Wasfaty are two desks
 
@@ -8264,40 +8287,86 @@ meaningless in a Cash filter.
 
 ```
 CRM
-├── Cash
-│   ├── Cash        /telesales?type=cash
-│   └── Retention   /telesales?type=retention
-└── Wasfaty         /telesales/wasfaty
+├── Cash      /crm/cash
+└── Wasfaty   /crm/wasfaty
 ```
 
-Cash is a **group heading over two destinations**, not a nested flyout: a submenu
-opening out of a submenu on a 92px rail is a pointer-tracking problem nobody
-enjoys solving, and a heading says the same thing. `NavItemData` gained
-`groupLabel` for that and `search` for the two children that are one route asked
-two questions.
+Two entries, because there are two desks. **Retention is not a third one.** A
+retention lead is literally the next cycle of a Cash conversion this system
+recorded — same customers, same catalogue, same question — and the Cash page
+carries it as a pipeline chip. A top-level destination that lands on the same
+queue with one filter applied is a menu entry pretending to be a place, so it was
+removed along with the `groupLabel` heading that existed to say Cash was a pair.
 
-`search` forced a second change. Every active-state comparison in the sidebar was
-an equality test against `to`, and `to` stopped being unique the moment two
-children shared a route — both Cash and Retention would have lit up at once, and
-`/telesales` with no query would have lit up whichever came first. `navKey()` is
-now the identity (`/telesales?type=cash`), and `resolveActivePath` takes the
-current search, matches only entries whose pinned query the URL agrees with, and
-prefers the more specific one.
+`NavItemData.search` and `navKey()` remain in the sidebar and are still exercised
+by other menus; the CRM no longer needs them, because no two CRM children share a
+route any more. Active state is now the ordinary longest-path match:
+`/crm/wasfaty/all` resolves to `/crm/wasfaty`, never to Cash.
 
 ### One Wasfaty lead, three views
 
 Defined as data in `src/features/telesales/wasfaty-views.ts`. Nothing copies,
 mirrors or re-generates a lead; these are three predicates over the same rows.
 
-| View            | Route                       | `status` / `lifecycle` default    | `worked` |
-| --------------- | --------------------------- | --------------------------------- | -------- |
-| Generated Leads | `/telesales/wasfaty`        | the queue's own (`open`/`active`) | `all`    |
-| All Leads       | `/telesales/wasfaty/all`    | `all` / `all`                     | `all`    |
-| Worked Leads    | `/telesales/wasfaty/worked` | `all` / `all`                     | `worked` |
+| View            | Route                 | Means                                     | Defaults                                    | `worked` |
+| --------------- | --------------------- | ----------------------------------------- | ------------------------------------------- | -------- |
+| Generated Leads | `/crm/wasfaty`        | actionable for the current daily cycle    | queue's own `open`/`active`, today→tomorrow | `all`    |
+| All Leads       | `/crm/wasfaty/all`    | the whole of the selected import cycle    | `all` / `all`, current cycle                | `all`    |
+| Worked Leads    | `/crm/wasfaty/worked` | that cycle's leads with a recorded action | `all` / `all`, current cycle                | `worked` |
 
-Generated Leads holds the queue's own defaults _by omission_ — it must not drift
-from what the daily generation run produces, and the daily logic is unchanged by
-this phase.
+Generated Leads inherits the queue's own status and lifecycle defaults _by
+omission_ — it must not drift from what the daily generation run produces, and
+the daily logic is unchanged by this phase. What it does state is the **date
+window**, and it states it by calling `wasfatyWindow()`, the function the
+generator itself runs: on 5 September the page opens with 5 → 6 September already
+selected, so an agent is not asked to reproduce a business rule by hand every
+morning. `WasfatyViewDef.defaults` is therefore a function rather than a
+constant — a date evaluated once at module load is wrong by the next morning.
+
+#### The cycle: All Leads is one month, not the archive
+
+Every monthly Wasfaty file is a new import and a new **cycle** — September's
+3,400 prescriptions, October's 3,500, November's 3,600. "All Leads" meaning
+"every prescription this system has ever seen" is a page that grows without
+bound and produces totals (6,900, then 10,500) that answer nobody's question, so
+All Leads and Worked Leads default to the **current** cycle and offer a
+**Period** control for the historical ones.
+
+The link is `telesales_leads.import_id`, added by
+`20260913120000_telesales_cycles_and_lead_deletion.sql`. It was already reachable
+one hop away — `source_record_id` → `telesales_source_records.import_id` — and it
+is copied onto the lead for two reasons, neither of them performance:
+
+- `telesales_source_records` is readable only with `manage_telesales`, and the
+  lifecycle view is `security_invoker`. An agent joining through it would get
+  NULL for every lead and an empty cycle filter. The raw drop stays restricted;
+  _which batch raised a lead_ is not the raw drop.
+- `source_record_id` is `ON DELETE SET NULL`, because deleting an import must
+  never delete the work done on its leads. A worked lead that outlives its import
+  keeps its own copy, and the new FK is `SET NULL` for the same reason.
+
+A `BEFORE INSERT` trigger (`telesales_lead_inherit_import`) fills it, rather than
+the generator: a lead whose cycle depended on the caller remembering to set it is
+a lead that quietly belongs to no cycle. Existing rows were backfilled in the
+same migration, and `telesales_leads_cycle_idx (lead_type, import_id) WHERE
+archived_at IS NULL` backs the read.
+
+**Nothing is duplicated.** There is still one lead row per prescription: a
+prescription that appears again in next month's file is the same lead — see
+`wasfatyKey` in `dedup.ts`, which deliberately excludes the date — and it stays
+in the cycle that raised it.
+
+The period list comes from `telesales_wasfaty_cycles()`, a `SECURITY DEFINER`
+function readable with `view_telesales`, returning the business month, its label,
+the batch ids in it and a lead count — no file names, no uploader, nothing else
+from `telesales_imports`, which stays `manage_telesales`. Two uploads of a
+corrected October file are one cycle, so the grouping is by month rather than by
+row. `resolveCycle()` turns an absent `?cycle` into the newest month, so staying
+on the current cycle writes nothing to the URL and a link shared in October still
+means "the current cycle" when it is opened in November; a month that no longer
+exists widens to "All periods" rather than showing an empty page with a date on
+it. Generated Leads does **not** take a cycle: it is a daily question, and two
+windows fighting over the same rows is not one.
 
 **Worked is `last_outcome IS NOT NULL`, not a status test.** Three of the eight
 Wasfaty actions leave the lead open, so a status-based Worked view would omit
@@ -8324,6 +8393,47 @@ to "no filter" instead of reaching the database.
 Two partial indexes back the new predicates:
 `telesales_leads_type_date_idx (lead_type, source_date DESC) WHERE archived_at IS NULL`
 and `telesales_leads_worked_idx`, the same shape with `last_outcome IS NOT NULL`.
+
+The control is the portal's own `DateRangePicker` — the same component the
+Dashboard and Orders mount, presets and all. It replaced a pair of native `type="date"`
+inputs that were this module's own invention: one calendar in the product means an
+agent who has picked "Last month" on Orders already knows how to pick it here.
+
+Because Generated Leads has a non-empty resting range, "cleared" had to become
+expressible: `ANY_DATE` (`?dateFrom=any`) is what the URL carries when an agent
+deliberately widens past the daily window. Without it, omission would mean "put
+the default back" and the range could never be cleared. Every other view's
+default is `""`, so nothing there changed.
+
+### The Wasfaty filter row
+
+Wasfaty's **status filter is the Recorded Action vocabulary**, not a parallel
+list that resembles it: the options are `WASFATY_OUTCOME_KEYS` resolved through
+`OUTCOME_BY_KEY`, so the filter, the dialog and the badge read one definition and
+the stored keys stay the historical ones (`low_price`, labelled "Below
+Threshold"). It becomes `last_outcome = …` in the database — its own clause
+rather than a widening of `status`, because three of the eight actions land on
+`follow_up` and two on `closed_lost`, and a status filter cannot tell "Out of
+Stock" from "Refill Too Soon".
+
+Two controls were **removed** from Wasfaty rather than hidden:
+
+- **Active Leads** — the lifecycle control. It is the refill axis, and a
+  prescription is not a refill cycle; the desk's own question is which action was
+  recorded, which the filter beside it now answers.
+- **All Products** — the family control. A Wasfaty lead is a prescription, not
+  one of the SKUs the Cash catalogue carries.
+
+Both are `showLifecycleFilter` / `showProductFilter` props on `LeadQueue`, off
+for Wasfaty and on for Cash, so there is no orphan state or query parameter left
+behind.
+
+**Telesales Agent** is a new filter, offered to `manage_telesales` holders on
+every queue. It is the **assignment** (`assigned_to`), not the last person to
+record something — those are two columns and two questions, and "how many leads
+did this agent receive" is the one a supervisor asks. Server-side like every
+other filter, so the count, the pager and the rows agree; an agent id that is not
+a UUID collapses to "all agents" rather than reaching PostgREST.
 
 ### Wasfaty's eight recorded actions
 
@@ -8358,6 +8468,43 @@ three days for stock.
 Colours live in `OUTCOME_STYLES` and render through one `OutcomeBadge` component
 used by the queue row, the lead page and the customer profile, so the same action
 cannot be green in one place and grey in another.
+
+**Order Created carries no Order Value on Wasfaty.** A Wasfaty order is placed in
+the Wasfaty portal and priced there; the figure typed into the outcome dialog was
+a second, unverified copy of a number the desk does not own, and the row already
+shows the prescription's own value. The field is gone from that presentation —
+the dialog does not render it and posts `null` — and from the lead page's
+"Converted" line. It is **not** gone from the schema: `converted_value` still
+holds what Cash conversions record, `recordOutcome` still accepts it, and the
+Cash dialog still asks, because a Cash conversion is priced here and nowhere
+else.
+
+### Deleting one lead
+
+An administrator (`isAdministrator`, i.e. Owner or Admin — narrower than
+`manage_telesales`, because this is the module's one irreversible write) can
+remove a single lead from the row's Delete action, behind a confirmation that
+states what will happen.
+
+`telesales_delete_lead(_lead_id, _actor)` decides, and the **append-only activity
+log decides for it** rather than being worked around:
+
+- **No history** — only the `created` bookkeeping row. The lead is an artefact of
+  an import and is deleted, using the same transaction-local
+  `telesales.purge_import` flag `telesales_delete_import` uses for the leads
+  nobody worked.
+- **History** — a call, an action, a conversion, or a child retention cycle. The
+  lead is **archived** instead. `archived_at` takes it out of Generated, All and
+  Worked exactly as it takes it out of every other working read, and the timeline
+  underneath is untouched.
+
+The trigger is unchanged: `DELETE` on `telesales_lead_activities` is still
+permitted only while the flag is set and only for an `activity_type = 'created'`
+row, so a wrong answer to the history question aborts the transaction rather than
+erasing evidence. The result says which of the two happened, the toast repeats
+it, and `telesales.lead_deleted` is written to the admin audit log with it. The
+RPC is `service_role` only; the administrator check lives in
+`telesalesDeleteLead`.
 
 ### Days to Refill
 

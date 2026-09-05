@@ -221,7 +221,7 @@ function CustomerProfilePage() {
       <div className="py-16 text-center">
         <p className="text-sm font-medium">No such customer</p>
         <Button asChild className="mt-4" variant="outline" size="sm">
-          <Link to="/telesales">Back to the queue</Link>
+          <Link to="/crm/cash">Back to the queue</Link>
         </Button>
       </div>
     );
@@ -240,7 +240,7 @@ function CustomerProfilePage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Button asChild variant="ghost" size="sm">
-          <Link to="/telesales">
+          <Link to="/crm/cash">
             <ArrowLeft className="mr-2 h-4 w-4" />
             Queue
           </Link>

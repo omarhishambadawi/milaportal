@@ -3,10 +3,11 @@ import { useCallback, useMemo } from "react";
 import { ShieldAlert, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useAuth } from "@/lib/auth";
+import { isAdministrator, useAuth } from "@/lib/auth";
 import { hasPerm } from "@/lib/permissions";
-import { DOMAIN_LEAD_TYPES } from "@/lib/telesales/types";
+import { DOMAIN_LEAD_TYPES, WASFATY_OUTCOME_KEYS } from "@/lib/telesales/types";
 import { LeadQueue } from "@/features/telesales/components/lead-queue";
+import { resolveCycle, useWasfatyCycles } from "@/features/telesales/hooks/use-telesales-queue";
 import {
   encodeQueueContext,
   queueStateFromSearch,
@@ -49,14 +50,52 @@ export function WasfatyPage({
   const canManage = hasPerm(role, perms, "manage_telesales");
 
   const view = wasfatyView(viewId);
-  const state = useMemo(() => queueStateFromSearch(search, view.defaults), [search, view.defaults]);
+  /*
+   * The view's resting position, recomputed per render.
+   *
+   * Generated Leads' default is a *date range*, so a value captured once at
+   * module load would be yesterday's window by the following morning. The
+   * function is cheap — one call to `businessToday()` and some day arithmetic —
+   * and it is what keeps the page honest about which day it is.
+   */
+  const defaults = view.defaults();
+  const state = useMemo(
+    () => queueStateFromSearch(search, defaults),
+    // `defaults` is a fresh object each render; its *content* is what matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [search, defaults.status, defaults.lifecycle, defaults.dateFrom, defaults.dateTo],
+  );
 
   const put = useCallback(
     (next: Partial<QueueState>, replace = false) => {
-      onSearchChange(searchFromQueueState({ ...state, ...next }, view.defaults), replace);
+      onSearchChange(searchFromQueueState({ ...state, ...next }, defaults), replace);
     },
-    [onSearchChange, state, view.defaults],
+    // Same reasoning as above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      onSearchChange,
+      state,
+      defaults.status,
+      defaults.lifecycle,
+      defaults.dateFrom,
+      defaults.dateTo,
+    ],
   );
+
+  /*
+   * The import cycles, and which one this page is showing.
+   *
+   * Fetched only for the two views that work a cycle at a time. Generated Leads
+   * is a *daily* question — the prescriptions actionable in the next 24 hours —
+   * and narrowing it to a month as well would be two windows fighting over the
+   * same rows.
+   *
+   * An absent `cycle` in the URL resolves to the newest cycle, so the resting
+   * position is "the current one" and a link shared in October still means the
+   * current cycle when it is opened in November.
+   */
+  const cycles = useWasfatyCycles(canView && view.cycles);
+  const cycle = resolveCycle(cycles.data, state.cycle);
 
   const queueContext = useMemo(() => encodeQueueContext(search), [search]);
 
@@ -81,7 +120,9 @@ export function WasfatyPage({
         </div>
         {canManage ? (
           <Button asChild size="sm">
-            <Link to="/telesales/import">
+            {/* `from` so the import page's Queue button returns to Wasfaty
+                rather than depositing a Wasfaty supervisor on the Cash desk. */}
+            <Link to="/telesales/import" search={{ from: "wasfaty" }}>
               <Upload className="mr-2 h-4 w-4" />
               Import
             </Link>
@@ -124,6 +165,25 @@ export function WasfatyPage({
         state={state}
         put={put}
         queueContext={queueContext}
+        /*
+         * Wasfaty's status vocabulary is the recorded action, and the two
+         * filters below are gone rather than hidden.
+         *
+         * "Active leads" was the lifecycle control: it is the *refill* axis, and
+         * a prescription is not a refill cycle — the Wasfaty desk's own question
+         * is which action was recorded, which the filter beside it now answers.
+         * "All products" was the family control, and a Wasfaty lead is a
+         * prescription rather than one of the SKUs the Cash catalogue carries.
+         */
+        statusFilter="outcome"
+        outcomeKeys={WASFATY_OUTCOME_KEYS}
+        showLifecycleFilter={false}
+        showProductFilter={false}
+        cycles={view.cycles ? (cycles.data ?? []) : undefined}
+        cyclePeriod={cycle.period}
+        importIds={cycle.importIds}
+        dateDefaults={{ from: defaults.dateFrom ?? "", to: defaults.dateTo ?? "" }}
+        canDelete={isAdministrator(role)}
         emptyTitle={
           view.id === "worked" ? "Nothing has been worked yet" : "No Wasfaty leads right now"
         }

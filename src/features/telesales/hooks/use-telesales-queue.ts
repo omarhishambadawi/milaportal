@@ -22,7 +22,7 @@ const QUEUE_COLUMNS =
   "id,lead_type,status,priority,last_outcome,assigned_to,customer_name,phone," +
   "branch_no,city,item_name,product_family,product_strength,patient_id,prescription_no," +
   "document_no,source_date,next_followup_on,contact_attempts,cycle_number,total_value," +
-  "phone_alternates,last_contacted_by,last_contacted_at,customer_id,created_at," +
+  "phone_alternates,last_contacted_by,last_contacted_at,customer_id,created_at,import_id," +
   // Derived by the view, stored nowhere. See `20260906120000`.
   "lifecycle,refill_due_on,stale_after,refill_cycle_days,last_purchased_on," +
   "archived_at,archived_by,archive_reason";
@@ -110,6 +110,30 @@ export function useTelesalesQueue(
 
       if (filters.status === "open") q = q.in("status", OPEN_LEAD_STATUSES);
       else if (filters.status !== "all") q = q.eq("status", filters.status);
+
+      /*
+       * The recorded action, which is what the Wasfaty desk means by "status".
+       *
+       * Its own clause rather than a widening of the one above, because the two
+       * are different questions: `status` is the workflow state the action
+       * produced, `last_outcome` is the action itself. Three of the eight
+       * Wasfaty actions land on `follow_up` and two on `closed_lost`, so a
+       * status filter cannot tell "Out of Stock" from "Refill Too Soon".
+       */
+      if (filters.outcome !== "all") q = q.eq("last_outcome", filters.outcome);
+
+      /*
+       * The import cycle.
+       *
+       * September's file is one cycle, October's is the next, and the desk works
+       * one at a time — so All Leads means "this cycle", not "every prescription
+       * this system has ever seen". `import_id` is carried on the lead itself
+       * (see `20260913120000`), so this is one indexed `IN` rather than a join
+       * through a table an agent may not read.
+       */
+      const importIds = filters.importIds.split(",").filter(Boolean);
+      if (importIds.length === 1) q = q.eq("import_id", importIds[0]);
+      else if (importIds.length > 1) q = q.in("import_id", importIds);
 
       /*
        * Lifecycle. Orthogonal to status, so it is its own clause.
@@ -340,4 +364,76 @@ export function useStaleLeadCount(enabled: boolean, domain: string, leadType: st
       };
     },
   });
+}
+
+/* ------------------------------------------------------------------------- */
+/* Cycles                                                                    */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * One Wasfaty import cycle: a business month, and the batches uploaded in it.
+ *
+ * `importIds` rather than the month itself is what the queue filters on, because
+ * two uploads of a corrected October file are one cycle to the desk and two rows
+ * in `telesales_imports`.
+ */
+export interface WasfatyCycle {
+  /** `2026-10`. The value that travels in the URL. */
+  period: string;
+  /** `October 2026`. What the selector shows. */
+  label: string;
+  importIds: string[];
+  /** Live leads the batches in this cycle raised. */
+  leads: number;
+}
+
+/**
+ * The cycles an agent may choose between, newest first.
+ *
+ * Through an RPC rather than a read of `telesales_imports`, which is
+ * `manage_telesales` only: the period selector is on a page every agent uses,
+ * and which *batch* raised a lead is not the raw extract. The function returns
+ * the month, its label, the batch ids and a count — no file names, no uploader.
+ *
+ * The first entry is the current cycle. That is what "All Leads" means when the
+ * URL says nothing, so this query is what decides the default view; it is
+ * cached for five minutes because a new cycle arrives once a month.
+ */
+export function useWasfatyCycles(enabled: boolean) {
+  return useQuery<WasfatyCycle[]>({
+    queryKey: [...queryKeys.telesales.all(), "wasfaty-cycles"],
+    enabled,
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await (supabase as any).rpc("telesales_wasfaty_cycles");
+      if (error) throw new Error(error.message);
+      return ((data as any[]) ?? []).map((r) => ({
+        period: String(r.period),
+        label: String(r.label),
+        importIds: (r.import_ids as string[] | null) ?? [],
+        leads: Number(r.leads ?? 0),
+      }));
+    },
+  });
+}
+
+/**
+ * Which cycle the page is actually showing, and the batches to ask for.
+ *
+ * `""` from the URL means "the current cycle", which is a datum and not a
+ * constant — it is whichever month was imported last. Resolving it here rather
+ * than in `queue-search.ts` keeps the URL honest: staying on the current cycle
+ * writes nothing, so a link shared in October still means "the current cycle"
+ * when it is opened in November.
+ */
+export function resolveCycle(
+  cycles: WasfatyCycle[] | undefined,
+  chosen: string,
+): { period: string; importIds: string } {
+  if (chosen === "all" || !cycles || cycles.length === 0) return { period: chosen, importIds: "" };
+  const found = chosen === "" ? cycles[0] : cycles.find((c) => c.period === chosen);
+  // A period that no longer exists — a deleted import, or a hand-edited URL —
+  // widens to every cycle rather than showing an empty page with a month on it.
+  if (!found) return { period: "all", importIds: "" };
+  return { period: found.period, importIds: found.importIds.join(",") };
 }

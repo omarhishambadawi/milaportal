@@ -6,6 +6,7 @@ import {
   telesalesAddNote,
   telesalesAssignLead,
   telesalesCloseLead,
+  telesalesDeleteLead,
   telesalesRecordOutcome,
   telesalesReopenLead,
   telesalesScheduleFollowup,
@@ -219,4 +220,33 @@ export function useLeadMutations(leadId?: string) {
   });
 
   return { assign, recordOutcome, addNote, scheduleFollowup, close, reopen, setPhone };
+}
+
+/**
+ * Delete one lead. Administrators only, and the server enforces that.
+ *
+ * Separate from `useLeadMutations` because it is not one of the desk's daily
+ * writes: it is offered on the row only to an administrator, and bundling it
+ * into the hook every queue row already calls would put an irreversible
+ * mutation one typo away from every one of them.
+ *
+ * The toast reports which of the two outcomes occurred, because they are
+ * genuinely different: a lead nobody worked is gone, and a lead with call
+ * history has been archived with its log intact.
+ */
+export function useDeleteLead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { leadId: string }) => telesalesDeleteLead({ data: input }),
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: queryKeys.telesales.all() });
+      toast.success(
+        result.mode === "archived"
+          ? "Lead removed from the queue. Its call history was kept."
+          : "Lead deleted.",
+      );
+    },
+    onError: (err: unknown) =>
+      toast.error(err instanceof Error ? err.message : "That lead could not be deleted."),
+  });
 }

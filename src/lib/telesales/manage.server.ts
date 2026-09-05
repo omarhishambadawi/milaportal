@@ -367,3 +367,39 @@ async function appendBulkActivities(
     );
   }
 }
+
+/* ------------------------------------------------------------------------- */
+/* Removing one lead                                                         */
+/* ------------------------------------------------------------------------- */
+
+export interface DeleteLeadResult {
+  leadId: string;
+  /** What actually happened. "archived" when the lead carried call history. */
+  mode: "deleted" | "archived";
+}
+
+/**
+ * Remove one lead from the operational views.
+ *
+ * The judgement is the database's, in `telesales_delete_lead`, and it is the
+ * same rule `telesales_delete_import` applies to the leads an import raised: a
+ * lead nobody has worked is an artefact and goes; a lead carrying a call log is
+ * archived instead, because `telesales_lead_activities` is append-only and that
+ * guarantee is not something a delete button gets to spend.
+ *
+ * One RPC rather than a read-then-write here: the decision and the write have to
+ * see the same row, and the hard-delete path needs the transaction-local flag
+ * that lets a 'created' activity row cascade.
+ */
+export async function deleteLead(
+  supabase: any,
+  input: { leadId: string; actor: ActorIdentity },
+): Promise<DeleteLeadResult> {
+  const { data, error } = await supabase.rpc("telesales_delete_lead", {
+    _lead_id: input.leadId,
+    _actor: input.actor.userId,
+  });
+  if (error) throw new Error(error.message);
+  const mode = (data as { mode: string }[] | null)?.[0]?.mode;
+  return { leadId: input.leadId, mode: mode === "archived" ? "archived" : "deleted" };
+}
