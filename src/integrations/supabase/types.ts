@@ -2298,6 +2298,8 @@ export type Database = {
           assigned_by: string | null
           assigned_to: string | null
           branch_no: string | null
+          canonical_item_code: string | null
+          canonical_via: string | null
           channel: string | null
           city: string | null
           closed_at: string | null
