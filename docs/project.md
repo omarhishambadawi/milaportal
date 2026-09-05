@@ -3707,6 +3707,24 @@ of the whole design:
   ~8,484 third-party requests, and forcing one daily on the off chance would be
   an unreasonable standing cost). Never on a short timer.
 
+**The marker is a cadence signal, not an incremental one — and that is a
+property of the API, not a shortcut taken here.** `/promotions/sync/status`
+returns run metadata (`id`, `sync_type`, `status`, `started_at`, `completed_at`),
+aggregate counts (`pages_fetched`, `rows_seen`, `rows_changed`) and scheduling
+fields. It carries **no product identifiers and no changed-item list**, so there
+is no way to ask "which products moved" and sweep only those. A marker that has
+moved therefore means "something, somewhere, changed" and costs a **full**
+~8,484-request pass; it can never cost less. Anyone tempted to make the sweep
+incremental should start by re-reading `RawShamsSyncStatus` — the field they
+need does not exist.
+
+One supported reduction is available and is **not** implemented: a completed
+run reports `rows_changed`, so an upstream pass that changed nothing could be
+skipped outright rather than triggering a sweep. It uses only a field the API
+actually returns. It is left for a later phase because it needs a live capture
+to confirm the field is populated on the promotions endpoint as well as the
+stock one.
+
 **`POST /promotions/sync` is never called.** It starts a ~24-minute job on
 Shams' own infrastructure (§11.3). Only the status document is read, and a test
 asserts the trigger path does not exist anywhere in the codebase.

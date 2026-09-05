@@ -317,11 +317,49 @@ export async function sweepOffers(options: SweepOffersOptions = {}): Promise<Off
   }
 
   const state = await store.readOfferSyncState();
-  const cursor = state?.cursor_item_code ?? null;
+
+  /*
+   * No state row, no sweep — and, crucially, no request to Shams.
+   *
+   * `readOfferSyncState` returns null for two reasons that look identical from
+   * here and lead to the same decision: the migration has not landed on this
+   * deployment yet, or the state row could not be read at all. Either way there
+   * is nowhere to record a cursor, a marker or an outcome, so a sweep could
+   * neither be resumed nor be stopped from starting again on the next tick.
+   *
+   * Without this guard that is not merely futile, it is expensive in the one
+   * currency this integration is careful with. The order of operations below is
+   * `readOfferSyncState` → `beginOfferAttempt` → **read `/promotions/sync/status`
+   * from Shams CRM** → `nextSweepItemCodes`, and only the last of those fails
+   * when the tables are absent. Both writes fail silently by design — a state
+   * write must never take a tick down — so every scheduler pass would spend an
+   * authenticated CRM request, discover it has nowhere to put the answer, record
+   * nothing, and be due again immediately because `isOfferSweepDue` errs towards
+   * "yes" when it cannot read the row.
+   *
+   * That is a standing cost against a third party, on a *user* credential (see
+   * `client.server.ts`), for an answer nobody can store. Checking first costs
+   * one local read.
+   *
+   * Not an error state: a deployment whose migration has not landed is a
+   * deployment in the middle of being deployed. It is reported as `failed` with
+   * a sentence an administrator can act on, and Branch Stock is unaffected —
+   * offers degrade to "could not be read" and live stock never touched them.
+   */
+  if (!state) {
+    console.warn("[shams-offers] sync state unavailable; sweep skipped without contacting Shams");
+    return emptyResult(
+      "failed",
+      "The local offer dataset is not available on this deployment. If the offers migration has " +
+        "not been applied yet, apply it; otherwise the state row could not be read.",
+    );
+  }
+
+  const cursor = state.cursor_item_code ?? null;
   const inProgress = cursor !== null;
-  const lastFull = state?.last_full_sweep_at ? Date.parse(state.last_full_sweep_at) : NaN;
+  const lastFull = state.last_full_sweep_at ? Date.parse(state.last_full_sweep_at) : NaN;
   const ageMs = Number.isFinite(lastFull) ? now.getTime() - lastFull : null;
-  const productRows = state?.product_row_count ?? 0;
+  const productRows = state.product_row_count ?? 0;
 
   /*
    * Claim the attempt before the network is touched.

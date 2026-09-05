@@ -261,6 +261,38 @@ describe("deciding whether to sweep at all", () => {
 /* -------------------------------------------------------------------------- */
 
 describe("last known good survives everything", () => {
+  /**
+   * The deployed-ahead-of-its-migration window, which is a real state a
+   * deployment passes through rather than a hypothetical.
+   *
+   * `readOfferSyncState` returns null when the table is absent or unreadable,
+   * and both state writes fail silently by design — a state write must never
+   * take a scheduler tick down. So without the guard this path would spend an
+   * authenticated Shams CRM request, find it had nowhere to record the answer,
+   * write nothing, and be due again on the next tick: a standing cost against a
+   * third party, on a person's credential, for an answer nobody can store.
+   */
+  it("contacts nobody when there is no state row to record the result in", async () => {
+    readOfferSyncState.mockResolvedValue(null);
+
+    const result = await sweepOffers({ now: NOW });
+
+    expect(result.outcome).toBe("failed");
+    expect(crmFetch).not.toHaveBeenCalled();
+    expect(fetchOfferReadNow).not.toHaveBeenCalled();
+    expect(promoteOfferSlice).not.toHaveBeenCalled();
+    expect(result.error).toMatch(/migration/i);
+  });
+
+  it("does not even claim the attempt when the state row is unreadable", async () => {
+    // `beginOfferAttempt` writes to the same missing row, so calling it would be
+    // one more failure to log and nothing gained.
+    readOfferSyncState.mockResolvedValue(null);
+    await sweepOffers({ now: NOW });
+    expect(beginOfferAttempt).not.toHaveBeenCalled();
+    expect(recordOfferAttempt).not.toHaveBeenCalled();
+  });
+
   it("touches nothing when the CRM is not configured", async () => {
     isCrmConfigured.mockReturnValue(false);
 
