@@ -531,6 +531,14 @@ export interface ShamsSyncTickSummary {
   catalogFailed: boolean;
   /** Products in the local catalogue after this pass. */
   catalogRows: number;
+  /** True when a slice of the local offer dataset was promoted. */
+  offersSwept: boolean;
+  /** True when the sweep could not run. The previous offer data is intact. */
+  offersFailed: boolean;
+  /** True when this pass reached the end of the catalogue. */
+  offerSweepComplete: boolean;
+  /** Offer rows whose values actually moved in this pass. */
+  offerRowsChanged: number;
 }
 
 /**
@@ -572,6 +580,10 @@ export async function runShamsSyncTick(
     catalogRefreshed: false,
     catalogFailed: false,
     catalogRows: 0,
+    offersSwept: false,
+    offersFailed: false,
+    offerSweepComplete: false,
+    offerRowsChanged: 0,
   };
 
   const { readScheduleSlots, readSyncSettings, advanceSlot } =
@@ -715,6 +727,39 @@ export async function runShamsSyncTick(
       "[shams-catalog] refresh threw during the tick:",
       (err as Error)?.name ?? "unknown",
     );
+  }
+
+  /*
+   * The local offer dataset.
+   *
+   * Beside the catalogue and for the same reasons: agents depend on it minute to
+   * minute (Branch Stock reads the tables it fills), it starts nothing at Shams,
+   * and it is therefore deliberately **not** gated on `automationEnabled` — that
+   * switch governs queueing runs on Shams' own infrastructure, and an operator
+   * pausing the nightly sync should not silently freeze the offers agents quote.
+   *
+   * One **slice** per tick, never a full pass. Offers have no bulk endpoint
+   * (`api-discovery.md` §11.5), so a whole catalogue is ~8,484 requests; the
+   * sweep is bounded per run and resumable across runs, and `isOfferSweepDue`
+   * is checked here as well as in `shams_sync_tick()` so a tick woken by a due
+   * schedule slot does not also pull a slice it was not asked for.
+   *
+   * Wrapped, and `sweepOffers` does not throw for an operational failure anyway.
+   * Two layers, because an offer sweep must never be able to fail a tick that
+   * has already triggered and reconciled real runs.
+   */
+  try {
+    const { isOfferSweepDue, sweepOffers } = await import("./offer-sync.server");
+    if (await isOfferSweepDue(supabase, now)) {
+      const offers = await sweepOffers({ now });
+      summary.offersSwept = offers.outcome === "swept";
+      summary.offersFailed = offers.outcome === "failed";
+      summary.offerSweepComplete = offers.sweepComplete;
+      summary.offerRowsChanged = offers.rowsChanged;
+    }
+  } catch (err) {
+    summary.offersFailed = true;
+    console.error("[shams-offers] sweep threw during the tick:", (err as Error)?.name ?? "unknown");
   }
 
   return summary;

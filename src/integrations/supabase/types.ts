@@ -1049,6 +1049,225 @@ export type Database = {
         }
         Relationships: []
       }
+      shams_offer_products: {
+        Row: {
+          branches_available: number
+          branches_with_offer: number
+          checked_at: string
+          item_code: string
+          offer_display: string | null
+          offer_price: number | null
+          scope: string
+          source_updated_at: string | null
+          unit_price: number | null
+          updated_at: string
+        }
+        Insert: {
+          branches_available?: number
+          branches_with_offer?: number
+          checked_at?: string
+          item_code: string
+          offer_display?: string | null
+          offer_price?: number | null
+          scope: string
+          source_updated_at?: string | null
+          unit_price?: number | null
+          updated_at?: string
+        }
+        Update: {
+          branches_available?: number
+          branches_with_offer?: number
+          checked_at?: string
+          item_code?: string
+          offer_display?: string | null
+          offer_price?: number | null
+          scope?: string
+          source_updated_at?: string | null
+          unit_price?: number | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      shams_offer_products_staging: {
+        Row: {
+          batch_id: string
+          branches_available: number
+          branches_with_offer: number
+          item_code: string
+          offer_display: string | null
+          offer_price: number | null
+          scope: string
+          staged_at: string
+          unit_price: number | null
+        }
+        Insert: {
+          batch_id: string
+          branches_available?: number
+          branches_with_offer?: number
+          item_code: string
+          offer_display?: string | null
+          offer_price?: number | null
+          scope: string
+          staged_at?: string
+          unit_price?: number | null
+        }
+        Update: {
+          batch_id?: string
+          branches_available?: number
+          branches_with_offer?: number
+          item_code?: string
+          offer_display?: string | null
+          offer_price?: number | null
+          scope?: string
+          staged_at?: string
+          unit_price?: number | null
+        }
+        Relationships: []
+      }
+      shams_offer_sync_state: {
+        Row: {
+          cursor_item_code: string | null
+          id: number
+          items_with_offers: number
+          last_attempt_at: string | null
+          last_error: string | null
+          last_finished_at: string | null
+          last_full_sweep_at: string | null
+          last_items_processed: number
+          last_outcome: string | null
+          last_rows_changed: number
+          last_rows_deleted: number
+          last_rows_inserted: number
+          last_rows_updated: number
+          last_started_at: string | null
+          last_success_at: string | null
+          next_refresh_due_at: string | null
+          offer_row_count: number
+          product_row_count: number
+          source_marker: string | null
+          sweep_completed_at: string | null
+          sweep_items_done: number
+          sweep_started_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          cursor_item_code?: string | null
+          id?: number
+          items_with_offers?: number
+          last_attempt_at?: string | null
+          last_error?: string | null
+          last_finished_at?: string | null
+          last_full_sweep_at?: string | null
+          last_items_processed?: number
+          last_outcome?: string | null
+          last_rows_changed?: number
+          last_rows_deleted?: number
+          last_rows_inserted?: number
+          last_rows_updated?: number
+          last_started_at?: string | null
+          last_success_at?: string | null
+          next_refresh_due_at?: string | null
+          offer_row_count?: number
+          product_row_count?: number
+          source_marker?: string | null
+          sweep_completed_at?: string | null
+          sweep_items_done?: number
+          sweep_started_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          cursor_item_code?: string | null
+          id?: number
+          items_with_offers?: number
+          last_attempt_at?: string | null
+          last_error?: string | null
+          last_finished_at?: string | null
+          last_full_sweep_at?: string | null
+          last_items_processed?: number
+          last_outcome?: string | null
+          last_rows_changed?: number
+          last_rows_deleted?: number
+          last_rows_inserted?: number
+          last_rows_updated?: number
+          last_started_at?: string | null
+          last_success_at?: string | null
+          next_refresh_due_at?: string | null
+          offer_row_count?: number
+          product_row_count?: number
+          source_marker?: string | null
+          sweep_completed_at?: string | null
+          sweep_items_done?: number
+          sweep_started_at?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      shams_offers: {
+        Row: {
+          after_offer_price: number
+          branch_code: string
+          item_code: string
+          offer_display: string
+          offer_percent: number
+          price: number
+          source_updated_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          after_offer_price: number
+          branch_code: string
+          item_code: string
+          offer_display: string
+          offer_percent: number
+          price: number
+          source_updated_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          after_offer_price?: number
+          branch_code?: string
+          item_code?: string
+          offer_display?: string
+          offer_percent?: number
+          price?: number
+          source_updated_at?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      shams_offers_staging: {
+        Row: {
+          after_offer_price: number
+          batch_id: string
+          branch_code: string
+          item_code: string
+          offer_display: string
+          offer_percent: number
+          price: number
+          staged_at: string
+        }
+        Insert: {
+          after_offer_price?: number
+          batch_id: string
+          branch_code: string
+          item_code: string
+          offer_display: string
+          offer_percent?: number
+          price?: number
+          staged_at?: string
+        }
+        Update: {
+          after_offer_price?: number
+          batch_id?: string
+          branch_code?: string
+          item_code?: string
+          offer_display?: string
+          offer_percent?: number
+          price?: number
+          staged_at?: string
+        }
+        Relationships: []
+      }
       shams_product_catalog: {
         Row: {
           item_code: string
@@ -3163,6 +3382,26 @@ export type Database = {
       shams_crm_store_agent_secret: {
         Args: { _password: string; _user_id: string }
         Returns: string
+      }
+      shams_offer_sweep_slice: {
+        Args: {
+          p_after?: string | null
+          p_limit?: number
+        }
+        Returns: {
+          item_code: string
+        }[]
+      }
+      shams_promote_offers: {
+        Args: {
+          p_batch_id: string
+          p_cursor?: string | null
+          p_source_marker?: string | null
+          p_source_updated_at?: string
+          p_started_at?: string
+          p_sweep_complete?: boolean
+        }
+        Returns: Json
       }
       shams_promote_product_catalog: {
         Args: {

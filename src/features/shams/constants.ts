@@ -35,6 +35,13 @@ const FAILURE_COPY: Record<string, string> = {
    */
   catalog_unavailable: "The product catalogue could not be read. Please try again.",
   catalog_empty: "The product catalogue is empty. Contact an administrator.",
+  /*
+   * MilaPortal's own offer tables, not Shams'. Same reasoning as the catalogue
+   * copy above, and one consequence worth stating: an empty offer column is
+   * never "no offer". An agent told the discount is unavailable quotes the list
+   * price and says so; an agent told there is no discount quotes it as final.
+   */
+  offers_unavailable: "Offer data could not be read. Prices shown are list prices.",
 };
 
 const FALLBACK_COPY = "Unable to load Shams data. Please try again.";

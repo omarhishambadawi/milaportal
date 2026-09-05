@@ -187,9 +187,11 @@ describe("MIS keeps the operational reads", () => {
   });
 });
 
-describe("CRM offer pricing sits beside MIS stock, never on top of it", () => {
+describe("offer pricing sits beside MIS stock, never on top of it", () => {
   it("loads offers as their own query, not inside the stock read", () => {
-    // Independent, so a slow or unhappy CRM cannot delay the stock table.
+    // Independent, so the local offer read never waits on the live MIS one —
+    // and, before offers moved local, so a slow CRM could not delay the stock
+    // table. The separation outlived the reason and is still right.
     expect(stockTab).toContain("useProductOffers(selected?.itemCode ?? null)");
     expect(stockTab).toContain("useProductDetail(");
   });
@@ -203,44 +205,65 @@ describe("CRM offer pricing sits beside MIS stock, never on top of it", () => {
   });
 
   it("shows an offer only on the branch that actually has one", () => {
-    // The rule has outlived three layouts — a conditional column, a card
-    // footer, and now `OfferCell`, which both the table and the mobile list
-    // render. A promotional price appears if and only if the CRM named that
-    // branch code.
-    expect(stockTab).toContain("if (offer) return <OfferPrice offer={offer} />;");
+    // The rule has outlived four layouts — a conditional column, a card footer,
+    // a table cell, and now `OfferCell`, which the table and the narrow list
+    // both render. A promotional price appears if and only if the dataset named
+    // that branch code.
+    expect(stockTab).toContain("function OfferCell({ offer, state }");
+    expect(stockTab).toContain("if (offer) {");
     expect(stockTab).toContain("<OfferCell offer={offer} state={offerState} />");
   });
 
   it("tells a branch with no offer apart from a branch nobody asked about", () => {
     /*
-     * The distinction the blank cell used to lose. A CRM that answered and
-     * found no promotion is a real answer and gets a real em dash; a CRM that
-     * could not be asked renders nothing and the table says why once, above,
-     * rather than shrugging on 140 rows. Neither is ever the other.
+     * The distinction a blank cell would lose, now three-way rather than two.
+     * A dataset that answered and found no promotion is a real answer and gets
+     * a real em dash. A dataset that could not be read, and one that has never
+     * been swept, each render nothing and the table says which — once, above,
+     * rather than shrugging on 140 rows. None of the three is ever another.
      */
-    expect(stockTab).toContain('if (state === "unavailable") return null;');
-    expect(stockTab).toContain('return <span className="text-muted-foreground">—</span>;');
-    expect(stockTab).toContain("Offer pricing is unavailable");
+    expect(stockTab).toContain('if (state !== "ready") return null;');
+    expect(stockTab).toContain('<span className="block text-right text-muted-foreground">—</span>');
+    expect(stockTab).toContain("Offer data could not be read");
+    expect(stockTab).toContain("Offer data has not been synced yet");
   });
 
   it("keeps the branch view a table rather than a surface per branch", () => {
-    // ~140 branches is a register, not a gallery: one table with fixed columns,
-    // and a dense list below `md` instead of a sideways-scrolling table.
+    // ~140 branches is a register, not a gallery: one table whose header and
+    // cells share a single `<colgroup>`, and a card per branch below `md`
+    // instead of seven columns nobody can read at 375px.
     expect(stockTab).toContain("const BranchStockTable = memo(");
     expect(stockTab).toContain("<BranchStockTable");
     expect(stockTab).toContain("rows={visible}");
     expect(stockTab).not.toContain("BranchStockCards");
     expect(stockTab).toContain("md:hidden");
-    // No `overflow-x` anywhere in the branch view — the page must never scroll
-    // sideways, and neither must the table region.
-    expect(stockTab).not.toContain("overflow-x");
+    /*
+     * The page still never scrolls sideways, and the mechanism changed.
+     *
+     * It used to be "no `overflow-x` anywhere". That rule held while the table
+     * hid columns to fit; it cannot hold now that all seven columns render at
+     * every width from `md` up, because hiding a column conditionally is
+     * exactly what let the header and the body disagree. The wrapper bounds the
+     * scroll to the table instead of the document, and `min-w` sits below the
+     * `md` breakpoint so at any ordinary width there is nothing to scroll.
+     */
+    expect(stockTab).toContain('<div className="hidden overflow-x-auto md:block">');
+    expect(stockTab).toContain("min-w-[44rem]");
+    // The document itself, and every other surface, stays put.
+    expect(stockTab.match(/overflow-x/g)).toHaveLength(1);
   });
 
   it("renders the API's after-offer price rather than deriving one", () => {
-    expect(stockTab).toContain("fmtSAR(offer.afterOfferPrice)");
+    expect(stockTab).toContain("money(offer.afterOfferPrice)");
     expect(stockTab).toContain("offer.offerDisplay");
-    // No arithmetic on the discount anywhere in the view.
+    // No arithmetic on the discount anywhere in the view — nor in the pure
+    // summary that decides whether a product-level price exists at all.
     expect(stockTab).not.toMatch(/offerPercent\s*[/*]/);
+    const summary = readFileSync(
+      fileURLToPath(new URL("../../../lib/shams-crm/offer-summary.ts", import.meta.url)),
+      "utf8",
+    );
+    expect(summary).not.toMatch(/offerPercent\s*[/*]/);
   });
 
   it("still renders quantity from the MIS row", () => {
@@ -465,25 +488,33 @@ describe("change product takes one click", () => {
 });
 
 /**
- * Offers on the result list, without turning a search into a hundred requests.
+ * Offers on the result list.
+ *
+ * This suite used to be called "offer badges are bounded", and the bound was
+ * twelve items: each was its own ~62 KB CRM request, so a hundred-row result
+ * would have been a hundred of them and the list said "offers not checked"
+ * instead. The bound is gone because the cost is — one indexed read of a local
+ * table answers for the whole set — and what is asserted now is the guarantee
+ * that replaced it: every row can show its own discounted price, and an absence
+ * is still never rendered as "no offer".
  */
-describe("offer badges are bounded", () => {
+describe("offers on the result list", () => {
   it("asks for a whole result set in one call, not one call per row", () => {
-    expect(stockTab).toContain("useOfferScopes(resultCodes, !selected)");
-    expect(stockTab.match(/useOfferScopes\(/g)).toHaveLength(1);
+    expect(stockTab).toContain("useOfferSummaries(resultCodes, !selected)");
+    expect(stockTab.match(/useOfferSummaries\(/g)).toHaveLength(1);
   });
 
   it("stops asking once a product is open", () => {
     // The result list is gone but its query data is still cached, so without
-    // the `!selected` gate the tab would keep checking a list nobody sees.
+    // the `!selected` gate the tab would keep re-reading a list nobody sees.
     expect(stockTab).toContain("!selected");
   });
 
-  it("says when a set was too large to check, rather than showing blanks", () => {
-    // A row with no badge would otherwise read as "no offer", which is a claim
-    // nobody made.
-    expect(stockTab).toContain("offersSkipped");
-    expect(stockTab).toContain("Offers not checked");
+  it("shows the discounted price on the row itself", () => {
+    // The screenshot this phase was opened against: an agent had to open a
+    // product to find out what it actually costs today.
+    expect(stockTab).toContain("<PriceStack listPrice={p.retailPrice} summary={summary} />");
+    expect(stockTab).toContain("function PriceStack({");
   });
 
   it("distinguishes all branches from some branches in the label", () => {
@@ -493,11 +524,19 @@ describe("offer badges are bounded", () => {
 
   it("renders nothing for an item with no offer and for one not checked", () => {
     expect(stockTab).toContain(
-      'if (!scope || scope.kind === "none" || scope.kind === "unknown") return null;',
+      'if (!summary || summary.scope === "none" || summary.scope === "unknown") return null;',
     );
   });
 
-  it("reuses the opened product's own response rather than asking again", () => {
-    expect(stockTab).toContain("offersQuery.data.scope");
+  it("says when the dataset cannot answer, rather than showing blanks", () => {
+    // A row with no badge reads as "no promotion" only when the dataset can
+    // actually answer. Before the first sweep, and after a failed read, every
+    // row looks offer-free — so the list says which it is.
+    expect(stockTab).toContain("Offer data unavailable");
+    expect(stockTab).toContain("Offer data not synced yet");
+  });
+
+  it("reuses the opened product's own verdict rather than reading again", () => {
+    expect(stockTab).toContain("offersQuery.data.summary");
   });
 });

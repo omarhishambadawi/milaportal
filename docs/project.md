@@ -3661,46 +3661,163 @@ src/lib/shams/search.ts          PURE: wildcard product matching, branch filter,
 src/lib/shams/availability.ts    PURE: invoice line ↔ branch stock join, the four stock states
 src/lib/shams/catalog.server.ts  product search (over the LOCAL catalogue) / info / stock + caches
 src/lib/shams/catalog-store.server.ts  the local catalogue in Supabase: candidate retrieval, staging, promotion, health
+src/lib/shams/offer-store.server.ts    the local offer dataset in Supabase: lookup, staging, scoped promotion, health
 src/lib/shams/sales.server.ts    invoice lookup + query validation + branch discovery fan-out
 src/lib/shams/crm.server.ts      customer sales history (crm/data) + query validation, uncached
 src/lib/shams.functions.ts       authenticated, RBAC-gated server functions
 ```
 
-### Offer coverage on the result list — all / some / none
+### Offers — a local dataset, swept from Shams CRM
 
-An agent can see which search results carry a promotion **without opening
-them**, and the badge always names its scope: `all branches` (every branch
-holding the item also has the offer) or `some branches` (only a subset). "On
-offer" alone would be a promise that fails at whichever branch the customer
-walks into.
+**Branch Stock makes no Shams CRM request for an offer.** Offers live in
+MilaPortal's own tables and are read from there; the CRM is still the source of
+the data and is no longer between an agent and an answer.
 
-Scope is classified once, server-side, by `classifyOfferScope` in
-`lib/shams-crm/offers.server.ts`. The denominator is **branches that hold the
-item**, read from `available_qty` on the availability response — the endpoint
-returns a row for every branch in the chain, so counting rows would make every
-offer look partial. That quantity is consumed there and dropped; it is never
-rendered, and MIS `product/stock` remains the only stock number on screen.
+```text
+product search   →  shams_product_catalog        (local)
+                 →  shams_offer_products         (local)
+product opened   →  MIS product/stock            LIVE, third party
+                 →  shams_offers                 (local)
+```
 
-**The cap is the load-bearing part.** There is no bulk offers endpoint
-(`api-discovery.md` §11.5): each item is its own ~62 KB CRM request. A badge on
-every row of an unbounded result set would be up to 100 upstream requests per
-search, so `shamsGetOfferScopes` accepts at most **12** item codes, fans them out
-server-side at 4 concurrent against the existing 60 s offer cache, and returns
-one browser response. Above 12 the list says _"Offers not checked — narrow to 12
-results or fewer"_ rather than rendering blanks that would read as "no offer".
-An item the CRM could not answer for is absent from the result, never reported
-as having none.
+#### Why this is a sweep and the catalogue is a download
 
-An opened product gets its scope from the same response as its per-branch
-prices (`shamsGetProductOffers` returns both), so the header badge and the price
-rows cannot disagree, and no second request is made.
+The catalogue is one request: `GET /products/names` answers with all ~8,484
+products, so a refresh replaces the world. Offers have no such endpoint, and
+that is established rather than assumed — `docs/shams/api-discovery.md` §11.1
+records that there is no `/offers`, no promotions list and no feed; §11.2 that
+an offer is a per-branch field on `GET /products/{item_code}/available-branches`,
+~62 KB for one item; §11.5 that there is no bulk form and no pagination. §11.6
+concluded that a cached offers index was "not possible against the API as it
+stands".
+
+It is possible — as **one request per product**, which for the whole catalogue
+is ~8,484 requests and on the order of half a gigabyte. That cost is the shape
+of the whole design:
+
+- **Sliced.** `SWEEP_SLICE_ITEMS = 150` products a run, four in flight
+  (`SWEEP_CONCURRENCY`, matching the figure already chosen for this endpoint).
+  Roughly 9 MB and well under a minute, so a scheduler tick is never held open.
+- **Resumable.** `cursor_item_code` lives in the state row, so a worker killed
+  mid-sweep resumes rather than restarting. 8,484 / 150 is 57 runs; at two
+  minutes a slice a full pass takes about two hours.
+- **Rarely run.** A pass starts when the CRM's own `/promotions/sync/status`
+  reports a new success marker, when the dataset has never been swept, or after
+  `MAX_SWEEP_AGE_MS` (**seven days**, not the catalogue's one — a full pass is
+  ~8,484 third-party requests, and forcing one daily on the off chance would be
+  an unreasonable standing cost). Never on a short timer.
+
+**`POST /promotions/sync` is never called.** It starts a ~24-minute job on
+Shams' own infrastructure (§11.3). Only the status document is read, and a test
+asserts the trigger path does not exist anywhere in the codebase.
+
+#### The two tables
+
+| table | one row per | holds |
+| --- | --- | --- |
+| `shams_offers` | (item, branch) **with** an offer | price, `offer_percent`, `offer_display`, `after_offer_price` |
+| `shams_offer_products` | item the sweep has **checked** | scope, branch counts, `offer_display`, and a product-level price pair |
+
+The second is not redundant. It is the only thing that separates **"we asked and
+there is no promotion"** (`scope = 'none'`, with a `checked_at` date on it) from
+**"we have not asked yet"** (no row). Rendering the second as the first would
+state something nobody established, about money, on a live call — so an item
+with no row is `unknown` everywhere in the UI, and `unknown` is never a badge and
+never a "no offer".
+
+**`available_qty` is not stored.** It is read during the sweep to classify
+coverage — the response lists every branch in the chain, so row count would
+answer the wrong question (§11.6) — and dropped there. Only the two derived
+**branch counts** are persisted. MIS `product/stock` remains the sole source of
+every quantity an agent reads, and no column in the schema could be mistaken for
+one.
+
+#### When a product may show one discounted price
+
+`summariseProductOffer` (`lib/shams-crm/offer-summary.ts`, pure) decides, and it
+is strict. A product-level `unit_price` / `offer_price` pair is written **only**
+when all three hold:
+
+1. the offer reaches every stocking branch (`classifyOfferScope` says `all`);
+2. every offering branch quotes the same list price;
+3. every offering branch quotes the same offer price.
+
+Any disagreement and both are null. §11.4 records that whether offers vary by
+branch is **NOT VERIFIED** — one captured item, 138 branches, all agreeing — so
+the code checks rather than assuming. A branch-specific promotion still gets its
+badge and its coverage; what it does not get is a global price nobody charges.
+The per-branch figures are in the Branch Stock table, which is where they are
+true.
+
+The two columns carry a `CHECK ((unit_price IS NULL) = (offer_price IS NULL))`,
+and the mapping restates it on the way out: a row showing an agreed discounted
+price beside a disputed list price would invite exactly the wrong subtraction.
+
+#### The promotion is scoped to the slice
+
+The one real departure from `shams_promote_product_catalog`. A catalogue refresh
+is complete by construction, so its promotion may delete anything the response
+did not mention. A slice covers 150 of 8,484 products, so a promotion that
+deleted what it did not cover would erase the other 8,334 **on every run**.
+
+`shams_promote_offers` therefore keys everything off `covered` — the distinct
+item codes in the slice's own verdict staging table. No row belonging to any
+other item is read, written or deleted. An abandoned sweep leaves a partially
+updated dataset, never a mostly deleted one. It refuses, changing nothing, a
+slice that covered no items: promoting one would advance the cursor past
+products nobody looked at, leaving a hole no later run revisits.
+
+#### Metrics, and what "rows changed" means
+
+`shams_offer_sync_state` records, per slice: items processed, rows inserted,
+rows updated, rows deleted, **rows changed**, started and finished timestamps,
+outcome and error — plus `offer_row_count`, `product_row_count`,
+`items_with_offers`, the sweep cursor, `sweep_items_done` and
+`last_full_sweep_at`.
+
+**Rows changed is `inserted + updated + deleted + summaries_changed`** — rows
+whose values actually moved — and never items processed. A slice routinely
+processes 150 products and changes nothing at all, and an operator reading the
+first as the second would think the dataset was being rewritten every two
+minutes. The upsert carries the catalogue's `IS DISTINCT FROM` guard for the
+same reason it does: an untouched row keeps its `source_updated_at`, which
+answers "how old is this branch's price" rather than "when did the sweep last
+run".
+
+#### Admin
+
+**Sync Control** (`/admin/shams-sync`) gains an **Offers** panel beside the
+Product catalogue one — same shell, same primitives, same permission model. It
+shows sync status, the last full sweep, the last slice's timestamps and metrics,
+row counts, sweep progress, the source marker, the next check and any error;
+`Sweep now` restarts the pass from the top and advances one slice, audited as
+`shams_sync.offers_swept`. Health is `view_shams_mis` (it spends nothing); the
+button is `assertAdmin` (it spends real third-party requests), exactly as the
+catalogue's refresh is. No standalone screen was added.
+
+The scheduler is the existing one: `shams_sync_tick()` gained a fourth reason to
+poke (`offers_due`), and `runShamsSyncTick` advances one slice when
+`isOfferSweepDue`. Like the catalogue, it is deliberately **not** gated on
+`automation_enabled` — that switch governs queueing runs on Shams'
+infrastructure, and an operator pausing the nightly sync should not silently
+freeze the prices agents quote.
+
+#### Degrading
+
+- **Never synced** — the UI says "Offer data not synced yet", shows list prices,
+  and reports no product as having no offer. Live stock is unaffected.
+- **Read failed** — "Offer data unavailable", same guarantees.
+- **Stale but valid** — kept and served. A refresh that fails never replaces
+  valid rows with empty ones; the sweep's every failure path records the
+  outcome and touches no row.
 
 ### Branch stock — the summary card and the register
 
-**The card answers the call.** An agent on the phone is asked four things: what
-does it cost, is there an offer, how many are there, and where. `ProductSummaryCard`
-states all four the moment a product opens — **price · applied offer · units ·
-branches with stock** — and three of them cost **no request at all**:
+**The card answers the call.** An agent on the phone is asked what it costs,
+whether there is an offer, what it costs *with* the offer, how many there are and
+where. `ProductSummaryCard` states all of it the moment a product opens —
+**price · applied offer · offer price · units in stock · available branches** —
+and none of it costs a third-party request except the stock half:
 
 - `retailPrice` and the name travel on the search row the agent clicked (and, for
   a restored `?item=`, on the detail the route already loaded), so the price is
@@ -3708,10 +3825,15 @@ branches with stock** — and three of them cost **no request at all**:
 - units and branch counts are `summariseStock` over the MIS rows the table below
   is drawing anyway.
 
-Only the offer waits on anything, and its **coverage is usually already known**:
-the result list classified it for this exact item a moment earlier, from the same
-upstream response, so the card can say "15% OFF · all branches" before the
-per-branch read lands and refine nothing when it does. See "Fast offers" below.
+The offer comes from the local dataset, and usually it is already in the browser
+from the result list the agent clicked — so the whole card is complete in the
+frame the product opens. **Offer price** is shown only when a single
+product-level figure is defensible; a branch-specific promotion leaves it an em
+dash and sends the agent to the table.
+
+There is deliberately **no "of 137"**. The chain's branch count is not a fact
+about this product, and an agent asked "where can I get it" wants the number of
+places that have it.
 
 **Three states, never two.** `FigureState` is `loading | ready | unavailable`,
 because "not loaded yet" and "could not be asked" are different from each other
@@ -6867,17 +6989,41 @@ reshuffle under the agent's cursor.
 
 #### Branch Stock table
 
-**Seven columns, `table-fixed`:** Branch (mono) · City · District · Units
+**Seven columns, one `<colgroup>`:** Branch (mono) · City · District · Units
 (right, tabular) · Status · Price (right, tabular) · Applied Offer.
+
+**The header lines up with its column because it cannot not.** One `<table>`,
+`table-fixed`, and a single `<colgroup>` whose seven `<col>` elements are the
+*only* place any width is stated — no `w-` class on a `th` or a `td`, and no
+pixel offset anywhere in the component, because there is nothing left for one to
+correct. A `<th>` and the `<td>`s beneath it are the same table column by
+definition of the element, so no CSS, breakpoint or content length can make them
+disagree. The previous table hid Status below `lg`, and a conditionally rendered
+column is exactly how a header and a body come to disagree about which column is
+which; nothing is hidden now.
+
+**Responsive, deliberately, in two states.** From `md` up it is this table,
+inside a wrapper that *may* scroll horizontally — `min-w` sits below the `md`
+breakpoint, so at any ordinary width there is nothing to scroll, and a narrow
+window scrolls one bounded region instead of misaligning seven columns. Below
+`md` the table is replaced by a structured card per branch.
+
+**Arabic is isolated with `<bdi>`, not `dir="auto"`.** `dir="auto"` on a cell
+flips the whole cell, and a City column that right-aligns for Arabic branches
+and left-aligns for the rest is precisely the drift this table was rebuilt to
+remove. `<bdi>` renders the run right-to-left *inside* a cell that stays aligned
+with its header.
 
 **Price and Applied Offer are separate and adjacent.** They are the pair an agent
 reads out together — "it's 512, and 435 on offer at that branch" — and folding
 the discount into the price column loses whichever half the customer actually
-asked for. A branch with an offer is priced from **its own CRM row**
-(`offer.price` beside `offer.afterOfferPrice`, so the two cannot disagree about
-what is being discounted); a branch the CRM did not price shows the product's MIS
-retail price, which is the same figure the card above states. **No price on this
-page is ever computed from a percentage** — rounding is Shams's to decide.
+asked for. A branch with an offer is priced from **its own stored row**
+(`price` beside `after_offer_price`, off one CRM response row, so the two cannot
+disagree about what is being discounted); a branch the dataset did not price
+shows the product's catalogue price, which is the same figure the card above
+states. **No price on this page is ever computed from a percentage** — rounding
+is Shams's to decide, and a figure derived here could differ from the one the
+till charges.
 
 **City is the stored Arabic name and District is the حي**, both from MilaServ's
 own branch directory. `useBranchLabels` selects `branch_no,city,address` in the
@@ -6923,46 +7069,34 @@ one line — "12 of 137 branches · 9 in stock · 240 units matching …" — ra
 a second four-figure strip repeating the first. `summariseStock` still takes an
 array, so a filtered count and the rows under it cannot disagree.
 
-#### Fast offers
+#### Offers on Branch Stock
 
-**Root cause of the wait.** Opening a product cost a *second, serialized* browser
-round trip before anything about the offer could be drawn. `shamsGetProductOffers`
-could not begin until the router had committed `?item=`, the tab had re-rendered
-and the query had mounted — and its answer, the ~62 KB CRM `available-branches`
-read, was the only thing on the page that could say whether the product was
-discounted. Everything an agent needed *first* was already in the browser and was
-being thrown away and re-asked for: the price on the search row they clicked, and
-the offer's coverage in the result list's own `shamsGetOfferScopes` response.
+**No Shams CRM request is on this page's critical path.** Opening a product
+reads two local tables; searching reads one. See "Offers — a local dataset,
+swept from Shams CRM" above for the sync, the schema and the sweep.
 
-Two changes, no new architecture and no new cache:
+What that bought, concretely:
 
-1. **The card renders from data already in hand.** Price from `ShamsProduct`;
-   coverage from `offersQuery.data.scope` when it has landed and otherwise from
-   `scopes.byItemCode.get(selected.itemCode)` — the same `classifyOfferScope`
-   over the same upstream response, classified server-side moments earlier. The
-   authoritative source wins as soon as it arrives, so the card and the per-branch
-   rows below it cannot disagree.
-2. **The CRM read starts on the click** (`usePrefetchProductOffers`), so it
-   overlaps the router navigation instead of queueing behind it. It is **the same
-   query key** the hook uses, so React Query treats the two as one observer on one
-   request — and `prefetchQuery` is a no-op while the 60 s entry is still fresh.
-   Deliberately **not** wired to hover or keyboard highlight: each is its own
-   62 KB upstream read, and prefetching a list as a cursor runs down it is exactly
-   the traffic `MAX_OFFER_SCOPE_ITEMS` exists to prevent.
+- **The discounted price is on the search row.** Name, code, badge, list price
+  struck through, offer price beneath — so an agent never opens a product to
+  find out what it costs today. The previous design could afford a badge for
+  twelve rows and no price at all, because each row was a ~62 KB CRM request.
+- **The twelve-item cap is gone**, along with "Offers not checked — narrow to 12
+  results or fewer". One indexed read of `shams_offer_products` answers for a
+  hundred rows as cheaply as for twelve. `MAX_OFFER_LOOKUP_ITEMS = 200` bounds a
+  pathological request, not an upstream cost.
+- **The click prefetch is gone.** It existed to overlap a CRM request with the
+  router navigation; there is no CRM request left to overlap, so the workaround
+  was deleted rather than kept. Hover prefetching was never added and a test
+  asserts it does not arrive as a substitute.
+- **A product-level price is shown only when it is defensible.** A
+  branch-specific offer shows its badge and its coverage and no global
+  discounted price; the per-branch figures are in the table.
 
-**No duplicate upstream request was found to remove, and none was added.** The
-server side already fans out under one browser request, single-flights concurrent
-reads per item code and shares one 60 s cache between coverage and per-branch
-prices, so a result set of twelve or fewer has the opened product's offers warm
-before the agent clicks. What was removed is the *round trip on the critical
-path*, not a request. `src/features/shams/__tests__/branch-stock.test.ts` pins
-this: one `useProductOffers` call in the tab, one `useBranchLabels`, one
-`from("branches")` select, and the prefetch keyed identically to the hook.
-
-**Nothing polls.** No `refetchInterval`, no `setInterval`, `refetchOnWindowFocus`
-off. Live stock is still Shams MIS `product/stock` on its 60 s server cache, and
-Shams CRM is still not a stock source — its `available_qty` is read server-side
-as the denominator for offer scope, consumed there and dropped.
+Nothing polls: no `refetchInterval`, no `setInterval`, `refetchOnWindowFocus`
+off. The browser holds an offer answer for five minutes — long enough that
+reading one product for a while costs one read, short enough not to outlive the
+sweep that fills the table.
 
 #### Invoice lookup — number first, branch discovered
 

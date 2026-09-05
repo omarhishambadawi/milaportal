@@ -7,8 +7,19 @@
  *
  * It is the only confirmed source of promotional pricing — there is no offers
  * feed, no bulk form and no offer entity of its own (`api-discovery.md` §11).
- * The response is ~62 KB for one item, which is the whole reason this is fetched
- * for a product an agent has actually opened and never for a result set.
+ * The response is ~62 KB for one item.
+ *
+ * ## This is no longer on an agent's critical path
+ *
+ * It used to be: opening a product on Branch Stock made this request and the
+ * agent waited for it. It now runs **only** from the background offer sweep in
+ * `offer-sync.server.ts`, which writes what it learns into MilaPortal's own
+ * tables; Branch Stock reads those. Same source of truth, different moment.
+ *
+ * `fetchOfferReadNow` is the sweep's entry point and is deliberately
+ * cache-bypassing — see its note. The cached `getProductOffer` /
+ * `getProductOfferScope` remain for callers that genuinely want a live read,
+ * and no agent-facing path is one of them.
  *
  * ## What is taken, and what is deliberately left
  *
@@ -202,6 +213,45 @@ async function readOffers(itemCode: string): Promise<OfferRead> {
 
 export async function getProductOffer(itemCode: string): Promise<ShamsCrmOffer[]> {
   return (await readOffers(itemCode)).offers;
+}
+
+/**
+ * One item's offers and coverage, read from the CRM **now**.
+ *
+ * The offer sweep's entry point, and deliberately cache-bypassing for the same
+ * reason `fetchCatalogNow` exists beside `getCatalog`: the 60 s cache is right
+ * for a caller that wants an answer, and exactly wrong for a job whose whole
+ * purpose is to find out whether the stored rows are still correct. A sweep
+ * served from cache would promote the values it already had and stamp them with
+ * a fresh marker, recording a successful sweep that verified nothing.
+ *
+ * The cache is still *filled* on the way past, so a live read moments later is
+ * free.
+ *
+ * Returns the classified scope alongside the rows, because both come out of the
+ * one response and `classifyOfferScope` is the single authority on coverage —
+ * the sweep must not reach its own verdict.
+ *
+ * Throws `ShamsCrmError` on any failure. Nothing is swallowed here; the sweep
+ * decides what a failed item means.
+ */
+export async function fetchOfferReadNow(
+  itemCode: string,
+): Promise<{ offers: ShamsCrmOffer[]; scope: ShamsOfferScope }> {
+  const code = itemCode.trim();
+  if (!code) {
+    return { offers: [], scope: classifyOfferScope(code, [], 0) };
+  }
+
+  const body = await crmFetch<RawCrmAvailableBranchesResponse>(
+    `/products/${encodeURIComponent(code)}/available-branches`,
+  );
+  const read = normalizeOffers(code, body);
+  offerCache.set(code, read);
+  return {
+    offers: read.offers,
+    scope: classifyOfferScope(code, read.offers, read.branchesAvailable),
+  };
 }
 
 /**

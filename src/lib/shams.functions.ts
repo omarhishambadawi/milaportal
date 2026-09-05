@@ -36,6 +36,7 @@ import type { InvoiceBranchMatch } from "@/lib/shams/types";
 import type { ItemAvailability } from "@/lib/shams/availability";
 import type { CatalogDiagnostics } from "@/lib/shams/diagnostics.server";
 import type { ShamsCatalogHealth } from "@/lib/shams/catalog-store.server";
+import type { ShamsOfferSyncHealth } from "@/lib/shams/offer-store.server";
 import type { CrmSearchDiagnostics, CrmSmokeResult } from "@/lib/shams-crm/diagnostics.server";
 import type {
   AlShrouqConfigProbe,
@@ -52,7 +53,8 @@ import type { ResolveDispatchResult } from "@/lib/shams-crm/alshrouq-resolve.ser
 import type { AlShrouqStatusResult } from "@/lib/shams-crm/alshrouq-status.server";
 import type { AlShrouqLocationResult } from "@/features/alshrouq/location";
 import type { AgentSetupSummary, ExistingAgentLink } from "@/lib/shams-crm/agent-setup.server";
-import type { ShamsCrmOffer, ShamsOfferScope } from "@/lib/shams-crm/types";
+import type { ShamsCrmOffer } from "@/lib/shams-crm/types";
+import type { ShamsOfferSummary } from "@/lib/shams-crm/offer-summary";
 import type { ShamsSyncMonitorReport } from "@/lib/shams-crm/sync-monitor.server";
 import type { ShamsCrmHistory } from "@/lib/shams/types";
 
@@ -1594,26 +1596,40 @@ export interface ShamsProductOffersResult {
   ok: boolean;
   offers: ShamsCrmOffer[];
   /**
-   * How widely the offer applies, from the same response as `offers`.
+   * The product-level verdict, from the same local read as `offers`.
    *
-   * Returned alongside rather than through `shamsGetOfferScopes` so an opened
-   * product costs one call, not two — and so the badge on the product header
-   * cannot disagree with the per-branch prices underneath it.
+   * Carries the coverage the badge shows *and* the product-level price pair,
+   * which is null unless a single figure is defensible. Returned alongside
+   * rather than through a second call so the header and the per-branch rows
+   * underneath it cannot disagree.
    */
-  scope: ShamsOfferScope | null;
+  summary: ShamsOfferSummary | null;
+  /**
+   * True once the offer sweep has ever promoted anything.
+   *
+   * The difference between "this product has no promotion" and "nothing has
+   * been swept yet". A UI handed `synced: false` must not render either the
+   * summary or an empty `offers` array as "no offer".
+   */
+  synced: boolean;
   error: ShamsFailure | null;
 }
 
 /**
- * CRM offer pricing for one opened product.
+ * Offer pricing for one opened product, read **locally**.
  *
- * Deliberately its own function rather than another field on `shamsGetProduct`:
- * offers are an optional enhancement, and pairing them with the MIS stock read
- * would let a slow or unhappy CRM delay the stock table an agent came for. The
- * two load independently and the page renders without this one.
+ * This used to make a ~62 KB CRM `available-branches` request while an agent
+ * waited. It is now two indexed reads of MilaPortal's own tables, filled in the
+ * background by the offer sweep (`lib/shams-crm/offer-sync.server.ts`). Shams
+ * CRM is still the source of the data; it is no longer between an agent and an
+ * answer, and **no path from this function reaches it**.
  *
- * Same permission as every other product read. Returns only the fields the row
- * renders — never a raw CRM response, never CRM availability.
+ * Still its own function rather than a field on `shamsGetProduct`: the MIS stock
+ * read is live and this one is not, so pairing them would make a local lookup
+ * wait on a third-party request for no reason.
+ *
+ * Same permission as every other product read. Returns only the fields the rows
+ * render — never CRM availability.
  */
 export const shamsGetProductOffers = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -1622,77 +1638,204 @@ export const shamsGetProductOffers = createServerFn({ method: "POST" })
     const { supabase, userId } = context as { supabase: any; userId: string };
     await assertPermission(supabase, userId, "view_shams_mis");
 
-    const { isCrmCatalogAvailable } = await import("@/lib/shams-crm/products.server");
-    // Not configured is not an error: the page simply shows no offers.
-    if (!isCrmCatalogAvailable()) return { ok: false, offers: [], scope: null, error: null };
-
     try {
-      const { getProductOffer, getProductOfferScope } =
-        await import("@/lib/shams-crm/offers.server");
-      // Both read the same cached response — one upstream request, two answers.
-      const [offers, scope] = await Promise.all([
-        getProductOffer(data.itemCode),
-        getProductOfferScope(data.itemCode),
+      const { fetchBranchOffers, fetchOfferSummaries, readOfferSyncHealth } =
+        await import("@/lib/shams/offer-store.server");
+
+      // Independent local reads, so the round trip is one query's worth of
+      // latency rather than three.
+      const [offers, summaries, health] = await Promise.all([
+        fetchBranchOffers(data.itemCode),
+        fetchOfferSummaries([data.itemCode]),
+        readOfferSyncHealth(),
       ]);
-      return { ok: true, offers, scope, error: null };
+
+      return {
+        ok: true,
+        offers,
+        // Absent means the sweep has not reached this item. Left null rather
+        // than fabricated as `none`, which would be a claim nobody made.
+        summary: summaries.get(data.itemCode.trim()) ?? null,
+        synced: health.synced,
+        error: null,
+      };
     } catch (err) {
       if (err instanceof Error && err.message.startsWith("Forbidden")) throw err;
-      const { ShamsCrmError } = await import("@/lib/shams-crm/client.server");
-      const kind = err instanceof ShamsCrmError ? err.kind : "unknown";
-      // The message is this module's, not the CRM's.
       return {
         ok: false,
         offers: [],
-        scope: null,
-        error: { kind, message: "Offer pricing is unavailable." },
+        summary: null,
+        synced: false,
+        error: await toFailure(err),
       };
     }
   });
 
-export interface ShamsOfferScopesResult {
+export interface ShamsOfferSummariesResult {
   ok: boolean;
-  /** Only the items that were actually answered for. */
-  scopes: ShamsOfferScope[];
+  /** Only the items the sweep has actually checked. */
+  summaries: ShamsOfferSummary[];
+  /** True once the offer sweep has ever promoted anything. */
+  synced: boolean;
   error: ShamsFailure | null;
 }
 
 /**
- * Offer coverage for a set of items, in one call.
+ * Offer verdicts for a set of items, in one **local** call.
  *
- * This exists so an agent can see *from the result list* whether a product is
- * on offer, without opening it — and it is capped rather than open-ended,
- * because there is no bulk offers endpoint. Each item is its own ~62 KB CRM
- * request, so the cap in `getOfferScopes` is what stops a badge on every row
- * from turning one search into a hundred upstream reads.
+ * What a search result list reads, so every row can show its discounted price
+ * without opening anything. The cap this replaces was the load-bearing part of
+ * the previous design — twelve items, because each was its own ~62 KB CRM
+ * request and a hundred-row result would have been a hundred of them. There is
+ * no fan-out left to cap: this is one indexed read of `shams_offer_products`
+ * keyed by `item_code`, and the remaining `MAX_OFFER_LOOKUP_ITEMS` bounds a
+ * pathological request rather than an upstream cost.
  *
- * One browser request regardless of how many items are asked about. The fan-out,
- * its concurrency limit and its cache all live server-side, next to the CRM
- * client that owns them.
- *
- * Items the CRM could not answer for are **absent** from `scopes` rather than
- * reported as having no offer. The distinction is the point: the caller renders
- * a missing entry as "not checked".
+ * Items the sweep has not reached are **absent** rather than reported as having
+ * no offer, exactly as before. The distinction is the point.
  */
-export const shamsGetOfferScopes = createServerFn({ method: "POST" })
+export const shamsGetOfferSummaries = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => offerScopesInput.parse(d))
-  .handler(async ({ context, data }): Promise<ShamsOfferScopesResult> => {
+  .handler(async ({ context, data }): Promise<ShamsOfferSummariesResult> => {
     const { supabase, userId } = context as { supabase: any; userId: string };
     await assertPermission(supabase, userId, "view_shams_mis");
 
-    const { isCrmCatalogAvailable } = await import("@/lib/shams-crm/products.server");
-    // Not configured is not an error: the list simply shows no offer badges.
-    if (!isCrmCatalogAvailable()) return { ok: false, scopes: [], error: null };
-
     try {
-      const { getOfferScopes } = await import("@/lib/shams-crm/offers.server");
-      return { ok: true, scopes: await getOfferScopes(data.itemCodes), error: null };
+      const { fetchOfferSummaries, readOfferSyncHealth } =
+        await import("@/lib/shams/offer-store.server");
+      const [summaries, health] = await Promise.all([
+        fetchOfferSummaries(data.itemCodes),
+        readOfferSyncHealth(),
+      ]);
+      return {
+        ok: true,
+        summaries: [...summaries.values()],
+        synced: health.synced,
+        error: null,
+      };
     } catch (err) {
       if (err instanceof Error && err.message.startsWith("Forbidden")) throw err;
-      const { ShamsCrmError } = await import("@/lib/shams-crm/client.server");
-      const kind = err instanceof ShamsCrmError ? err.kind : "unknown";
-      return { ok: false, scopes: [], error: { kind, message: "Offer pricing is unavailable." } };
+      return { ok: false, summaries: [], synced: false, error: await toFailure(err) };
     }
+  });
+
+/* -------------------------------------------------------------------------- */
+/* Local offer dataset — health and sweep                                      */
+/* -------------------------------------------------------------------------- */
+
+export interface ShamsOfferHealthResult {
+  ok: boolean;
+  health: ShamsOfferSyncHealth | null;
+  error: ShamsFailure | null;
+}
+
+/**
+ * Are agents seeing offers, and how old are they?
+ *
+ * The offers counterpart of `shamsCatalogHealth`, and cheap in the same way: it
+ * reads one row of `shams_offer_sync_state` and makes no request to Shams at
+ * all, so it stays readable during exactly the outage it would be consulted
+ * about.
+ *
+ * `assertPermission` rather than `assertAdmin`: it contacts nothing, spends
+ * nothing and reveals nothing beyond counts and timestamps, so anyone who can
+ * use Branch Stock can be told why an offer column is empty.
+ */
+export const shamsOfferHealth = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }): Promise<ShamsOfferHealthResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertPermission(supabase, userId, "view_shams_mis");
+
+    try {
+      const { readOfferSyncHealth } = await import("@/lib/shams/offer-store.server");
+      return { ok: true, health: await readOfferSyncHealth(), error: null };
+    } catch (err) {
+      return { ok: false, health: null, error: await toFailure(err) };
+    }
+  });
+
+export interface ShamsOfferSweepResult {
+  ok: boolean;
+  outcome: string;
+  itemsProcessed: number;
+  itemsFailed: number;
+  rowsChanged: number;
+  offerRows: number;
+  productRows: number;
+  itemsWithOffers: number;
+  sweepComplete: boolean;
+  message: string;
+}
+
+/**
+ * Advance the offer sweep now, by hand.
+ *
+ * `assertAdmin`, because this spends real requests against a third-party
+ * production system — the same reason `shamsCatalogRefreshNow` and
+ * `shamsSyncRunNow` are administrator-only.
+ *
+ * `force: true` restarts the sweep from the top rather than resuming, which is
+ * the point of pressing it: an operator does this precisely when they believe
+ * the dataset is behind and the promotions marker has not said so. It advances
+ * **one slice** — a full pass is ~8,484 requests and cannot be a button press —
+ * so the scheduler carries it the rest of the way at two minutes a slice.
+ *
+ * It cannot leave Branch Stock worse off. A promotion is scoped to the slice's
+ * own item codes and only lands from a complete, validated slice, so a refusal,
+ * a timeout or a slice nobody answered for all end with the previous offer data
+ * still serving.
+ */
+export const shamsOfferSweepNow = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }): Promise<ShamsOfferSweepResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertAdmin(supabase, userId);
+
+    const { logAdminAction, AUDIT_ACTIONS } = await import("@/lib/audit.server");
+    // Written before the attempt, for the same reason the catalogue refresh
+    // does it: a request that loses its response must still record that a named
+    // person asked for it.
+    await logAdminAction({
+      actorId: userId,
+      targetUserId: null,
+      action: AUDIT_ACTIONS.shamsOffersSwept,
+      details: { forced: true },
+    });
+
+    const { sweepOffers } = await import("@/lib/shams-crm/offer-sync.server");
+    const result = await sweepOffers({ force: true });
+
+    const message =
+      result.outcome === "swept"
+        ? `Swept ${result.itemsProcessed} products: ${result.rowsChanged} rows changed, ` +
+          `${result.itemsWithOffers} of ${result.productRows} checked products on offer.` +
+          (result.sweepComplete
+            ? " The sweep reached the end of the catalogue."
+            : " The scheduler will continue from here.") +
+          (result.itemsFailed > 0
+            ? ` ${result.itemsFailed} products could not be read and keep their previous offers.`
+            : "")
+        : result.outcome === "not_configured"
+          ? "Shams CRM is not configured on this deployment, so offers were left as they are."
+          : result.outcome === "unchanged"
+            ? `Offers are already current: ${result.productRows} products checked, ` +
+              `${result.itemsWithOffers} on offer.`
+            : "The sweep failed. The previous offer data is still serving Branch Stock.";
+
+    return {
+      ok: result.outcome !== "failed",
+      outcome: result.outcome,
+      itemsProcessed: result.itemsProcessed,
+      itemsFailed: result.itemsFailed,
+      rowsChanged: result.rowsChanged,
+      offerRows: result.offerRows,
+      productRows: result.productRows,
+      itemsWithOffers: result.itemsWithOffers,
+      sweepComplete: result.sweepComplete,
+      message,
+    };
   });
 
 /* -------------------------------------------------------------------------- */

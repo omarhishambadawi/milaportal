@@ -55,6 +55,8 @@ import {
 import {
   shamsCatalogHealth,
   shamsCatalogRefreshNow,
+  shamsOfferHealth,
+  shamsOfferSweepNow,
   shamsSyncDeleteSlot,
   shamsSyncMonitor,
   shamsSyncRunNow,
@@ -347,6 +349,197 @@ function CatalogPanel() {
             <NoticeState
               tone="warning"
               message="The catalogue's health could not be read. Product search may still be working; this panel is a separate query."
+            />
+          </div>
+        )}
+      </AdminCard>
+    </AdminSection>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* The local offer dataset                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Are agents seeing offers, and how old are they?
+ *
+ * The catalogue panel's twin, deliberately: same shape, same server-function
+ * pattern, same permission model, same "reads one state row and contacts Shams
+ * not at all" property — so it still answers during exactly the outage it would
+ * be consulted about.
+ *
+ * What it has that the catalogue panel does not is **progress**, and that is the
+ * one thing worth understanding here. Offers have no bulk endpoint
+ * (`docs/shams/api-discovery.md` §11.5): a full pass is one ~62 KB request per
+ * product, so the sweep walks the catalogue in slices of 150 across many
+ * scheduler ticks. An operator therefore needs to see not just "when did this
+ * last succeed" but "how far has it got", because a sweep half done has looked
+ * at half the products — and the products it has not reached show no offer
+ * badge, correctly and temporarily.
+ */
+function OffersPanel() {
+  const loadHealth = useServerFn(shamsOfferHealth);
+  const sweepNow = useServerFn(shamsOfferSweepNow);
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const health = useQuery({
+    queryKey: ["shams-offer-health"],
+    queryFn: () => loadHealth({ data: undefined }),
+    refetchOnWindowFocus: true,
+    staleTime: 30_000,
+  });
+
+  const sweep = useMutation({
+    mutationFn: () => sweepNow({ data: undefined }),
+    onSuccess: (result) => {
+      setNotice({ ok: result.ok, text: result.message });
+      void health.refetch();
+    },
+  });
+
+  const row = health.data?.ok ? health.data.health : null;
+  const checked = row?.productRowCount ?? 0;
+  const ageHours = row?.ageMs === null || row?.ageMs === undefined ? null : row.ageMs / 3_600_000;
+
+  /**
+   * Tone is about *what agents see*, not about the sweep.
+   *
+   * A dataset that has never synced is the only danger: every product then looks
+   * offer-free, which is the one state in which the page can mislead someone
+   * about money. A failed slice is a warning — the previous rows are still
+   * serving and nobody on a call notices — and so is a dataset whose last full
+   * pass is older than the eight-day fallback, which is past the point where the
+   * age trigger should have fired.
+   */
+  const tone: Tone = !row?.synced
+    ? "danger"
+    : row?.lastOutcome === "failed" || (ageHours !== null && ageHours > 24 * 8)
+      ? "warning"
+      : "success";
+
+  return (
+    <AdminSection
+      title="Offers"
+      description="Promotional pricing, held in MilaPortal so Branch Stock never contacts Shams CRM when an agent opens a product."
+    >
+      <AdminCard>
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b px-4 py-4 sm:px-5">
+          <HealthIndicator
+            tone={tone}
+            label={
+              !row?.synced
+                ? "Offers have never been synced"
+                : `${count(row.itemsWithOffers)} of ${count(checked)} products on offer`
+            }
+            detail={
+              !row?.synced
+                ? "Branch Stock shows list prices and says so. No product is reported as having no offer, because nothing has been checked."
+                : row.sweepInProgress
+                  ? `A sweep is in progress — ${count(row.sweepItemsDone)} products checked so far. Products it has not reached yet show no badge.`
+                  : row.lastFullSweepAt
+                    ? `Last full sweep ${relativeToNow(row.lastFullSweepAt)}.`
+                    : "No sweep has reached the end of the catalogue yet."
+            }
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={sweep.isPending}
+            onClick={() => sweep.mutate()}
+          >
+            {sweep.isPending && (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+            )}
+            Sweep now
+          </Button>
+        </div>
+
+        <div className="grid gap-x-6 px-4 py-2 sm:grid-cols-2 sm:px-5">
+          <DataRow label="Products checked">{count(checked)}</DataRow>
+          <DataRow label="Products on offer">{count(row?.itemsWithOffers ?? 0)}</DataRow>
+          <DataRow label="Branch offer rows">{count(row?.offerRowCount ?? 0)}</DataRow>
+          <DataRow label="Sweep">
+            {row?.sweepInProgress
+              ? `In progress — ${count(row.sweepItemsDone)} checked`
+              : row?.lastFullSweepAt
+                ? "Complete"
+                : "Not started"}
+          </DataRow>
+          <DataRow label="Last full sweep">
+            {row?.lastFullSweepAt ? riyadh(row.lastFullSweepAt) : "Never"}
+          </DataRow>
+          <DataRow label="Last slice">
+            {row?.lastSuccessAt ? riyadh(row.lastSuccessAt) : "Never"}
+          </DataRow>
+          <DataRow label="Last checked">
+            {row?.lastAttemptAt ? riyadh(row.lastAttemptAt) : "—"}
+          </DataRow>
+          <DataRow label="Last outcome">
+            <StatusBadge
+              tone={
+                row?.lastOutcome === "failed"
+                  ? "danger"
+                  : row?.lastOutcome === "success"
+                    ? "success"
+                    : "neutral"
+              }
+              label={row?.lastOutcome ?? "Never checked"}
+            />
+          </DataRow>
+          <DataRow label="Next check">
+            {row?.nextRefreshDueAt ? riyadh(row.nextRefreshDueAt) : "Due now"}
+          </DataRow>
+          {/* The upstream promotions marker the current rows were swept
+              against. A timestamp Shams already publishes; nothing sensitive. */}
+          <DataRow label="Source marker">{row?.sourceMarker ?? "—"}</DataRow>
+        </div>
+
+        {/*
+          The last slice's metrics, and the one distinction worth a whole row.
+
+          "Processed" is how many products were asked about; "changed" is how
+          many rows actually moved. They are wildly different numbers — a slice
+          of 150 products routinely changes nothing at all — and an operator who
+          read the first as the second would think the sweep was rewriting the
+          dataset every two minutes.
+        */}
+        <div className="grid gap-x-6 border-t px-4 py-2 sm:grid-cols-2 sm:px-5">
+          <DataRow label="Last slice — processed">{count(row?.lastItemsProcessed ?? 0)}</DataRow>
+          <DataRow label="Last slice — rows changed">{count(row?.lastRowsChanged ?? 0)}</DataRow>
+          <DataRow label="Inserted">{count(row?.lastRowsInserted ?? 0)}</DataRow>
+          <DataRow label="Updated">{count(row?.lastRowsUpdated ?? 0)}</DataRow>
+          <DataRow label="Removed">{count(row?.lastRowsDeleted ?? 0)}</DataRow>
+          <DataRow label="Slice ran">
+            {row?.lastStartedAt ? riyadhShort(row.lastStartedAt) : "—"}
+            {row?.lastFinishedAt ? ` → ${riyadhShort(row.lastFinishedAt)}` : ""}
+          </DataRow>
+        </div>
+
+        {(row?.lastError || notice) && (
+          <div className="space-y-2 border-t px-4 py-3 sm:px-5">
+            {notice && (
+              <NoticeState tone={notice.ok ? "success" : "danger"} message={notice.text} />
+            )}
+            {row?.lastError && (
+              <NoticeState
+                tone={row.synced ? "warning" : "danger"}
+                message={
+                  row.synced
+                    ? `${row.lastError} The previous offer data is still serving Branch Stock.`
+                    : row.lastError
+                }
+              />
+            )}
+          </div>
+        )}
+
+        {!health.isLoading && !row && (
+          <div className="border-t px-4 py-3 sm:px-5">
+            <NoticeState
+              tone="warning"
+              message="The offer dataset's health could not be read. Branch Stock may still be working; this panel is a separate query."
             />
           </div>
         )}
@@ -846,6 +1039,8 @@ function ShamsSyncPage() {
 
           {/* ------------------------------------------------------------ */}
           <CatalogPanel />
+
+          <OffersPanel />
 
           {/* ------------------------------------------------------------ */}
           <AdminSection

@@ -61,6 +61,14 @@ export const AUDIT_ACTIONS = {
    * the one control that can replace what every agent's product search sees.
    */
   shamsCatalogRefreshed: "shams_sync.catalog_refreshed",
+  /**
+   * The offer sweep was advanced by hand.
+   *
+   * Audited for the same reason as `shamsCatalogRefreshed`: it is a browser
+   * action that spends real requests against a third-party production system,
+   * and it is the control that decides what price every agent quotes.
+   */
+  shamsOffersSwept: "shams_sync.offers_swept",
   /** A telesales source workbook was imported. */
   telesalesImported: "telesales.imported",
   /** Lead generation was run by hand rather than by the scheduler. */

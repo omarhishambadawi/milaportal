@@ -882,18 +882,40 @@ Note that this response is location-aware (it takes `location_lat` / `location_l
 and sorts by distance) and carries outward-facing `whatsapp` and `maps_url`
 links. Those are display data; nothing should follow them server-side.
 
-### 11.6 What a future phase would have to decide
+### 11.7 How this was resolved — a swept local index
 
-The per-item cost is the whole design problem. Showing an offer badge on a
-100-row search result would be 100 requests and ~6 MB. Two shapes avoid that, and
-neither is implemented:
+The per-item cost was the whole design problem. Showing an offer badge on a
+100-row search result would be 100 requests and ~6 MB. Two shapes avoided that:
 
 1. **On demand, for the opened product only** — one request when an agent opens a
-   product, alongside the MIS stock read the page already makes. Smallest, and it
-   matches how the desktop itself surfaces offers.
-2. **A cached offers index**, if Shams can expose a bulk endpoint. Not possible
-   against the API as it stands.
+   product. Implemented first, and it is what the badge cap of 12 existed to
+   bound.
+2. **A cached offers index**, if Shams can expose a bulk endpoint. Recorded above
+   as "not possible against the API as it stands", and that reading of the API is
+   unchanged — there is still no bulk form.
 
-Caching, when it happens, must be **shorter than the catalog's six hours** — an
-offer is a live price, and a stale one is a price an agent quotes wrongly. The
-60-second MIS stock TTL is the closer precedent.
+What was built is a third shape the note above did not consider: **a local index
+filled by an incremental sweep**. It does not need a bulk endpoint; it pays the
+per-item cost in the background, once, rather than on an agent's critical path.
+
+- One request per product, 150 products per run, 4 in flight, resumed from a
+  stored cursor across scheduler ticks. A full pass is ~8,484 requests and about
+  two hours.
+- Triggered by a new success marker on `GET /promotions/sync/status`, by a
+  dataset that has never been swept, or by a seven-day age fallback. **Never on
+  a short timer**, and `POST /promotions/sync` is never called.
+- The results land in `shams_offers` (per branch, offers only) and
+  `shams_offer_products` (per checked item, including those with no offer — the
+  row that makes "no promotion" distinguishable from "not asked yet").
+
+The caching note above still holds and is honoured differently: an offer is a
+live price, so the browser holds an answer for five minutes rather than the
+catalog's hours, and the dataset's freshness is exposed to operators in Sync
+Control rather than being invisible.
+
+**A product-level offer price is derived only under unanimity** — the offer
+reaches every stocking branch, and every offering branch quotes the same list
+price and the same offer price. §11.4's `NOT VERIFIED` on per-branch variation is
+what makes that check mandatory rather than optional: without it, a
+branch-specific promotion would be shown as a global discount an agent could
+quote and no branch would honour.

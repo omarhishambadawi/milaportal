@@ -16,8 +16,8 @@
  *   3. An invoice lookup runs only once submitted, never while typing.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
 import { queryKeys } from "@/lib/query-keys";
@@ -29,7 +29,7 @@ import {
   shamsFindInvoiceBranches,
   shamsGetCustomerHistory,
   shamsGetInvoices,
-  shamsGetOfferScopes,
+  shamsGetOfferSummaries,
   shamsGetInvoiceStock,
   shamsGetProduct,
   shamsGetProductOffers,
@@ -50,8 +50,21 @@ const SEARCH_STALE_MS = 5 * 60_000;
 const PRODUCT_STALE_MS = 60_000;
 /** Matches the server's stock cache — the half of an invoice+stock read that moves. */
 const STOCK_STALE_MS = 60_000;
-/** Matches the server's offer cache. A promotional price is not reference data. */
-const OFFERS_STALE_MS = 60_000;
+/**
+ * How long an offer answer is reused before re-asking.
+ *
+ * It used to match the server's 60 s CRM cache, because that is what it was: a
+ * live third-party read. Offers now come from MilaPortal's own tables, filled by
+ * a background sweep, so the question this number answers has changed from "how
+ * stale may a live price be" to "how often should the browser re-read a local
+ * table that a sweep touches every few minutes".
+ *
+ * Five minutes, and deliberately not longer. The dataset moves only when the
+ * sweep promotes a slice, and an agent who has been looking at one product for
+ * five minutes is not mid-sentence about its price. Deliberately not shorter
+ * either: re-reading on a tighter loop would be polling a table by another name.
+ */
+const OFFERS_STALE_MS = 5 * 60_000;
 /**
  * Branch discovery is the most expensive call on the page — one sweep of every
  * branch — and its answer (which branches ever held document N) does not move
@@ -285,15 +298,18 @@ export function useProductDetail(itemCode: string | null, enabled = true) {
 }
 
 /**
- * CRM offer pricing for one opened product.
+ * Offer pricing for one opened product, from the **local** dataset.
  *
- * Separate from `useProductDetail` on purpose. Offers are an enhancement: this
- * query failing, or the CRM not being configured at all, must leave the stock
- * table exactly as it is — so it loads alongside rather than in front, and its
- * error state is simply "no offers".
+ * There is no prefetch beside this any more, and its absence is the point. The
+ * previous phase primed this query on the click so a ~62 KB CRM request could
+ * overlap the router navigation; there is no CRM request left to overlap. Two
+ * indexed reads of MilaPortal's own tables land in the time the navigation
+ * takes, so the workaround was deleted rather than kept.
  *
- * Held for the server's own 60 s offer TTL rather than the catalog's hours: an
- * offer is a live price.
+ * Still separate from `useProductDetail`. That one is a **live** MIS read and
+ * this one is local, so pairing them would make an instant lookup wait on a
+ * third-party request. A failure here still leaves the stock table exactly as it
+ * is; offers remain an enhancement, never a gate.
  */
 export function useProductOffers(itemCode: string | null, enabled = true) {
   const offersFn = useServerFn(shamsGetProductOffers);
@@ -306,55 +322,6 @@ export function useProductOffers(itemCode: string | null, enabled = true) {
     refetchOnWindowFocus: false,
     retry: false,
   });
-}
-
-/**
- * Start an opened product's offer read at the moment it is picked.
- *
- * ## Why this exists
- *
- * `useProductOffers` cannot fire until the tab is re-rendered with a selection,
- * and a selection is a **router navigation**: the click writes `?item=`, the
- * route re-renders, `openProduct` finally agrees with the URL, and only then
- * does the query mount. Until that whole cycle finished, the slowest thing on
- * the page — a ~62 KB CRM `available-branches` read — had not been asked for.
- * Called from the click handler, the request leaves while the navigation is
- * still happening, so the two overlap instead of queueing.
- *
- * ## Why this is not an extra request
- *
- * It is the **same query key** the hook uses, so React Query treats the two as
- * one: the observer that mounts a moment later attaches to the request already
- * in flight, or reads what it returned. `prefetchQuery` is also a no-op while
- * the entry is still fresh, so re-opening a product inside the 60 s window asks
- * for nothing at all.
- *
- * The code is handed to `productOffers` **verbatim**, exactly as
- * `useProductOffers` does, and only the emptiness guard trims. Normalizing it
- * here and not there is how "one key" quietly becomes two, and two keys for one
- * item is the duplicate this function exists to avoid.
- *
- * Deliberately **not** wired to hover or to keyboard highlight. Each of these is
- * its own 62 KB upstream read, and prefetching a list as a cursor moves down it
- * is exactly the traffic `MAX_OFFER_SCOPE_ITEMS` exists to prevent. One product,
- * one deliberate click.
- */
-export function usePrefetchProductOffers() {
-  const offersFn = useServerFn(shamsGetProductOffers);
-  const queryClient = useQueryClient();
-
-  return useCallback(
-    (itemCode: string | null | undefined) => {
-      if (!itemCode?.trim()) return;
-      void queryClient.prefetchQuery({
-        queryKey: queryKeys.shams.productOffers(itemCode),
-        queryFn: () => offersFn({ data: { itemCode } }),
-        staleTime: OFFERS_STALE_MS,
-        retry: false,
-      });
-    },
-    [offersFn, queryClient],
-  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -627,64 +594,67 @@ export function useCustomerHistory(query: CustomerHistoryQuery | null) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Offer coverage for a result set                                             */
+/* Offer verdicts for a result set                                             */
 /* -------------------------------------------------------------------------- */
 
 /**
- * The most items one lookup may cover. Mirrors the server's own cap.
+ * Offer verdicts for every product in a result set, in one local call.
  *
- * Exported because the UI has to *say* when a result set is too large to check
- * rather than quietly showing rows with no badge, which would read as "no
- * offer". See `MAX_OFFER_SCOPE_ITEMS` in `lib/shams-crm/offers.server.ts` for
- * why the ceiling exists at all.
+ * ## What changed, and why the cap went
+ *
+ * This hook used to be the page's worst N+1 risk, and its rules said so: one
+ * query for the set, **disabled above twelve items**, because each item was its
+ * own ~62 KB CRM request and a hundred-row result would have been a hundred of
+ * them. The list said "offers not checked" above the cap rather than rendering
+ * blanks that would read as "no offer".
+ *
+ * None of that is true any more. `shamsGetOfferSummaries` is one indexed read of
+ * `shams_offer_products` keyed by `item_code`, so a hundred rows cost what
+ * twelve did and the cap has no cost left to express. Every search result can
+ * now carry its own discounted price, which is the whole point of the phase.
+ *
+ * Two rules survive, because they were never about the cap:
+ *
+ *   1. **Keyed on the sorted set**, so re-ranking the same products is a cache
+ *      hit rather than a second read.
+ *   2. **An item absent from the answer was not checked.** The sweep walks the
+ *      catalogue over hours; a product it has not reached has no row, and that
+ *      is `unknown`, never `none`.
  */
-export const MAX_OFFER_SCOPE_ITEMS = 12;
-
-/**
- * Whether each product in a result set has an offer, and how widely it applies.
- *
- * This is the hook that could have been the page's worst N+1, so the rules are
- * strict:
- *
- *   1. **One query for the whole set**, not one per row. The fan-out happens
- *      server-side under a concurrency limit and a shared 60 s cache.
- *   2. **Disabled above `MAX_OFFER_SCOPE_ITEMS`.** Offers have no bulk endpoint
- *      and each item is a ~62 KB request, so a broad search asks for nothing at
- *      all and the list says so.
- *   3. **Keyed on the sorted set**, so re-ranking the same products is a cache
- *      hit rather than a second fan-out.
- *
- * Held for the same 60 s the server holds an offer: this is a live price, and a
- * badge that outlived it would be a promise about money.
- */
-export function useOfferScopes(itemCodes: readonly string[], enabled = true) {
-  const scopesFn = useServerFn(shamsGetOfferScopes);
+export function useOfferSummaries(itemCodes: readonly string[], enabled = true) {
+  const summariesFn = useServerFn(shamsGetOfferSummaries);
 
   // Sorted and deduplicated here so the key is order-insensitive; `codes` is
   // also what gets sent, so the request and the key cannot disagree.
   const codes = useMemo(() => [...new Set(itemCodes.filter(Boolean))].sort(), [itemCodes]);
-  const within = codes.length > 0 && codes.length <= MAX_OFFER_SCOPE_ITEMS;
 
   const query = useQuery({
-    queryKey: queryKeys.shams.offerScopes(codes.join(",")),
-    queryFn: ({ signal }) => scopesFn({ data: { itemCodes: codes }, signal }),
-    enabled: enabled && within,
+    queryKey: queryKeys.shams.offerSummaries(codes.join(",")),
+    queryFn: ({ signal }) => summariesFn({ data: { itemCodes: codes }, signal }),
+    enabled: enabled && codes.length > 0,
     staleTime: OFFERS_STALE_MS,
     refetchOnWindowFocus: false,
     retry: false,
   });
 
   return useMemo(() => {
-    const rows = query.data?.ok ? query.data.scopes : [];
+    const rows = query.data?.ok ? query.data.summaries : [];
     return {
       /**
-       * Scope by item code. An item **absent** from this map was not answered
-       * for — never render that as "no offer"; `none` is its own kind.
+       * Verdict by item code. An item **absent** from this map has not been
+       * swept — never render that as "no offer"; `none` is its own kind.
        */
-      byItemCode: new Map(rows.map((scope) => [scope.itemCode, scope])),
-      /** True when the set was too large to check, so the UI can say why. */
-      skipped: codes.length > MAX_OFFER_SCOPE_ITEMS,
+      byItemCode: new Map(rows.map((summary) => [summary.itemCode, summary])),
+      /**
+       * False until the sweep has promoted something.
+       *
+       * The gate for "Offer data not synced": before the first successful
+       * sweep, *every* item is absent, and a UI that read that as "no offer"
+       * would quote full price on a shelf full of promotions.
+       */
+      synced: query.data?.ok ? query.data.synced : false,
       loading: query.isFetching,
+      failed: query.isError || (query.data ? !query.data.ok : false),
     };
-  }, [query.data, query.isFetching, codes.length]);
+  }, [query.data, query.isFetching, query.isError]);
 }

@@ -55,6 +55,7 @@ export const AUDIT_ACTION_LABEL = {
   "shams_sync.schedule_deleted": "Removed a Shams schedule",
   "shams_sync.manual_run": "Started a Shams sync manually",
   "shams_sync.catalog_refreshed": "Refreshed the Shams product catalogue",
+  "shams_sync.offers_swept": "Swept Shams offers into the local dataset",
   "telesales.imported": "Imported a telesales source file",
   "telesales.generated": "Ran telesales lead generation",
   "telesales.settings_saved": "Changed the telesales date windows",
