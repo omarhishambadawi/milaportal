@@ -1577,6 +1577,7 @@ export type Database = {
           generation_reason: string | null
           generation_run_id: string | null
           id: string
+          import_id: string | null
           invoice_checked_at: string | null
           invoice_discrepancies: string[]
           invoice_match_status: string | null
@@ -1632,6 +1633,7 @@ export type Database = {
           generation_reason?: string | null
           generation_run_id?: string | null
           id?: string
+          import_id?: string | null
           invoice_checked_at?: string | null
           invoice_discrepancies?: string[]
           invoice_match_status?: string | null
@@ -1687,6 +1689,7 @@ export type Database = {
           generation_reason?: string | null
           generation_run_id?: string | null
           id?: string
+          import_id?: string | null
           invoice_checked_at?: string | null
           invoice_discrepancies?: string[]
           invoice_match_status?: string | null
@@ -1728,6 +1731,13 @@ export type Database = {
             columns: ["generation_run_id"]
             isOneToOne: false
             referencedRelation: "telesales_generation_runs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "telesales_leads_import_id_fkey"
+            columns: ["import_id"]
+            isOneToOne: false
+            referencedRelation: "telesales_imports"
             referencedColumns: ["id"]
           },
           {
@@ -2288,8 +2298,6 @@ export type Database = {
           assigned_by: string | null
           assigned_to: string | null
           branch_no: string | null
-          canonical_item_code: string | null
-          canonical_via: string | null
           channel: string | null
           city: string | null
           closed_at: string | null
@@ -2309,6 +2317,7 @@ export type Database = {
           generation_reason: string | null
           generation_run_id: string | null
           id: string | null
+          import_id: string | null
           invoice_checked_at: string | null
           invoice_discrepancies: string[] | null
           invoice_match_status: string | null
@@ -2355,6 +2364,13 @@ export type Database = {
             columns: ["generation_run_id"]
             isOneToOne: false
             referencedRelation: "telesales_generation_runs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "telesales_leads_import_id_fkey"
+            columns: ["import_id"]
+            isOneToOne: false
+            referencedRelation: "telesales_imports"
             referencedColumns: ["id"]
           },
           {
@@ -3706,6 +3722,12 @@ export type Database = {
           source_records: number
         }[]
       }
+      telesales_delete_lead: {
+        Args: { _actor: string; _lead_id: string }
+        Returns: {
+          mode: string
+        }[]
+      }
       telesales_generation_tick: { Args: never; Returns: number }
       telesales_import_summary: {
         Args: { _limit?: number }
@@ -3742,6 +3764,15 @@ export type Database = {
         Args: { _import_id: string }
         Returns: {
           leads: number
+        }[]
+      }
+      telesales_wasfaty_cycles: {
+        Args: never
+        Returns: {
+          import_ids: string[]
+          label: string
+          leads: number
+          period: string
         }[]
       }
       unlockrows: { Args: { "": string }; Returns: number }
