@@ -53,6 +53,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  shamsCatalogHealth,
+  shamsCatalogRefreshNow,
   shamsSyncDeleteSlot,
   shamsSyncMonitor,
   shamsSyncRunNow,
@@ -76,7 +78,7 @@ import {
   statusTone,
   type Tone,
 } from "@/features/admin/components/primitives";
-import { count, duration, riyadh, riyadhShort } from "@/features/admin/format";
+import { count, duration, relativeToNow, riyadh, riyadhShort } from "@/features/admin/format";
 
 export const Route = createFileRoute("/_app/admin/shams-sync")({
   component: ShamsSyncPage,
@@ -198,6 +200,160 @@ interface SlotDraft {
 const CELL = "px-4 py-3 align-middle";
 const HEAD =
   "px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground";
+
+/* -------------------------------------------------------------------------- */
+/* The local product catalogue                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Is product search working, and is what it searches current?
+ *
+ * The catalogue Branch Stock searches is MilaPortal's own table, not a live read
+ * of Shams CRM, which is what makes search instant and what makes it survive a
+ * CRM outage. The cost of that is a question nobody could previously ask: *how
+ * old are these rows*. This panel is the answer, and it is deliberately four
+ * facts rather than a dashboard — a row count, a freshness, an outcome, and one
+ * sentence when something went wrong.
+ *
+ * It reads one row of `shams_catalog_state` and contacts Shams not at all, so it
+ * still answers during exactly the outage it would be consulted about.
+ *
+ * Its own query, separate from the monitor's, for the same reason: the monitor
+ * reads live status from Shams CRM and fails when the CRM does. Folding the
+ * catalogue's health into it would mean losing the health signal precisely when
+ * the CRM is down — the moment it matters most, because that is when someone
+ * needs to be told that search is unaffected.
+ */
+function CatalogPanel() {
+  const loadHealth = useServerFn(shamsCatalogHealth);
+  const refreshNow = useServerFn(shamsCatalogRefreshNow);
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const health = useQuery({
+    queryKey: ["shams-catalog-health"],
+    queryFn: () => loadHealth({ data: undefined }),
+    refetchOnWindowFocus: true,
+    staleTime: 30_000,
+  });
+
+  const refresh = useMutation({
+    mutationFn: () => refreshNow({ data: undefined }),
+    onSuccess: (result) => {
+      setNotice({ ok: result.ok, text: result.message });
+      void health.refetch();
+    },
+  });
+
+  const row = health.data?.ok ? health.data.health : null;
+  const rows = row?.rowCount ?? 0;
+  const ageHours = row?.ageMs === null || row?.ageMs === undefined ? null : row.ageMs / 3_600_000;
+
+  /**
+   * Tone is about *search*, not about the refresh.
+   *
+   * An empty catalogue is the only state in which agents cannot search, so it is
+   * the only danger. A refresh that failed is a warning — the previous rows are
+   * still serving and nobody on a call notices — and so is a catalogue that has
+   * gone more than a day and a half without one, which is past the point where
+   * the age fallback should have fired.
+   */
+  const tone: Tone =
+    rows === 0
+      ? "danger"
+      : row?.lastOutcome === "failed" || (ageHours !== null && ageHours > 36)
+        ? "warning"
+        : "success";
+
+  return (
+    <AdminSection
+      title="Product catalogue"
+      description="What Branch Stock search reads. Held in MilaPortal, so a Shams CRM outage cannot stop an agent finding a product."
+    >
+      <AdminCard>
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b px-4 py-4 sm:px-5">
+          <HealthIndicator
+            tone={tone}
+            label={rows === 0 ? "Search is unavailable" : `${count(rows)} products searchable`}
+            detail={
+              rows === 0
+                ? "The catalogue is empty, so product search cannot return anything. Refresh it, or check that the migrations have run."
+                : row?.lastSuccessAt
+                  ? `Last refreshed ${relativeToNow(row.lastSuccessAt)}.`
+                  : "Serving the shipped seed; no refresh from Shams CRM has completed yet."
+            }
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={refresh.isPending}
+            onClick={() => refresh.mutate()}
+          >
+            {refresh.isPending && (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+            )}
+            Refresh catalogue
+          </Button>
+        </div>
+
+        <div className="grid gap-x-6 px-4 py-2 sm:grid-cols-2 sm:px-5">
+          <DataRow label="Products">{count(rows)}</DataRow>
+          <DataRow label="Last refreshed">
+            {row?.lastSuccessAt ? riyadh(row.lastSuccessAt) : "Never"}
+          </DataRow>
+          <DataRow label="Last checked">
+            {row?.lastAttemptAt ? riyadh(row.lastAttemptAt) : "—"}
+          </DataRow>
+          <DataRow label="Last outcome">
+            <StatusBadge
+              tone={
+                row?.lastOutcome === "failed"
+                  ? "danger"
+                  : row?.lastOutcome === "success"
+                    ? "success"
+                    : "neutral"
+              }
+              label={row?.lastOutcome ?? "Never checked"}
+            />
+          </DataRow>
+          <DataRow label="Next check">
+            {row?.nextRefreshDueAt ? riyadh(row.nextRefreshDueAt) : "Due now"}
+          </DataRow>
+          {/* The upstream marker the current rows were fetched against. A
+              timestamp Shams already publishes; nothing sensitive. */}
+          <DataRow label="Source marker">{row?.sourceMarker ?? "—"}</DataRow>
+        </div>
+
+        {(row?.lastError || notice) && (
+          <div className="space-y-2 border-t px-4 py-3 sm:px-5">
+            {notice && (
+              <NoticeState tone={notice.ok ? "success" : "danger"} message={notice.text} />
+            )}
+            {row?.lastError && (
+              <NoticeState
+                tone={rows === 0 ? "danger" : "warning"}
+                message={
+                  rows === 0
+                    ? row.lastError
+                    : `${row.lastError} The previous catalogue is still serving searches.`
+                }
+              />
+            )}
+          </div>
+        )}
+
+        {!health.isLoading && !row && (
+          <div className="border-t px-4 py-3 sm:px-5">
+            <NoticeState
+              tone="warning"
+              message="The catalogue's health could not be read. Product search may still be working; this panel is a separate query."
+            />
+          </div>
+        )}
+      </AdminCard>
+    </AdminSection>
+  );
+}
 
 function SlotEditorRow({
   draft,
@@ -687,6 +843,9 @@ function ShamsSyncPage() {
               )}
             </AdminCard>
           </AdminSection>
+
+          {/* ------------------------------------------------------------ */}
+          <CatalogPanel />
 
           {/* ------------------------------------------------------------ */}
           <AdminSection

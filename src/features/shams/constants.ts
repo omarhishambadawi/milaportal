@@ -27,6 +27,14 @@ const FAILURE_COPY: Record<string, string> = {
   malformed: "Shams MIS returned an unexpected response. Please try again.",
   auth_failed: "Shams MIS rejected the portal's credentials. Contact an administrator.",
   invalid_query: "That search could not be run. Check the values and try again.",
+  /*
+   * MilaPortal's own catalogue, not Shams'. The wording says so: an agent told
+   * "unable to reach Shams" during a local database incident escalates to the
+   * wrong people, and — worse on a call — may tell a customer the product does
+   * not exist.
+   */
+  catalog_unavailable: "The product catalogue could not be read. Please try again.",
+  catalog_empty: "The product catalogue is empty. Contact an administrator.",
 };
 
 const FALLBACK_COPY = "Unable to load Shams data. Please try again.";

@@ -53,6 +53,14 @@ export const AUDIT_ACTIONS = {
    * browser start work on a third-party production system.
    */
   shamsManualRun: "shams_sync.manual_run",
+  /**
+   * An administrator forced a refresh of the local product catalogue.
+   *
+   * Audited for the same reason as `shamsManualRun`: it is a browser action that
+   * spends a ~700 KB request against a third-party production system, and it is
+   * the one control that can replace what every agent's product search sees.
+   */
+  shamsCatalogRefreshed: "shams_sync.catalog_refreshed",
   /** A telesales source workbook was imported. */
   telesalesImported: "telesales.imported",
   /** Lead generation was run by hand rather than by the scheduler. */

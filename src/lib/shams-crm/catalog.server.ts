@@ -139,6 +139,28 @@ export async function getCatalog(): Promise<ShamsCrmProduct[]> {
 }
 
 /**
+ * Download the catalogue now, with no cache and no fallback.
+ *
+ * What `getCatalog` deliberately cannot do. Its stale-fallback rule — return the
+ * previous rows when a refresh throws — is right for a caller that wants
+ * *something* to match against, and exactly wrong for the persistence refresh in
+ * `catalog-sync.server.ts`, which must be able to tell "8,484 fresh rows" from
+ * "the same 8,484 rows I already had". Writing the fallback back into Postgres
+ * would be harmless; recording it as a successful refresh, and stamping it with
+ * the new marker, would not be.
+ *
+ * The in-memory cache is still filled on success, so a deployment that also uses
+ * `getCatalog` for something is not made to download twice.
+ *
+ * Throws `ShamsCrmError` on any failure. Nothing is swallowed here.
+ */
+export async function fetchCatalogNow(): Promise<ShamsCrmProduct[]> {
+  const next = await fetchCatalog();
+  catalog = next;
+  return next.products;
+}
+
+/**
  * Force a refetch on the next `getCatalog`. For a future marker-driven refresh.
  *
  * Marks the cache **stale** rather than deleting it. Deleting it would throw

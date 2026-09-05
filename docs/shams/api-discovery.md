@@ -753,9 +753,18 @@ reveals the true total even when `data` is capped), and whether the NAN OPTIPRO
 rows exist upstream at all. Its output belongs in
 `docs/shams/catalog-probe-results.{md,json}`.
 
-Until it has been run, the catalog source is **`NOT VERIFIED`** and no
-server-side catalog cache should be built: there is nothing confirmed to fill it
-from.
+Until it has been run, the **MIS** catalog source is `NOT VERIFIED`, and nothing
+should be built on the assumption that one exists.
+
+**Superseded for the CRM path.** A credential for `shams-crm.cloud` was obtained,
+so `GET /products/names` — the other option §10.4 names — is the catalog source,
+and it is now persisted in MilaPortal rather than cached per isolate: see
+`shams_product_catalog` in `docs/project.md` (_The local product catalogue_). The
+refresh follows §10.6's marker rule, and the Desktop's shipped
+`product_cache_seed.json` is committed as a migration for exactly the reason the
+Desktop ships it — a cold start that has never reached the endpoint can still
+search. This probe remains worth running: an MIS catalog dump would remove the
+second credential entirely.
 
 ---
 

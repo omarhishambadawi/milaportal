@@ -159,7 +159,31 @@ export function StockTab({
   // The picker only runs while no product is chosen — once one is, this tab is
   // about its stock, and there is nothing to search for.
   const searchQuery = useProductSearch(term, !selected);
-  const matches = useMemo(() => searchQuery.data?.products ?? [], [searchQuery.data]);
+
+  /** Whether the settled term is long enough for the server to answer at all. */
+  const searchable = term.trim().length >= MIN_QUERY_LENGTH;
+
+  /**
+   * The rows on screen.
+   *
+   * `searchable` is load-bearing, not decorative. The search query keeps the
+   * previous result set as placeholder data so a new term dims the list instead
+   * of collapsing it to a skeleton — but placeholder data survives the query
+   * being disabled too, so without this an agent deleting back to one character
+   * would keep looking at results for a term they have just erased.
+   */
+  const matches = useMemo(
+    () => (searchable ? (searchQuery.data?.products ?? []) : []),
+    [searchQuery.data, searchable],
+  );
+
+  /**
+   * True while showing an answer that belongs to an earlier term.
+   *
+   * The list is rendered rather than replaced — losing results mid-typing is
+   * worse than briefly showing stale ones — so it says so instead, by dimming.
+   */
+  const stale = searchQuery.isFetching && searchQuery.isPlaceholderData;
 
   /** Highlighted row, for arrow-key navigation of the result list. */
   const [activeIndex, setActiveIndex] = useState(0);
@@ -265,17 +289,35 @@ export function StockTab({
           </CardContent>
         </Card>
 
+        {/* The states below are written to be exhaustive on purpose: at every
+            combination of searchable / fetching / stale / failed, exactly one of
+            them renders. A search box that can go blank, or that can sit in a
+            skeleton with nothing ever arriving, is the failure this whole change
+            exists to remove — so "nothing rendered" must not be reachable. */}
+
         {searchQuery.isError && <ErrorState onRetry={() => searchQuery.refetch()} />}
 
-        {searchQuery.data && !searchQuery.data.configured && <NotConfiguredState />}
-
-        {searchQuery.data && searchQuery.data.configured && !searchQuery.data.ok && (
-          <ErrorState kind={searchQuery.data.error?.kind} onRetry={() => searchQuery.refetch()} />
+        {/* A failure is the previous term's until the new one has landed; while
+            it is placeholder data the list below still shows real results, and
+            an error panel over them would be about a search nobody made. */}
+        {!searchQuery.isPlaceholderData && searchQuery.data && !searchQuery.data.configured && (
+          <NotConfiguredState />
         )}
 
-        {searchQuery.isFetching && !searchQuery.data && <TableSkeleton rows={4} />}
+        {!searchQuery.isPlaceholderData &&
+          searchQuery.data &&
+          searchQuery.data.configured &&
+          !searchQuery.data.ok && (
+            <ErrorState kind={searchQuery.data.error?.kind} onRetry={() => searchQuery.refetch()} />
+          )}
 
-        {searchQuery.data?.ok && matches.length === 0 && !searchQuery.isFetching && (
+        {/* Fetching with nothing to show — the first search of a session, or a
+            new term after one that found nothing. Keyed on `matches` rather than
+            on `data`, which now survives a term change as placeholder data and
+            would leave this blank instead. */}
+        {searchable && searchQuery.isFetching && matches.length === 0 && <TableSkeleton rows={4} />}
+
+        {searchable && !searchQuery.isFetching && searchQuery.data?.ok && matches.length === 0 && (
           <EmptyState>No products found for “{term.trim()}”.</EmptyState>
         )}
 
@@ -285,14 +327,14 @@ export function StockTab({
             activeIndex={activeIndex}
             onHover={setActiveIndex}
             onSelect={onSelect}
-            busy={searchQuery.isFetching}
+            busy={stale}
             offerScopes={scopes.byItemCode}
             offersSkipped={scopes.skipped}
             offersLoading={scopes.loading}
           />
         )}
 
-        {term.trim().length < MIN_QUERY_LENGTH && !searchQuery.isFetching && (
+        {!searchable && !searchQuery.isFetching && (
           <EmptyState icon={<Boxes className="h-8 w-8 opacity-40" aria-hidden="true" />}>
             Search for a product to see its stock across branches.
           </EmptyState>

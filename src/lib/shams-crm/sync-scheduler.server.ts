@@ -525,6 +525,12 @@ export interface ShamsSyncTickSummary {
   reconciled: number;
   notConfigured: boolean;
   automationEnabled: boolean;
+  /** True when the local product catalogue was replaced with fresher rows. */
+  catalogRefreshed: boolean;
+  /** True when the refresh could not run. The previous catalogue is intact. */
+  catalogFailed: boolean;
+  /** Products in the local catalogue after this pass. */
+  catalogRows: number;
 }
 
 /**
@@ -563,6 +569,9 @@ export async function runShamsSyncTick(
     reconciled: 0,
     notConfigured: false,
     automationEnabled: false,
+    catalogRefreshed: false,
+    catalogFailed: false,
+    catalogRows: 0,
   };
 
   const { readScheduleSlots, readSyncSettings, advanceSlot } =
@@ -673,6 +682,40 @@ export async function runShamsSyncTick(
 
   const reconcile = await runShamsSyncReconcile(supabase, now);
   summary.reconciled = reconcile.completed + reconcile.failed + reconcile.lost;
+
+  /*
+   * The local product catalogue.
+   *
+   * Last, and outside everything above, because it is the only work in this tick
+   * that agents depend on minute to minute — Branch Stock search reads the table
+   * it fills — and the only work that starts nothing at Shams. It is therefore
+   * deliberately **not** gated on `automationEnabled`: that switch governs
+   * queueing runs on Shams' own infrastructure, and an operator pausing the
+   * nightly sync should not silently freeze the catalogue agents search.
+   *
+   * `isCatalogRefreshDue` is checked here as well as in `shams_sync_tick()`,
+   * because a tick woken by a due schedule slot must not also pull 700 KB it was
+   * not asked for.
+   *
+   * Wrapped, and `refreshProductCatalog` does not throw for an operational
+   * failure anyway. Two layers, because a catalogue refresh must never be able
+   * to fail a tick that has already triggered and reconciled real runs.
+   */
+  try {
+    const { isCatalogRefreshDue, refreshProductCatalog } = await import("./catalog-sync.server");
+    if (await isCatalogRefreshDue(supabase, now)) {
+      const catalog = await refreshProductCatalog({ now });
+      summary.catalogRefreshed = catalog.outcome === "refreshed";
+      summary.catalogFailed = catalog.outcome === "failed";
+      summary.catalogRows = catalog.rowCount;
+    }
+  } catch (err) {
+    summary.catalogFailed = true;
+    console.error(
+      "[shams-catalog] refresh threw during the tick:",
+      (err as Error)?.name ?? "unknown",
+    );
+  }
 
   return summary;
 }

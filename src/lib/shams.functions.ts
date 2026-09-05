@@ -35,6 +35,7 @@ import type {
 import type { InvoiceBranchMatch } from "@/lib/shams/types";
 import type { ItemAvailability } from "@/lib/shams/availability";
 import type { CatalogDiagnostics } from "@/lib/shams/diagnostics.server";
+import type { ShamsCatalogHealth } from "@/lib/shams/catalog-store.server";
 import type { CrmSearchDiagnostics, CrmSmokeResult } from "@/lib/shams-crm/diagnostics.server";
 import type {
   AlShrouqConfigProbe,
@@ -109,9 +110,16 @@ async function toFailure(err: unknown): Promise<ShamsFailure> {
 
   const { ShamsError } = await import("@/lib/shams/client.server");
   const { ShamsQueryError } = await import("@/lib/shams/sales.server");
+  const { ShamsCatalogError } = await import("@/lib/shams/catalog-store.server");
 
   if (err instanceof ShamsError) return { kind: err.kind, message: err.message };
   if (err instanceof ShamsQueryError) return { kind: "invalid_query", message: err.message };
+  /*
+   * MilaPortal's own catalogue, not Shams'. Kept as a distinct kind so the copy
+   * an agent sees does not blame a third party for a local incident, and so an
+   * administrator reading a report is sent to the right system.
+   */
+  if (err instanceof ShamsCatalogError) return { kind: err.kind, message: err.message };
 
   console.warn("[shams] unexpected failure:", (err as Error)?.name ?? "unknown");
   return { kind: "unknown", message: "Shams lookup failed." };
@@ -188,11 +196,38 @@ const offerScopesInput = z.object({
 
 export interface ShamsSearchResult {
   ok: boolean;
+  /**
+   * Whether there is a product catalogue to search.
+   *
+   * It no longer reports whether the **MIS** is configured, because product
+   * discovery no longer uses it: the catalogue is local, and searching it works
+   * on a deployment holding no Shams credential of any kind. A missing MIS
+   * connection is now discovered where it actually bites — `shamsGetProduct`,
+   * when an agent opens a product and asks for live branch stock — rather than
+   * by refusing to search.
+   *
+   * Kept as a field, and kept true, so the tab's `NotConfiguredState` branch and
+   * every existing caller keep their shape.
+   */
   configured: boolean;
   products: ShamsProduct[];
   error: ShamsFailure | null;
 }
 
+/**
+ * Product search, against MilaPortal's own catalogue.
+ *
+ * The gate is unchanged — `requireSupabaseAuth` then `view_shams_mis` — and it
+ * is still the only access control in the path, so nothing here is reachable
+ * anonymously. What changed is underneath: `searchProducts` reads
+ * `shams_product_catalog` in Postgres rather than downloading ~8,484 products
+ * from `shams-crm.cloud`, so a cold worker answers in milliseconds and a CRM
+ * outage costs freshness rather than results.
+ *
+ * The request's abort signal is forwarded down to the database query. An agent
+ * typing abandons a search roughly every 350 ms, and without this each abandoned
+ * one would still be read to completion for a client that has gone.
+ */
 export const shamsSearchProducts = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => searchInput.parse(d))
@@ -200,14 +235,27 @@ export const shamsSearchProducts = createServerFn({ method: "POST" })
     const { supabase, userId } = context as { supabase: any; userId: string };
     await assertPermission(supabase, userId, "view_shams_mis");
 
-    const { isConfigured } = await import("@/lib/shams/client.server");
-    if (!isConfigured()) {
-      return { ok: false, configured: false, products: [], error: null };
+    /*
+     * Best effort. `getRequest()` is only meaningful inside a request context,
+     * and a search that cannot find one is still a perfectly good search — it
+     * just cannot be cancelled early.
+     */
+    let signal: AbortSignal | undefined;
+    try {
+      const { getRequest } = await import("@tanstack/react-start/server");
+      signal = getRequest()?.signal;
+    } catch {
+      signal = undefined;
     }
 
     try {
       const { searchProducts } = await import("@/lib/shams/catalog.server");
-      return { ok: true, configured: true, products: await searchProducts(data.q), error: null };
+      return {
+        ok: true,
+        configured: true,
+        products: await searchProducts(data.q, { signal }),
+        error: null,
+      };
     } catch (err) {
       return { ok: false, configured: true, products: [], error: await toFailure(err) };
     }
@@ -607,6 +655,110 @@ export const shamsCatalogDiagnostics = createServerFn({ method: "POST" })
     } catch (err) {
       return { ok: false, configured, report: null, error: await toFailure(err) };
     }
+  });
+
+/* -------------------------------------------------------------------------- */
+/* Local product catalogue — health and refresh                                */
+/* -------------------------------------------------------------------------- */
+
+export interface ShamsCatalogHealthResult {
+  ok: boolean;
+  health: ShamsCatalogHealth | null;
+  error: ShamsFailure | null;
+}
+
+/**
+ * Is product search working, and is what it searches current?
+ *
+ * The lightweight health signal for the local catalogue: a row count, the last
+ * refresh's time and outcome, and one sentence if it failed. No products, no
+ * credentials, no endpoint — the whole point is that an operator can answer
+ * "search is fine, the rows are six hours old" without being handed the data.
+ *
+ * Deliberately cheap. It reads one row of `shams_catalog_state` and makes no
+ * request to Shams at all, so it is safe to poll from an admin page and it stays
+ * readable during exactly the outage it would be consulted about.
+ *
+ * `assertPermission` rather than `assertAdmin`: this contacts nothing, spends
+ * nothing and reveals nothing beyond "the catalogue has N rows", so anyone who
+ * can use Branch Stock can be told why it is empty.
+ */
+export const shamsCatalogHealth = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }): Promise<ShamsCatalogHealthResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertPermission(supabase, userId, "view_shams_mis");
+
+    try {
+      const { readCatalogHealth } = await import("@/lib/shams/catalog-store.server");
+      return { ok: true, health: await readCatalogHealth(), error: null };
+    } catch (err) {
+      return { ok: false, health: null, error: await toFailure(err) };
+    }
+  });
+
+export interface ShamsCatalogRefreshResult {
+  ok: boolean;
+  outcome: string;
+  rowCount: number;
+  changed: number;
+  removed: number;
+  message: string;
+}
+
+/**
+ * Refresh the local catalogue now, by hand.
+ *
+ * `assertAdmin`, because this is the one control here that spends a 700 KB
+ * request against a third-party production system — the same reason
+ * `shamsSyncRunNow` and the diagnostics are administrator-only.
+ *
+ * `force: true` skips the marker check, which is the entire point of pressing
+ * it: an operator does this precisely when they believe the catalogue is behind
+ * and the marker has not said so. The scheduler never forces.
+ *
+ * It cannot leave search worse off. `refreshProductCatalog` replaces the rows
+ * only from a complete, validated download, so a refusal, a timeout or a short
+ * response all end with the previous catalogue still serving — which is what the
+ * message says rather than glossing.
+ */
+export const shamsCatalogRefreshNow = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }): Promise<ShamsCatalogRefreshResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+    await assertAdmin(supabase, userId);
+
+    const { logAdminAction, AUDIT_ACTIONS } = await import("@/lib/audit.server");
+    // Written before the attempt, for the same reason `shamsSyncRunNow` does it:
+    // a request that loses its response must still record that a named person
+    // asked for it.
+    await logAdminAction({
+      actorId: userId,
+      targetUserId: null,
+      action: AUDIT_ACTIONS.shamsCatalogRefreshed,
+      details: { forced: true },
+    });
+
+    const { refreshProductCatalog } = await import("@/lib/shams-crm/catalog-sync.server");
+    const result = await refreshProductCatalog({ force: true });
+
+    const message =
+      result.outcome === "refreshed"
+        ? `Catalogue refreshed: ${result.rowCount} products, ${result.changed} changed, ${result.removed} removed.`
+        : result.outcome === "not_configured"
+          ? "Shams CRM is not configured on this deployment, so the catalogue was left as it is."
+          : result.outcome === "unchanged"
+            ? `The catalogue is already current: ${result.rowCount} products.`
+            : `The refresh failed. The previous catalogue of ${result.rowCount} products is still serving searches.`;
+
+    return {
+      ok: result.outcome !== "failed",
+      outcome: result.outcome,
+      rowCount: result.rowCount,
+      changed: result.changed,
+      removed: result.removed,
+      message,
+    };
   });
 
 /**

@@ -9,20 +9,30 @@
  * **There are no timing thresholds.** The project defines none, and a wall-clock
  * assertion on a shared CI runner is a flaky test wearing a performance costume.
  * What is asserted is correctness and *work* at scale: results are non-empty and
- * capped, a repeat query costs nothing, and the catalog is read from cache rather
- * than refetched. Timings are written to `PERF_OUT` when set, for a human to read
- * — measured at 4–9 ms per uncached search, 0.00 ms cached.
+ * capped, a repeat query costs nothing, and one search reads the catalogue once.
+ * Timings are written to `PERF_OUT` when set, for a human to read.
+ *
+ * The catalogue is a fake of the Supabase table implementing Postgres `LIKE`, so
+ * these numbers measure the matching and ranking work over 8,484 candidate rows
+ * — the worst case, where the database narrows nothing. In production the `LIKE`
+ * runs against a GIN trigram index and hands back a few hundred rows at most, so
+ * the real figure is lower than anything printed here plus one round trip to
+ * Postgres.
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appendFileSync } from "node:fs";
 import type { ShamsProduct } from "@/lib/shams/types";
 
-const crmMock = vi.fn();
+import { fakeCatalogStore } from "./fixtures/fake-catalog-store";
 
-vi.mock("@/lib/shams-crm/products.server", () => ({
-  getCrmProducts: () => crmMock(),
-}));
+const local: { rows: ShamsProduct[]; calls: number; fail: boolean } = {
+  rows: [],
+  calls: 0,
+  fail: false,
+};
+
+vi.mock("@/lib/shams/catalog-store.server", () => fakeCatalogStore(local)());
 
 const { searchProducts, _clearCaches, MAX_SEARCH_RESULTS } =
   await import("@/lib/shams/catalog.server");
@@ -73,9 +83,10 @@ async function timed(query: string): Promise<{ ms: number; count: number }> {
 }
 
 beforeEach(() => {
-  crmMock.mockReset();
   _clearCaches();
-  crmMock.mockResolvedValue(CATALOG);
+  local.rows = CATALOG;
+  local.calls = 0;
+  local.fail = false;
 });
 
 describe(`search over ${CATALOG_SIZE} products`, () => {
@@ -99,13 +110,13 @@ describe(`search over ${CATALOG_SIZE} products`, () => {
   it("a repeated query does no work at all", async () => {
     _clearCaches();
     await searchProducts("nan");
-    const afterFirst = crmMock.mock.calls.length;
+    const afterFirst = local.calls;
 
     const started = performance.now();
     await searchProducts("nan");
     const cachedMs = performance.now() - started;
 
-    expect(crmMock.mock.calls).toHaveLength(afterFirst);
+    expect(local.calls).toBe(afterFirst);
     if (process.env.PERF_OUT) {
       appendFileSync(
         process.env.PERF_OUT,
@@ -115,15 +126,15 @@ describe(`search over ${CATALOG_SIZE} products`, () => {
     }
   });
 
-  it("each distinct query reads the cached catalog, never re-downloading it", async () => {
+  it("each distinct query is one catalogue read, and never a download", async () => {
     _clearCaches();
     const queries = ["panadol", "omega", "gold", "mounjaro", "nan*op", "cap*mg*"];
     for (const q of queries) await searchProducts(q);
 
-    // One `getCrmProducts()` per distinct query, and each is a cache read rather
-    // than a fetch — the six-hour catalog cache absorbs them, and that the
-    // download happens once is asserted where it lives, in the shams-crm tests.
-    expect(crmMock).toHaveBeenCalledTimes(queries.length);
+    // One indexed read per distinct query, against MilaPortal's own table. The
+    // 700 KB CRM download this used to sit in front of is not on this path at
+    // all any more; the refresh that does perform it is tested separately.
+    expect(local.calls).toBe(queries.length);
   });
 
   it("caps a broad result set at MAX_SEARCH_RESULTS", async () => {

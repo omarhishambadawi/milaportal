@@ -139,6 +139,44 @@ export function looksLikeItemCode(query: string): boolean {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Plain product matching                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Does this product answer a plain — non-wildcard — query?
+ *
+ * Three ways, and an agent never has to say which one they mean:
+ *
+ *   name contains        `mounjaro`, case- and whitespace-insensitively
+ *   item code exactly    `10400746`, pasted from an invoice or a message
+ *   item code prefix     `104007`, the first digits of a code read aloud
+ *
+ * The prefix rule is gated on `looksLikeItemCode`, which is what stops it firing
+ * on ordinary text: a name search for `pro` must not also drag in every product
+ * whose code happens to start `pro` — no code does, but the gate means the
+ * question never arises, and it keeps short numeric fragments like a `500` in a
+ * strength from being read as an identifier.
+ *
+ * Prefix rather than substring, matching PharmacyCRM Desktop, which does
+ * `startswith` on the code (`docs/shams/api-discovery.md` §10.3). A code buried
+ * in the middle of another code is a coincidence rather than a lookup, and the
+ * agent who wants that already has `104*746`.
+ *
+ * Extracted here, next to the wildcard rules, so the local catalogue's SQL
+ * retrieval and the in-process match are written against one statement of what a
+ * match is rather than two.
+ */
+export function matchesProductQuery(product: ShamsProduct, query: string): boolean {
+  const q = query.trim();
+  if (q === "") return false;
+
+  const needle = normalizeForSearch(q);
+  if (needle !== "" && normalizeForSearch(product.itemName).includes(needle)) return true;
+  if (product.itemCode === q) return true;
+  return looksLikeItemCode(q) && product.itemCode.startsWith(q);
+}
+
+/* -------------------------------------------------------------------------- */
 /* Ranking                                                                     */
 /* -------------------------------------------------------------------------- */
 

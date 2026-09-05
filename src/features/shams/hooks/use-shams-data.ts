@@ -76,6 +76,56 @@ const DISCOVERY_STALE_MS = 10 * 60_000;
  */
 const CRM_HISTORY_STALE_MS = 2 * 60_000;
 
+/**
+ * How long a product search may run before it is given up on.
+ *
+ * A ceiling on the loading state, not a performance target. The search reads
+ * MilaPortal's own catalogue and answers in milliseconds, so nothing legitimate
+ * comes close — but "nothing legitimate" is not the same as "nothing", and a
+ * request that never settles leaves the Stock tab in a skeleton forever with no
+ * message, no retry and no way for the agent to tell a slow answer from a dead
+ * one. Fifteen seconds converts that into an error state with a Retry button.
+ *
+ * Deliberately generous. This is the last resort, not the mechanism: the useful
+ * cancellation is React Query aborting a superseded query, which happens the
+ * moment the next keystroke settles.
+ */
+const SEARCH_TIMEOUT_MS = 15_000;
+
+/**
+ * Run a request under a signal that aborts on supersession *or* on time.
+ *
+ * Written by hand rather than with `AbortSignal.any` + `AbortSignal.timeout`, so
+ * the behaviour does not depend on how modern the agent's browser is — this runs
+ * on call-centre desktops — and so the timer and the listener are both released
+ * when the request settles rather than being left for the garbage collector.
+ *
+ * A timeout rejects with an ordinary error, not with React Query's own signal,
+ * which is what makes it surface as an error state with a Retry rather than as a
+ * silent cancellation that leaves the skeleton up.
+ */
+async function withTimeout<T>(
+  signal: AbortSignal | undefined,
+  ms: number,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
+
+  const timer = setTimeout(
+    () => controller.abort(new Error("The product search took too long.")),
+    ms,
+  );
+  try {
+    return await run(controller.signal);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+
 /** Trailing-edge debounce over a text input. */
 export function useDebounced(value: string, delayMs = DEBOUNCE_MS): string {
   const [settled, setSettled] = useState(value);
@@ -141,8 +191,23 @@ export function useBranchLabels() {
 /**
  * Catalog search over a debounced term.
  *
- * `enabled` is the whole performance story: nothing is requested until the
- * debounce settles on a term long enough to mean something.
+ * `enabled` is still the first half of the performance story: nothing is
+ * requested until the debounce settles on a term long enough to mean something.
+ * The 350 ms is unchanged — it was never the problem, and shortening it now that
+ * the server answers in milliseconds would only mean searching mid-word.
+ *
+ * The `signal` handed to `queryFn` is now load-bearing rather than tidy. React
+ * Query aborts it when a query is superseded, the server function forwards it to
+ * the database read, and an abandoned search therefore stops costing work the
+ * moment the agent types the next character.
+ *
+ * `placeholderData` keeps the previous result list on screen while the next one
+ * loads, so a search-as-you-type field dims rather than collapsing to a skeleton
+ * between every term. Safe here in a way it is not for
+ * `useCustomerHistory` — a product list belongs to nobody, so showing last
+ * moment's products under this moment's query cannot show one person's data
+ * under another person's name. The list is visibly busy while it is stale; see
+ * `busy` in `ProductResults`.
  */
 export function useProductSearch(term: string, enabled = true) {
   const searchFn = useServerFn(shamsSearchProducts);
@@ -150,10 +215,14 @@ export function useProductSearch(term: string, enabled = true) {
 
   return useQuery({
     queryKey: queryKeys.shams.productSearch(term.trim().toLowerCase()),
-    queryFn: ({ signal }) => searchFn({ data: { q: term.trim() }, signal }),
+    queryFn: ({ signal }) =>
+      withTimeout(signal, SEARCH_TIMEOUT_MS, (s) =>
+        searchFn({ data: { q: term.trim() }, signal: s }),
+      ),
     enabled: enabled && searchable,
     staleTime: SEARCH_STALE_MS,
     gcTime: 30 * 60_000,
+    placeholderData: (previous) => previous,
     refetchOnWindowFocus: false,
     retry: false,
   });

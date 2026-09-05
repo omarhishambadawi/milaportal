@@ -117,31 +117,59 @@ const customersTab = readFileSync(
   "utf8",
 );
 
+const search = readFileSync(
+  fileURLToPath(new URL("../../../lib/shams/search.ts", import.meta.url)),
+  "utf8",
+);
+
 const catalog = readFileSync(
   fileURLToPath(new URL("../../../lib/shams/catalog.server.ts", import.meta.url)),
   "utf8",
 );
 
-describe("an item code is still findable, now from the catalog", () => {
-  // The capability from e876452 is preserved; only its mechanism moved. Product
-  // discovery is the CRM catalog's job since Phase 4, so an exact code is a scan
-  // of rows already in hand rather than a second MIS request.
-  it("matches an exact item code against the catalog rows", () => {
-    expect(catalog).toContain("product.itemCode === q");
+describe("an item code is still findable, now from the local catalogue", () => {
+  /*
+   * The capability from e876452 is preserved through a second move of its
+   * mechanism. Discovery left the MIS for the CRM catalogue, and has now left
+   * the CRM for MilaPortal's own table — but an agent pasting a code has always
+   * been able to find the product, and always without a second MIS request.
+   *
+   * The rule itself now lives in `search.ts` beside the wildcard rules, so that
+   * the SQL retrieval and the in-process match are written against one statement
+   * of what a match is.
+   */
+  it("matches an exact item code", () => {
+    expect(search).toContain("if (product.itemCode === q) return true;");
+  });
+
+  it("matches the first digits of a code, which no previous source could retrieve", () => {
+    expect(search).toContain("looksLikeItemCode(q) && product.itemCode.startsWith(q)");
   });
 
   it("searches the name too, so the field is never told which kind was typed", () => {
-    expect(catalog).toContain("normalizeForSearch(product.itemName).includes(needle)");
+    expect(search).toContain("normalizeForSearch(product.itemName).includes(needle)");
+    expect(catalog).toContain("matchesProductQuery(product, q)");
   });
 
   it("no longer spends a product/info request to answer a code", () => {
-    expect(catalog).not.toContain("looksLikeItemCode(q)");
     expect(catalog).not.toContain("getProductDetail(q).catch");
   });
 
-  it("does not ask the MIS for product discovery at all", () => {
+  it("asks neither the MIS nor Shams CRM for product discovery", () => {
     expect(catalog).not.toContain('"/api/v2/product/search"');
-    expect(catalog).toContain("getCrmProducts()");
+    /*
+     * The CRM download is what made a cold worker slow, and the import is what
+     * proves it is gone — the name still appears in a comment explaining why,
+     * which is worth keeping and is not a call.
+     */
+    expect(catalog).not.toContain('from "@/lib/shams-crm/products.server"');
+    expect(catalog).toContain("fetchCatalogCandidates(");
+  });
+
+  it("retrieves candidates with escaped LIKE patterns, never raw agent text", () => {
+    // `%` and `_` in a query are literal characters in this search's grammar and
+    // syntax in Postgres'. Escaping is the only thing keeping the two agreed.
+    expect(catalog).toContain("escapeLikePattern");
   });
 });
 
@@ -324,8 +352,17 @@ describe("customer results never outlive their search", () => {
   });
 
   it("does not carry data across every key change", () => {
-    expect(hook).not.toContain("placeholderData: (previous) => previous");
-    expect(hook).not.toContain("keepPreviousData");
+    /*
+     * Scoped to `useCustomerHistory`, deliberately. Product search *does* carry
+     * its previous result set across a term change, and should: a list of
+     * products belongs to nobody, so showing last moment's while this moment's
+     * loads cannot put one person's data under another person's name. A file-wide
+     * assertion would forbid the safe case to protect the dangerous one.
+     */
+    const historyHook = hook.slice(hook.indexOf("export function useCustomerHistory"));
+
+    expect(historyHook).not.toContain("placeholderData: (previous) => previous");
+    expect(historyHook).not.toContain("keepPreviousData");
   });
 });
 

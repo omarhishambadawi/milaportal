@@ -1,18 +1,24 @@
 /**
  * Shams product catalog reads (server-only).
  *
- * Three endpoints, each with a cache sized to how fast the thing behind it
- * actually moves:
+ * Three reads, each with a cache sized to how fast the thing behind it actually
+ * moves:
  *
- *   search  5 min   a name-to-code lookup over a catalog that changes daily at most
- *   info   15 min   price and name for one item; the most static thing here
+ *   search  5 min   a name-to-code lookup over the **local** catalogue in
+ *                   Postgres — no upstream request of any kind
+ *   info   15 min   price and name for one item, from the MIS; the most static
+ *                   thing here
  *   stock  60 s     branch quantities move continuously — a stale figure sends
  *                   an agent to a branch that has just sold the last unit
  *
- * The caches are per-isolate and in-memory (see `TtlCache`). Their real job is
- * search: the MIS portal issues a request per keystroke (`moun`, `mounj`,
- * `mounjaro` all appear in the capture), and without a cache the portal would
- * forward that keystroke traffic upstream.
+ * The caches are per-isolate and in-memory (see `TtlCache`). Search's cache is
+ * no longer load-bearing — the query behind it is an indexed read of our own
+ * database — but a search-as-you-type field re-asks the same term constantly,
+ * and this keeps a repeated query from reaching the database at all.
+ *
+ * **Product discovery never contacts Shams.** The catalogue is
+ * `shams_product_catalog`, filled in the background; see `searchProducts`. Only
+ * `info` and `stock` go upstream, and only for a product an agent has selected.
  *
  * **Stock is never fetched for a search result set.** Availability for twelve
  * hits is twelve requests returning ~136 rows each; callers ask for stock on the
@@ -23,12 +29,15 @@ import { shamsFetch, ShamsError, TtlCache } from "./client.server";
 import { normalizeProductDetail, normalizeStock } from "./normalize";
 import {
   isWildcardQuery,
+  looksLikeItemCode,
+  matchesProductQuery,
   matchesProductWildcard,
   normalizeForSearch,
   parseWildcardQuery,
   rankProducts,
 } from "./search";
-import { getCrmProducts } from "@/lib/shams-crm/products.server";
+import { escapeLikePattern, fetchCatalogCandidates } from "./catalog-store.server";
+import type { CatalogCandidateQuery } from "./catalog-store.server";
 import type {
   RawProductInfoResponse,
   RawStockResponse,
@@ -58,33 +67,89 @@ export function _clearCaches(): void {
 }
 
 /**
- * Free-text catalog search, over the Shams CRM catalog.
+ * The `LIKE` patterns that retrieve everything a query could match.
  *
- * **The catalog comes from the CRM, not the MIS.** `product/search` returns at
- * most 50 rows with no pagination, so a broad query was truncated before the
- * wanted product was ever seen — `nan` matched 53+ products and the NAN OPTIPRO
- * range fell outside the 50 that came back. The CRM's `/products/names` returns
- * all ~8,484 rows in one cached response, so matching now runs over the whole
- * catalog and the cap is gone.
+ * The one place the SQL side and the matching side have to agree, so it is
+ * written to make the agreement obvious rather than probable:
+ *
+ *   plain     `%needle%` against the name; the code exactly, and by prefix when
+ *             the query looks like an item code — the three arms of
+ *             `matchesProductQuery`, one for one.
+ *   wildcard  `%f1%f2%…%` against both fields. `LIKE` with `%` between fragments
+ *             *is* `matchesWildcard`: each fragment found after the previous one
+ *             ended, in order, without overlap.
+ *
+ * Whatever an agent typed is escaped first, so a `%` in `50% CREAM` is a percent
+ * sign rather than a wildcard the syntax never offered them.
+ *
+ * Retrieval is allowed to be wider than matching but never narrower, and here it
+ * is exactly as wide: `searchProducts` re-checks every row against the pure
+ * predicates anyway, so a divergence can only ever cost a result, never invent
+ * one.
+ */
+function candidateQuery(q: string, fragments: string[]): CatalogCandidateQuery {
+  if (fragments.length > 0) {
+    const pattern = `%${fragments.map(escapeLikePattern).join("%")}%`;
+    return { namePattern: pattern, codePattern: pattern };
+  }
+
+  const needle = escapeLikePattern(normalizeForSearch(q));
+  return {
+    namePattern: needle === "" ? null : `%${needle}%`,
+    // The exact code is a prefix of itself, so one pattern serves both arms when
+    // the query looks like a code; otherwise only the exact match is offered.
+    codePattern: looksLikeItemCode(q) ? `${escapeLikePattern(q)}%` : escapeLikePattern(q),
+  };
+}
+
+/**
+ * Free-text catalog search, over the **local** Shams product catalogue.
+ *
+ * ## Why this no longer touches Shams CRM
+ *
+ * It used to match against `getCrmProducts()`: the whole `/products/names`
+ * catalogue, downloaded on demand and held in an in-memory, per-isolate cache.
+ * That cache is cold after every deploy and in every new isolate, and a cold
+ * cache made the first search of a shift pay a CRM login plus a 700 KB download
+ * before a single row appeared — during a live call, on the AHT clock, with an
+ * outage at `shams-crm.cloud` turning "slow" into "no results at all".
+ *
+ * The catalogue now lives in Postgres (`shams_product_catalog`), seeded at
+ * migration time and refreshed in the background by
+ * `lib/shams-crm/catalog-sync.server.ts`. A search is one indexed query against
+ * it. **No agent-facing search path contacts Shams CRM**, so a CRM outage costs
+ * freshness — a price that may be a few hours old — and never an answer.
  *
  * This function is product **discovery** only. Stock, availability, invoices and
  * branch data stay on the MIS, and `getProductDetail` / `getProductStock` below
  * are untouched — a product found here is looked up there by its item code,
- * exactly as before.
+ * exactly as before, and only once an agent has selected one.
  *
  * ## Matching is unchanged
  *
- * The same pure rules as before, from `lib/shams/search.ts`: case- and
- * whitespace-insensitive, `*` as ordered fragments, `rankProducts` for ordering,
- * capped at `MAX_SEARCH_RESULTS`. What changed is only *which products are
- * available to match against*. A plain query matches a substring of the item
- * name — what the MIS did upstream — plus an exact item code, which used to cost
- * a separate `product/info` request and is now a scan of rows already in hand.
+ * The same pure rules from `lib/shams/search.ts`, applied to the same three
+ * fields: case- and whitespace-insensitive, `*` as ordered fragments,
+ * `rankProducts` for ordering, capped at `MAX_SEARCH_RESULTS`. The database
+ * narrows 8,484 rows to the candidates; it does not rank them and it does not
+ * decide how many an agent sees. What is genuinely new is the item-code
+ * **prefix** arm — see `matchesProductQuery` — which the catalogue's own index
+ * makes free and which no previous source could retrieve at all.
  *
- * The per-query result cache is kept: matching 8,484 rows is cheap, but a
- * search-as-you-type field would otherwise redo it on every keystroke.
+ * The candidates are re-checked in TypeScript rather than trusted from SQL. It
+ * costs a filter over at most a few hundred rows and it means `search.ts` stays
+ * the single authority on what a match is: if a stored `search_name` were ever
+ * written by something other than `normalizeForSearch`, the effect is a missing
+ * result, not a wrong one.
+ *
+ * The per-query result cache is kept, unchanged. It is a smaller win than it was
+ * — the query behind it is now milliseconds — but a search-as-you-type field
+ * still re-asks for the same term constantly, and this is what keeps a repeated
+ * query from reaching the database at all.
  */
-export async function searchProducts(query: string): Promise<ShamsProduct[]> {
+export async function searchProducts(
+  query: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<ShamsProduct[]> {
   const q = query.trim();
   if (q === "") return [];
 
@@ -99,29 +164,35 @@ export async function searchProducts(query: string): Promise<ShamsProduct[]> {
   // split: `***` is "match everything", which is not a search.
   if (isWildcardQuery(q) && !wildcard) return [];
 
-  // The same floors as before. They no longer protect an upstream request —
-  // there is none — but a one-character query still matches most of the catalog
-  // and returning it is not an answer.
+  // The same floors as before. A one-character query still matches most of the
+  // catalog and returning it is not an answer.
   const searchable = wildcard
     ? fragments.some((fragment) => fragment.length >= MIN_SEARCH_LENGTH)
     : q.length >= MIN_SEARCH_LENGTH;
   if (!searchable) return [];
 
-  // Throws when the catalog cannot be loaded. Deliberately not caught here: the
-  // MIS must not silently become a second product source, and an outage must not
-  // read as "no products found".
-  const catalog = await getCrmProducts();
+  // Throws when the local catalogue cannot be read. Deliberately not caught
+  // here: the MIS must not silently become a second product source, and a
+  // database incident must not read as "no products found".
+  const candidates = await fetchCatalogCandidates(candidateQuery(q, fragments), {
+    signal: options.signal,
+  });
 
-  const needle = normalizeForSearch(q);
   const matched = wildcard
-    ? catalog.filter((product) => matchesProductWildcard(product, fragments))
-    : catalog.filter(
-        (product) =>
-          normalizeForSearch(product.itemName).includes(needle) || product.itemCode === q,
-      );
+    ? candidates.filter((product) => matchesProductWildcard(product, fragments))
+    : candidates.filter((product) => matchesProductQuery(product, q));
 
   const products = rankProducts(matched, q, fragments).slice(0, MAX_SEARCH_RESULTS);
-  searchCache.set(key, products);
+
+  /*
+   * An abandoned query's result is not cached.
+   *
+   * A cancelled read resolves as no candidates rather than as an error (see
+   * `fetchCatalogCandidates`), and caching that under the term would mean the
+   * agent who types the same thing a moment later is told there are no matches
+   * for five minutes.
+   */
+  if (!options.signal?.aborted) searchCache.set(key, products);
   return products;
 }
 

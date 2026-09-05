@@ -3659,7 +3659,8 @@ src/lib/shams/types.ts           wire shapes + normalized models
 src/lib/shams/normalize.ts       PURE: numeric parsing, invoice grouping, Call Centre rule
 src/lib/shams/search.ts          PURE: wildcard product matching, branch filter, stock summary
 src/lib/shams/availability.ts    PURE: invoice line ↔ branch stock join, the four stock states
-src/lib/shams/catalog.server.ts  product search (over the CRM catalog) / info / stock + caches
+src/lib/shams/catalog.server.ts  product search (over the LOCAL catalogue) / info / stock + caches
+src/lib/shams/catalog-store.server.ts  the local catalogue in Supabase: candidate retrieval, staging, promotion, health
 src/lib/shams/sales.server.ts    invoice lookup + query validation + branch discovery fan-out
 src/lib/shams/crm.server.ts      customer sales history (crm/data) + query validation, uncached
 src/lib/shams.functions.ts       authenticated, RBAC-gated server functions
@@ -3779,14 +3780,123 @@ this codebase for one reason — `GET /products/names` returns the **whole**
 `product/search` caps at 50 rows with no pagination, so broad and wildcard
 searches are truncated before the wanted product is ever seen.
 
+It is now a **refresh source, not a read path.** Product search reads the local
+catalogue described below; this host is contacted only by the background job that
+fills it. See _The local product catalogue_.
+
 ```
 src/lib/shams-crm/client.server.ts       login + session (X-Session-Token), 401 -> one re-login -> one retry
-src/lib/shams-crm/catalog.server.ts      full-catalog cache: 6 h TTL, single-flight, stale-on-failure fallback
+src/lib/shams-crm/catalog.server.ts      full-catalog fetch + in-memory cache: 6 h TTL, single-flight, stale-on-failure fallback; fetchCatalogNow is the no-fallback read the refresh uses
+src/lib/shams-crm/catalog-sync.server.ts marker-driven refresh of the local catalogue; never throws, never shrinks it
 src/lib/shams-crm/products.server.ts     the seam: the catalog as the Portal's own ShamsProduct
 src/lib/shams-crm/diagnostics.server.ts  admin-only smoke test (login / catalog / cache reuse)
 src/lib/shams-crm/alshrouq-config.server.ts  admin-only AlShrouq connectivity probe (read-only)
 src/lib/shams-crm/types.ts               wire shapes + normalized models
 ```
+
+### The local product catalogue
+
+**Product search never contacts Shams.** `shams_product_catalog` in Supabase is
+what Branch Stock searches; `shams-crm.cloud` fills it in the background and is
+absent from the agent's path entirely.
+
+The problem it removes: the catalogue used to be the CRM download held in an
+in-memory, per-isolate cache. That cache is cold after every deploy, in every new
+isolate and every six hours, and a cold cache made the first search of a shift
+pay a CRM login plus a 700 KB transfer before a single row appeared — on a live
+call, on the AHT clock, and returning nothing at all when the CRM was down. This
+is what PharmacyCRM Desktop already does differently: it keeps the whole
+catalogue in local SQLite, searches that, and ships a cold-start seed
+(`api-discovery.md` §10.3, §10.6).
+
+**Schema** (`20260915120000_shams_product_catalog.sql`):
+
+- `shams_product_catalog` — `item_code` (PK), `item_name`, `search_name`,
+  `retail_price`, `source_updated_at`, `updated_at`. Six columns, because
+  `/products/names` returns three fields and inventing more would invite a
+  consumer to depend on them. `search_name` is `item_name` lowercased with
+  whitespace collapsed, **written by the application** using the same
+  `normalizeForSearch` the matcher applies to the other side of every
+  comparison — never derived in SQL, so the two cannot drift.
+  `source_updated_at` is when a row's _values_ last changed upstream, not when
+  the catalogue was last refreshed: an unchanged row is left alone.
+- `shams_product_catalog_staging` — one refresh attempt's rows, keyed
+  `(batch_id, item_code)`.
+- `shams_catalog_state` — one row (`id = 1`): `row_count`, `source_marker`,
+  `last_attempt_at`, `last_success_at`, `last_outcome`, `last_error`,
+  `next_refresh_due_at`.
+
+**Indexes, one per branch of the search's OR** — the planner only builds a
+BitmapOr when every branch is indexable: GIN `gin_trgm_ops` on `search_name`
+(name substrings and ordered `*` fragments), GIN `gin_trgm_ops` on `item_code` (a
+wildcard written against a code, which has no anchored prefix), and btree
+`text_pattern_ops` on `item_code` (a partial code — the primary key answers `=`
+but not `LIKE 'x%'`).
+
+**Access.** RLS is on and there is **no read policy**, which is the access
+control rather than an omission: no browser session can read the table however it
+authenticates. Reads go through `shamsSearchProducts` — `requireSupabaseAuth` +
+`view_shams_mis`, unchanged — which runs as the service role and returns at most
+`MAX_SEARCH_RESULTS` matched rows. A policy for `view_shams_mis` holders would
+look like a convenience and would quietly restore the whole-catalogue download,
+served from a different host. Both SQL functions are `REVOKE`d from `PUBLIC`,
+`anon` and `authenticated`, and the search function is `SECURITY INVOKER` so it
+cannot become a way around the table's own RLS. `shams_catalog_state` _is_
+administrator-readable: six scalars of telemetry, not the data.
+
+**Retrieval and matching are split, and matching did not move.** The SQL function
+`shams_search_product_catalog(p_name_pattern, p_code_pattern, p_max_rows)` narrows
+8,484 rows to candidates with two `LIKE` patterns and orders them by item code;
+`rankProducts`, `MAX_SEARCH_RESULTS` and every wildcard rule stay in
+`lib/shams/search.ts`, where they are pure and unit-tested. `LIKE '%a%b%'` _is_
+`matchesWildcard` — each fragment after the previous one ended, in order, no
+overlap — so the two agree by construction, and the candidates are re-checked
+against the pure predicates anyway, which means a divergence can only ever cost a
+result rather than invent one. Whatever the agent typed is escaped first
+(`escapeLikePattern`), so a `%` in `1% CREAM` is a percent sign rather than a
+wildcard the syntax never offered them.
+
+**Refresh.** `refreshProductCatalog` follows the Desktop's rule rather than a
+TTL: read `GET /stock/sync/status`, reduce it to one success marker
+(`stockSyncMarker`), and re-fetch `/products/names` only when that marker has
+moved. The marker is checked hourly; the 700 KB transfer happens only on a
+change, on a 24-hour age fallback, on an empty catalogue, or on an
+administrator's forced refresh. It runs from the existing `shams_sync_tick()`
+cron path, which gained a third reason to wake the application.
+
+The catalogue refresh is deliberately **not** gated on
+`shams_sync_settings.automation_enabled`. That switch governs queueing runs on
+Shams' own infrastructure — ~840 upstream page fetches — which an operator may
+well want to hold; refreshing a reference list starts nothing there, and tying
+agents' product search to a switch about remote job scheduling would mean pausing
+the nightly sync silently froze what everyone can find.
+
+**A failed refresh cannot break search**, and that is structural rather than
+careful. Rows are staged in chunks and swapped in by one statement inside
+`shams_promote_product_catalog`, which raises — changing nothing — when the batch
+holds fewer than 1,000 rows. So an unconfigured deployment, an unreadable status
+document, a failed or truncated download, and a worker killed mid-stage all end
+with the previous catalogue still serving. `last_error` records why, in one
+sentence carrying no upstream body, header or credential.
+
+**The seed.** `20260915120100_shams_product_catalog_seed.sql` ships all 8,484
+products from the Desktop's own `product_cache_seed.json`, generated by
+`scripts/build-shams-catalog-seed.mjs` and `ON CONFLICT DO NOTHING` so it never
+overwrites a refreshed catalogue. It is what makes the acceptance criterion true
+on day one: a cold server, or one holding no CRM credential at all, can search
+without contacting `shams-crm.cloud`. Its prices are as old as the build they
+came from and `source_updated_at` says so; the first successful refresh replaces
+every row that has moved.
+
+**Health.** `shamsCatalogHealth` (any `view_shams_mis` holder) reads one row of
+`shams_catalog_state` and contacts Shams not at all, so it still answers during
+the outage it would be consulted about. It reports row count, freshness, last
+outcome and one error sentence — never a product row, a credential or an
+endpoint. `shamsCatalogRefreshNow` (administrator, audited as
+`shams_sync.catalog_refreshed`) forces a refresh. Both surface on
+`/admin/shams-sync` in a _Product catalogue_ panel whose tone is about **search**:
+an empty catalogue is the only danger state, because a failed refresh leaves
+agents unaffected.
 
 ### Shams CRM stock and promotions sync — automated
 
@@ -6670,28 +6780,26 @@ a superset of the desktop's answer, never a different one.
 `pharmacycrm-parity.test.ts` holds that comparison against real catalog rows;
 `docs/shams/api-discovery.md` §10 records how the desktop was read.
 
-**Item codes are exact-only, and that is an API limit.** `product/search?q=`
-matches names and cannot see codes, so a partial code — and a wildcard written
-against a code — brings no candidate back for local matching. The desktop
-supports both because it downloads the whole 8 484-product catalog and matches
-offline; closing the gap here needs a catalog source the MIS API does not
-currently offer (§10.4).
+**Item codes now match exactly _and_ by prefix.** A plain query answers three
+ways, and the agent never has to say which they meant: a substring of the name, a
+whole item code, or the **first digits** of one — `104007` finds `10400746`. The
+prefix arm is gated on `looksLikeItemCode` (four digits or more, digits only), so
+a `500` in a strength is never read as an identifier, and it is a prefix rather
+than a substring because a code buried inside another code is a coincidence, not
+a lookup. The rule is `matchesProductQuery` in `lib/shams/search.ts`.
 
-The MIS API has no wildcard syntax — its only parameter is `q`, matched as a
-plain substring — so the expression is split in `catalog.server.ts`: fragments go
-upstream as ordinary terms and the full ordered match is applied to the rows that
-come back, **before** the result cap. The rule itself is pure and lives in
-`lib/shams/search.ts`.
+This was previously impossible rather than undesired: `product/search?q=` matches
+names and cannot see codes, and the CRM download compared a plain query to the
+code for equality. The local catalogue's `text_pattern_ops` index makes it free,
+and it matches PharmacyCRM Desktop, which does `startswith` on the code (§10.3).
 
-**Up to `MAX_SEARCH_PROBES` (3) probes per wildcard query, not one.** One probe
-is logically sufficient — every match contains every fragment, so a
-single-fragment search returns a superset — but only if the API returns
-everything it matched. It exposes no `limit`, `page` or `offset` (the whole
-signature is `?q=`), so a server-side cap cannot be ruled out from the client,
-and a truncated superset is not a superset: the wanted product can be cut off
-before local matching sees it. Several probes mean a product only has to survive
-_one_ probe's truncation. The union is de-duplicated by item code, filtered, then
-ranked. A plain query still costs exactly **one** request.
+**Matching runs over the whole catalogue, in-process, with no upstream request.**
+The database narrows 8,484 rows with `LIKE` patterns built from the same rules —
+`%f1%f2%` is exactly `matchesWildcard` — and `catalog.server.ts` re-checks every
+candidate against the pure predicates before ranking. There are no probes and no
+truncation to defend against: the earlier three-probe scheme existed because the
+MIS `?q=` might cap its own result set, and neither the MIS nor its cap is on this
+path any more.
 
 Results are ranked (`rankProducts`), not returned in API order: exact name, then
 prefix, then contains, then item-code match, with a nudge for names where the
@@ -6793,10 +6901,31 @@ plain.
 
 Decisions worth keeping:
 
-- **Search is debounced 350 ms and floored at 2 characters.** The MIS portal
-  itself fires a request per keystroke; this one does not.
+- **Search is debounced 350 ms and floored at 2 characters.** Unchanged when the
+  catalogue moved local: it was never the problem, and shortening it now that the
+  server answers in milliseconds would only mean searching mid-word.
+- **A superseded search stops costing work.** React Query's abort signal is
+  forwarded through the server function (`getRequest().signal`) to the database
+  read, so the query an agent abandoned on the next keystroke is cancelled rather
+  than completed for nobody. A cancelled read resolves as no candidates and is
+  **not** cached — caching it would tell whoever retypes the same term that the
+  product does not exist, for five minutes.
+- **The result list dims rather than disappearing.** `placeholderData` keeps the
+  previous products on screen while the next term loads. Safe here in a way it is
+  not for customer history — a product list belongs to nobody — but gated on the
+  term still being searchable, or deleting back to one character would leave
+  results for a term the agent has erased.
+- **The loading state always ends.** Skeleton, results, an empty state or an
+  error with a Retry: the branches are written to be exhaustive, and a 15 s
+  ceiling on the request turns a search that never settles into an error rather
+  than a skeleton nobody comes back for.
+- **A local failure does not read as a Shams outage.** `catalog_unavailable` and
+  `catalog_empty` carry their own copy; telling an agent mid-call that Shams is
+  unreachable, when it is our own database, sends the escalation to the wrong
+  place and can end with a customer being told a product does not exist.
 - **Stock loads only for a selected product.** Availability for a twelve-row
-  result set would be twelve requests of ~136 rows each.
+  result set would be twelve requests of ~136 rows each. This is the one live MIS
+  read on the page and it happens after a selection, never for a result set.
 - **Detail and stock are one query.** The server function already overlaps them,
   so "View branch stock" reads a warm cache entry.
 - **No date filter on invoices.** The API's date parameters are NOT VERIFIED —

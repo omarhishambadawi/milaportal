@@ -1013,6 +1013,96 @@ export type Database = {
         }
         Relationships: []
       }
+      shams_catalog_state: {
+        Row: {
+          id: number
+          last_attempt_at: string | null
+          last_error: string | null
+          last_outcome: string | null
+          last_success_at: string | null
+          next_refresh_due_at: string | null
+          row_count: number
+          source_marker: string | null
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          last_attempt_at?: string | null
+          last_error?: string | null
+          last_outcome?: string | null
+          last_success_at?: string | null
+          next_refresh_due_at?: string | null
+          row_count?: number
+          source_marker?: string | null
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          last_attempt_at?: string | null
+          last_error?: string | null
+          last_outcome?: string | null
+          last_success_at?: string | null
+          next_refresh_due_at?: string | null
+          row_count?: number
+          source_marker?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      shams_product_catalog: {
+        Row: {
+          item_code: string
+          item_name: string
+          retail_price: number
+          search_name: string
+          source_updated_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          item_code: string
+          item_name: string
+          retail_price?: number
+          search_name: string
+          source_updated_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          item_code?: string
+          item_name?: string
+          retail_price?: number
+          search_name?: string
+          source_updated_at?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      shams_product_catalog_staging: {
+        Row: {
+          batch_id: string
+          item_code: string
+          item_name: string
+          retail_price: number
+          search_name: string
+          staged_at: string
+        }
+        Insert: {
+          batch_id: string
+          item_code: string
+          item_name: string
+          retail_price?: number
+          search_name: string
+          staged_at?: string
+        }
+        Update: {
+          batch_id?: string
+          item_code?: string
+          item_name?: string
+          retail_price?: number
+          search_name?: string
+          staged_at?: string
+        }
+        Relationships: []
+      }
       shams_sync_runs: {
         Row: {
           branches_seen: number | null
@@ -3073,6 +3163,27 @@ export type Database = {
       shams_crm_store_agent_secret: {
         Args: { _password: string; _user_id: string }
         Returns: string
+      }
+      shams_promote_product_catalog: {
+        Args: {
+          p_batch_id: string
+          p_min_rows?: number
+          p_source_marker?: string | null
+          p_source_updated_at?: string
+        }
+        Returns: Json
+      }
+      shams_search_product_catalog: {
+        Args: {
+          p_code_pattern?: string | null
+          p_max_rows?: number
+          p_name_pattern?: string | null
+        }
+        Returns: {
+          item_code: string
+          item_name: string
+          retail_price: number
+        }[]
       }
       shams_sync_tick: { Args: never; Returns: number }
       st_3dclosestpoint: {

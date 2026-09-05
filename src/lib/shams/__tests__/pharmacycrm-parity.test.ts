@@ -32,6 +32,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import catalog from "./fixtures/shams-catalog-sample.json";
+import { fakeCatalogStore } from "./fixtures/fake-catalog-store";
 
 /**
  * A fixture row. Narrower than `RawProductSearchRow`, whose fields are all
@@ -46,9 +47,21 @@ interface CatalogRow {
 
 const fetchMock = vi.fn();
 const crmMock = vi.fn();
+const local: { rows: CatalogRow[]; calls: number; fail: boolean } = {
+  rows: [],
+  calls: 0,
+  fail: false,
+};
 
-// Since Phase 4 the catalog is the CRM's, so the fixture is handed over whole
-// rather than filtered through a stand-in for the MIS's 50-row search.
+/*
+ * The catalogue is now MilaPortal's own table, so the fixture is loaded into a
+ * fake of it that implements Postgres `LIKE`. Same 237 real rows, same whole
+ * catalogue to match over; what changed is only where they are read from — and
+ * that is asserted too, because `getCrmProducts` is still stubbed and a search
+ * that touched it would be a search that had gone back to downloading 700 KB.
+ */
+vi.mock("@/lib/shams/catalog-store.server", () => fakeCatalogStore(local)());
+
 vi.mock("@/lib/shams-crm/products.server", () => ({
   getCrmProducts: () => crmMock(),
 }));
@@ -64,9 +77,11 @@ const { searchProducts, _clearCaches } = await import("@/lib/shams/catalog.serve
 
 const CATALOG = catalog as CatalogRow[];
 
-/** The whole catalog, as the CRM serves it. */
+/** The whole catalog, as the local table holds it. */
 function respondFromCatalog(): void {
-  crmMock.mockResolvedValue(CATALOG);
+  local.rows = CATALOG;
+  local.calls = 0;
+  local.fail = false;
 }
 
 /**
@@ -285,10 +300,10 @@ describe("edges", () => {
 
   it("repeating a search is answered from cache, not by rescanning the catalog", async () => {
     await searchProducts("nan*op");
-    const first = crmMock.mock.calls.length;
+    const first = local.calls;
     const repeat = await searchProducts("nan*op");
 
-    expect(crmMock.mock.calls).toHaveLength(first);
+    expect(local.calls).toBe(first);
     expect(repeat.length).toBeGreaterThan(0);
   });
 

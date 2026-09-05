@@ -13,6 +13,7 @@ import {
   isWildcardQuery,
   looksLikeItemCode,
   matchesBranchQuery,
+  matchesProductQuery,
   matchesProductWildcard,
   matchesWildcard,
   mergeInvoiceBranchMatches,
@@ -452,5 +453,65 @@ describe("nan*op against the real catalog names", () => {
     for (const row of rows) {
       expect(matchesProductWildcard(row, fragments)).toBe(true);
     }
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Plain queries                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `matchesProductQuery` — the three ways a plain query finds a product.
+ *
+ * The rule an agent never has to think about: they type a name, or a code, or
+ * the start of a code, and the field works out which. It is asserted here rather
+ * than only through `searchProducts` because the local catalogue's SQL retrieval
+ * is written to mirror it exactly, and the two are only as aligned as this
+ * function is precise.
+ */
+describe("matchesProductQuery", () => {
+  const NAN = { itemCode: "10400746", itemName: "NAN 2 OPTIPRO 1800 GM", retailPrice: 1 };
+
+  it("matches a substring of the name, case- and whitespace-insensitively", () => {
+    expect(matchesProductQuery(NAN, "optipro")).toBe(true);
+    expect(matchesProductQuery(NAN, "OPTIPRO")).toBe(true);
+    expect(matchesProductQuery(NAN, "  nan   2  ")).toBe(true);
+  });
+
+  it("matches an exact item code", () => {
+    expect(matchesProductQuery(NAN, "10400746")).toBe(true);
+  });
+
+  it("matches the first digits of an item code", () => {
+    // What an agent has when a code was read to them, or pasted half-selected.
+    expect(matchesProductQuery(NAN, "104007")).toBe(true);
+    expect(matchesProductQuery(NAN, "1040")).toBe(true);
+  });
+
+  it("does not match the middle of a code", () => {
+    // A code buried inside another code is a coincidence, not a lookup. An agent
+    // who genuinely wants that already has `104*746`.
+    expect(matchesProductQuery(NAN, "0074")).toBe(false);
+  });
+
+  it("does not read a short number as an item code", () => {
+    /*
+     * `500` is a strength far more often than an identifier, and treating it as
+     * a code prefix would put unrelated products above the paracetamol the agent
+     * was describing. `MIN_ITEM_CODE_LENGTH` is the gate.
+     */
+    expect(matchesProductQuery({ ...NAN, itemName: "X" }, "104")).toBe(false);
+    expect(looksLikeItemCode("104")).toBe(false);
+  });
+
+  it("does not read text as an item code prefix", () => {
+    expect(matchesProductQuery({ itemCode: "nan1", itemName: "ZZZ", retailPrice: 1 }, "nan")).toBe(
+      false,
+    );
+  });
+
+  it("is false for an empty query rather than true for everything", () => {
+    expect(matchesProductQuery(NAN, "")).toBe(false);
+    expect(matchesProductQuery(NAN, "   ")).toBe(false);
   });
 });

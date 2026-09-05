@@ -27,6 +27,7 @@ import {
   parseCrmTimestamp,
   parseSyncNotes,
   readTriggerRunId,
+  stockSyncMarker,
   type RawShamsSyncStatus,
 } from "@/lib/shams-crm/sync-status";
 
@@ -316,5 +317,58 @@ describe("readTriggerRunId", () => {
     for (const body of [null, undefined, {}, { run_id: null }, { run_id: "" }]) {
       expect(readTriggerRunId(body as never)).toBeNull();
     }
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The catalogue refresh marker                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `stockSyncMarker` — PharmacyCRM Desktop's refresh trigger, transcribed.
+ *
+ * What it returns is compared against the marker the local product catalogue was
+ * last built from, and a difference is the only ordinary reason to re-download
+ * 700 KB. So the failures worth guarding are both directions of wrong: a marker
+ * that moves when nothing changed re-downloads for nothing, and one that fails
+ * to move when a sync succeeded leaves agents searching yesterday's catalogue.
+ */
+describe("stockSyncMarker", () => {
+  it("prefers the latest successful run's completion time", () => {
+    const status = normalizeSyncStatus(STOCK_STATUS, OBSERVED_AT);
+    expect(stockSyncMarker(status)).toBe(status.latestRun?.completedAt);
+  });
+
+  it("falls back to the run's start when it reports no completion", () => {
+    const status = normalizeSyncStatus(
+      {
+        is_running: false,
+        latest_run: { run_id: "9", status: "success", started_at: "2026-08-14T11:50:00Z" },
+        last_success_at_utc: "2026-08-01T00:00:00Z",
+      } as never,
+      OBSERVED_AT,
+    );
+    expect(stockSyncMarker(status)).toBe(status.latestRun?.startedAt);
+  });
+
+  it("falls back to the envelope when the latest run was not a success", () => {
+    // A failed run must not become the marker: doing so would record the
+    // catalogue as refreshed against a run that changed nothing.
+    const status = normalizeSyncStatus(
+      {
+        is_running: false,
+        latest_run: { run_id: "9", status: "failed", completed_at: "2026-08-14T11:50:00Z" },
+        last_success_at_utc: "2026-08-13T11:53:23Z",
+      } as never,
+      OBSERVED_AT,
+    );
+    expect(stockSyncMarker(status)).toBe(status.lastSuccessAt);
+  });
+
+  it("has no opinion when nothing has ever succeeded", () => {
+    // Read by the caller as "no opinion", never as "unchanged" — otherwise a CRM
+    // that has never synced would pin the catalogue forever.
+    const status = normalizeSyncStatus({ is_running: false } as never, OBSERVED_AT);
+    expect(stockSyncMarker(status)).toBeNull();
   });
 });

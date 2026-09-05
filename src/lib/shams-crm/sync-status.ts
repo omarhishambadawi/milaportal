@@ -410,6 +410,37 @@ export function readTriggerRunId(raw: RawShamsSyncTrigger | null | undefined): s
 }
 
 /* -------------------------------------------------------------------------- */
+/* The catalogue refresh marker                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One string standing for "the last time a stock sync succeeded upstream".
+ *
+ * PharmacyCRM Desktop's `_extract_stock_sync_success_marker`, transcribed: the
+ * latest run's `completed_at` — falling back to its `started_at` — when that run
+ * says `success`, and otherwise the envelope's `last_success_at_utc`. When the
+ * marker differs from the one the cached catalogue was built against, the
+ * catalogue is re-fetched; when it does not, nothing is downloaded.
+ *
+ * That is a better refresh trigger than a clock, and the reason is in the data:
+ * the catalogue changes when Shams' own sync changes it, roughly 0.3 % of rows a
+ * day and never on a schedule anyone here controls
+ * (`docs/shams/api-discovery.md` §10.6). A TTL either re-downloads 700 KB for
+ * nothing or serves rows that moved hours ago; the marker does neither.
+ *
+ * Returns null when the CRM reports no successful run at all, which callers read
+ * as "no opinion" — not as "unchanged".
+ */
+export function stockSyncMarker(status: ShamsSyncStatus): string | null {
+  const latest = status.latestRun;
+  if (latest && latest.status?.toLowerCase() === "success") {
+    const marker = latest.completedAt ?? latest.startedAt;
+    if (marker) return marker;
+  }
+  return status.lastSuccessAt;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Reconciliation                                                              */
 /* -------------------------------------------------------------------------- */
 
