@@ -155,6 +155,63 @@ describe("the canonical scheduler keeps every behaviour the incident was about",
     expect(sql).toContain("SELECT public.alshrouq_dispatch_due();");
   });
 
+  /**
+   * One job calls the poll, and it is unscheduled before it is scheduled.
+   *
+   * The function-level guard above cannot see this: two cron jobs under
+   * *different names* would both call the same, correct, single definition —
+   * and a poll running twice a minute is two workers racing for the same
+   * `scheduled` rows. The claim is a compare-and-swap so it would not book two
+   * couriers, but it is not a state anybody chose, and it would produce the
+   * duplicate-execution symptom while every uniqueness check passed.
+   *
+   * So the property is asserted over the whole migration history rather than
+   * over this file: every registration of the poll uses the one job name, and
+   * every one of them clears it first.
+   */
+  it("is registered under exactly one cron job name, everywhere", () => {
+    const registrations: { file: string; name: string }[] = [];
+
+    for (const name of files) {
+      const text = read(name);
+      // `cron.schedule('<job>', '<cron>', '<command>')`, across lines.
+      const pattern = /cron\.schedule\(\s*'([^']+)'\s*,\s*'[^']*'\s*,\s*'([^']*)'/g;
+      for (const match of text.matchAll(pattern)) {
+        if (match[2].includes("alshrouq_dispatch_due")) {
+          registrations.push({ file: name, name: match[1] });
+        }
+      }
+    }
+
+    expect(registrations.length).toBeGreaterThan(0);
+    expect([...new Set(registrations.map((r) => r.name))]).toEqual(["alshrouq-dispatch-due"]);
+
+    // And each registration clears the job first, so re-running any of them —
+    // which is what an operator does when the scheduler is suspected dead —
+    // replaces the job rather than adding a second one.
+    for (const { file } of registrations) {
+      expect(read(file)).toContain("cron.unschedule('alshrouq-dispatch-due')");
+    }
+  });
+
+  /**
+   * Nothing else in the schema calls the poll on a timer.
+   *
+   * A second job could reach it indirectly — through a wrapper function, or from
+   * inside another scheduler's command — and that is the shape a competing
+   * scheduler would actually take. Every `cron.schedule` in the history is
+   * checked, not just the ones naming the poll directly.
+   */
+  it("has no other scheduled command that reaches the poll", () => {
+    for (const name of files) {
+      const text = read(name);
+      for (const match of text.matchAll(/cron\.schedule\(\s*'([^']+)'[\s\S]{0,400}?\)\s*;/g)) {
+        if (match[1] === "alshrouq-dispatch-due") continue;
+        expect(match[0]).not.toContain("alshrouq_dispatch_due");
+      }
+    }
+  });
+
   it("verifies itself, so a downgrade cannot be applied quietly", () => {
     expect(sql).toContain("pg_get_functiondef");
     expect(sql).toContain("RAISE EXCEPTION");

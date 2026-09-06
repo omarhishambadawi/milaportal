@@ -155,15 +155,44 @@ export const Route = createFileRoute("/api/shams-sync-run")({
 
         try {
           if (task === "tick") {
-            const { runShamsSyncTick } = await import("@/lib/shams-crm/sync-scheduler.server");
+            const { runShamsSyncTick, tickHadFailures } =
+              await import("@/lib/shams-crm/sync-scheduler.server");
             const summary = await runShamsSyncTick(supabase as any);
+
+            /*
+             * `ok` is about the work, not about this request surviving.
+             *
+             * It used to be the literal `true`, which made every reply
+             * indistinguishable: a tick that refreshed the catalogue, a tick
+             * with nothing to do, and a tick whose catalogue refresh failed all
+             * said the same word. The last of those is the one that matters —
+             * Branch Stock searches the table that refresh fills — and the only
+             * trace of it was two booleans nothing read.
+             *
+             * The HTTP status stays 2xx on purpose. `shams_sync_tick()` reads
+             * the previous reply's status code on the following tick and writes
+             * "the scheduler was refused by the application (HTTP n)" for
+             * anything else, which would be a false sentence about a poke that
+             * arrived and ran — and it would mask the credential drift that
+             * message exists to catch. The work's verdict belongs in the body
+             * and in the log; the status code answers a different question.
+             *
+             * The per-subsystem detail is already durable: `refreshProductCatalog`
+             * and `sweepOffers` record `failed` with a reason on
+             * `shams_catalog_state` / `shams_offer_sync_state`, which is what the
+             * Control Center renders — and both leave the previous rows serving.
+             */
+            const ok = !tickHadFailures(summary);
+
             /*
              * Counts only. Never a run's contents, never a credential — the
-             * summary types are integers and one boolean, and a test asserts
+             * summary types are integers and booleans, and a test asserts
              * nothing else reaches them.
              */
-            console.info("[shams-sync] tick", summary);
-            return json({ ok: true, task, ...summary });
+            if (ok) console.info("[shams-sync] tick", summary);
+            else console.error("[shams-sync] tick completed with failures", summary);
+
+            return json({ ok, task, ...summary });
           }
 
           const { runShamsSyncReconcile } = await import("@/lib/shams-crm/sync-scheduler.server");

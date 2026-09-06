@@ -54,9 +54,14 @@ import {
   useTelesalesQueue,
   type WasfatyCycle,
 } from "@/features/telesales/hooks/use-telesales-queue";
-import { DEFAULT_QUEUE_FILTERS, type QueueLead } from "@/features/telesales/types";
+import type { QueueLead } from "@/features/telesales/types";
 import { useDebounced } from "@/features/shams/hooks/use-shams-data";
-import type { QueueState } from "@/features/telesales/queue-search";
+import {
+  clearedQueueFilters,
+  queueDefaults,
+  queueFiltersActive,
+} from "@/features/telesales/queue-search";
+import type { QueueDefaults, QueueState } from "@/features/telesales/queue-search";
 
 /**
  * The lead queue, once, for every page that shows one.
@@ -143,8 +148,23 @@ export interface LeadQueueProps {
   cyclePeriod?: string;
   /** The batches in that period, comma-joined. `""` is every cycle. */
   importIds?: string;
-  /** Where the date range rests, so "Any date" can put it back. */
-  dateDefaults?: { from: string; to: string };
+  /**
+   * Where this view's filters rest when the URL says nothing.
+   *
+   * The same `QueueDefaults` the route hands `validateQueueSearch` and
+   * `queueStateFromSearch`, so the queue, the URL and the Clear button agree on
+   * one answer to "what is this page's resting position".
+   *
+   * They used to disagree. This prop was only the date range, and Clear reset
+   * `status` to the *global* default — `"open"`. On All Leads and Worked Leads,
+   * whose resting status is `"all"`, that made Clear a filter rather than the
+   * removal of one: every converted and closed prescription vanished from a
+   * supervisor's list, on a page whose entire purpose is to show them, and
+   * Wasfaty hides the status control (`statusFilter="outcome"`) so there was
+   * nothing on screen to put back. The same mismatch made `filtersActive` true
+   * at rest, which is why Clear was always offered on a page nobody had filtered.
+   */
+  defaults?: Partial<QueueDefaults>;
   /** Offer the administrator's per-lead Delete. */
   canDelete?: boolean;
   /** What to say when an unfiltered queue is empty. */
@@ -167,11 +187,20 @@ export function LeadQueue({
   cycles,
   cyclePeriod = "all",
   importIds = "",
-  dateDefaults = { from: "", to: "" },
+  defaults: viewDefaults,
   canDelete = false,
   emptyTitle = "The queue is clear",
   emptyHint,
 }: LeadQueueProps) {
+  /*
+   * The view's resting position, filled in from the global one.
+   *
+   * `queueDefaults(viewDefaults)` is the same helper `validateQueueSearch` and
+   * `queueStateFromSearch` use, so a view that overrides nothing rests exactly
+   * where the URL reader thinks it does — which is the property that broke.
+   */
+  const defaults = queueDefaults(viewDefaults);
+
   const { profile, role, session } = useAuth();
   const userId = session?.user?.id;
   const perms = profile?.permissions as string[] | null | undefined;
@@ -348,22 +377,17 @@ export function LeadQueue({
   const rows = queue.data?.rows ?? [];
   const total = queue.data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / pageSize));
-  const filtersActive =
-    leadType !== "all" ||
-    status !== DEFAULT_QUEUE_FILTERS.status ||
-    outcome !== "all" ||
-    agent !== "all" ||
-    branch !== "all" ||
-    family !== "all" ||
-    followup !== "all" ||
-    // Against the *view's* resting range, not against "no dates". Generated
-    // Leads rests on today and tomorrow, and a page that opened on its own
-    // default should not claim the agent has filtered anything.
-    dateFrom !== dateDefaults.from ||
-    dateTo !== dateDefaults.to ||
-    term.trim() !== "" ||
-    mineOnly ||
-    unassignedOnly;
+  /*
+   * Measured against the *view's* resting position, not the queue's.
+   *
+   * All Leads and Worked Leads rest at `status: "all"`; comparing those against
+   * the global `"open"` is what offered a Clear button on a page nobody had
+   * filtered — and pressing it then applied the very filter the comparison had
+   * imagined. `queueFiltersActive` and `resetFilters` now read the same rule, so
+   * the button appears only when it would change something and disappears once
+   * it has.
+   */
+  const filtersActive = queueFiltersActive(state, defaults);
 
   /*
    * Clearing is one navigation, not eleven.
@@ -372,29 +396,29 @@ export function LeadQueue({
    * `state` that is stale after the first, so the last would win and the rest
    * would be lost. The whole default state goes back at once instead.
    *
-   * `lifecycle` is deliberately not reset: it is the actionable/stale axis and
-   * it was not on the old reset either, because an agent clearing filters wants
-   * their working set back, not the dead backlog with it.
+   * ## Clear means "put this page back where it opens"
+   *
+   * Not "apply the queue's global defaults", which is what it used to do and
+   * what made it destructive. `status` went back to `DEFAULT_QUEUE_FILTERS`'s
+   * `"open"` on every page, including the two whose whole purpose is to show
+   * closed work — so a supervisor pressing Clear on All Leads watched every
+   * converted prescription disappear, with no visible control to bring it back
+   * because Wasfaty renders the outcome filter in the status filter's place.
+   *
+   * `defaults` is the view's own resting position, the same one the URL reader
+   * uses, so clearing now lands on exactly the state the page opens in — and,
+   * because `filtersActive` is measured against the same values, the button
+   * disappears once it has done its job. That is the visible confirmation the
+   * old behaviour could never give.
+   *
+   * `lifecycle` is reset too, which it was not before. It has to be: it is one
+   * of the two filters a view may rest somewhere other than the global default,
+   * so leaving it out would recreate the same disagreement on the other axis.
+   * On every existing view its resting value is the global one, so nothing an
+   * agent sees today changes.
    */
   function resetFilters() {
-    put({
-      leadType: DEFAULT_QUEUE_FILTERS.leadType,
-      status: DEFAULT_QUEUE_FILTERS.status,
-      outcome: "all",
-      agent: "all",
-      branch: "all",
-      family: "all",
-      followup: "all",
-      // Back to the view's resting range, not to "no dates": Generated Leads
-      // rests on the daily window, and clearing filters there should return the
-      // agent to today's work rather than to every prescription ever imported.
-      dateFrom: dateDefaults.from,
-      dateTo: dateDefaults.to,
-      term: "",
-      mineOnly: false,
-      unassignedOnly: false,
-      page: 0,
-    });
+    put(clearedQueueFilters(defaults));
   }
 
   return (

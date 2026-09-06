@@ -182,7 +182,15 @@ export function WasfatyPage({
         cycles={view.cycles ? (cycles.data ?? []) : undefined}
         cyclePeriod={cycle.period}
         importIds={cycle.importIds}
-        dateDefaults={{ from: defaults.dateFrom ?? "", to: defaults.dateTo ?? "" }}
+        /*
+         * The whole resting position, not just the dates.
+         *
+         * The queue needs the same `defaults` this page hands
+         * `queueStateFromSearch` and `searchFromQueueState`, or Clear resets to
+         * somewhere the page does not open — which on All Leads and Worked
+         * Leads meant hiding every closed and converted prescription.
+         */
+        defaults={defaults}
         canDelete={isAdministrator(role)}
         emptyTitle={
           view.id === "worked" ? "Nothing has been worked yet" : "No Wasfaty leads right now"

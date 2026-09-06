@@ -181,8 +181,82 @@ const GLOBAL_DEFAULTS: QueueDefaults = {
   dateTo: "",
 };
 
-function defaultsOf(d?: Partial<QueueDefaults>): QueueDefaults {
+/**
+ * A view's resting position, with the global one filling every gap.
+ *
+ * Exported because the queue component needs the *same* answer the URL reader
+ * uses. It did not have it: `LeadQueue` compared the live status against the
+ * global default and reset to the global default, so on All Leads and Worked
+ * Leads — whose resting status is `"all"` — the Clear button was offered on an
+ * untouched page and, pressed, applied `status = "open"` and hid every closed
+ * and converted lead. One function, one answer, and the disagreement is gone
+ * structurally rather than by two constants being kept equal by hand.
+ */
+export function queueDefaults(d?: Partial<QueueDefaults>): QueueDefaults {
   return { ...GLOBAL_DEFAULTS, ...d };
+}
+
+/**
+ * What the Clear button writes: this view's resting position, and nothing else.
+ *
+ * Pure, and here rather than inside `LeadQueue`, because "clear" and "is
+ * anything filtered" are two readings of one rule and the bug was them
+ * disagreeing — the button reset `status` to the queue's global `"open"` while
+ * the page it was on rested at `"all"`. Kept as one function beside
+ * {@link queueFiltersActive}, which compares against the same values, so the
+ * button can only be shown when pressing it would change something.
+ *
+ * Every field the queue filters on appears here, deliberately. A filter added
+ * to `QueueState` and forgotten here would survive a Clear, which is the quiet
+ * half of the same fault.
+ */
+export function clearedQueueFilters(defaults: QueueDefaults): Partial<QueueState> {
+  return {
+    leadType: DEFAULT_QUEUE_FILTERS.leadType,
+    status: defaults.status,
+    lifecycle: defaults.lifecycle,
+    outcome: "all",
+    agent: "all",
+    branch: "all",
+    family: "all",
+    followup: "all",
+    // Back to the view's resting range, not to "no dates": Generated Leads
+    // rests on the daily window, and clearing filters there should return the
+    // agent to today's work rather than to every prescription ever imported.
+    dateFrom: defaults.dateFrom,
+    dateTo: defaults.dateTo,
+    term: "",
+    mineOnly: false,
+    unassignedOnly: false,
+    page: 0,
+  };
+}
+
+/**
+ * Has the reader narrowed this view at all?
+ *
+ * The Clear button's visibility, and the difference between the two empty
+ * states ("loosen a filter" versus "nothing has been imported"). Measured
+ * against `clearedQueueFilters`, so the answer is exactly "would Clear change
+ * anything" — which is what makes the button's disappearance the confirmation
+ * that it worked.
+ *
+ * `page` and `pageSize` are not filters and are excluded: being on page three
+ * is not something an agent needs offering a Clear for.
+ */
+export function queueFiltersActive(state: QueueState, defaults: QueueDefaults): boolean {
+  const cleared = clearedQueueFilters(defaults);
+  for (const [key, value] of Object.entries(cleared)) {
+    if (key === "page") continue;
+    const current = state[key as keyof QueueState];
+    // The search box is the one field where trailing space is not a filter.
+    if (key === "term") {
+      if (String(current).trim() !== value) return true;
+      continue;
+    }
+    if (current !== value) return true;
+  }
+  return false;
 }
 
 function oneOf(value: unknown, allowed: string[], fallback: string): string {
@@ -212,7 +286,7 @@ export function validateQueueSearch(
   s: Record<string, unknown>,
   viewDefaults?: Partial<QueueDefaults>,
 ): QueueSearch {
-  const d = defaultsOf(viewDefaults);
+  const d = queueDefaults(viewDefaults);
   const out: QueueSearch = {};
 
   const type = oneOf(s.type, TYPE_VALUES, DEFAULT_QUEUE_FILTERS.leadType);
@@ -312,7 +386,7 @@ export function queueStateFromSearch(
   s: QueueSearch,
   viewDefaults?: Partial<QueueDefaults>,
 ): QueueState {
-  const d = defaultsOf(viewDefaults);
+  const d = queueDefaults(viewDefaults);
   return {
     leadType: s.type ?? DEFAULT_QUEUE_FILTERS.leadType,
     status: s.status ?? d.status,

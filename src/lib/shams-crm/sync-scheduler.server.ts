@@ -525,12 +525,25 @@ export interface ShamsSyncTickSummary {
   reconciled: number;
   notConfigured: boolean;
   automationEnabled: boolean;
+  /**
+   * True when this pass actually looked at the catalogue.
+   *
+   * The flag that makes every `catalog*` field below readable. Without it a tick
+   * that was not due and a tick that failed before it could record anything
+   * produce the identical line — `catalogRefreshed: false, catalogRows: 0` — and
+   * an operator reading the log cannot tell "there was nothing to do" from "the
+   * catalogue has not been refreshed in a week". That ambiguity is the whole of
+   * what a Shams sync tick can quietly hide.
+   */
+  catalogChecked: boolean;
   /** True when the local product catalogue was replaced with fresher rows. */
   catalogRefreshed: boolean;
   /** True when the refresh could not run. The previous catalogue is intact. */
   catalogFailed: boolean;
   /** Products in the local catalogue after this pass. */
   catalogRows: number;
+  /** True when this pass actually attempted a sweep slice. See `catalogChecked`. */
+  offersChecked: boolean;
   /** True when a slice of the local offer dataset was promoted. */
   offersSwept: boolean;
   /** True when the sweep could not run. The previous offer data is intact. */
@@ -539,6 +552,29 @@ export interface ShamsSyncTickSummary {
   offerSweepComplete: boolean;
   /** Offer rows whose values actually moved in this pass. */
   offerRowsChanged: number;
+}
+
+/**
+ * Did anything in this tick fail in a way a person needs to know about?
+ *
+ * The scheduler endpoint's `ok`, as one rule rather than as a condition written
+ * out at the call site. Everything it counts is work that *was attempted and did
+ * not succeed*; work that was not due is not a failure, which is exactly the
+ * distinction `catalogChecked` and `offersChecked` exist to make.
+ *
+ * `failed` and `indeterminate` runs count too. A trigger the CRM refused, or one
+ * whose outcome could not be established, is not a successful tick — and
+ * `indeterminate` in particular is the state that needs a person, so a green
+ * scheduler over the top of one is the report that stops them looking.
+ *
+ * A missed slot is deliberately **not** counted. It is recorded as `skipped`
+ * with its reason, and the tick that records it did its job correctly; the
+ * failure it describes happened earlier.
+ */
+export function tickHadFailures(summary: ShamsSyncTickSummary): boolean {
+  return (
+    summary.catalogFailed || summary.offersFailed || summary.failed > 0 || summary.indeterminate > 0
+  );
 }
 
 /**
@@ -577,9 +613,11 @@ export async function runShamsSyncTick(
     reconciled: 0,
     notConfigured: false,
     automationEnabled: false,
+    catalogChecked: false,
     catalogRefreshed: false,
     catalogFailed: false,
     catalogRows: 0,
+    offersChecked: false,
     offersSwept: false,
     offersFailed: false,
     offerSweepComplete: false,
@@ -716,12 +754,17 @@ export async function runShamsSyncTick(
   try {
     const { isCatalogRefreshDue, refreshProductCatalog } = await import("./catalog-sync.server");
     if (await isCatalogRefreshDue(supabase, now)) {
+      summary.catalogChecked = true;
       const catalog = await refreshProductCatalog({ now });
       summary.catalogRefreshed = catalog.outcome === "refreshed";
       summary.catalogFailed = catalog.outcome === "failed";
       summary.catalogRows = catalog.rowCount;
     }
   } catch (err) {
+    // Marked checked here as well: a throw on the *due* read is still this tick
+    // having tried and got nowhere, and reporting it as "not due" would be the
+    // same silence the flag exists to break.
+    summary.catalogChecked = true;
     summary.catalogFailed = true;
     console.error(
       "[shams-catalog] refresh threw during the tick:",
@@ -751,6 +794,7 @@ export async function runShamsSyncTick(
   try {
     const { isOfferSweepDue, sweepOffers } = await import("./offer-sync.server");
     if (await isOfferSweepDue(supabase, now)) {
+      summary.offersChecked = true;
       const offers = await sweepOffers({ now });
       summary.offersSwept = offers.outcome === "swept";
       summary.offersFailed = offers.outcome === "failed";
@@ -758,6 +802,8 @@ export async function runShamsSyncTick(
       summary.offerRowsChanged = offers.rowsChanged;
     }
   } catch (err) {
+    // See the catalogue's `catch`: a throw is an attempt, not an idle pass.
+    summary.offersChecked = true;
     summary.offersFailed = true;
     console.error("[shams-offers] sweep threw during the tick:", (err as Error)?.name ?? "unknown");
   }

@@ -4268,6 +4268,42 @@ it due would retry every minute for two hours and then record itself as missed;
 Phase 2A's rule holds — a trigger is never automatically retried, and Update Now
 is the human retry.
 
+##### A tick reports the work, not the request
+
+`/api/shams-sync-run` answered `{ ok: true, ...summary }` for every tick that
+returned, so three different things arrived looking identical: a tick that
+refreshed the catalogue, a tick with nothing to do, and a tick whose catalogue
+refresh failed. The last is the one that matters — Branch Stock searches the
+table that refresh fills — and its only trace was `catalogFailed` /`offersFailed`,
+two booleans nothing read. An operator quoting
+`catalogRefreshed=false, catalogRows=0, offerSweepComplete=false,
+offerRowsChanged=0` could not tell which of the three they were holding, because
+an idle tick and a failed one produce exactly those four values.
+
+Two changes, both to the reporting rather than to the work:
+
+- **`catalogChecked` and `offersChecked`** say whether this pass looked at all.
+  Set before the attempt and in the `catch`, so a throw counts as an attempt and
+  not as an idle pass. Every other `catalog*` / `offer*` field is unreadable
+  without them.
+- **`tickHadFailures(summary)`** is the endpoint's `ok`. It counts a failed
+  catalogue refresh, a failed offer sweep, a refused trigger and an
+  `indeterminate` one — that last because it needs a person, and a green
+  scheduler over the top of it is what stops them looking. A slot recorded as
+  `missed` is not counted: the tick that records one did its job.
+
+**The HTTP status stays 2xx.** `shams_sync_tick()` reads the previous reply's
+status code on the following tick and writes "the scheduler was refused by the
+application (HTTP n)" for anything else — a false sentence about a poke that
+arrived and ran, and one that would mask the credential drift that message exists
+to catch. The verdict belongs in the body and the log.
+
+Nothing about durability changed, because it was already right: `refreshProductCatalog`
+and `sweepOffers` each record `failed` with a safe one-line reason on
+`shams_catalog_state` / `shams_offer_sync_state`, which is what the Control
+Center's two health panels render, and both leave the previous rows serving —
+promotion is atomic and the offer promotion is scoped to its slice.
+
 ##### Manual runs
 
 `shamsSyncRunNow` is administrator-gated, audited before the attempt, and reuses
@@ -7103,6 +7139,17 @@ What that bought, concretely:
   results or fewer". One indexed read of `shams_offer_products` answers for a
   hundred rows as cheaply as for twelve. `MAX_OFFER_LOOKUP_ITEMS = 200` bounds a
   pathological request, not an upstream cost.
+
+  It survived one release longer than it should have. `shamsGetOfferSummaries`'s
+  input validator kept `max(12)` after the sweep landed, so a search matching a
+  thirteenth product did not truncate its answer — it **rejected the request**,
+  and every row in the result fell back to the catalogue price with no badge. A
+  search for `nan` showed list prices; a search for one product showed the
+  discount. The validator now caps at `MAX_OFFER_SUMMARY_ITEMS = 200`, the same
+  number the store reads up to, and `offer-summary-batch.test.ts` parses real
+  sets of 1, 12, 13, 20, 100 and 200 codes through the object the handler uses.
+  The two constants cannot be one — `shams.functions.ts` ships to the browser
+  bundle and `offer-store.server.ts` does not — so a test asserts they agree.
 - **The click prefetch is gone.** It existed to overlap a CRM request with the
   router navigation; there is no CRM request left to overlap, so the workaround
   was deleted rather than kept. Hover prefetching was never added and a test
@@ -8806,6 +8853,35 @@ Per-view defaults had to reach `validateSearch` as well as the reader.
 the reader disagreed about what the default is, choosing "Open" on All Leads
 would write nothing to the URL and read back as "All". `validateQueueSearch`,
 `queueStateFromSearch` and `searchFromQueueState` all take the view's defaults.
+
+**And so does the queue itself, now.** `LeadQueue` was the one place that did
+not: it received only the date half of the defaults and measured "is anything
+filtered" against — and reset to — `DEFAULT_QUEUE_FILTERS.status`, which is
+`open`. On All Leads and Worked Leads, resting at `all`, that produced both
+halves of one fault. The Clear button was permanently visible, because the page's
+resting status never equalled the global one; and pressing it applied
+`status = open`, which the queue turns into `.in("status", OPEN_LEAD_STATUSES)`,
+so every converted and closed prescription vanished from a supervisor's view.
+Unrecoverably, too: Wasfaty renders the outcome control in the status control's
+place (`statusFilter="outcome"`), so nothing on screen held the filter that had
+just been applied, and the URL it produced carried `?status=open` to whoever the
+link was shared with.
+
+The prop is now the whole `QueueDefaults`, and the rule is two exported pure
+functions in `queue-search.ts` rather than two expressions in a component:
+
+- `clearedQueueFilters(defaults)` — what Clear writes. The view's resting
+  position, including `lifecycle`, which the old reset skipped.
+- `queueFiltersActive(state, defaults)` — measured against the same values, so
+  the button appears only when pressing it would change something and disappears
+  once it has. That disappearance is the confirmation the old behaviour could
+  never give.
+
+`queueDefaults()` is the single filler for a partial view definition, shared by
+the URL reader and the queue, so the two cannot drift again.
+`wasfaty-clear.test.ts` drives all three views through both functions and the URL
+round trip, and reads the resting positions from `wasfaty-views.ts` rather than
+restating them.
 
 #### The lifecycle view was rebuilt twice
 

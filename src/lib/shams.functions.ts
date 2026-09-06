@@ -181,16 +181,44 @@ const crmHistoryInput = z.object({
   perPage: z.number().int().min(1).max(100).optional(),
 });
 /**
- * Items to check offer coverage for.
+ * Items to look offer verdicts up for.
  *
- * The `max(12)` is the load-bearing part and it is asserted here as well as in
- * `getOfferScopes`. There is no bulk offers endpoint, so every code in this
- * array is one ~62 KB CRM request: the browser does not get to decide how many
- * of those a single call makes. Anything longer is a rejected request rather
- * than a silently truncated one, so a caller that outgrows the cap finds out.
+ * ## The twelve that had to go
+ *
+ * This used to be `max(12)`, and that number was load-bearing for a design that
+ * no longer exists: there is no bulk offers endpoint, so under the old scheme
+ * every code in this array was its own ~62 KB CRM request and a hundred-row
+ * result would have been a hundred of them.
+ *
+ * `shamsGetOfferSummaries` has not worked that way since the offer sweep landed.
+ * It is **one indexed read of `shams_offer_products`** keyed by `item_code`, and
+ * the fan-out the cap was protecting is gone. What the stale twelve did instead
+ * was reject the whole request the moment a search matched a thirteenth product
+ * — so a search for `nan`, which matches dozens, lost its discounted prices
+ * entirely while a search for one product kept them. Every row silently fell
+ * back to the list price, on a call, about money.
+ *
+ * ## Why 200
+ *
+ * It is `MAX_OFFER_LOOKUP_ITEMS` in `lib/shams/offer-store.server.ts`, which is
+ * where the read itself is bounded. Stating the same number at the boundary is
+ * what keeps the rejection honest: the store slices at 200, so a validator that
+ * admitted more would hand back a partial answer that reads exactly like "those
+ * products have no offer". A search returns at most `MAX_SEARCH_RESULTS` (100),
+ * so this is twice the largest legitimate request and bounds a pathological one
+ * rather than expressing a cost. It cannot be imported — this module ships to
+ * the browser bundle and that one does not — so a test asserts the two agree.
  */
-const offerScopesInput = z.object({
-  itemCodes: z.array(z.string().min(1).max(40)).min(1).max(12),
+export const MAX_OFFER_SUMMARY_ITEMS = 200;
+
+/**
+ * Exported so a test can parse real inputs through the object the handler uses,
+ * rather than asserting that a number appears somewhere in this file. The bug
+ * this replaces was a validator and its own documentation disagreeing; a test
+ * that reads the source could not have caught it.
+ */
+export const offerScopesInput = z.object({
+  itemCodes: z.array(z.string().min(1).max(40)).min(1).max(MAX_OFFER_SUMMARY_ITEMS),
 });
 
 /* -------------------------------------------------------------------------- */
