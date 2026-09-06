@@ -211,7 +211,26 @@ describe("a search result shows what the product costs today", () => {
 
   it("puts the offer badge on a row that has one", () => {
     expect(resultList).toContain("<OfferBadge summary={summary} />");
-    expect(stockTab).toContain('{all ? "· all branches" : "· some branches"}');
+    expect(stockTab).toContain(
+      '{varies ? "· varies by branch" : all ? "· all branches" : "· some branches"}',
+    );
+  });
+
+  it("says 'varies by branch' rather than dropping the discount silently", () => {
+    /*
+     * Item 10612992 in production: 50% at 135 branches, 30% at three. The badge
+     * used to render that as a bare "OFFER · all branches" — coverage true,
+     * discount simply absent — which reads as a badge that failed rather than
+     * as the fact it is.
+     */
+    expect(stockTab).toContain("const varies = summary.offerDisplay === null;");
+    expect(stockTab).toContain('{varies ? "OFFER" : `${summary.offerDisplay} OFF`}');
+    // And it drops the reassuring green: "all branches" must not invite an
+    // agent to infer one price when there are two.
+    expect(stockTab).toContain("const uniform = all && !varies;");
+    expect(stockTab).toContain(
+      'uniform ? "bg-success/10 text-success" : "bg-warning/10 text-warning"',
+    );
   });
 
   it("puts the resulting offer price on the row, beneath the struck-through list price", () => {
@@ -279,11 +298,38 @@ describe("the product card", () => {
     expect(summaryCard).toContain('<Figure label="Applied offer">');
     expect(summaryCard).toContain('<Figure label="Offer price">');
     expect(summaryCard).toContain("<AppliedOffer summary={summary} state={offerState} />");
-    expect(summaryCard).toContain("{fmtSAR(summary.offerPrice)}");
+    expect(summaryCard).toContain(
+      "<OfferPriceFigure summary={summary} spread={offerSpread} state={offerState} />",
+    );
+    // The agreed figure is still the headline when there is one.
+    expect(stockTab).toContain("if (hasProductOfferPrice(summary)) {");
+    expect(stockTab).toContain("{fmtSAR(summary.offerPrice)}");
   });
 
-  it("withholds the final price when no single figure is defensible", () => {
-    expect(summaryCard).toContain("hasProductOfferPrice(summary) ? (");
+  it("shows the spread, not an em dash, when branch prices disagree", () => {
+    /*
+     * The second half of the 10612992 report. `APPLIED OFFER · all branches`
+     * above `OFFER PRICE —` looks like a card that failed to load. The dash is
+     * now reserved for the one thing it can honestly mean — asked, no promotion
+     * — and the disagreeing case shows both ends, read off the branch rows the
+     * table below is already drawing.
+     */
+    expect(stockTab).toContain("function OfferPriceFigure({");
+    expect(stockTab).toContain("`${money(spread.min)} – ${money(spread.max)} SAR`");
+    expect(stockTab).toContain("Varies by branch");
+    // The dash survives only for a product with no offer at all.
+    expect(stockTab).toContain(
+      'return <span className="text-xl font-medium text-muted-foreground sm:text-2xl">—</span>;',
+    );
+  });
+
+  it("computes the spread from rows already in memory, never a request", () => {
+    expect(stockTab).toContain("function offerPriceSpread(");
+    expect(stockTab).toContain(
+      "const offerSpread = useMemo(() => offerPriceSpread(offers), [offers]);",
+    );
+    // `offers` is the map the table renders; no new query, no new key.
+    expect(stockTab).toContain("const offersQuery = useProductOffers(selected?.itemCode ?? null);");
   });
 
   it("shows units and available branches, and no other branch total", () => {
@@ -411,10 +457,21 @@ describe("the stock table", () => {
      * left-aligns for the rest is precisely the drift this table was rebuilt to
      * remove.
      */
-    expect(stockTab).toContain("<bdi className=");
+    /*
+     * `dir="ltr"` is the fix and the assertion. `<bdi>` defaults its own `dir`
+     * to `auto` per the HTML standard, so an Arabic-only value resolved the
+     * block to RTL and flushed it against the far edge of a correctly-sized
+     * column — measured at 60.2 px of gap before the text began, against 12 px
+     * (the cell padding) once the direction is stated. The header was pointing
+     * at the right column all along; the content was hugging the wrong side.
+     */
+    expect(stockTab).toContain('<bdi dir="ltr" className="block truncate"');
     expect(table).toContain("<Place value={place.city}");
     expect(table).toContain("<Place value={place.district} />");
     expect(table).not.toMatch(/<td[^>]*dir="auto"/);
+    // Not solved by centring, and not solved by an offset.
+    expect(stockTab).not.toMatch(/<bdi[^>]*text-center/);
+    expect(table).not.toMatch(/-?(ml|mr|pl|pr)-\[\d+px\]/);
   });
 
   it("truncates long names rather than reflowing the row", () => {
@@ -469,8 +526,44 @@ describe("city and district", () => {
   });
 
   it("says what the filter searches without a paragraph of instructions", () => {
-    expect(stockTab).toContain("Branch, city or district — P0221 · جدة · حي الحمراء");
+    expect(stockTab).toContain('placeholder="Filter by branch, city or district…"');
     expect(openedProduct).not.toContain("Filter by branch code, English or Arabic city");
+  });
+
+  it("renders the filter as a visible input, not as static text", () => {
+    /*
+     * It carried `border-transparent … shadow-none` over a tinted strip, which
+     * made a live text field indistinguishable from a caption — there was no
+     * visual cue that anything could be typed. It is a bordered field on the
+     * card's own background now.
+     */
+    // Scoped to the element: the note above it names the old classes to explain
+    // what changed, and a bare substring search would find the explanation.
+    const input = openedProduct.slice(
+      openedProduct.indexOf("<Input"),
+      openedProduct.indexOf("/>", openedProduct.indexOf("<Input")),
+    );
+    expect(input).toContain(
+      'className="h-9 w-full border-input bg-background pl-8 pr-8 text-[13px]"',
+    );
+    expect(input).not.toContain("border-transparent");
+    expect(input).not.toContain("shadow-none");
+    // Search affordance and a way back out of a filter.
+    expect(openedProduct).toContain("<Search");
+    expect(openedProduct).toContain('aria-label="Clear branch filter"');
+    expect(openedProduct).toContain('aria-label="Filter branches by code, city or district"');
+  });
+
+  it("lays the filter row out deliberately, so the field cannot be squeezed away", () => {
+    // Field first and allowed to grow, count last and shrink-proof; stacked
+    // below `sm` so neither has to fight for room.
+    expect(openedProduct).toContain(
+      'className="flex flex-col gap-2 border-b bg-muted/20 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4"',
+    );
+    expect(openedProduct).toContain('className="relative w-full min-w-0 sm:max-w-md sm:flex-1"');
+    expect(openedProduct).toContain(
+      '<p className="shrink-0 text-xs tabular-nums text-muted-foreground">',
+    );
   });
 });
 

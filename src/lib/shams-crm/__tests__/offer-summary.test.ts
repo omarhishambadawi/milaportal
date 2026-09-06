@@ -71,6 +71,81 @@ describe("a promotion at every stocking branch", () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* The reported case: LUXERA SUN BLOCK CREAM GEL 50ML (10612992)               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Both halves of a real production report, pinned as data rather than by code.
+ *
+ * The item was raised as "the summary is broken": Branch Stock showed 50.00% OFF
+ * and 69.00 SAR on the rows, the top card showed no offer price, and that looked
+ * like a failed derivation. The local dataset said otherwise — 135 branches at
+ * 50% (138 -> 69) and **three** at 30% (138 -> 96.60) — so there genuinely is no
+ * single price, and withholding one was correct.
+ *
+ * Both shapes are tested here so the distinction cannot regress in either
+ * direction: the unanimous shape must yield 69, and the real mixed shape must
+ * yield nothing. Neither test names the item code — a fix that special-cased
+ * 10612992 would pass the first and fail the second.
+ */
+describe("the 10612992 shapes", () => {
+  const at = (branch: string, pct: number, display: string, after: number) =>
+    offer(branch, { price: 138, offerPercent: pct, offerDisplay: display, afterOfferPrice: after });
+
+  it("yields 69 when every branch agrees on 50% off 138", () => {
+    const offers = Array.from({ length: 138 }, (_, i) =>
+      at(`P${String(i + 1).padStart(4, "0")}`, 50, "50.00%", 69),
+    );
+
+    const summary = summarise(offers, 138);
+
+    expect(summary.scope).toBe("all");
+    expect(summary.offerDisplay).toBe("50.00%");
+    expect(summary.unitPrice).toBe(138);
+    expect(summary.offerPrice).toBe(69);
+    expect(hasProductOfferPrice(summary)).toBe(true);
+  });
+
+  it("yields no product price for the real mix of 50% and 30%", () => {
+    // 135 at 69.00, 3 at 96.60 — exactly what production holds.
+    const offers = [
+      ...Array.from({ length: 135 }, (_, i) =>
+        at(`P${String(i + 1).padStart(4, "0")}`, 50, "50.00%", 69),
+      ),
+      at("P0023", 30, "30.00%", 96.6),
+      at("P0301", 30, "30.00%", 96.6),
+      at("P0302", 30, "30.00%", 96.6),
+    ];
+
+    const summary = summarise(offers, 138);
+
+    // Coverage is complete — every stocking branch discounts it — and that is
+    // precisely why coverage alone is not enough to name a price.
+    expect(summary.scope).toBe("all");
+    expect(summary.offerDisplay).toBeNull();
+    expect(summary.unitPrice).toBeNull();
+    expect(summary.offerPrice).toBeNull();
+    expect(hasProductOfferPrice(summary)).toBe(false);
+    // It is still an offer, and the badge still earns its place.
+    expect(hasOffer(summary)).toBe(true);
+  });
+
+  it("does not let the 135-branch majority speak for the other three", () => {
+    // The tempting "fix": take the commonest figure, or the first branch's.
+    // 69.00 would be wrong at P0023, P0301 and P0302, where the customer is
+    // charged 96.60 — a 27.60 SAR error read aloud on a call.
+    const offers = [
+      ...Array.from({ length: 135 }, (_, i) =>
+        at(`P${String(i + 1).padStart(4, "0")}`, 50, "50.00%", 69),
+      ),
+      at("P0023", 30, "30.00%", 96.6),
+    ];
+    expect(summarise(offers, 136).offerPrice).not.toBe(69);
+    expect(summarise(offers, 136).offerPrice).toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
 /* The cases where a single price would be a lie                               */
 /* -------------------------------------------------------------------------- */
 

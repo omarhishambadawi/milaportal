@@ -334,6 +334,15 @@ export function StockTab({
     [stock, deferredFilter, branchLabels],
   );
 
+  /**
+   * The spread of per-branch offer prices, from rows already in memory.
+   *
+   * Feeds the summary card's "Offer price" when the branches disagree and there
+   * is therefore no single product-level figure. Never a request: these are the
+   * same offers the table below renders.
+   */
+  const offerSpread = useMemo(() => offerPriceSpread(offers), [offers]);
+
   const summary = useMemo(() => summariseStock(visible), [visible]);
   const totalSummary = useMemo(() => summariseStock(stock), [stock]);
   const filtering = deferredFilter.trim() !== "";
@@ -424,6 +433,7 @@ export function StockTab({
       <ProductSummaryCard
         product={selected}
         summary={cardSummary}
+        offerSpread={offerSpread}
         offerState={offerState}
         units={totalSummary.units}
         availableBranches={totalSummary.withStock}
@@ -453,25 +463,34 @@ export function StockTab({
 
       {stock.length > 0 && (
         <Card className="overflow-hidden">
-          {/* The filter belongs to the table, so it sits inside the same
-              surface rather than floating above it in a card of its own.
-              One row: the input, and the count of what it is hiding. */}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b bg-muted/20 px-3 py-2.5 sm:px-4">
-            <div className="relative min-w-0 flex-1 sm:max-w-sm">
+          {/*
+            The filter belongs to the table, so it sits inside the same surface
+            rather than floating above it in a card of its own.
+
+            It previously carried `border-transparent … shadow-none` over a
+            tinted strip, which made a live text input indistinguishable from a
+            caption — an agent could not tell there was anything to type into.
+            It now looks like what it is: a bordered field on the card's own
+            background, with a focus ring. The layout is explicit rather than
+            emergent — the field takes the row and the count sits at the end,
+            and `min-w-0` keeps the field from being squeezed to nothing by a
+            long count.
+          */}
+          <div className="flex flex-col gap-2 border-b bg-muted/20 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4">
+            <div className="relative w-full min-w-0 sm:max-w-md sm:flex-1">
               <Search
-                className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+                className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
                 aria-hidden="true"
               />
               <Input
                 value={branchFilter}
                 onChange={(e) => setBranchFilter(e.target.value)}
-                // The instruction is the example, and the example is three
-                // words long. A paragraph under the box said the same thing and
-                // cost a line on every screen.
-                placeholder="Branch, city or district — P0221 · جدة · حي الحمراء"
+                // The instruction is the example. A paragraph under the box said
+                // the same thing and cost a line on every screen.
+                placeholder="Filter by branch, city or district…"
                 aria-label="Filter branches by code, city or district"
                 autoComplete="off"
-                className="h-9 border-transparent bg-background pl-8 pr-8 text-[13px] shadow-none focus-visible:border-input"
+                className="h-9 w-full border-input bg-background pl-8 pr-8 text-[13px]"
               />
               {branchFilter && (
                 <button
@@ -485,7 +504,7 @@ export function StockTab({
               )}
             </div>
 
-            <p className="text-xs tabular-nums text-muted-foreground">
+            <p className="shrink-0 text-xs tabular-nums text-muted-foreground">
               {filtering ? (
                 <>
                   <span className="font-medium text-foreground">{summary.branches}</span> of{" "}
@@ -560,11 +579,24 @@ function OfferBadge({
   if (!summary || summary.scope === "none" || summary.scope === "unknown") return null;
 
   const all = summary.scope === "all";
+  /*
+   * No single percentage, because the offering branches quote more than one.
+   *
+   * This is a real state with real products behind it — item 10612992 runs at
+   * 50% in 135 branches and 30% in three — and the badge used to render it as a
+   * bare "OFFER · all branches". Coverage was true and the discount was simply
+   * missing, which reads as a broken badge rather than as the fact it is. It
+   * says "varies by branch" now, and takes the cautious tone even at full
+   * coverage: an agent must not read "all branches" and infer one price.
+   */
+  const varies = summary.offerDisplay === null;
+  const uniform = all && !varies;
+
   return (
     <span
       className={cn(
         "inline-flex items-center gap-1 whitespace-nowrap rounded font-semibold",
-        all ? "bg-success/10 text-success" : "bg-warning/10 text-warning",
+        uniform ? "bg-success/10 text-success" : "bg-warning/10 text-warning",
         size === "md" ? "px-2 py-0.5 text-[13px]" : "px-1.5 py-0.5 text-[11px]",
       )}
       // The counts are the evidence behind the word, for anyone who wants to
@@ -572,10 +604,30 @@ function OfferBadge({
       title={`${summary.branchesWithOffer} of ${summary.branchesAvailable} branches holding this item`}
     >
       <Tag className={size === "md" ? "h-3.5 w-3.5" : "h-3 w-3"} aria-hidden="true" />
-      {summary.offerDisplay ? `${summary.offerDisplay} OFF` : "OFFER"}
-      <span className="font-medium opacity-80">{all ? "· all branches" : "· some branches"}</span>
+      {varies ? "OFFER" : `${summary.offerDisplay} OFF`}
+      <span className="font-medium opacity-80">
+        {varies ? "· varies by branch" : all ? "· all branches" : "· some branches"}
+      </span>
     </span>
   );
+}
+
+/**
+ * The spread of discounted prices across the branches that carry the offer.
+ *
+ * Only ever computed from rows already on screen — the per-branch offers the
+ * table below is drawing — so it costs nothing and cannot disagree with them.
+ * Null when nothing is loaded; a single figure when every branch agrees, which
+ * is the ordinary case and is what `hasProductOfferPrice` is already showing.
+ */
+function offerPriceSpread(offers: Map<string, ShamsCrmOffer>): { min: number; max: number } | null {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const offer of offers.values()) {
+    if (offer.afterOfferPrice < min) min = offer.afterOfferPrice;
+    if (offer.afterOfferPrice > max) max = offer.afterOfferPrice;
+  }
+  return Number.isFinite(min) ? { min, max } : null;
 }
 
 /**
@@ -758,6 +810,7 @@ const ProductResults = memo(function ProductResults({
 function ProductSummaryCard({
   product,
   summary,
+  offerSpread,
   offerState,
   units,
   availableBranches,
@@ -766,6 +819,8 @@ function ProductSummaryCard({
 }: {
   product: ShamsProduct;
   summary: ShamsOfferSummary | null;
+  /** Per-branch offer price spread, for the disagreeing case. Never a request. */
+  offerSpread: { min: number; max: number } | null;
   offerState: OfferState;
   units: number;
   availableBranches: number;
@@ -810,16 +865,7 @@ function ProductSummaryCard({
           </Figure>
 
           <Figure label="Offer price">
-            {/* Only when a single product-level figure is defensible. A
-                branch-specific offer leaves this an em dash and sends the agent
-                to the table, where the per-branch prices are. */}
-            {hasProductOfferPrice(summary) ? (
-              <span className="text-xl font-semibold tabular-nums text-success sm:text-2xl">
-                {fmtSAR(summary.offerPrice)}
-              </span>
-            ) : (
-              <span className="text-xl font-medium text-muted-foreground sm:text-2xl">—</span>
-            )}
+            <OfferPriceFigure summary={summary} spread={offerSpread} state={offerState} />
           </Figure>
 
           <Figure label="Units in stock">
@@ -863,6 +909,77 @@ function Figure({ label, children }: { label: string; children: ReactNode }) {
       </dd>
     </div>
   );
+}
+
+/**
+ * What this product costs on offer — one figure, a range, or nothing.
+ *
+ * The em dash this replaces was the second half of the 10612992 report, and the
+ * complaint was fair: a card reading `APPLIED OFFER  OFFER · all branches` above
+ * `OFFER PRICE  —` looks like a page that failed to load its own data. What was
+ * actually true is that the product has two offers, and the dash said none of
+ * that.
+ *
+ * So the dash is now reserved for the one thing it can honestly mean — the
+ * dataset was asked and this product has no promotion — and the disagreeing
+ * case shows the **spread**, read off the per-branch rows already on screen:
+ *
+ *   69.00 – 96.60 SAR      two offers, and the agent can see both ends
+ *   varies by branch       offers exist but no branch prices are loaded
+ *   69.00 SAR              every offering branch agrees; the ordinary case
+ *   —                      no promotion at all
+ *
+ * A range is not a global price and cannot be mistaken for one: it names two
+ * numbers, which is precisely the claim "there is no single number" made
+ * legible. Nothing here is derived from a percentage, and the branch a customer
+ * walks into still decides which end they pay — which is what the table below
+ * is for.
+ */
+function OfferPriceFigure({
+  summary,
+  spread,
+  state,
+}: {
+  summary: ShamsOfferSummary | null;
+  spread: { min: number; max: number } | null;
+  state: OfferState;
+}) {
+  // One agreed figure. The common case, and the one an agent quotes.
+  if (hasProductOfferPrice(summary)) {
+    return (
+      <span className="text-xl font-semibold tabular-nums text-success sm:text-2xl">
+        {fmtSAR(summary.offerPrice)}
+      </span>
+    );
+  }
+
+  const hasOffer = summary?.scope === "all" || summary?.scope === "some";
+
+  if (hasOffer) {
+    if (state === "loading") {
+      return <span className="h-5 w-16 animate-pulse rounded bg-muted sm:h-6" aria-hidden="true" />;
+    }
+    // Both ends, from the rows the table is drawing. `min === max` would mean
+    // the branches agree after all, which `hasProductOfferPrice` would have
+    // caught — but rendering it as one figure rather than "x – x" costs a line
+    // and cannot be wrong.
+    if (spread) {
+      return (
+        <span
+          className="text-base font-semibold tabular-nums text-warning sm:text-lg"
+          title="Branches quote different offer prices for this product. The table below shows each branch's own price."
+        >
+          {spread.min === spread.max
+            ? fmtSAR(spread.min)
+            : `${money(spread.min)} – ${money(spread.max)} SAR`}
+        </span>
+      );
+    }
+    return <span className="text-base font-medium text-muted-foreground">Varies by branch</span>;
+  }
+
+  // Asked, and there is no promotion. The one thing a dash may mean.
+  return <span className="text-xl font-medium text-muted-foreground sm:text-2xl">—</span>;
 }
 
 /**
@@ -967,16 +1084,30 @@ function branchPrice(offer: ShamsCrmOffer | undefined, listPrice: number): numbe
 /**
  * Arabic that does not drag its cell with it.
  *
- * `<bdi>` isolates the run's direction so `جدة` and `حي الحمراء` render
- * naturally right-to-left **inside** a cell that stays left-aligned under a
- * left-aligned header. `dir="auto"` on the cell itself would flip the whole
- * cell, and a City column that right-aligns for Arabic branches and left-aligns
- * for the rest is precisely the drift this table was rebuilt to remove.
+ * ## `dir="ltr"` is the whole fix, and it is not a hack
+ *
+ * `<bdi>` was already here to isolate the run's direction, and it does that
+ * job. What it also does — and what broke the table — is default its **own**
+ * `dir` to `auto`: the HTML standard specifies `dir=auto` for `bdi`, so an
+ * Arabic-only value resolves the element to `direction: rtl`, and a *block*
+ * box with `direction: rtl` puts `text-align: start` at its **right** edge.
+ *
+ * The column was never wrong. `جدة` was sitting flush against the far side of a
+ * correctly-sized City column while the `CITY` header sat at the near side, and
+ * the gap between them read as a header pointing at the wrong column. Measured
+ * on the real markup: 60.2 px of empty space before the text began, against
+ * 12 px (the cell padding) once the direction is stated.
+ *
+ * So the element's direction is pinned to the table's, while `<bdi>` keeps
+ * isolating: the Arabic characters still shape and order right-to-left as a
+ * run, the block still starts where the header starts, and the ellipsis still
+ * lands at the end a left-to-right reader expects. Nothing is centred, nothing
+ * is nudged, and no offset compensates for anything.
  */
 function Place({ value, title }: { value: string | null; title?: string }) {
   if (!value) return <span className="text-muted-foreground">—</span>;
   return (
-    <bdi className="block truncate" title={title ?? value}>
+    <bdi dir="ltr" className="block truncate" title={title ?? value}>
       {value}
     </bdi>
   );
@@ -1002,8 +1133,10 @@ function OfferPending() {
 function OfferCell({ offer, state }: { offer: ShamsCrmOffer | undefined; state: OfferState }) {
   if (offer) {
     return (
-      <span className="flex items-center justify-end gap-1.5 whitespace-nowrap">
-        <span className="rounded bg-success/10 px-1.5 py-0.5 text-[11px] font-semibold text-success">
+      <span className="flex items-baseline justify-end gap-2 whitespace-nowrap">
+        {/* The discount is context; the price is the answer. The chip is
+            deliberately neutral so it cannot out-shout the figure beside it. */}
+        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-muted-foreground">
           {offer.offerDisplay}
         </span>
         <span
@@ -1048,7 +1181,8 @@ function StockStatus({ quantity }: { quantity: number }) {
 }
 
 /** Header and body cell padding, defined once so the two cannot drift apart. */
-const TH_CELL = "px-3 py-2 text-[11px] font-semibold uppercase tracking-wide first:pl-4 last:pr-4";
+const TH_CELL =
+  "px-3 py-2 text-[11px] font-semibold uppercase tracking-wider whitespace-nowrap first:pl-4 last:pr-4";
 const TD_CELL = "px-3 py-1.5 align-middle first:pl-4 last:pr-4";
 
 /**
@@ -1133,7 +1267,7 @@ const BranchStockTable = memo(function BranchStockTable({
             <col className="w-[19%]" />
           </colgroup>
           <thead>
-            <tr className="border-b bg-muted/30 text-left text-muted-foreground">
+            <tr className="border-b bg-muted/40 text-left text-muted-foreground">
               <th scope="col" className={TH_CELL}>
                 Branch
               </th>
