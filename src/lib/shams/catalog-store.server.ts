@@ -151,8 +151,11 @@ export async function fetchCatalogCandidates(
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
   let request = supabaseAdmin.rpc("shams_search_product_catalog", {
-    p_name_pattern: namePattern,
-    p_code_pattern: codePattern,
+    // Both arguments default to NULL in SQL, so an absent pattern is omitted
+    // rather than sent as null -- the generated types model the defaults as
+    // optional, and the two are equivalent at the database.
+    p_name_pattern: namePattern ?? undefined,
+    p_code_pattern: codePattern ?? undefined,
     p_max_rows: options.maxRows ?? MAX_CATALOG_CANDIDATES,
   });
   if (options.signal) request = request.abortSignal(options.signal);
@@ -365,7 +368,7 @@ export async function replaceCatalog(
       p_batch_id: batchId,
       p_min_rows: minRows,
       p_source_updated_at: (options.sourceUpdatedAt ?? new Date()).toISOString(),
-      p_source_marker: options.sourceMarker ?? null,
+      p_source_marker: options.sourceMarker ?? undefined,
     });
     if (error) {
       console.warn("[shams] catalogue promotion failed:", error.code ?? "unknown");
