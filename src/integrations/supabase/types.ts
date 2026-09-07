@@ -974,6 +974,42 @@ export type Database = {
           },
         ]
       }
+      shams_catalog_state: {
+        Row: {
+          id: number
+          last_attempt_at: string | null
+          last_error: string | null
+          last_outcome: string | null
+          last_success_at: string | null
+          next_refresh_due_at: string | null
+          row_count: number
+          source_marker: string | null
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          last_attempt_at?: string | null
+          last_error?: string | null
+          last_outcome?: string | null
+          last_success_at?: string | null
+          next_refresh_due_at?: string | null
+          row_count?: number
+          source_marker?: string | null
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          last_attempt_at?: string | null
+          last_error?: string | null
+          last_outcome?: string | null
+          last_success_at?: string | null
+          next_refresh_due_at?: string | null
+          row_count?: number
+          source_marker?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       shams_crm_agent_links: {
         Row: {
           active: boolean
@@ -1010,42 +1046,6 @@ export type Database = {
           user_id?: string
           vault_key?: string | null
           verified_at?: string | null
-        }
-        Relationships: []
-      }
-      shams_catalog_state: {
-        Row: {
-          id: number
-          last_attempt_at: string | null
-          last_error: string | null
-          last_outcome: string | null
-          last_success_at: string | null
-          next_refresh_due_at: string | null
-          row_count: number
-          source_marker: string | null
-          updated_at: string
-        }
-        Insert: {
-          id?: number
-          last_attempt_at?: string | null
-          last_error?: string | null
-          last_outcome?: string | null
-          last_success_at?: string | null
-          next_refresh_due_at?: string | null
-          row_count?: number
-          source_marker?: string | null
-          updated_at?: string
-        }
-        Update: {
-          id?: number
-          last_attempt_at?: string | null
-          last_error?: string | null
-          last_outcome?: string | null
-          last_success_at?: string | null
-          next_refresh_due_at?: string | null
-          row_count?: number
-          source_marker?: string | null
-          updated_at?: string
         }
         Relationships: []
       }
@@ -3384,10 +3384,7 @@ export type Database = {
         Returns: string
       }
       shams_offer_sweep_slice: {
-        Args: {
-          p_after?: string | null
-          p_limit?: number
-        }
+        Args: { p_after?: string; p_limit?: number }
         Returns: {
           item_code: string
         }[]
@@ -3395,8 +3392,8 @@ export type Database = {
       shams_promote_offers: {
         Args: {
           p_batch_id: string
-          p_cursor?: string | null
-          p_source_marker?: string | null
+          p_cursor?: string
+          p_source_marker?: string
           p_source_updated_at?: string
           p_started_at?: string
           p_sweep_complete?: boolean
@@ -3407,16 +3404,16 @@ export type Database = {
         Args: {
           p_batch_id: string
           p_min_rows?: number
-          p_source_marker?: string | null
+          p_source_marker?: string
           p_source_updated_at?: string
         }
         Returns: Json
       }
       shams_search_product_catalog: {
         Args: {
-          p_code_pattern?: string | null
+          p_code_pattern?: string
           p_max_rows?: number
-          p_name_pattern?: string | null
+          p_name_pattern?: string
         }
         Returns: {
           item_code: string
