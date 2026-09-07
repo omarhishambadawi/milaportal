@@ -384,7 +384,9 @@ export async function nextSweepItemCodes(
 ): Promise<string[]> {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const { data, error } = await supabaseAdmin.rpc("shams_offer_sweep_slice", {
-    p_after: afterItemCode,
+    // `p_after` defaults to NULL, which is how the first slice asks for the
+    // start of the catalogue; omitting it says the same thing.
+    p_after: afterItemCode ?? undefined,
     p_limit: limit,
   });
   if (error) {
@@ -527,8 +529,8 @@ export async function promoteOfferSlice(
     const { data, error } = await supabaseAdmin.rpc("shams_promote_offers", {
       p_batch_id: batchId,
       p_source_updated_at: (options.sourceUpdatedAt ?? new Date()).toISOString(),
-      p_source_marker: options.sourceMarker ?? null,
-      p_cursor: options.cursor,
+      p_source_marker: options.sourceMarker ?? undefined,
+      p_cursor: options.cursor ?? undefined,
       p_sweep_complete: options.sweepComplete,
       p_started_at: (options.startedAt ?? new Date()).toISOString(),
     });
