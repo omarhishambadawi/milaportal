@@ -643,6 +643,19 @@ references them — so "remove" means `active = false`. Indexes:
 `branches_active_idx`, `branches_city_idx`, and a partial GiST
 `branches_location_gix … WHERE location IS NOT NULL`.
 
+**Duty hours are refreshed by migration, not only by the importer.**
+`20260917120000_branch_duty_hours_refresh.sql` carries operations' September 2026
+"Duty Hours.xlsx" (139 pharmacies, `Phcy` / `Duty Hours` / `Start - End`) as a
+VALUES list joined on `branch_no`, touching `duty_hours` and `working_hours`
+only. The workbook has no Friday column, so `friday_hours` is left alone — which
+is why `P0509` still reads `friday_hours = 'new'`, a placeholder from the day
+that branch was added. Three rows of the workbook are worth remembering: `P0309`
+states 14 duty hours against its own `11 AM - 02 AM`, which spans 15, so it is
+**not** applied until operations say which is right; `P0311` and `P0509` were
+blank and are filled for the first time. `P0312`, `P0313` and the three facility
+rows are absent from the workbook and therefore unchanged. Applying that file is
+a separate act from pushing it — see _Migrations are not applied by pushing_.
+
 ### `branch_imports`
 
 `id`, `imported_by` (`ON DELETE SET NULL`), `imported_at`, `actor_role` (the role
