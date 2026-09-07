@@ -4108,6 +4108,54 @@ migration:
   Worker — so a `pg_cron` job can report HTTP 200 every minute while running code
   that predates the feature being debugged.
 
+#### ⚠️ Never replay `20260820180000_alshrouq_dispatch.sql`
+
+The section above says a missing object may mean an unapplied migration. **It can
+also mean the object was removed on purpose**, and this file is the case where
+guessing wrong is dangerous.
+
+`20260820180000_alshrouq_dispatch.sql` section 1 adds
+`branches.alshrouq_branch_id` with a partial unique index and seeds a 137-row
+Shams-code → AlShrouq-id mapping. Checked against the CRM's own published
+mapping it was **49 correct, 27 pointing at another pharmacy's id** (P0101–P0127,
+shifted by 60 rows), **61 codes the CRM does not have** (P0041–P0100), and 60
+real branches left unmapped. The 27 are the dangerous ones: a valid-looking
+dispatch that sends a real delivery to the wrong shop. About 75 minutes later
+`20260820185447_7fff9f9c-08f8-49dc-85de-4d31135baae8.sql` dropped the column and
+its index deliberately, and that is the state production is in — **there is no
+`branches.alshrouq_branch_id` in the live database, and its absence is correct,
+not a gap to be filled.** Replaying the file re-creates a mapping whose known
+failure mode is misdelivery.
+
+Replaying it costs a second thing. The file ends with
+`DROP POLICY IF EXISTS "Dispatch visible with its order"` followed by a
+`CREATE POLICY` carrying only the bare `EXISTS (… orders …)` test. Production's
+policy of that name was hardened by
+`20260824140000_critical_rls_findings.sql` to
+`is_active(auth.uid()) AND has_permission(auth.uid(),'view_orders') AND EXISTS (…)`,
+so a replay silently strips both checks. Nothing in the run would report an
+error.
+
+Everything else in the file is long since live and has moved past it:
+`alshrouq_dispatches` exists and carries the columns six later migrations added,
+and `payment_type` is the `integer` the same superseding migration cast it to,
+not the `text` this file declares.
+
+**Branch mapping is resolved live, not stored.** `GET
+/integrations/alshrouq/config` publishes `branch_options` — `id`,
+`internal_code`, `covered`, `note` — parsed by
+`src/lib/shams-crm/alshrouq-config.server.ts` and consumed already-resolved by
+`alshrouq-payload.ts`. That is the only source that also carries `covered`, the
+flag marking the branches AlShrouq does not serve, which a frozen column cannot
+express. No application code reads a branch column of that name; every
+`alshrouq_branch_id` reference in `src/` (six, across three files) is the
+`alshrouq_dispatches` column, which is a different thing and does exist.
+
+So: **work on AlShrouq branch mapping starts at the CRM integration and the
+migrations after `20260820185447`, never by replaying `20260820180000`.** If a
+future task hands you "`branches.alshrouq_branch_id` is missing from
+production" as a defect, it is not one.
+
 **Health.** `shamsCatalogHealth` (any `view_shams_mis` holder) reads one row of
 `shams_catalog_state` and contacts Shams not at all, so it still answers during
 the outage it would be consulted about. It reports row count, freshness, last
