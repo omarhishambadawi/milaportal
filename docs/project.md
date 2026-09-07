@@ -647,14 +647,22 @@ references them — so "remove" means `active = false`. Indexes:
 `20260917120000_branch_duty_hours_refresh.sql` carries operations' September 2026
 "Duty Hours.xlsx" (139 pharmacies, `Phcy` / `Duty Hours` / `Start - End`) as a
 VALUES list joined on `branch_no`, touching `duty_hours` and `working_hours`
-only. The workbook has no Friday column, so `friday_hours` is left alone — which
-is why `P0509` still reads `friday_hours = 'new'`, a placeholder from the day
-that branch was added. Three rows of the workbook are worth remembering: `P0309`
-states 14 duty hours against its own `11 AM - 02 AM`, which spans 15, so it is
-**not** applied until operations say which is right; `P0311` and `P0509` were
-blank and are filled for the first time. `P0312`, `P0313` and the three facility
-rows are absent from the workbook and therefore unchanged. Applying that file is
-a separate act from pushing it — see _Migrations are not applied by pushing_.
+only. The workbook has no Friday column, so `friday_hours` is left alone.
+Three rows of the workbook are worth remembering: `P0309` states 14 duty hours
+against its own `11 AM - 02 AM`, which spans 15, so the refresh did **not** apply
+it; `P0311` and `P0509` were blank and are filled for the first time. `P0312`,
+`P0313` and the three facility rows are absent from the workbook and therefore
+unchanged. Applying that file is a separate act from pushing it — see
+_Migrations are not applied by pushing_.
+
+`20260917130000_branch_hours_corrections.sql` closes the two loose ends
+operations came back on. `P0309` keeps **15** duty hours against
+`11 AM - 02 AM` — the figure `parseDutyHours` derives, so the stored number and
+the string it is derived from agree, which is the invariant the whole table now
+holds. `P0509`'s `friday_hours` was the placeholder `'new'` and is now the
+literal `'none'`: the branch does not open on Friday, and the card says so. NULL
+would have meant "nobody has told us", which is the opposite of what is known
+about that row.
 
 ### `branch_imports`
 
