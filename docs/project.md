@@ -891,7 +891,10 @@ Google server key never enters a bundle.
 
 ### MCP tools (`src/lib/mcp/`)
 
-`defineMcp` with `auth.oauth.issuer({ issuer: https://<projectRef>.supabase.co/auth/v1, acceptedAudiences: "authenticated" })`.
+`defineMcp` with `auth.oauth.issuer({ issuer: <host>/auth/v1, acceptedAudiences: "authenticated" })`. `<host>` is
+`https://<projectRef>.supabase.co` when `VITE_SUPABASE_PROJECT_ID` is set (Supabase Cloud — publish can rewrite
+`SUPABASE_URL` to a `.lovable.cloud` proxy, so the project ref stays the source of truth there); otherwise it falls
+back to `VITE_SUPABASE_URL`/`SUPABASE_URL` directly, for self-hosted Supabase.
 Tools: `whoami`, `list_orders`, `get_order`, `list_complaints`,
 `orders_summary`. Each builds a per-request Supabase client with the caller's
 bearer token, so **RLS is the boundary** — the tools grant nothing the user does
@@ -9845,7 +9848,7 @@ Template: `.env.example`. `.env` is git-ignored.
 
 | Variable                                                     | Scope           | Notes                                                                                       |
 | ------------------------------------------------------------ | --------------- | ------------------------------------------------------------------------------------------- |
-| `SUPABASE_PROJECT_ID` / `VITE_SUPABASE_PROJECT_ID`           | server / client | Project ref. The `VITE_` copy is the MCP OAuth issuer.                                      |
+| `SUPABASE_PROJECT_ID` / `VITE_SUPABASE_PROJECT_ID`           | server / client | Project ref. The `VITE_` copy drives the MCP OAuth issuer on Supabase Cloud; unset on self-hosted, where the issuer falls back to `SUPABASE_URL`. |
 | `SUPABASE_URL` / `VITE_SUPABASE_URL`                         | server / client |                                                                                             |
 | `SUPABASE_PUBLISHABLE_KEY` / `VITE_SUPABASE_PUBLISHABLE_KEY` | server / client | Anon key. Browser-safe by design; **RLS is the boundary**.                                  |
 | `SUPABASE_SERVICE_ROLE_KEY`                                  | **server only** | Bypasses RLS. Never `VITE_`-prefixed, never bridged by `hydrateServerEnv`, never committed. |
