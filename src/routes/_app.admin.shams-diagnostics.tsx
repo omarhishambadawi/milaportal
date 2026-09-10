@@ -132,10 +132,23 @@ function ShamsDiagnosticsPage() {
 
         {crm.data && (
           <Table
-            head={["Configured", "Login", "Catalog HTTP", "Products", "Cache reused", "Error"]}
+            head={[
+              "Configured",
+              "Client version",
+              "Compatible",
+              "Login",
+              "Catalog HTTP",
+              "Products",
+              "Cache reused",
+              "Error",
+            ]}
           >
             <tr className="border-t">
               <td className={TD}>{crm.data.configured ? "yes" : "no"}</td>
+              <td className={TD}>{crm.data.clientVersion ?? "—"}</td>
+              <td className={TD}>
+                {crm.data.compatible === null ? "—" : crm.data.compatible ? "yes" : "no"}
+              </td>
               <td className={TD}>{crm.data.login ?? "—"}</td>
               <td className={TD}>{crm.data.catalogStatus ?? "—"}</td>
               <td className={TD}>{crm.data.catalogCount ?? "—"}</td>

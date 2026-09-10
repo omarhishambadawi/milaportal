@@ -9,7 +9,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   _resetCrmSession,
+  crmClientVersion,
   crmFetch,
+  invalidateCrmSession,
   isCrmConfigured,
   ShamsCrmError,
 } from "@/lib/shams-crm/client.server";
@@ -30,6 +32,8 @@ function jsonResponse(body: unknown, status = 200) {
 }
 
 const LOGIN_OK = { session_token: "stub-session", id: 1, role: "manager", branch_code: "P0001" };
+/** The version the client declares. Read from the client so the two cannot drift. */
+const CLIENT_VERSION = crmClientVersion();
 const PRODUCTS = [
   { code: "10400746", name: "NAN 2 OPTIPRO 1800 GM", price: 100 },
   { code: "10400741", name: "NAN OPTIPRO KIDS MILK, 400 G", price: 50 },
@@ -178,6 +182,203 @@ describe("401 recovery", () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* Client version handshake — the CRM gates /login on it and answers 426       */
+/* -------------------------------------------------------------------------- */
+
+describe("client version handshake", () => {
+  const MANIFEST_PATH = "/api/public/desktop-release/manifest";
+  const NEWER = "2027.01.02.030405";
+
+  /** What the CRM says when the declared version is below its floor. */
+  const TOO_OLD = { detail: "This desktop version is no longer supported." };
+
+  /** The body of every login attempt, in order. */
+  function loginBodies(): Record<string, unknown>[] {
+    return fetchMock.mock.calls
+      .filter((c) => new URL(c[0] as string).pathname === "/login")
+      .map((c) => JSON.parse((c[1] as RequestInit).body as string) as Record<string, unknown>);
+  }
+
+  /** A CRM that refuses anything below `NEWER`, and publishes that floor. */
+  function respondBelowFloor() {
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === MANIFEST_PATH) return jsonResponse({ minimum_supported_version: NEWER });
+      if (path === "/login") {
+        const body = JSON.parse(init!.body as string) as { app_version?: string };
+        return body.app_version === NEWER ? jsonResponse(LOGIN_OK) : jsonResponse(TOO_OLD, 426);
+      }
+      return jsonResponse(PRODUCTS);
+    });
+  }
+
+  it("declares a version on login, alongside the credentials", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(LOGIN_OK))
+      .mockResolvedValueOnce(jsonResponse(PRODUCTS));
+
+    await crmFetch("/products/names");
+
+    expect(loginBodies()[0]).toMatchObject({
+      client_name: "milaserv-portal",
+      app_version: CLIENT_VERSION,
+    });
+  });
+
+  /*
+   * The incident this block exists to prevent a repeat of: the CRM raised its
+   * minimum client version, every login came back 426, and the portal reported
+   * it as the credentials being rejected. Two different faults, two different
+   * people to call.
+   */
+  it("a 426 is incompatible_client, never auth_failed", async () => {
+    fetchMock.mockImplementation(async (url: string) =>
+      new URL(url).pathname === MANIFEST_PATH
+        ? jsonResponse({ minimum_supported_version: CLIENT_VERSION })
+        : jsonResponse(TOO_OLD, 426),
+    );
+
+    await expect(crmFetch("/products/names")).rejects.toMatchObject({
+      kind: "incompatible_client",
+      httpStatus: 426,
+    });
+  });
+
+  it("reads the published floor and retries once at that version", async () => {
+    respondBelowFloor();
+
+    await expect(crmFetch<typeof PRODUCTS>("/products/names")).resolves.toHaveLength(2);
+
+    expect(loginBodies().map((b) => b.app_version)).toEqual([CLIENT_VERSION, NEWER]);
+  });
+
+  it("adopts the negotiated version for later logins rather than re-paying the 426", async () => {
+    respondBelowFloor();
+
+    await crmFetch("/products/names");
+    // Only the session is dropped; whatever was negotiated is not.
+    invalidateCrmSession();
+    await crmFetch("/products/names");
+
+    // Three logins, not four: the second round opens at the negotiated version.
+    expect(loginBodies().map((b) => b.app_version)).toEqual([CLIENT_VERSION, NEWER, NEWER]);
+  });
+
+  /*
+   * Getting as far as "invalid credentials" proves the version was accepted —
+   * the two are checked in that order. Adopting it anyway is what stops a
+   * deployment with a stale password from re-paying the 426 and the manifest
+   * read on every single login.
+   */
+  it("adopts a version that reached the credential check, even when that fails", async () => {
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === MANIFEST_PATH) return jsonResponse({ minimum_supported_version: NEWER });
+      if (path === "/login") {
+        const body = JSON.parse(init!.body as string) as { app_version?: string };
+        return body.app_version === NEWER
+          ? jsonResponse({ detail: "Invalid credentials" }, 401)
+          : jsonResponse(TOO_OLD, 426);
+      }
+      return jsonResponse(PRODUCTS);
+    });
+
+    await expect(crmFetch("/products/names")).rejects.toMatchObject({ kind: "auth_failed" });
+    await expect(crmFetch("/products/names")).rejects.toMatchObject({ kind: "auth_failed" });
+
+    // The second call opens at the negotiated version rather than starting over
+    // from the pinned one and collecting another 426.
+    expect(loginBodies().map((b) => b.app_version)).toEqual([CLIENT_VERSION, NEWER, NEWER]);
+  });
+
+  it("does not loop when the retry is refused too", async () => {
+    fetchMock.mockImplementation(async (url: string) =>
+      new URL(url).pathname === MANIFEST_PATH
+        ? jsonResponse({ minimum_supported_version: NEWER })
+        : jsonResponse(TOO_OLD, 426),
+    );
+
+    await expect(crmFetch("/products/names")).rejects.toMatchObject({
+      kind: "incompatible_client",
+    });
+    expect(pathsAsked().filter((p) => p === "/login")).toHaveLength(2);
+  });
+
+  it("still reports the 426 when the manifest cannot be read", async () => {
+    fetchMock.mockImplementation(async (url: string) =>
+      new URL(url).pathname === MANIFEST_PATH ? jsonResponse({}, 503) : jsonResponse(TOO_OLD, 426),
+    );
+
+    await expect(crmFetch("/products/names")).rejects.toMatchObject({
+      kind: "incompatible_client",
+    });
+    // One login only: with no floor to adopt there is nothing to retry with.
+    expect(pathsAsked().filter((p) => p === "/login")).toHaveLength(1);
+  });
+
+  it("refuses a manifest version that is not shaped like one", async () => {
+    fetchMock.mockImplementation(async (url: string) =>
+      new URL(url).pathname === MANIFEST_PATH
+        ? jsonResponse({ minimum_supported_version: "../../etc/passwd" })
+        : jsonResponse(TOO_OLD, 426),
+    );
+
+    await expect(crmFetch("/products/names")).rejects.toMatchObject({
+      kind: "incompatible_client",
+    });
+    expect(loginBodies().map((b) => b.app_version)).toEqual([CLIENT_VERSION]);
+  });
+
+  it("a 426 on a data request is incompatible_client, not http_error", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(LOGIN_OK))
+      .mockResolvedValueOnce(jsonResponse(TOO_OLD, 426));
+
+    await expect(crmFetch("/products/names")).rejects.toMatchObject({
+      kind: "incompatible_client",
+      httpStatus: 426,
+    });
+  });
+
+  /*
+   * A 500 from the login endpoint is the CRM failing, not the password being
+   * wrong. Before this incident every non-2xx was rounded up to `auth_failed`.
+   */
+  it("a failing login endpoint is http_error, not auth_failed", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({}, 500));
+
+    await expect(crmFetch("/products/names")).rejects.toMatchObject({
+      kind: "http_error",
+      httpStatus: 500,
+    });
+  });
+
+  it("a 2xx login without a session token is malformed, not auth_failed", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ id: 1, role: "manager" }));
+
+    await expect(crmFetch("/products/names")).rejects.toMatchObject({ kind: "malformed" });
+  });
+
+  it("the smoke test separates compatibility from authentication", async () => {
+    fetchMock.mockImplementation(async (url: string) =>
+      new URL(url).pathname === MANIFEST_PATH
+        ? jsonResponse({ minimum_supported_version: CLIENT_VERSION })
+        : jsonResponse(TOO_OLD, 426),
+    );
+
+    await expect(runCrmSmokeTest()).resolves.toMatchObject({
+      configured: true,
+      compatible: false,
+      // The whole point: nothing was learned about the credentials, so nothing
+      // is claimed about them.
+      login: null,
+      catalogStatus: 426,
+      errorKind: "incompatible_client",
+    });
+  });
+});
+
+/* -------------------------------------------------------------------------- */
 /* Catalog cache                                                               */
 /* -------------------------------------------------------------------------- */
 
@@ -294,6 +495,8 @@ describe("runCrmSmokeTest", () => {
 
     await expect(runCrmSmokeTest()).resolves.toEqual({
       configured: false,
+      compatible: null,
+      clientVersion: null,
       login: null,
       catalogStatus: null,
       catalogCount: null,
@@ -308,6 +511,8 @@ describe("runCrmSmokeTest", () => {
 
     await expect(runCrmSmokeTest()).resolves.toEqual({
       configured: true,
+      compatible: true,
+      clientVersion: CLIENT_VERSION,
       login: "success",
       catalogStatus: 200,
       catalogCount: 2,

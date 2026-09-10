@@ -3755,10 +3755,10 @@ asserts the trigger path does not exist anywhere in the codebase.
 
 #### The two tables
 
-| table | one row per | holds |
-| --- | --- | --- |
-| `shams_offers` | (item, branch) **with** an offer | price, `offer_percent`, `offer_display`, `after_offer_price` |
-| `shams_offer_products` | item the sweep has **checked** | scope, branch counts, `offer_display`, and a product-level price pair |
+| table                  | one row per                      | holds                                                                 |
+| ---------------------- | -------------------------------- | --------------------------------------------------------------------- |
+| `shams_offers`         | (item, branch) **with** an offer | price, `offer_percent`, `offer_display`, `after_offer_price`          |
+| `shams_offer_products` | item the sweep has **checked**   | scope, branch counts, `offer_display`, and a product-level price pair |
 
 The second is not redundant. It is the only thing that separates **"we asked and
 there is no promotion"** (`scope = 'none'`, with a `checked_at` date on it) from
@@ -3856,7 +3856,7 @@ freeze the prices agents quote.
 ### Branch stock — the summary card and the register
 
 **The card answers the call.** An agent on the phone is asked what it costs,
-whether there is an offer, what it costs *with* the offer, how many there are and
+whether there is an offer, what it costs _with_ the offer, how many there are and
 where. `ProductSummaryCard` states all of it the moment a product opens —
 **price · applied offer · offer price · units in stock · available branches** —
 and none of it costs a third-party request except the stock half:
@@ -3970,14 +3970,50 @@ catalogue described below; this host is contacted only by the background job tha
 fills it. See _The local product catalogue_.
 
 ```
-src/lib/shams-crm/client.server.ts       login + session (X-Session-Token), 401 -> one re-login -> one retry
+src/lib/shams-crm/client.server.ts       login (app_version handshake) + session (X-Session-Token), 401 -> one re-login -> one retry
 src/lib/shams-crm/catalog.server.ts      full-catalog fetch + in-memory cache: 6 h TTL, single-flight, stale-on-failure fallback; fetchCatalogNow is the no-fallback read the refresh uses
 src/lib/shams-crm/catalog-sync.server.ts marker-driven refresh of the local catalogue; never throws, never shrinks it
 src/lib/shams-crm/products.server.ts     the seam: the catalog as the Portal's own ShamsProduct
-src/lib/shams-crm/diagnostics.server.ts  admin-only smoke test (login / catalog / cache reuse)
+src/lib/shams-crm/diagnostics.server.ts  admin-only smoke test (compatibility / login / catalog / cache reuse)
 src/lib/shams-crm/alshrouq-config.server.ts  admin-only AlShrouq connectivity probe (read-only)
 src/lib/shams-crm/types.ts               wire shapes + normalized models
 ```
+
+#### The client version handshake
+
+`POST /login` carries `app_version` alongside the credentials, and the CRM checks
+it **before** it looks at the password. A client below the published floor is
+refused with **HTTP 426** and never reaches authentication.
+
+```
+POST /login  {username, password, client_name, app_version}
+GET  /api/public/desktop-release/manifest -> {minimum_supported_version, ...}   (unauthenticated)
+```
+
+`CLIENT_APP_VERSION` in `client.server.ts` is the version declared, pinned to the
+floor the CRM publishes. `client_name` is unchanged and still says truthfully
+that the caller is the Portal — `app_version` states which wire contract it
+speaks, not what software it is.
+
+A 426 costs one extra round trip and then heals itself: the floor is read from
+the public manifest and the login retried once at that version, which is adopted
+for later logins only if it actually worked. The pinned constant is still tried
+first, so an ordinary login stays a single request. The manifest value is
+shape-checked against a version pattern before being echoed back — it arrives
+from an unauthenticated endpoint.
+
+**426 is classified as `incompatible_client`, never `auth_failed`.** These are
+different faults with different fixes, and conflating them sends someone to
+rotate a credential that was never the problem — which is exactly what happened
+on 2026-09-10, when the CRM raised its floor and every dependent feature reported
+the portal's credentials as rejected. For the same reason `login` only classifies
+401 and 403 as `auth_failed`; any other non-2xx from `/login` is `http_error`,
+and a 2xx without a session token is `malformed`.
+
+The smoke test reports compatibility and authentication as separate columns, so
+"the CRM refused this build" can never again be read as "the password is wrong".
+`verifyAgentAgainstCrm` in `agent-setup.server.ts` posts its own login and
+declares the same version through `crmClientVersion()`.
 
 ### The local product catalogue
 
@@ -4091,7 +4127,7 @@ missing 43 (`shams_sync_runs`, for one) plainly did exist. Lovable applies
 migrations through its own path and the version stamps do not always line up, so
 **the ledger can be wrong in both directions**.
 
-So verify the *objects*, never the ledger, after shipping schema:
+So verify the _objects_, never the ledger, after shipping schema:
 
 ```sql
 SELECT to_regclass('public.shams_product_catalog') AS tbl,
@@ -4107,7 +4143,7 @@ migration:
   `extensions.gin_trgm_ops` then fails to resolve and takes the migration with
   it. Reference the opclass unqualified under a `SET LOCAL search_path`.
 - **Deploying is a separate act from pushing.** `main` can be several commits
-  ahead of what `milaportal.live` serves, and the scheduler pokes the *published*
+  ahead of what `milaportal.live` serves, and the scheduler pokes the _published_
   Worker — so a `pg_cron` job can report HTTP 200 every minute while running code
   that predates the feature being debugged.
 
@@ -7120,7 +7156,7 @@ reshuffle under the agent's cursor.
 
 **The header lines up with its column because it cannot not.** One `<table>`,
 `table-fixed`, and a single `<colgroup>` whose seven `<col>` elements are the
-*only* place any width is stated — no `w-` class on a `th` or a `td`, and no
+_only_ place any width is stated — no `w-` class on a `th` or a `td`, and no
 pixel offset anywhere in the component, because there is nothing left for one to
 correct. A `<th>` and the `<td>`s beneath it are the same table column by
 definition of the element, so no CSS, breakpoint or content length can make them
@@ -7129,7 +7165,7 @@ column is exactly how a header and a body come to disagree about which column is
 which; nothing is hidden now.
 
 **Responsive, deliberately, in two states.** From `md` up it is this table,
-inside a wrapper that *may* scroll horizontally — `min-w` sits below the `md`
+inside a wrapper that _may_ scroll horizontally — `min-w` sits below the `md`
 breakpoint, so at any ordinary width there is nothing to scroll, and a narrow
 window scrolls one bounded region instead of misaligning seven columns. Below
 `md` the table is replaced by a structured card per branch.
@@ -7137,7 +7173,7 @@ window scrolls one bounded region instead of misaligning seven columns. Below
 **Arabic is isolated with `<bdi>`, not `dir="auto"`.** `dir="auto"` on a cell
 flips the whole cell, and a City column that right-aligns for Arabic branches
 and left-aligns for the rest is precisely the drift this table was rebuilt to
-remove. `<bdi>` renders the run right-to-left *inside* a cell that stays aligned
+remove. `<bdi>` renders the run right-to-left _inside_ a cell that stays aligned
 with its header.
 
 **Price and Applied Offer are separate and adjacent.** They are the pair an agent
@@ -7222,6 +7258,7 @@ What that bought, concretely:
   sets of 1, 12, 13, 20, 100 and 200 codes through the object the handler uses.
   The two constants cannot be one — `shams.functions.ts` ships to the browser
   bundle and `offer-store.server.ts` does not — so a test asserts they agree.
+
 - **The click prefetch is gone.** It existed to overlap a CRM request with the
   router navigation; there is no CRM request left to overlap, so the workaround
   was deleted rather than kept. Hover prefetching was never added and a test

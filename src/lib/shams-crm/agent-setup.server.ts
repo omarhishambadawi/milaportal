@@ -49,6 +49,7 @@
  */
 
 import { readAgentWorkbook, normaliseTeam, type AgentWorkbookRow } from "./agent-workbook.server";
+import { crmClientVersion } from "./client.server";
 
 const CRM_BASE = "https://shams-crm.cloud";
 const TIMEOUT_MS = 30_000;
@@ -64,6 +65,12 @@ export type AgentSetupFailure =
   | "not_configured"
   /** The CRM refused the credential. */
   | "auth_failed"
+  /**
+   * The CRM refused this client as out of date (HTTP 426) and never reached the
+   * credential. Nothing was proved about the row either way, so it is not
+   * reported as a bad password.
+   */
+  | "incompatible_client"
   /** `/me` returned a different username than the workbook claims. */
   | "username_mismatch"
   | "inactive"
@@ -165,9 +172,17 @@ export async function verifyAgentAgainstCrm(
     const res = await fetch(`${CRM_BASE}/login`, {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({ username, password, client_name: "milaserv-portal-setup" }),
+      body: JSON.stringify({
+        username,
+        password,
+        client_name: "milaserv-portal-setup",
+        // The CRM gates /login on this before it looks at the credential; see
+        // the version handshake note in client.server.ts.
+        app_version: crmClientVersion(),
+      }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
+    if (res.status === 426) return { ok: false, reason: "incompatible_client" };
     if (res.status === 401 || res.status === 403 || res.status === 422) {
       return { ok: false, reason: "auth_failed" };
     }

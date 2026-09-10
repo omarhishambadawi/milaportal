@@ -3,12 +3,19 @@
  *
  * Phase 1 built the client; its credentials live only in the deployed runtime,
  * so the only place it can be exercised is inside that runtime. This answers
- * four questions and returns nothing else:
+ * five questions and returns nothing else:
  *
  *   1. is the CRM configured here?
- *   2. does the login flow authenticate?
- *   3. does `GET /products/names` return the catalog, and how many rows?
- *   4. does a second `getCatalog()` reuse the cache?
+ *   2. does this client still speak the CRM's protocol?
+ *   3. does the login flow authenticate?
+ *   4. does `GET /products/names` return the catalog, and how many rows?
+ *   5. does a second `getCatalog()` reuse the cache?
+ *
+ * Two and three are separate answers because the CRM answers them separately:
+ * it gates `/login` on the declared client version and refuses an out-of-date
+ * client with 426 *before* reading the credential. Folding that into `login:
+ * "failed"` is what once had this page reporting a protocol break as a
+ * rejected password.
  *
  * Cache reuse is decided by the catalog's successful-fetch count, not by
  * reference equality alone. `getCatalog()` serves the previous catalog when a
@@ -20,10 +27,18 @@
  */
 
 import { catalogStatus, getCatalog, refreshCatalog } from "./catalog.server";
-import { isCrmConfigured, ShamsCrmError } from "./client.server";
+import { crmClientVersion, isCrmConfigured, ShamsCrmError } from "./client.server";
 
 export interface CrmSmokeResult {
   configured: boolean;
+  /**
+   * Whether the CRM accepted this client's declared version. `false` means a
+   * 426 — nothing was asked about the credential. `null` means the CRM was not
+   * reached at all, so nothing was learned either way.
+   */
+  compatible: boolean | null;
+  /** The version this deployment declares at login. Not a secret. */
+  clientVersion: string | null;
   login: "success" | "failed" | null;
   catalogStatus: number | null;
   catalogCount: number | null;
@@ -48,6 +63,8 @@ export async function runCrmSmokeTest(): Promise<CrmSmokeResult> {
   if (!isCrmConfigured()) {
     return {
       configured: false,
+      compatible: null,
+      clientVersion: null,
       login: null,
       catalogStatus: null,
       catalogCount: null,
@@ -70,6 +87,9 @@ export async function runCrmSmokeTest(): Promise<CrmSmokeResult> {
     if (afterFirst === before) {
       return {
         configured: true,
+        // The request that would have settled this is the one that failed.
+        compatible: null,
+        clientVersion: crmClientVersion(),
         // Nothing was proved about the credentials either way: the request that
         // would have exercised them is the one that failed.
         login: null,
@@ -87,6 +107,10 @@ export async function runCrmSmokeTest(): Promise<CrmSmokeResult> {
 
     return {
       configured: true,
+      // A catalog came back over an authenticated session, so the version gate
+      // was passed on the way in.
+      compatible: true,
+      clientVersion: crmClientVersion(),
       login: "success",
       // Inferred, not observed, and only claimed once a fetch is confirmed:
       // `crmFetch` throws on any non-2xx, so fresh rows imply a 2xx.
@@ -100,7 +124,21 @@ export async function runCrmSmokeTest(): Promise<CrmSmokeResult> {
     const kind = err instanceof ShamsCrmError ? err.kind : "unknown";
     return {
       configured: true,
-      // Only an auth failure is a *login* failure; a 500 on the catalog is not.
+      /*
+       * `false` only for the one kind that says so. `null` where the CRM was
+       * never reached — a timeout proves nothing about compatibility — and
+       * `true` for the rest, because a CRM that got as far as refusing the
+       * credential or erroring on the catalog had already accepted the client.
+       */
+      compatible:
+        kind === "incompatible_client"
+          ? false
+          : kind === "timeout" || kind === "unavailable" || kind === "unknown"
+            ? null
+            : true,
+      clientVersion: crmClientVersion(),
+      // Only an auth failure is a *login* failure; a 500 on the catalog is not,
+      // and neither is a 426 — that one never reached the credential.
       login: kind === "auth_failed" ? "failed" : null,
       catalogStatus: err instanceof ShamsCrmError ? err.httpStatus : null,
       catalogCount: null,
