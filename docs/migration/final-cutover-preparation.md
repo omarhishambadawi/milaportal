@@ -31,6 +31,26 @@ ordinary schema change, and is tracked as its own line item below (§1, item 1b)
 modification, which this phase's hard safety rules forbid regardless of how low-risk the
 change is.
 
+**Second finding, from a dedicated read-only capability investigation (no cutover action
+taken)**: this session's already-authenticated Lovable MCP connector
+(`mcp__claude_ai_Lovable__*`) was confirmed — via a minimal read-only aggregate query, not
+a data export — to be a live, working, authenticated connection to the actual MilaPortal
+Lovable Cloud project (project id `ee0d9841-3e00-4fc2-b9e5-873ee8568720`, Supabase-stack
+database enabled, project ref `gwnxlpophyvgafctrbkx` matching `supabase/config.toml`) —
+not self-hosted, and not a stale or unrelated project. Through this connector: (a)
+`auth.users` is directly queryable, giving `id`/`email`/metadata for the real Cloud Auth
+roster without ever selecting `encrypted_password`; (b) arbitrary `SELECT` can be run
+against every Cloud table needed for the final production dataset. This resolves §1 items
+7 and 12 below (and their corresponding rows in §6) **without requiring any new
+credential from the business owner**. The same connector also supports
+`INSERT`/`UPDATE`/`DELETE`/`DDL` — it is not a scoped read-only credential — so its use
+during preparation is restricted to `SELECT` only, per the safety statement immediately
+below.
+
+> Until explicit cutover authorization is given, all Lovable Cloud access used for
+> preparation must remain read-only/SELECT-only. No freeze, export execution, INSERT,
+> UPDATE, DELETE, DDL, credential changes, or other production mutation is permitted.
+
 ---
 
 ## 1. Reconciliation — final prerequisite status (baseline: Phase 50)
@@ -44,12 +64,12 @@ change is.
 | 4 | Security ACLs / RLS (6 functions, 4 email tables) | **CLOSED** | Unchanged since Phase 48; one non-blocking low-severity note (unpinned `search_path` on 4 fully-qualified email-queue functions) carried forward, not a gate item |
 | 5 | Self-hosted schema recapture | **CLOSED** | Performed in Phase 50 (`prod_schema_phase50.sql`); a further recapture immediately before the real export remains standard cutover-day hygiene, not an outstanding gap |
 | 6 | Phase 44 scratch rehearsal container | **CLOSED** | Destroyed in Phase 50, confirmed absent this session, production containers unaffected |
-| 7 | Auth roster pull | **REQUIRES OPERATOR INPUT** | Needs Cloud `service_role` GoTrue Admin API access — not available in this environment |
+| 7 | Auth roster pull | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the already-authenticated Lovable MCP connector's direct query access to Cloud `auth.users` (`id`/`email`/metadata only, never `encrypted_password`) — no Cloud `service_role` GoTrue Admin API key or other new credential required |
 | 8 | `avatars` storage bucket | **REQUIRES OPERATOR INPUT** (RLS is READY) | 4 RLS policies pre-attached to `storage.objects`; bucket itself not created — size/MIME limits still undecided (no existing Cloud value to mirror) |
 | 9 | Real SMTP credentials | **REQUIRES OPERATOR INPUT** | `GOTRUE_SMTP_*` names present on `supabase-auth`; `GOTRUE_SMTP_USER` still reads as a placeholder pattern |
 | 10 | Application env vars (`SITE_URL`, `VITE_SITE_URL`, `LOVABLE_API_KEY`, `LOVABLE_SEND_URL`) | **REQUIRES OPERATOR INPUT** | Load-bearing, absent from `.env.example`, live app runs on Vercel (not inspectable here) |
 | 11 | Shams credentials (`SHAMS_CRM_*`, `SHAMS_MIS_*`) | **REQUIRES OPERATOR INPUT** | No `SHAMS_*` name found in any inspectable container this session |
-| 12 | libpq client tooling + Cloud Postgres export credentials | **REQUIRES OPERATOR INPUT** | Host has neither `psql` nor `pg_dump` installed; no Cloud connection string available here |
+| 12 | Cloud production export path | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the same Lovable MCP connector's `query_database` capability against the live Cloud project — a literal `psql`/`pg_dump` binary is not required for this path; export *execution* is still a cutover-day action (item 18) and remains SELECT-only until Gate B |
 | 13 | 5 optional branches decision | **CLOSED** | Business confirmed: migrate all 5 (`P0312`, `P0313`, General Administration, Branch Administration, Warehouse) |
 | 14 | `orders_verification_snapshot_20260815` exclusion sign-off | **CLOSED** | Business confirmed: exclude |
 | 15 | Maintenance window | **REQUIRES OPERATOR INPUT (business)** | Business confirmed "after 12:30 AM" as a constraint only — exact date/time still not chosen; this phase does not choose it |
@@ -60,9 +80,15 @@ change is.
 
 **Net change from Phase 50**: business decisions 13, 14, and 16 move from OPEN to
 CLOSED. The maintenance window (15) is partially constrained ("after 12:30 AM") but not
-closed — the exact date/time is still required from the business before Gate A. All 6
-operator-credential items (7–12) are unchanged and still open; none of them require
-further investigation, only operator execution.
+closed — the exact date/time is still required from the business before Gate A.
+
+**Net change this phase**: items 7 (Auth roster pull) and 12 (Cloud production export
+path) move from REQUIRES OPERATOR INPUT to READY FOR CUTOVER — both are resolved via the
+already-authenticated Lovable MCP connector verified this phase (see the note at the top
+of this document), with **no new credential required from the business owner**. 4
+operator-credential items remain open (8–11: `avatars` bucket decision, real SMTP,
+Vercel app env vars, Shams CRM/MIS credentials); none of them require further
+investigation, only operator execution.
 
 ---
 
@@ -103,9 +129,14 @@ revocation, or provider-level pause — not decided in this document).
 `cdr_records`, `alshrouq_dispatches`).
 
 ### 3. Final production snapshot/export
-3.1. Using the provisioned libpq/export credentials (§6), take the authoritative final
-export of Cloud via direct `libpq` connection (per `phase45_export_runbook.md`'s
-methodology), covering every table classified CLOUD→REPLACE, MERGE/RECONCILE, or HYBRID.
+3.1. Using the already-authenticated Lovable MCP connector's `query_database` capability
+against the live Cloud project (verified this phase; a literal `libpq`/`pg_dump` binary
+is not required for this path), extract the authoritative final dataset for every table
+classified CLOUD→REPLACE, MERGE/RECONCILE, or HYBRID via `SELECT`-only queries, following
+`phase45_export_runbook.md`'s table-by-table methodology. This step is a cutover-day
+action gated behind Gate B (§8) — it is not performed by this preparation phase, and the
+connector must be used SELECT-only throughout per the safety statement at the top of this
+document (it also supports writes, which must never be issued against Cloud here).
 3.2. Record final row counts for every exported table and compare against every prior
 phase's reconciliation assumption; reconcile any drift found before proceeding.
 3.3. This export explicitly **includes** all 7 previously-partitioned branch rows:
@@ -115,11 +146,15 @@ phase's reconciliation assumption; reconcile any drift found before proceeding.
 confirmed business decision.
 
 ### 4. Cloud Auth roster acquisition
-4.1. Using Cloud `service_role` access (§6), call the GoTrue Admin API list operation
-(`GET /admin/users`) to acquire the complete, current Cloud Auth roster.
+4.1. Using the already-authenticated Lovable MCP connector's direct query access to the
+live Cloud project (verified this phase), `SELECT id`, `email`, and required metadata
+columns from `auth.users` to acquire the complete, current Cloud Auth roster. A separate
+Cloud `service_role` GoTrue Admin API credential is not required for this path.
 4.2. Record each user's `id` (UUID), `email`, and metadata needed for `profiles`/
-`user_roles` reconciliation. **Do not** capture or transport password hashes — the
-confirmed strategy is password-reset-only (§5).
+`user_roles` reconciliation. **Never select `encrypted_password`, MFA factor secrets, or
+any other credential-internal column** — the confirmed strategy is password-reset-only
+(§5); the connector's own privilege is broader than this step needs, so this restriction
+is procedural, not tool-enforced, and must be followed deliberately.
 
 ### 5. UUID-preserving Auth import (password-reset-only strategy)
 5.1. For each Cloud Auth user, call self-hosted GoTrue's `admin.createUser` with the
@@ -384,13 +419,18 @@ this section is implemented or tested against production in this phase.
 ## 6. Credentials and secrets checklist
 
 No secret value appears anywhere below — this is a checklist of what must be supplied,
-by whom, and where. All items are unchanged from Phase 50's findings; re-confirmed live
-this session (name-only presence checks).
+by whom, and where. All rows are unchanged from Phase 50's findings and re-confirmed live
+this session (name-only presence checks), **except the two rows marked superseded**,
+which were resolved this phase via the already-authenticated Lovable MCP connector (see
+the note at the top of this document). The connector's own authentication is pre-existing
+and was neither created, modified, nor reset in this phase — only its capability was
+verified, using a minimal, non-sensitive aggregate-count query (no rows dumped, no
+secrets read).
 
 | Credential/config | Required for | Where it must be supplied | Current status |
 |---|---|---|---|
-| Cloud Auth `service_role` key | Auth roster pull (GoTrue Admin API `GET /admin/users`) | Whatever tooling/environment performs the roster pull | **Not available in this environment — operator must supply** |
-| Cloud Postgres direct connection credentials (libpq) | Final production export | Export host/tooling performing the `libpq` dump | **Not available — operator must supply**; host also lacks `psql`/`pg_dump` client tooling entirely (confirmed this session) |
+| Cloud Auth `service_role` key | Auth roster pull | — | **Superseded.** No longer required: the already-authenticated Lovable MCP connector (verified this phase) provides equivalent capability via direct `SELECT` on Cloud `auth.users`; no new credential needed from the business owner. |
+| Cloud Postgres direct connection credentials (libpq) | Final production export | — | **Superseded.** No longer required: the already-authenticated Lovable MCP connector (verified this phase) can `SELECT` every table needed for the export directly against the live Cloud project; a literal `psql`/`pg_dump` binary is not required for this path. The connector is also capable of writes, so export *execution* remains a SELECT-only, Gate-B-gated cutover-day action, not performed by this preparation phase. |
 | Self-hosted `GOTRUE_SMTP_HOST/PORT/USER/PASS/SENDER_NAME/ADMIN_EMAIL` | Real password-reset email delivery | `supabase-auth` container environment (self-hosted) | Variable names present; values still read as placeholder — **operator must replace with real production SMTP credentials** |
 | `SITE_URL`, `VITE_SITE_URL` | Password-reset redirect URL correctness | Vercel project environment variables | **Missing from `.env.example`; must come from institutional knowledge — operator must supply** |
 | `LOVABLE_API_KEY`, `LOVABLE_SEND_URL` | Email queue/webhook routes | Vercel project environment variables | **Missing from `.env.example`; must come from institutional knowledge — operator must supply** |
@@ -469,8 +509,11 @@ runbook step 15.
 - The business must supply the exact cutover date/time, honoring the confirmed
   constraint of "after 12:30 AM." **This document does not choose that date/time.**
 
-Gate A has **not** been passed yet — 6 operator-credential items (§1, rows 7–12) remain
-open, and the exact date/time has not been provided.
+Gate A has **not** been passed yet — 4 operator-credential items (§1, rows 8–11:
+`avatars` bucket decision, real SMTP, Vercel app env vars, Shams CRM/MIS credentials)
+remain open, and the exact date/time has not been provided. Items 7 and 12 (Auth roster
+pull, Cloud production export path) closed this phase via the already-authenticated
+Lovable MCP connector — no new credential required.
 
 ### Gate B — Immediately before executing cutover
 Once Gate A is passed and a specific date/time is scheduled, execution may not begin
@@ -488,18 +531,23 @@ untouched.
 **READY WITH CONDITIONS.**
 
 ### Remaining operator inputs
-1. Cloud Auth `service_role` access for the roster pull.
-2. Real production SMTP credentials for self-hosted `supabase-auth`.
-3. `SITE_URL`/`VITE_SITE_URL`/`LOVABLE_API_KEY`/`LOVABLE_SEND_URL` on the Vercel
+1. Real production SMTP credentials for self-hosted `supabase-auth`.
+2. `SITE_URL`/`VITE_SITE_URL`/`LOVABLE_API_KEY`/`LOVABLE_SEND_URL` on the Vercel
    deployment.
-4. Shams CRM/MIS credentials for the sync runtime.
-5. libpq client tooling plus Cloud Postgres export credentials for the final export.
-6. `avatars` bucket size/MIME-limit decision (operator or business), then bucket
+3. Shams CRM/MIS credentials for the sync runtime.
+4. `avatars` bucket size/MIME-limit decision (operator or business), then bucket
    creation.
 
+Resolved this phase, no longer remaining: Cloud Auth roster access and the Cloud
+production export path (previously listed here) — both are obtainable via the
+already-authenticated Lovable MCP connector verified this phase, with no new credential
+required from the business owner. See the note at the top of this document and §6.
+
 ### Remaining credentials/access
-Identical to the 6 items above (§6 gives the exact variable names and destinations for
-each) — no credential has been supplied, read, or invented in this phase.
+Identical to the 4 items above (§6 gives the exact variable names and destinations for
+each) — no credential has been supplied, read, or invented in this phase. Two
+previously-listed credential requirements (Cloud Auth `service_role` key, Cloud Postgres
+libpq credentials) are superseded — see §6.
 
 ### Remaining business confirmations
 1. Exact cutover date/time (constraint already given: after 12:30 AM; specific date/time
@@ -509,8 +557,11 @@ No other business decision remains open — optional branches, verification-snap
 exclusion, and credential strategy are all CLOSED as of this phase.
 
 ### Exact next action
-Operator closes items 1–6 above (in parallel, independent of each other and of the date/
+Operator closes items 1–4 above (in parallel, independent of each other and of the date/
 time decision). Once closed, and once the business supplies the exact cutover date/time,
 Gate A is passed. At the start of the scheduled window, the user must issue an explicit
 `GO`/`NO-GO` at Gate B before any execution phase (a future "Phase 51 — Cutover
-Execution") may begin runbook step 2 onward.
+Execution") may begin runbook step 2 onward. Cloud production export and Auth roster
+acquisition (runbook steps 3–4) will use the already-authenticated Lovable MCP connector
+SELECT-only, per the safety statement at the top of this document, and remain gated
+behind Gate B like every other cutover action.
