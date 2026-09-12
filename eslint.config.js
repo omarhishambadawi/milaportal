@@ -12,7 +12,6 @@ export default tseslint.config(
       ".output",
       ".vinxi",
       ".nitro",
-      ".vercel",
       ".wrangler",
 
       // Generated sources. Each is rewritten verbatim by its generator, so a

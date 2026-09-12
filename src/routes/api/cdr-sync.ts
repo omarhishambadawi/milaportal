@@ -5,7 +5,7 @@ import { createClient } from "@supabase/supabase-js";
  * Background CDR synchronization trigger.
  *
  * This is the "background" in the synchronization layer: a scheduler (a
- * Cloudflare cron trigger, a Vercel cron entry, or any external timer) POSTs
+ * Cloudflare cron trigger or any external timer) POSTs
  * here on an interval and the layer advances one bounded run. The work itself
  * lives in `cdr-sync.server`; this route is only authorization plus a result.
  *

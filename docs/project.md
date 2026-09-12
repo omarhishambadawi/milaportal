@@ -136,7 +136,7 @@ Nitro server entry  (src/server.ts)
 │   ├── config.toml              CLI project ref
 │   ├── migrations/              91 SQL migrations
 │   └── verify/security_verification.sql
-├── eslint.config.js  vite.config.ts  vitest.config.ts  vercel.json
+├── eslint.config.js  vite.config.ts  vitest.config.ts
 └── AGENTS.md                    Lovable-managed block (do not rewrite history)
 ```
 
@@ -10210,8 +10210,8 @@ a password bought nothing and stored a credential for no reason.
 `.env` is git-ignored and never ships, so a value present locally does not reach
 production — the deployed portal reports "Shams MIS is not configured for this
 deployment" until the variable exists in the hosting environment itself
-(Lovable's project environment settings for the Cloudflare Worker; project
-environment variables on Vercel). Set it as a plain **unprefixed** server
+(Lovable's project environment settings for the Cloudflare Worker). Set it as a
+plain **unprefixed** server
 variable — a `VITE_` copy would be inlined into the public bundle — then
 redeploy so the Worker picks it up.
 
@@ -10228,10 +10228,6 @@ what populates `process.env` from the Worker's own variables. So an absent Shams
 value is a missing setting, never a broken bridge — `hydrateServerEnv` does not
 need to carry it.
 
-### Build
-
-`NITRO_PRESET` — set to `vercel` by `vercel.json`'s build command.
-
 ---
 
 ## Deployment
@@ -10245,14 +10241,6 @@ bindings, delegates to the TanStack Start server entry, normalizes
 h3-swallowed 500s, and applies security headers to **every** response — SSR
 documents, `/api` routes, server functions and MCP endpoints alike, which a
 host-level `_headers` file would not reach.
-
-### Secondary target — Vercel
-
-`vercel.json` sets `buildCommand: "NITRO_PRESET=vercel npm run build"`, which
-makes Vite write `.vercel/output/{config.json,functions,static}` (Build Output
-API). Install command and output directory are deliberately unset: the repo
-commits `bun.lock`, so Vercel's auto-detection installs with Bun correctly. The
-file is inert outside Vercel.
 
 ### CI (`.github/workflows/ci.yml`)
 
