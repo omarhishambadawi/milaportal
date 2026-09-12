@@ -65,10 +65,10 @@ below.
 | 5 | Self-hosted schema recapture | **CLOSED** | Performed in Phase 50 (`prod_schema_phase50.sql`); a further recapture immediately before the real export remains standard cutover-day hygiene, not an outstanding gap |
 | 6 | Phase 44 scratch rehearsal container | **CLOSED** | Destroyed in Phase 50, confirmed absent this session, production containers unaffected |
 | 7 | Auth roster pull | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the already-authenticated Lovable MCP connector's direct query access to Cloud `auth.users` (`id`/`email`/metadata only, never `encrypted_password`) — no Cloud `service_role` GoTrue Admin API key or other new credential required |
-| 8 | `avatars` storage bucket | **REQUIRES OPERATOR INPUT** (RLS is READY) | 4 RLS policies pre-attached to `storage.objects`; bucket itself not created — size/MIME limits still undecided (no existing Cloud value to mirror) |
-| 9 | Real SMTP credentials | **REQUIRES OPERATOR INPUT** | `GOTRUE_SMTP_*` names present on `supabase-auth`; `GOTRUE_SMTP_USER` still reads as a placeholder pattern |
-| 10 | Application env vars (`SITE_URL`, `VITE_SITE_URL`, `LOVABLE_API_KEY`, `LOVABLE_SEND_URL`) | **REQUIRES OPERATOR INPUT** | Load-bearing, absent from `.env.example`, live app runs on Vercel (not inspectable here) |
-| 11 | Shams credentials (`SHAMS_CRM_*`, `SHAMS_MIS_*`) | **REQUIRES OPERATOR INPUT** | No `SHAMS_*` name found in any inspectable container this session |
+| 8 | `avatars` storage bucket | **REQUIRES OPERATOR INPUT** (RLS is READY, settings fully determined) | No longer an open decision: name (`avatars`), private, `file_size_limit = 4194304` (4 MB), and `allowed_mime_types = {image/png,image/jpeg,image/webp,image/gif}` are all fixed by already-applied migration `20260721002100_avatars_bucket_limits.sql` and `src/lib/avatar.ts` — not "no existing Cloud value to mirror" as previously stated. That migration is an `UPDATE ... WHERE id='avatars'`, applied while the bucket didn't exist, so it was a no-op; creation must set these values explicitly, not rely on the migration re-firing. Exact statement attempted this phase and blocked by this session's own permission classifier ("Modify Shared Resources") — only remaining step is running it, with the operator's explicit go-ahead (see §2 step 9.1) |
+| 9 | Real SMTP credentials | **REQUIRES OPERATOR INPUT** | `GOTRUE_SMTP_*` names present on `supabase-auth`; `GOTRUE_SMTP_ADMIN_EMAIL` reconfirmed this phase as a placeholder-pattern value; the other 5 vars (`HOST`/`PORT`/`USER`/`PASS`/`SENDER_NAME`) hold non-empty values whose authenticity as real production credentials cannot be verified without printing them, which this phase did not do — the only reliable proof remains the real SMTP delivery test already gated to runbook step 12 |
+| 10 | Application env vars (`SITE_URL`, `VITE_SITE_URL`, `LOVABLE_API_KEY`, `LOVABLE_SEND_URL`) | **REQUIRES OPERATOR INPUT** | Load-bearing, absent from `.env.example`, live app runs on Vercel; this phase's Vercel MCP connector is installed but **not yet authenticated** (OAuth not completed) — presence cannot be verified from here until that authorization happens |
+| 11 | Shams credentials (`SHAMS_CRM_*`, `SHAMS_MIS_*`) | **REQUIRES OPERATOR INPUT** | No `SHAMS_*` name found in any inspectable container this session; consumed only by the Vercel app's server-only code (`src/lib/shams-crm/client.server.ts`, `src/lib/shams/client.server.ts`), not by any self-hosted container. **New this phase**: self-hosted's `shams_sync_tick()` cron function additionally requires two Vault secrets, `shams_sync_scheduler_url` and `email_queue_service_role_key`, to reach the Vercel-side scheduler — both confirmed **absent** (no row in `vault.decrypted_secrets`) — a separate self-hosted wiring step from the CRM/MIS credentials themselves, not resolvable until the Vercel deployment's scheduler endpoint exists |
 | 12 | Cloud production export path | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the same Lovable MCP connector's `query_database` capability against the live Cloud project — a literal `psql`/`pg_dump` binary is not required for this path; export *execution* is still a cutover-day action (item 18) and remains SELECT-only until Gate B |
 | 13 | 5 optional branches decision | **CLOSED** | Business confirmed: migrate all 5 (`P0312`, `P0313`, General Administration, Branch Administration, Warehouse) |
 | 14 | `orders_verification_snapshot_20260815` exclusion sign-off | **CLOSED** | Business confirmed: exclude |
@@ -82,13 +82,20 @@ below.
 CLOSED. The maintenance window (15) is partially constrained ("after 12:30 AM") but not
 closed — the exact date/time is still required from the business before Gate A.
 
-**Net change this phase**: items 7 (Auth roster pull) and 12 (Cloud production export
-path) move from REQUIRES OPERATOR INPUT to READY FOR CUTOVER — both are resolved via the
-already-authenticated Lovable MCP connector verified this phase (see the note at the top
-of this document), with **no new credential required from the business owner**. 4
-operator-credential items remain open (8–11: `avatars` bucket decision, real SMTP,
-Vercel app env vars, Shams CRM/MIS credentials); none of them require further
-investigation, only operator execution.
+**Net change in that phase**: items 7 (Auth roster pull) and 12 (Cloud production export
+path) moved from REQUIRES OPERATOR INPUT to READY FOR CUTOVER — both resolved via the
+already-authenticated Lovable MCP connector, with **no new credential required from the
+business owner**.
+
+**Net change in this prerequisite-closure phase**: item 8's decision (`avatars` bucket
+name/private/MIME/size limits) is now fully determined from existing code and migration
+— it was never actually a business/operator decision, only an investigation gap. Bucket
+*creation* remains open, blocked this phase by the session's own permission classifier
+(see item 8's note and §2 step 9.1) — the operator can run the one exact statement given
+there, or grant approval for it to be run in-session. Items 9–11 (real SMTP, Vercel app
+env vars, Shams CRM/MIS credentials) remain open and genuinely require operator/business
+action; none of the 4 remaining items (8–11) require further investigation beyond what is
+already documented.
 
 ---
 
@@ -225,8 +232,17 @@ Phase 48, growing) only as a sanity check, not an exact-match requirement (Cloud
 continues to grow independently).
 
 ### 9. Storage bucket/object handling
-9.1. Create the self-hosted `avatars` bucket (exact name `avatars`) once the
-size/MIME-limit decision is made (§1, item 8) — the 4 RLS policies
+9.1. Create the self-hosted `avatars` bucket. The decision is no longer open (§1, item
+8) — the exact statement, fully determined from existing code/migration, is:
+```sql
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES ('avatars', 'avatars', false, 4194304,
+        ARRAY['image/png','image/jpeg','image/webp','image/gif'])
+ON CONFLICT (id) DO NOTHING;
+```
+Attempted this phase and blocked by this session's own permission classifier ("Modify
+Shared Resources") as a self-hosted write — requires the operator to run it directly, or
+to grant explicit approval for it to be run in-session. The 4 RLS policies
 (`avatars_owner_insert/read/update/delete`) are already attached and require no changes.
 9.2. Migrate any required existing avatar objects from Cloud storage to the new bucket,
 preserving object paths/ownership so the pre-attached RLS policies resolve correctly.
@@ -509,10 +525,11 @@ runbook step 15.
 - The business must supply the exact cutover date/time, honoring the confirmed
   constraint of "after 12:30 AM." **This document does not choose that date/time.**
 
-Gate A has **not** been passed yet — 4 operator-credential items (§1, rows 8–11:
-`avatars` bucket decision, real SMTP, Vercel app env vars, Shams CRM/MIS credentials)
-remain open, and the exact date/time has not been provided. Items 7 and 12 (Auth roster
-pull, Cloud production export path) closed this phase via the already-authenticated
+Gate A has **not** been passed yet — 4 items (§1, rows 8–11: `avatars` bucket creation
+execution, real SMTP, Vercel app env vars, Shams CRM/MIS credentials) remain open, and
+the exact date/time has not been provided. Item 8's decision is resolved (see its row) —
+only the creation statement's execution is still pending. Items 7 and 12 (Auth roster
+pull, Cloud production export path) closed via the already-authenticated
 Lovable MCP connector — no new credential required.
 
 ### Gate B — Immediately before executing cutover
@@ -532,16 +549,21 @@ untouched.
 
 ### Remaining operator inputs
 1. Real production SMTP credentials for self-hosted `supabase-auth`.
-2. `SITE_URL`/`VITE_SITE_URL`/`LOVABLE_API_KEY`/`LOVABLE_SEND_URL` on the Vercel
-   deployment.
-3. Shams CRM/MIS credentials for the sync runtime.
-4. `avatars` bucket size/MIME-limit decision (operator or business), then bucket
-   creation.
+2. Vercel MCP connector authorization (OAuth), then confirmation that `SITE_URL`/
+   `VITE_SITE_URL`/`LOVABLE_API_KEY`/`LOVABLE_SEND_URL` are set on the deployment.
+3. Shams CRM/MIS credentials for the sync runtime, plus the two self-hosted Vault
+   secrets (`shams_sync_scheduler_url`, `email_queue_service_role_key`) once the Vercel
+   scheduler endpoint exists.
+4. Execute `avatars` bucket creation — the decision is closed (§1, item 8; exact
+   statement in §2 step 9.1); only running it remains, blocked this phase by the
+   session's own permission classifier, pending operator action or explicit approval.
 
 Resolved this phase, no longer remaining: Cloud Auth roster access and the Cloud
 production export path (previously listed here) — both are obtainable via the
 already-authenticated Lovable MCP connector verified this phase, with no new credential
-required from the business owner. See the note at the top of this document and §6.
+required from the business owner. See the note at the top of this document and §6. Within
+item 4 above, the `avatars` bucket's size/MIME-limit *decision* is also resolved this
+phase — only the creation statement's *execution* remains open.
 
 ### Remaining credentials/access
 Identical to the 4 items above (§6 gives the exact variable names and destinations for
