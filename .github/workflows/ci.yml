@@ -47,7 +47,7 @@ jobs:
       # `--legacy-peer-deps` would silence it, but that only tells npm to stop
       # checking — and it would still resolve semver ranges fresh on every run,
       # because the repo commits bun.lock and deliberately does not track
-      # package-lock.json (see the note in vercel.json).
+      # package-lock.json.
       #
       # Using bun with the committed lockfile fixes both halves: the install
       # succeeds, and it is byte-reproducible instead of drifting whenever a

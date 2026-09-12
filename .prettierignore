@@ -3,7 +3,6 @@ dist
 .output
 .vinxi
 .nitro
-.vercel
 .wrangler
 pnpm-lock.yaml
 package-lock.json
