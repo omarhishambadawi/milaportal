@@ -47,6 +47,28 @@ credential from the business owner**. The same connector also supports
 during preparation is restricted to `SELECT` only, per the safety statement immediately
 below.
 
+**Third finding, from this phase's documentation-audit task (no cutover action taken)**:
+this document's items 10–11 (§1), runbook step 10.2, and the credentials checklist (§6)
+described the live application as deployed to Vercel, authenticated via a separate Vercel
+MCP connector. That is now stale: `vercel.json` was removed from the repository on
+`origin/main` (commit `fa0a188`, 2026-09-12, merged into this branch before this phase
+began), along with the last Vercel references in `.env.example`,
+`.github/workflows/ci.yml`, and `src/routes/api/cdr-sync.ts` — confirmed this phase via
+`git show`/`grep`, no repository file changed. `docs/project.md`'s own Deployment section
+(already accurate, not modified by this phase) confirms the live app builds as a
+Cloudflare Worker (Nitro preset `cloudflare-module`, `vite.config.ts`) and deploys via
+Lovable — this was already the actual architecture; removing `vercel.json` did not change
+it. This phase also re-confirmed live that the canonical Lovable Cloud Supabase project
+remains `gwnxlpophyvgafctrbkx` (`supabase/config.toml`, `.lovable/mcp/manifest.json`,
+`vite.config.ts`'s fallback constants all agree, unchanged) and that no prior phase ever
+actually completed Vercel MCP authentication or used it to close any item — items 10–11
+were only ever describing Vercel as the intended target, never resolved through it. Every
+Vercel reference below is corrected to Lovable's Cloudflare Worker deployment target. No
+prerequisite's status changes as a result of this correction alone: items 10 and 11 remain
+**REQUIRES OPERATOR INPUT** — only the described dependency target changes, and item 10's
+blocker on Vercel MCP OAuth is removed as moot (it never applied to the real
+architecture), which simplifies but does not close that item.
+
 > Until explicit cutover authorization is given, all Lovable Cloud access used for
 > preparation must remain read-only/SELECT-only. No freeze, export execution, INSERT,
 > UPDATE, DELETE, DDL, credential changes, or other production mutation is permitted.
@@ -67,8 +89,8 @@ below.
 | 7 | Auth roster pull | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the already-authenticated Lovable MCP connector's direct query access to Cloud `auth.users` (`id`/`email`/metadata only, never `encrypted_password`) — no Cloud `service_role` GoTrue Admin API key or other new credential required |
 | 8 | `avatars` storage bucket | **REQUIRES OPERATOR INPUT** (RLS is READY, settings fully determined) | No longer an open decision: name (`avatars`), private, `file_size_limit = 4194304` (4 MB), and `allowed_mime_types = {image/png,image/jpeg,image/webp,image/gif}` are all fixed by already-applied migration `20260721002100_avatars_bucket_limits.sql` and `src/lib/avatar.ts` — not "no existing Cloud value to mirror" as previously stated. That migration is an `UPDATE ... WHERE id='avatars'`, applied while the bucket didn't exist, so it was a no-op; creation must set these values explicitly, not rely on the migration re-firing. Exact statement attempted this phase and blocked by this session's own permission classifier ("Modify Shared Resources") — only remaining step is running it, with the operator's explicit go-ahead (see §2 step 9.1) |
 | 9 | Real SMTP credentials | **REQUIRES OPERATOR INPUT** | `GOTRUE_SMTP_*` names present on `supabase-auth`; `GOTRUE_SMTP_ADMIN_EMAIL` reconfirmed this phase as a placeholder-pattern value; the other 5 vars (`HOST`/`PORT`/`USER`/`PASS`/`SENDER_NAME`) hold non-empty values whose authenticity as real production credentials cannot be verified without printing them, which this phase did not do — the only reliable proof remains the real SMTP delivery test already gated to runbook step 12 |
-| 10 | Application env vars (`SITE_URL`, `VITE_SITE_URL`, `LOVABLE_API_KEY`, `LOVABLE_SEND_URL`) | **REQUIRES OPERATOR INPUT** | Load-bearing, absent from `.env.example`, live app runs on Vercel; this phase's Vercel MCP connector is installed but **not yet authenticated** (OAuth not completed) — presence cannot be verified from here until that authorization happens |
-| 11 | Shams credentials (`SHAMS_CRM_*`, `SHAMS_MIS_*`) | **REQUIRES OPERATOR INPUT** | No `SHAMS_*` name found in any inspectable container this session; consumed only by the Vercel app's server-only code (`src/lib/shams-crm/client.server.ts`, `src/lib/shams/client.server.ts`), not by any self-hosted container. **New this phase**: self-hosted's `shams_sync_tick()` cron function additionally requires two Vault secrets, `shams_sync_scheduler_url` and `email_queue_service_role_key`, to reach the Vercel-side scheduler — both confirmed **absent** (no row in `vault.decrypted_secrets`) — a separate self-hosted wiring step from the CRM/MIS credentials themselves, not resolvable until the Vercel deployment's scheduler endpoint exists |
+| 10 | Application env vars (`SITE_URL`, `VITE_SITE_URL`, `LOVABLE_API_KEY`, `LOVABLE_SEND_URL`) | **REQUIRES OPERATOR INPUT** | Load-bearing, absent from `.env.example`. **Corrected this phase**: Vercel is no longer part of the architecture (see the third finding at the top of this document) — the live app deploys as a Cloudflare Worker via Lovable, so these vars must be set in Lovable's project environment settings for that Worker, per `.env.example`'s own guidance for `SHAMS_MIS_BASE_URL`. No MCP tool available this session exposes Worker environment-variable values or presence, so this remains unverifiable from here — operator confirmation required, not a guess |
+| 11 | Shams credentials (`SHAMS_CRM_*`, `SHAMS_MIS_*`) | **REQUIRES OPERATOR INPUT** | No `SHAMS_*` name found in any inspectable container this session; consumed only by the deployed Cloudflare Worker's server-only code (`src/lib/shams-crm/client.server.ts`, `src/lib/shams/client.server.ts`), not by any self-hosted container. self-hosted's `shams_sync_tick()` cron function additionally requires two Vault secrets, `shams_sync_scheduler_url` and `email_queue_service_role_key`, to reach that Worker's scheduler endpoint — both confirmed **absent** (no row in `vault.decrypted_secrets`) — a separate self-hosted wiring step from the CRM/MIS credentials themselves, not resolvable until the deployed Worker's scheduler endpoint exists |
 | 12 | Cloud production export path | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the same Lovable MCP connector's `query_database` capability against the live Cloud project — a literal `psql`/`pg_dump` binary is not required for this path; export *execution* is still a cutover-day action (item 18) and remains SELECT-only until Gate B |
 | 13 | 5 optional branches decision | **CLOSED** | Business confirmed: migrate all 5 (`P0312`, `P0313`, General Administration, Branch Administration, Warehouse) |
 | 14 | `orders_verification_snapshot_20260815` exclusion sign-off | **CLOSED** | Business confirmed: exclude |
@@ -92,10 +114,15 @@ name/private/MIME/size limits) is now fully determined from existing code and mi
 — it was never actually a business/operator decision, only an investigation gap. Bucket
 *creation* remains open, blocked this phase by the session's own permission classifier
 (see item 8's note and §2 step 9.1) — the operator can run the one exact statement given
-there, or grant approval for it to be run in-session. Items 9–11 (real SMTP, Vercel app
-env vars, Shams CRM/MIS credentials) remain open and genuinely require operator/business
-action; none of the 4 remaining items (8–11) require further investigation beyond what is
-already documented.
+there, or grant approval for it to be run in-session. Items 9–11 (real SMTP, Cloudflare
+Worker application env vars, Shams CRM/MIS credentials) remain open and genuinely require
+operator/business action; none of the 4 remaining items (8–11) require further
+investigation beyond what is already documented.
+
+**Net change in this documentation-audit phase**: no prerequisite's status changes. Items
+10–11's described dependency is corrected from Vercel (removed from the architecture,
+`vercel.json` deleted on `origin/main`) to the actual deployment target, a Cloudflare
+Worker deployed via Lovable — see the third finding at the top of this document.
 
 ---
 
@@ -250,8 +277,10 @@ preserving object paths/ownership so the pre-attached RLS policies resolve corre
 ### 10. SMTP/application/Shams configuration
 10.1. Replace placeholder `GOTRUE_SMTP_*` values on self-hosted `supabase-auth` with
 real production SMTP credentials.
-10.2. Set `SITE_URL`, `VITE_SITE_URL`, `LOVABLE_API_KEY`, `LOVABLE_SEND_URL` on the
-Vercel application deployment environment.
+10.2. Set `SITE_URL`, `VITE_SITE_URL`, `LOVABLE_API_KEY`, `LOVABLE_SEND_URL` in Lovable's
+project environment settings for the deployed Cloudflare Worker — the app's current, and
+only, deployment target (Vercel was removed from the architecture; see the third finding
+at the top of this document and §1 item 10).
 10.3. Set `SHAMS_CRM_USERNAME`, `SHAMS_CRM_PASSWORD`, `SHAMS_MIS_*` wherever the Shams
 sync runtime reads them.
 10.4. Do not print or log any of these values at any point; verify presence by name/
@@ -441,19 +470,23 @@ which were resolved this phase via the already-authenticated Lovable MCP connect
 the note at the top of this document). The connector's own authentication is pre-existing
 and was neither created, modified, nor reset in this phase — only its capability was
 verified, using a minimal, non-sensitive aggregate-count query (no rows dumped, no
-secrets read).
+secrets read). **"Where it must be supplied" is corrected in this phase**: rows previously
+naming "Vercel project environment variables" are updated to Lovable's project environment
+settings for the deployed Cloudflare Worker, the app's actual (and only) deployment target
+— Vercel was removed from the architecture; see the third finding at the top of this
+document. No status changes as a result, only the named destination.
 
 | Credential/config | Required for | Where it must be supplied | Current status |
 |---|---|---|---|
 | Cloud Auth `service_role` key | Auth roster pull | — | **Superseded.** No longer required: the already-authenticated Lovable MCP connector (verified this phase) provides equivalent capability via direct `SELECT` on Cloud `auth.users`; no new credential needed from the business owner. |
 | Cloud Postgres direct connection credentials (libpq) | Final production export | — | **Superseded.** No longer required: the already-authenticated Lovable MCP connector (verified this phase) can `SELECT` every table needed for the export directly against the live Cloud project; a literal `psql`/`pg_dump` binary is not required for this path. The connector is also capable of writes, so export *execution* remains a SELECT-only, Gate-B-gated cutover-day action, not performed by this preparation phase. |
 | Self-hosted `GOTRUE_SMTP_HOST/PORT/USER/PASS/SENDER_NAME/ADMIN_EMAIL` | Real password-reset email delivery | `supabase-auth` container environment (self-hosted) | Variable names present; values still read as placeholder — **operator must replace with real production SMTP credentials** |
-| `SITE_URL`, `VITE_SITE_URL` | Password-reset redirect URL correctness | Vercel project environment variables | **Missing from `.env.example`; must come from institutional knowledge — operator must supply** |
-| `LOVABLE_API_KEY`, `LOVABLE_SEND_URL` | Email queue/webhook routes | Vercel project environment variables | **Missing from `.env.example`; must come from institutional knowledge — operator must supply** |
+| `SITE_URL`, `VITE_SITE_URL` | Password-reset redirect URL correctness | Lovable project environment settings (Cloudflare Worker) | **Missing from `.env.example`; must come from institutional knowledge — operator must supply** |
+| `LOVABLE_API_KEY`, `LOVABLE_SEND_URL` | Email queue/webhook routes | Lovable project environment settings (Cloudflare Worker) | **Missing from `.env.example`; must come from institutional knowledge — operator must supply** |
 | `SHAMS_CRM_USERNAME`, `SHAMS_CRM_PASSWORD`, `SHAMS_MIS_BASE_URL`, `SHAMS_MIS_ACCOUNT_IDENTIFIER`, `SHAMS_MIS_API_KEY` | `shams_offers` rebuild via `shams-sync-tick` | Wherever the Shams sync runtime reads its environment | **Not found in any inspectable container — operator must supply, all required together per `.env.example`'s documented grouping** |
-| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_PROJECT_ID` (+ `VITE_` counterparts) | Application-to-database connectivity | Vercel project environment variables | Documented in `.env.example`; live presence on the actual deployment unverifiable from this environment — operator should confirm |
-| `ALSHROUQ_SCHEDULER_SECRET`, `CDR_SYNC_SECRET`, `YEASTAR_*` | Scheduler/sync authentication | Vercel project environment variables | Documented in `.env.example`; live presence unverifiable — operator should confirm |
-| `ALSHROUQ_LIVE_DISPATCH_ENABLED` | Live dispatch gating | Vercel project environment variables | Documented, defaults safe-closed (`"false"`) — no action required unless the business wants it enabled post-cutover |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_PROJECT_ID` (+ `VITE_` counterparts) | Application-to-database connectivity | Lovable project environment settings (Cloudflare Worker) | Documented in `.env.example`; live presence on the actual deployment unverifiable from this environment — operator should confirm |
+| `ALSHROUQ_SCHEDULER_SECRET`, `CDR_SYNC_SECRET`, `YEASTAR_*` | Scheduler/sync authentication | Lovable project environment settings (Cloudflare Worker) | Documented in `.env.example`; live presence unverifiable — operator should confirm |
+| `ALSHROUQ_LIVE_DISPATCH_ENABLED` | Live dispatch gating | Lovable project environment settings (Cloudflare Worker) | Documented, defaults safe-closed (`"false"`) — no action required unless the business wants it enabled post-cutover |
 
 **No credential above was read, guessed, or invented in this phase.** Every "status" is
 a presence/pattern observation only.
@@ -526,7 +559,8 @@ runbook step 15.
   constraint of "after 12:30 AM." **This document does not choose that date/time.**
 
 Gate A has **not** been passed yet — 4 items (§1, rows 8–11: `avatars` bucket creation
-execution, real SMTP, Vercel app env vars, Shams CRM/MIS credentials) remain open, and
+execution, real SMTP, Cloudflare Worker application env vars, Shams CRM/MIS credentials)
+remain open, and
 the exact date/time has not been provided. Item 8's decision is resolved (see its row) —
 only the creation statement's execution is still pending. Items 7 and 12 (Auth roster
 pull, Cloud production export path) closed via the already-authenticated
@@ -549,11 +583,14 @@ untouched.
 
 ### Remaining operator inputs
 1. Real production SMTP credentials for self-hosted `supabase-auth`.
-2. Vercel MCP connector authorization (OAuth), then confirmation that `SITE_URL`/
-   `VITE_SITE_URL`/`LOVABLE_API_KEY`/`LOVABLE_SEND_URL` are set on the deployment.
+2. Confirmation that `SITE_URL`/`VITE_SITE_URL`/`LOVABLE_API_KEY`/`LOVABLE_SEND_URL` are
+   set in Lovable's project environment settings for the deployed Cloudflare Worker.
+   **Corrected this phase**: Vercel is no longer part of the architecture, so no MCP
+   connector authorization or OAuth step applies here — this is a direct operator
+   confirmation, not gated on any authentication flow.
 3. Shams CRM/MIS credentials for the sync runtime, plus the two self-hosted Vault
-   secrets (`shams_sync_scheduler_url`, `email_queue_service_role_key`) once the Vercel
-   scheduler endpoint exists.
+   secrets (`shams_sync_scheduler_url`, `email_queue_service_role_key`) once the deployed
+   Cloudflare Worker's scheduler endpoint exists.
 4. Execute `avatars` bucket creation — the decision is closed (§1, item 8; exact
    statement in §2 step 9.1); only running it remains, blocked this phase by the
    session's own permission classifier, pending operator action or explicit approval.
