@@ -44,6 +44,7 @@ describe("the Admin flyout", () => {
       "/admin/users",
       "/admin/shams-sync",
       "/admin/shams-diagnostics",
+      "/admin/alshrouq-reconciliation",
       "/calls/diagnostics",
       "/calls/configuration",
     ]);
@@ -68,6 +69,7 @@ describe("the Admin flyout", () => {
       "/admin/users": "routes/_app.admin.users.tsx",
       "/admin/shams-sync": "routes/_app.admin.shams-sync.tsx",
       "/admin/shams-diagnostics": "routes/_app.admin.shams-diagnostics.tsx",
+      "/admin/alshrouq-reconciliation": "routes/_app.admin.alshrouq-reconciliation.tsx",
       "/calls/diagnostics": "routes/_app.calls.diagnostics.tsx",
       "/calls/configuration": "routes/_app.calls.configuration.tsx",
     };

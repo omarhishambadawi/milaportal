@@ -5466,6 +5466,66 @@ act.
 alone. The columns can say a POST was never transmitted; they cannot say a
 customer received anything.
 
+#### The reconciliation centre — 2026-09-12
+
+`/admin/alshrouq-reconciliation`, gated on `admin_access`, reading the
+`alshrouq_dispatches_unresolved_idx` the 2026-08-23 migration built and nothing
+had ever queried. Two actions, and **neither of them dispatches anything**:
+
+- **Look up** — `alshrouqLookupDispatch` → `findAlshrouqOrderByClientOrderId`.
+  One GET, repeatable. It is the question that matters for a row with no
+  `local_id`, which the order page's Check status button cannot ask.
+- **Record outcome** — the existing `alshrouqResolveDispatch`, unchanged in what
+  it writes.
+
+There is no retry, resend or re-dispatch control on the page and no code path
+from it to the create transport. A test asserts both: no control label matches
+`Retry|Resend|Re-dispatch|Send again|Dispatch`, and the module imports none of
+`alshrouqDispatchOrder`, `createAlshrouqOrder` or `runDueAlShrouqDispatches`.
+
+##### `handled_manually`, and why a fourth outcome was needed
+
+12389, 12422 and 12428 were dealt with by hand after the outage, under a
+standing instruction that nothing at all is to be sent to AlShrouq about them.
+The three existing outcomes could not express that, because **each one asserts
+something the courier said**:
+
+| outcome         | its own explanation                                            |
+| --------------- | -------------------------------------------------------------- |
+| `delivered`     | "AlShrouq confirmed the delivery exists and was completed."      |
+| `not_delivered` | "AlShrouq confirmed no delivery was created for this order."     |
+| `undetermined`  | "…could not be established even after checking with AlShrouq."   |
+
+Recording any of them would be an operator entering a confirmation they were
+forbidden to obtain. `handled_manually` — "Handled manually — no automated
+dispatch required" — is the one statement that is true and needs no external
+contact. It says the Portal's dispatch is finished with; it says nothing
+whatever about the courier. `20260918120000` widens the CHECK and reads it back.
+
+##### The refusal, and where it lives
+
+`alshrouq-reconciliation.ts` is pure and imports no transport, so it cannot be
+where a request leaks out. It refuses on two grounds: the three ids from the
+incident (matched on `client_order_id` **or** dispatch uuid, so a mistyped one
+still fails closed), and any dispatch already resolved `handled_manually` — the
+first covers the window before the second is true.
+
+`alshrouqLookupDispatch` checks it **before the permission read and before the
+row is fetched**, so there is no ordering of its steps in which a request could
+go out for one of the three; a test asserts that ordering. `alshrouqResolveDispatch`
+checks it too, and refuses any courier-confirming outcome for a blocked
+dispatch. The page not drawing a button is a convenience, not the guarantee.
+
+##### When the record disagrees with the evidence
+
+On 2026-09-12 at 01:06–01:07 all three were resolved as **`delivered`** —
+including 12389, whose `attempt_count` is 0 and for which no request ever left
+the machine. `resolveAlShrouqDispatch` will not overwrite an operator's account,
+deliberately, so the contradiction cannot be papered over. It can be shown:
+`describeEvidenceConflict` flags a `delivered` recorded against a dispatch that
+was never transmitted, or against one the Portal was barred from asking about,
+and the page renders it beside the resolution. It reports; it never edits.
+
 #### The worklist that does not exist
 
 `20260823120000_alshrouq_dispatch_resolution.sql` creates
@@ -5479,8 +5539,10 @@ twenty days old, none carrying a resolution. An operator cannot settle what they
 cannot find.
 
 The index is already there and already the right shape, so the missing piece is
-an admin surface that reads it. Until one exists, finding these rows means
-querying the table directly.
+an admin surface that reads it.
+
+**Built on 2026-09-12** — see "The reconciliation centre" above. This section is
+kept as the record of why it was needed.
 
 ### The dispatch state model, and the order timeline
 
