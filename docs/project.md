@@ -4077,6 +4077,18 @@ result rather than invent one. Whatever the agent typed is escaped first
 (`escapeLikePattern`), so a `%` in `1% CREAM` is a percent sign rather than a
 wildcard the syntax never offered them.
 
+**An absent pattern is omitted, not sent as null.** Every argument of
+`shams_search_product_catalog` carries a SQL default
+(`p_name_pattern text DEFAULT NULL`, `p_code_pattern text DEFAULT NULL`,
+`p_max_rows integer DEFAULT 2000`), so `?? undefined` is dropped by
+`JSON.stringify`, PostgREST calls the function without that named argument, and
+the default supplies it. The same holds for `p_source_marker` on
+`shams_promote_product_catalog` and for `p_after`, `p_cursor` and
+`p_source_marker` on the offer store's functions — all verified against the
+deployed signatures. `catalog-store.test.ts` asserts the **serialised** argument
+body rather than the object literal, because that equivalence is a property of
+the request and would stop holding if one of those defaults were ever dropped.
+
 **Refresh.** `refreshProductCatalog` follows the Desktop's rule rather than a
 TTL: read `GET /stock/sync/status`, reduce it to one success marker
 (`stockSyncMarker`), and re-fetch `/products/names` only when that marker has
@@ -5399,6 +5411,76 @@ statement about a courier just booked, so the reference is reported and the
 failure to record it is logged (`[alshrouq] a booked delivery could not be
 recorded`) rather than swallowed; on the scheduling path — which contacts nobody
 — it is an honest save failure.
+
+### Settling a stuck dispatch — the operator's runbook
+
+An `indeterminate` or `failed` row is the machine saying it has stopped
+guessing. Nothing automatic will ever move it. This is what a person does, and
+what the Portal can and cannot do for them.
+
+**1. Read the row's own evidence first.** `attempt_count` is the discriminator
+nothing else gives you:
+
+| `attempt_count` | `last_error`                                 | What it means                                                                |
+| --------------- | -------------------------------------------- | ---------------------------------------------------------------------------- |
+| **1**           | "The CRM returned 500 / 502 …"               | The POST **was transmitted**. The CRM answered ambiguously. A delivery may exist. |
+| **0**           | "…being sent when the process stopped…"      | No terminal write ever ran. Settled by `reapStaleClaims`, which cannot tell whether the POST went out. |
+
+Every terminal write sets `attempt_count`, so `0` means the run died between the
+claim and any outcome being recorded. That narrows the question but does not
+answer it on its own — pair it with whether any dispatch at all was succeeding
+in that window (see "A failure before the POST — 2026-09-12" for how that
+argument is made).
+
+**2. Establish the truth at AlShrouq.** Two routes, and which one is available
+depends on `local_id`:
+
+- **`local_id` present** → the order page's **Check status** button
+  (`refreshAlShrouqOrderStatus`, `GET …/orders/{id}/refresh`). A read, repeatable,
+  safe.
+- **`local_id` null** → the button cannot help: it has no CRM id to ask about.
+  This is the normal case for a row that never got a usable create response,
+  which is every row that reaches `indeterminate` this way. **The answer has to
+  come from AlShrouq directly**, quoting the `client_order_id` — which is the
+  order's `display_no` without the `#`.
+
+`findAlshrouqOrderByClientOrderId` would answer exactly this question with one
+GET, and the worker already uses it internally — but it is **not exposed to an
+operator**. Wiring it to a button is the obvious next improvement and is
+deliberately not part of the 2026-09-12 fix.
+
+**3. Record what was established**, through the Resolve control on the order
+page — `delivered`, `not_delivered` or `undetermined`, with a note. It writes
+four columns and an `order_activity` entry, contacts nobody, and **does not
+change `dispatch_status`**: the machine's observation stands beside the
+operator's conclusion rather than being overwritten by it.
+
+**Resolving does not free the order to be sent again.** `cancelled_at` stays
+null, so the row keeps the order's slot in `alshrouq_dispatches_live_order_key`.
+Recording what happened and re-authorising a delivery are separate decisions,
+and the second one is not currently automatable — a genuinely undelivered order
+needs the dispatch cancelled or a new order raised, which is a deliberate human
+act.
+
+**Never** resolve a row as `delivered` on the strength of database evidence
+alone. The columns can say a POST was never transmitted; they cannot say a
+customer received anything.
+
+#### The worklist that does not exist
+
+`20260823120000_alshrouq_dispatch_resolution.sql` creates
+`alshrouq_dispatches_unresolved_idx` and its comment calls it _"the operator's
+worklist: stuck and not yet settled"_. **Nothing queries it.** The only place an
+`indeterminate` row is visible is the order page of the order it belongs to.
+
+The cost is measurable rather than theoretical: on 2026-09-12 there were **nine
+unresolved `indeterminate` rows and one unresolved `failed` row**, the oldest
+twenty days old, none carrying a resolution. An operator cannot settle what they
+cannot find.
+
+The index is already there and already the right shape, so the missing piece is
+an admin surface that reads it. Until one exists, finding these rows means
+querying the table directly.
 
 ### The dispatch state model, and the order timeline
 

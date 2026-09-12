@@ -148,11 +148,32 @@ describe("candidate retrieval", () => {
     const rows = await fetchCatalogCandidates({ namePattern: "%nan%", codePattern: null });
 
     expect(recorded.rpc[0].fn).toBe("shams_search_product_catalog");
-    expect(recorded.rpc[0].args).toMatchObject({
+    /*
+     * What actually crosses the wire, not what the argument object looks like
+     * in memory.
+     *
+     * An absent pattern is passed as `undefined`, which `JSON.stringify` drops
+     * from the body entirely, so PostgREST calls the function without that
+     * named argument and the SQL default supplies it. Verified against the
+     * deployed signature:
+     *
+     *   shams_search_product_catalog(
+     *     p_name_pattern text DEFAULT NULL,
+     *     p_code_pattern text DEFAULT NULL,
+     *     p_max_rows integer DEFAULT 2000)
+     *
+     * so omitting `p_code_pattern` and sending it as NULL are the same call.
+     * Asserting the serialised body is what makes that equivalence a property of
+     * the request rather than of the object literal — an argument that lost its
+     * SQL default would still be omitted here, and this is where that would have
+     * to be noticed.
+     */
+    const sent = JSON.parse(JSON.stringify(recorded.rpc[0].args));
+    expect(sent).toEqual({
       p_name_pattern: "%nan%",
-      p_code_pattern: null,
       p_max_rows: MAX_CATALOG_CANDIDATES,
     });
+    expect("p_code_pattern" in sent).toBe(false);
     // `numeric` arrives as a string from PostgREST; a price that stayed one
     // would render as text and break every comparison downstream.
     expect(rows).toEqual([{ itemCode: "10400746", itemName: "NAN 2 OPTIPRO", retailPrice: 129.5 }]);
