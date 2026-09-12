@@ -172,6 +172,44 @@ export function resolutionWarningFor(status: string | null | undefined): string 
 export const RESOLUTION_ACTIVITY_ACTION = "alshrouq_dispatch_resolved";
 
 /**
+ * The `order_activity.action` a **correction** writes.
+ *
+ * Its own action, never a second `alshrouq_dispatch_resolved`. The two are
+ * different events and an audit log that called them the same thing would make
+ * "who decided this" unanswerable: the original entry stays exactly where it is,
+ * saying what was recorded and by whom, and this one sits after it saying what
+ * was changed, by whom, and why.
+ */
+export const RESOLUTION_CORRECTION_ACTIVITY_ACTION = "alshrouq_dispatch_resolution_corrected";
+
+/**
+ * The one correction this system performs: `delivered` → `handled_manually`.
+ *
+ * Deliberately a pair of constants rather than parameters. A general "change any
+ * outcome to any other" operation is an edit button on an audit trail, and the
+ * whole value of a resolution record is that it cannot be quietly rewritten.
+ *
+ * This exists because three dispatches were recorded as `delivered` — "AlShrouq
+ * confirmed the delivery exists and was completed" — when AlShrouq had never
+ * been asked about any of them, and for one of them no request had ever left the
+ * machine. That is a claim the evidence contradicts, and correcting it is not
+ * the same act as making a fresh decision.
+ */
+export const CORRECTABLE_FROM_OUTCOME = "delivered" as const;
+export const CORRECTION_TARGET_OUTCOME = "handled_manually" as const;
+
+/**
+ * The operator's reason for a correction, bounded like a resolution note.
+ *
+ * Required for the same reason: a correction with no account of why is an
+ * unsourced change to an audit record, which is worse than the wrong value it
+ * replaces because it is no longer visible as a question.
+ */
+export function isValidCorrectionReason(reason: string): boolean {
+  return isValidResolutionNote(reason);
+}
+
+/**
  * The operator's note, bounded.
  *
  * Required: the note *is* the evidence. "AlShrouq confirmed by phone, ref

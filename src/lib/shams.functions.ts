@@ -50,6 +50,7 @@ import type {
   ScheduleResult,
 } from "@/lib/shams-crm/alshrouq-scheduler.server";
 import type { ResolveDispatchResult } from "@/lib/shams-crm/alshrouq-resolve.server";
+import type { CorrectResolutionResult } from "@/lib/shams-crm/alshrouq-correct.server";
 import type { AlShrouqStatusResult } from "@/lib/shams-crm/alshrouq-status.server";
 import type { AlShrouqLocationResult } from "@/features/alshrouq/location";
 import type { AgentSetupSummary, ExistingAgentLink } from "@/lib/shams-crm/agent-setup.server";
@@ -1228,6 +1229,12 @@ export interface UnresolvedDispatchRow {
    * so the person who can settle it knows it exists.
    */
   evidenceConflict: string | null;
+  /**
+   * True when this row is eligible for the `delivered` → `handled_manually`
+   * correction. Derived from the same conflict the UI displays, so the button
+   * appears exactly where `alshrouqCorrectResolution` would permit it.
+   */
+  correctionAvailable: boolean;
 }
 
 /**
@@ -1307,6 +1314,11 @@ export const alshrouqUnresolvedDispatches = createServerFn({ method: "POST" })
         dispatchId: r.id,
         resolutionOutcome: r.resolution_outcome ?? null,
       };
+      const conflict = describeEvidenceConflict({
+        ...ref,
+        attemptCount: attempts,
+        dispatchStatus: r.dispatch_status ?? null,
+      });
 
       return {
         dispatchId: r.id,
@@ -1342,13 +1354,13 @@ export const alshrouqUnresolvedDispatches = createServerFn({ method: "POST" })
         resolutionNote: r.resolution_note ?? null,
         resolvedAt: r.resolved_at ?? null,
         resolvedByName: r.resolved_by ? (names.get(r.resolved_by) ?? null) : null,
-        evidenceConflict: describeEvidenceConflict({
-          clientOrderId: r.client_order_id ?? null,
-          dispatchId: r.id,
-          resolutionOutcome: r.resolution_outcome ?? null,
-          attemptCount: attempts,
-          dispatchStatus: r.dispatch_status ?? null,
-        }),
+        evidenceConflict: conflict,
+        /*
+         * Exactly the condition `correctAlShrouqResolutionToHandledManually`
+         * enforces, computed from the same function, so the button cannot appear
+         * where the server would refuse it or hide where it would allow it.
+         */
+        correctionAvailable: conflict !== null && r.resolution_outcome === "delivered",
       };
     });
   });
@@ -1458,6 +1470,91 @@ export const alshrouqLookupDispatch = createServerFn({ method: "POST" })
       console.warn("[alshrouq] reconciliation lookup failed:", (err as Error)?.name ?? "unknown");
       return { kind: "unavailable" };
     }
+  });
+
+/**
+ * Correct a resolution the evidence contradicts. `delivered` → `handled_manually`.
+ *
+ * Narrow on purpose, and narrow in four independent ways: it is admin-only, it
+ * accepts no outcome parameter, it refuses any row whose recorded outcome is not
+ * `delivered`, and it refuses any row whose evidence does not already contradict
+ * that outcome. An ordinary `delivered` — one an operator recorded after actually
+ * ringing AlShrouq — cannot be reached through it.
+ *
+ * ## The eligibility test is the evidence, not a list of ids
+ *
+ * `describeEvidenceConflict` is what decides, which is the same function the
+ * reconciliation centre already uses to *display* the conflict. So the button
+ * appears exactly where the correction is permitted, and neither can drift from
+ * the other. Hardcoding the three incident ids here would have made this
+ * operation untestable against the condition it actually exists for.
+ *
+ * ## It contacts nobody
+ *
+ * `alshrouq-correct.server.ts` imports no transport — not the create, not the
+ * reconciliation GET, not the CRM client — so no outcome of this function has a
+ * branch that reaches AlShrouq. That is the same way `alshrouqResolveDispatch`
+ * meets the same requirement: by not importing the thing that could break it.
+ *
+ * ## It does not replace normal resolution
+ *
+ * `alshrouqResolveDispatch` is untouched and still refuses every row that
+ * already carries an answer. This is a second, differently-named door, and the
+ * only transition behind it is the one above.
+ */
+export const alshrouqCorrectResolution = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) =>
+    z
+      .object({
+        dispatchId: z.string().uuid(),
+        /*
+         * No `outcome` field, deliberately.
+         *
+         * The transition is a property of the operation, not a parameter of it —
+         * a caller who could name the target could turn this into a general
+         * "rewrite any resolution" endpoint, which is the thing this design
+         * exists to avoid.
+         */
+        reason: z.string().min(3).max(280),
+      })
+      .parse(d),
+  )
+  .handler(async ({ context, data }): Promise<CorrectResolutionResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+
+    await assertPermission(supabase, userId, "admin_access");
+
+    /*
+     * The visibility read runs on the *caller's* client, so the dispatch's own
+     * RLS policy — which follows the order's visibility — decides whether this
+     * operator may see the row at all. A dispatch they cannot see is reported as
+     * absent rather than as forbidden, the same reading every other action on
+     * this table takes.
+     */
+    const { data: visible } = await (supabase as any)
+      .from("alshrouq_dispatches")
+      .select("id")
+      .eq("id", data.dispatchId)
+      .maybeSingle();
+    if (!visible) return { kind: "not_found" };
+
+    // And the write runs as the service role, after the checks above — the same
+    // pattern as every other write to this table.
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { correctAlShrouqResolutionToHandledManually } =
+      await import("@/lib/shams-crm/alshrouq-correct.server");
+
+    return correctAlShrouqResolutionToHandledManually(
+      {
+        dispatchId: data.dispatchId,
+        reason: data.reason,
+        // The verified session's subject, never anything the caller sent. The
+        // corrector is whoever is signed in now — never the original author.
+        correctedBy: userId,
+      },
+      supabaseAdmin,
+    );
   });
 
 export const alshrouqResolveDispatch = createServerFn({ method: "POST" })

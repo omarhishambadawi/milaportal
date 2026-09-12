@@ -42,7 +42,7 @@ import { useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { AlertTriangle, Loader2, Search, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Loader2, PencilLine, Search, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -55,6 +55,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  alshrouqCorrectResolution,
   alshrouqLookupDispatch,
   alshrouqResolveDispatch,
   alshrouqUnresolvedDispatches,
@@ -65,6 +66,7 @@ import {
   ALSHROUQ_RESOLUTION_OUTCOMES,
   describeResolutionOutcome,
   explainResolutionOutcome,
+  isValidCorrectionReason,
   isValidResolutionNote,
   RESOLUTION_NOTE_MAX,
   type AlShrouqResolutionOutcome,
@@ -230,6 +232,7 @@ function DispatchTable({ rows, onDone }: { rows: UnresolvedDispatchRow[]; onDone
 
 function DispatchRow({ row, onDone }: { row: UnresolvedDispatchRow; onDone: () => void }) {
   const [open, setOpen] = useState(false);
+  const [correcting, setCorrecting] = useState(false);
   const [lookup, setLookup] = useState<AlShrouqLookupResult | null>(null);
   const lookupFn = useServerFn(alshrouqLookupDispatch);
 
@@ -289,11 +292,25 @@ function DispatchRow({ row, onDone }: { row: UnresolvedDispatchRow; onDone: () =
               </div>
               {row.resolutionNote && <div className="text-[11px]">{row.resolutionNote}</div>}
               {row.evidenceConflict && (
-                <div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
-                  <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
-                  <span>
-                    <strong>Record disagrees with the evidence.</strong> {row.evidenceConflict}
-                  </span>
+                <div className="mt-1.5 space-y-1.5">
+                  <div className="flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
+                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+                    <span>
+                      <strong>Record disagrees with the evidence.</strong> {row.evidenceConflict}
+                    </span>
+                  </div>
+                  {/*
+                   * Offered per row and never in bulk. A correction is a
+                   * statement about one delivery, and a control that changed
+                   * several at once would make it impossible to say afterwards
+                   * which of them anybody actually looked at.
+                   */}
+                  {row.correctionAvailable && (
+                    <Button variant="outline" size="sm" onClick={() => setCorrecting(true)}>
+                      <PencilLine className="mr-2 h-3.5 w-3.5" />
+                      Correct to “Handled manually”
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
@@ -354,7 +371,117 @@ function DispatchRow({ row, onDone }: { row: UnresolvedDispatchRow; onDone: () =
       )}
 
       <ResolveDialog row={row} open={open} onOpenChange={setOpen} onDone={onDone} />
+      <CorrectDialog row={row} open={correcting} onOpenChange={setCorrecting} onDone={onDone} />
     </>
+  );
+}
+
+/**
+ * Correcting a recorded outcome the evidence contradicts.
+ *
+ * Deliberately heavier than the resolve dialog. Resolving settles something that
+ * was open; this changes something already written down, and the four statements
+ * below exist so nobody presses it believing it does more — or less — than it
+ * does. The reason is mandatory for the same purpose the resolution note is: a
+ * change to an audit record with no account of why is worse than the wrong value
+ * it replaces, because it stops looking like a question.
+ */
+function CorrectDialog({
+  row,
+  open,
+  onOpenChange,
+  onDone,
+}: {
+  row: UnresolvedDispatchRow;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onDone: () => void;
+}) {
+  const [reason, setReason] = useState("");
+  const correctFn = useServerFn(alshrouqCorrectResolution);
+
+  const correct = useMutation({
+    mutationFn: () => correctFn({ data: { dispatchId: row.dispatchId, reason } }),
+    onSuccess: (r) => {
+      if (r.kind === "corrected") {
+        toast.success("Resolution corrected to “Handled manually”. Nothing was sent to AlShrouq.");
+        onOpenChange(false);
+        onDone();
+      } else if (r.kind === "ineligible") {
+        toast.error(r.message);
+      } else {
+        toast.error("This dispatch could not be found.");
+      }
+    },
+    onError: () => toast.error("The correction could not be recorded. Nothing was changed."),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>
+            Correct the recorded resolution — {row.displayNo ?? row.clientOrderId ?? "dispatch"}
+          </DialogTitle>
+          <DialogDescription>
+            This changes what the record says about a delivery that has already been settled.
+          </DialogDescription>
+        </DialogHeader>
+
+        <NoticeState
+          tone="warning"
+          message={
+            <ul className="list-disc space-y-1 pl-4">
+              <li>
+                This changes the recorded resolution from <strong>Delivered</strong> to{" "}
+                <strong>Handled manually</strong>.
+              </li>
+              <li>No request will be sent to AlShrouq.</li>
+              <li>This does not change the order status.</li>
+              <li>This does not create or cancel a courier dispatch.</li>
+              <li>This action will be permanently audited.</li>
+            </ul>
+          }
+        />
+
+        {row.evidenceConflict && (
+          <p className="text-xs text-muted-foreground">
+            <strong className="text-foreground">Why this is correctable:</strong>{" "}
+            {row.evidenceConflict}
+          </p>
+        )}
+
+        <div className="space-y-1.5">
+          <label htmlFor={`reason-${row.dispatchId}`} className="text-sm font-medium">
+            Why is this being corrected?
+          </label>
+          <Textarea
+            id={`reason-${row.dispatchId}`}
+            value={reason}
+            maxLength={RESOLUTION_NOTE_MAX}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. Handled manually after the 2026-09-10 outage; AlShrouq was never asked, so the delivered record was wrong."
+          />
+          <p className="text-xs text-muted-foreground">
+            Required. The original entry stays in the order timeline; this is recorded beside it
+            with your name and the time.
+          </p>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => correct.mutate()}
+            disabled={correct.isPending || !isValidCorrectionReason(reason)}
+          >
+            {correct.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Correct the record
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
