@@ -10348,11 +10348,15 @@ project history.
 12. **Audit writes are best-effort.** `logAdminAction` never throws. Making the
     trail provably complete needs a two-phase write (record, act, mark
     committed), which belongs with that requirement rather than ahead of it.
-13. **Local `.env` and the Supabase CLI link disagree.**
-    `supabase/config.toml` + `supabase/.temp/project-ref` point at
-    `xscurilznfinllufgdpq`, while `.env` and the `vite.config.ts` fallbacks point
-    at `gwnxlpophyvgafctrbkx`. Migrations applied through the CLI would land on a
-    different project than the running app.
+13. **The Supabase project reference is reconciled.** `supabase/config.toml` now
+    points at `gwnxlpophyvgafctrbkx`, matching `.env` and the `vite.config.ts`
+    fallbacks — one project, the Lovable Cloud instance. This item used to flag a
+    disagreement with `xscurilznfinllufgdpq`, a different Supabase project the
+    Supabase CLI was linked to at the time; that project is not referenced
+    anywhere else in the tracked repository. `supabase/.temp/` (the CLI's local
+    link state) is gitignored and machine-local — a stale link there is not a
+    repository configuration problem, since `supabase link` re-creates it against
+    whichever project the operator names.
 14. **Migration history has a known gap.** `20260726000000` records that
     `20260721001200_owner_protection.sql` was committed but never applied to the
     live project — `schema_migrations` jumps from `20260709174246` to
@@ -10579,9 +10583,9 @@ Drawn from what the code itself marks as deferred, incomplete, or blocked.
    in the module and it is deliberately isolated to a single function.
 2. **Verify the Customer Care refactor in a browser** against live PBX responses
    — specifically the O1 notice card and the "—" missed column.
-3. **Reconcile the Supabase project reference.** Decide whether
-   `xscurilznfinllufgdpq` or `gwnxlpophyvgafctrbkx` is the live project and make
-   `config.toml`, `.env` and the `vite.config.ts` fallbacks agree.
+3. **Supabase project reference reconciled.** `config.toml` now agrees with
+   `.env` and the `vite.config.ts` fallbacks at `gwnxlpophyvgafctrbkx`, the one
+   live (Lovable Cloud) project — no further action needed.
 4. **Decide on the owner-protection triggers.** `trg_protect_last_owner` and
    `trg_protect_owner_profile` were held back from the live project; applying
    them is what makes an Owner grant genuinely irreversible.
