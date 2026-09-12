@@ -5080,6 +5080,10 @@ cancelled`. `processing` is a claim, not a report. `indeterminate` is terminal
 until a human resolves it, and is never followed by another POST — the whole
 point of scheduling is that nobody is watching.
 
+There is one arrow back: `processing → scheduled`, taken only when the failure
+happened **before** the POST was transmitted, so there is nothing at AlShrouq to
+duplicate. See "A failure before the POST — 2026-09-12".
+
 **With the gate closed the run claims nothing**, sends nothing and invents no
 status; rows stay `scheduled` and are picked up whenever it opens.
 `alshrouq_dispatch_due()` sends nothing either while the vault entries
@@ -5229,6 +5233,123 @@ threshold, and the poll runs every minute.
 Every terminal write goes through `finishClaim`, guarded on
 `dispatch_status = 'processing'`, so a reaped run waking up late cannot
 overwrite an `indeterminate` a person has already resolved.
+
+#### A failure before the POST — 2026-09-12
+
+**What was observed.** The `alshrouq-dispatch-due` cron fired every minute and
+`/api/alshrouq-run-scheduled` answered **HTTP 500** for roughly sixteen
+consecutive minutes. Deliveries whose scheduled time arrived in that window were
+not handed to the courier, and staff saw them sitting past their time.
+
+**What actually happened**, from the production row that proves it
+(`client_order_id` 12389, due 2026-09-10 18:25:00Z):
+
+| column            | value                                                              |
+| ----------------- | ------------------------------------------------------------------ |
+| `last_attempt_at` | `18:25:00.665Z` — the claim succeeded, at the scheduled minute      |
+| `attempt_count`   | **0** — every terminal write sets 1, so none of them ever ran       |
+| `last_error`      | the reaper's sentence, written ~15 minutes later                    |
+| `dispatch_status` | `indeterminate`                                                     |
+
+The row was claimed and then **nothing finished it**.
+
+**What made the login fail that evening** is the CRM's minimum-client-version
+gate — see "The client version handshake". It answers **426 Upgrade
+Required** on `POST /login` before it looks at the credentials, the Portal was
+declaring no `app_version`, and `login()` rounded every non-2xx up to
+`auth_failed` and threw. 18:25:00Z is 21:25 +03:00, about forty minutes before
+`e416ecc` fixed the handshake.
+
+So the two incidents are connected, but not in the direction it looked: the CRM
+version gate was the trigger, and it was fixed at the source. What it _exposed_
+is the defect below, which is independent of it and would have been reached by
+any other pre-transmission failure.
+
+The cause is a distinction the worker was not making.
+`createAlshrouqOrder` **throws** for every failure that happens _before_ the
+POST is transmitted — a CRM that refuses the login, a CRM that cannot be
+reached, a login that times out — and _returns_ for everything from `fetch`
+onwards. Nothing in `runDueAlShrouqDispatches` caught the throw. So one
+unreachable CRM:
+
+1. aborted the whole batch, leaving every other due delivery that minute
+   untouched;
+2. escaped to the route, which answered pg_cron with a 500 — the observed
+   symptom, repeating for as long as due work kept waking the poll;
+3. left the claimed row in `processing`, reachable by nothing but
+   `reapStaleClaims`, which correctly settles a claim it cannot explain as
+   `indeterminate` — a state only a human can clear.
+
+A delivery that had never been sent to anybody therefore ended up needing
+somebody to ring AlShrouq about it.
+
+The CRM was demonstrably unwell that afternoon: seven **immediate** dispatches
+took a 500 or 502 between 16:25 and 16:43 the same day. Those were handled
+correctly — a returned 5xx is `indeterminate` by design. Only the throw-shaped
+failure was mishandled.
+
+**The fix**, in `alshrouq-scheduler.server.ts`:
+
+- **Each row runs in its own `try`.** A row that throws is settled or released on
+  its own and the run continues to the next one. One bad delivery no longer
+  costs the batch, and the endpoint no longer answers 500 for a per-row problem.
+- **A pre-transmission failure releases the row back to `scheduled`**, through
+  the single helper `releaseClaim`, with the reason on `last_error` and
+  `attempt_count` incremented. This is safe by contract rather than by hope: the
+  worker tracks whether `deps.createOrder` has returned, and releases only when
+  it has not — which is exactly when the transport guarantees nothing was
+  transmitted. **There is no delivery to duplicate, because there is no
+  delivery.**
+- **A failure _after_ the POST is unchanged.** If the create returned and only
+  the write-down failed, the row stays claimed for `reapStaleClaims` to settle
+  as `indeterminate`. Transmitted, outcome unknown, never re-POSTed.
+- **`RETRY_BACKOFF_MS` (2 minutes)** keeps a released row from being re-claimed
+  by the very next minute's poll. `client.server.ts` names the hazard this
+  avoids: "repeatedly re-authenticating a user credential against a server that
+  keeps refusing is how an account gets locked." A delivery that has never been
+  attempted has no `last_attempt_at`, so a first dispatch is never delayed.
+- **The due read is ordered `scheduled_for` ascending** and reads
+  `BATCH_SIZE × 4` before the backoff filter, so the longest-waiting delivery
+  drains first and rows resting in backoff cannot crowd out a fresh one.
+- **`classifyDispatchFailure`** names the failure: `configuration`,
+  `authentication`, `incompatible_client`, `upstream`, `timeout`, `database`,
+  `unknown`. It reads the HTTP status as well as the kind, because
+  `client.server.ts` used to raise `auth_failed` for _any_ non-2xx on `/login` —
+  which is exactly how the CRM's 426 read as a bad password. `blocked` (waiting
+  on a person) is 401/403, `not_configured` and `incompatible_client`;
+  everything else is `retryable`. It returns fixed sentences and copies nothing
+  out of the upstream error, so no credential or customer detail reaches a log
+  or a row.
+- **The run summary gained three integers** — `retryable`, `deferred`,
+  `unsettled` — and both the summary and the 500 path now name the job
+  (`alshrouq-run-scheduled`) and the failure category.
+
+**There is no attempt budget.** A delivery that stops being retried after N
+tries is a delivery silently abandoned during an outage, which is the failure
+this change exists to end. A row waits, with the reason visible on the order,
+until it goes out or a person acts.
+
+**Recovery does not depend on any particular minute.** The due query has always
+asked `scheduled_for <= now()`, never `= this minute`, so a delivery due at 18:30
+during an 18:26–18:41 outage is still overdue at 18:42 and is taken by the first
+healthy run. What the fix adds is that the run in question is now healthy.
+
+**Nothing about the database changed** — no migration, no new column, no cron
+change. `attempt_count`, `last_attempt_at` and `last_error` already existed.
+Verified against production on 2026-09-12: `alshrouq-dispatch-due` is active on
+`* * * * *` running `SELECT public.alshrouq_dispatch_due()`, the installed
+function is the canonical body, and no row is stuck in `processing` or overdue.
+
+**Relationship to the Shams CRM work.** Not the catalogue and offer commits of
+2026-09-05…07 — those go nowhere near `getSessionToken`, `login` or the create
+transport. The connection is to `e416ecc`, the client-version handshake: the
+CRM's 426 gate is what broke every login that evening, and it is what the
+scheduled dispatch tripped over. That trigger is already fixed at the source,
+and this change fixes the separate defect it exposed — a pre-transmission throw
+stranding a claim. **This change touches no shared authentication
+infrastructure**; it only classifies what the transport already reports,
+`incompatible_client` included, so a 426 now reads as "the Portal needs
+updating" rather than as a credential problem.
 
 #### "Already booked"
 
