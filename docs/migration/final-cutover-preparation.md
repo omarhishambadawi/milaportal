@@ -7,14 +7,29 @@ cutover after 12:30 AM, exact date/time not yet set; password-reset-only credent
 strategy). This phase performed **read-only verification only** — every fact below was
 re-checked live against the running self-hosted stack this session
 (`docker ps`, `docker exec supabase-db psql ...`) and found **unchanged from Phase 50**:
-migration ledger (150/151, migration 69 held), `owner_protection`/`is_owner()`, storage
-buckets (0), `shams_offers` (0)/`shams_product_catalog` (8,484 exact match), all 3 cron
-jobs active, all 11 production containers `Up 4 days (healthy)`, production destination
-tables (`orders`, `complaints`, `profiles`, `user_roles`, `cdr_records`,
-`alshrouq_dispatches`) all still 0 rows, and the exact trigger inventory on `orders` (6),
-`complaints` (2), and the two telesales sync triggers. No Cloud write, no self-hosted
-schema/data write, no migration applied, no DNS change, no branch created/switched, no
-credential invented, no cutover date/time chosen.
+`owner_protection`/`is_owner()`, storage buckets (0), `shams_offers` (0)/
+`shams_product_catalog` (8,484 exact match), all 3 cron jobs active, all 11 production
+containers `Up 5 days (healthy)`, production destination tables (`orders`, `complaints`,
+`profiles`, `user_roles`, `cdr_records`, `alshrouq_dispatches`) all still 0 rows, and the
+exact trigger inventory on `orders` (6), `complaints` (2), and the two telesales sync
+triggers. No Cloud write, no self-hosted schema/data write, no migration applied, no DNS
+change, no branch created/switched, no credential invented, no cutover date/time chosen.
+
+**One genuine change since Phase 50, found during this phase's own git push**: while this
+document was being prepared, 5 new commits landed on `origin/main` (merged into this
+branch, no conflicts, no code reviewed or altered by this phase), including a new
+migration file, `20260918120000_alshrouq_handled_manually.sql`. It **widens** the
+`alshrouq_dispatches_resolution_outcome_valid` CHECK constraint to admit a fourth value
+(`handled_manually`) alongside the existing three (`delivered`, `not_delivered`,
+`undetermined`); it modifies no data and touches no other table. Confirmed live this
+session: **not yet applied to self-hosted** (`schema_migrations` still shows 150 applied;
+this version is absent from the ledger). This is a **normal pending migration**, unrelated
+to migration 69's cutover-specific hold — it must be applied to self-hosted through the
+project's regular migration-deployment process before or during cutover, like any other
+ordinary schema change, and is tracked as its own line item below (§1, item 1b). It was
+**not applied in this phase** — applying any migration to self-hosted is schema
+modification, which this phase's hard safety rules forbid regardless of how low-risk the
+change is.
 
 ---
 
@@ -22,7 +37,8 @@ credential invented, no cutover date/time chosen.
 
 | # | Prerequisite | Status | Notes |
 |---|---|---|---|
-| 1 | Migration ledger / migration 69 hold | **CLOSED** | 150/151 applied, `20260723022830` confirmed absent, unchanged since Phase 48 |
+| 1 | Migration ledger / migration 69 hold | **CLOSED** | 150 applied of 152 files now on disk (151 as of Phase 48, +1 new normal migration since, see 1b); `20260723022830` confirmed absent from the ledger, unchanged since Phase 48 |
+| 1b | New migration `20260918120000_alshrouq_handled_manually.sql` (landed on `origin/main` during this phase, merged in) | **REQUIRES CUTOVER-DAY ACTION** | Pure additive CHECK-constraint widening on `alshrouq_dispatches.resolution_outcome`, no data change; confirmed not yet applied to self-hosted; unrelated to migration 69's hold — apply via the normal migration-deployment process before or during cutover (pre-cutover check 1.2 below), not part of this preparation phase |
 | 2 | `owner_protection` / `is_owner()` | **CLOSED** | Both triggers present, enabled, live-verified this session |
 | 3 | Auth FK graph / `telesales_leads` self-ref / order-complaint triggers | **CLOSED** | Live-verified this session, exact names below (§4) |
 | 4 | Security ACLs / RLS (6 functions, 4 email tables) | **CLOSED** | Unchanged since Phase 48; one non-blocking low-severity note (unpinned `search_path` on 4 fully-qualified email-queue functions) carried forward, not a gate item |
@@ -59,14 +75,22 @@ may not begin until Gate B (§8) receives an explicit `GO`.**
 ### 1. Pre-cutover checks
 1.1. Confirm all prerequisites in §1 are CLOSED or READY FOR CUTOVER (no
 REQUIRES OPERATOR INPUT items remain).
-1.2. Recapture `prod_schema.sql` fresh (self-hosted, schema-only, read-only) — even
+1.2. Apply any normal (non-migration-69) pending migrations to self-hosted through the
+project's regular migration-deployment process — as of this document, exactly one is
+pending: `20260918120000_alshrouq_handled_manually.sql` (§1, item 1b). Re-check the
+migration directory for any further migration added between now and the cutover window,
+since main is an actively developed branch and this phase already observed one land
+mid-preparation. **Migration 69 (`20260723022830`) remains excluded from this step and
+from every step of this runbook.**
+1.3. Recapture `prod_schema.sql` fresh (self-hosted, schema-only, read-only) — even
 though Phase 50 already did this once, a same-day recapture is standard hygiene since
-self-hosted may have advanced further.
-1.3. Re-run the same live checks as §"Executive verdict" above (ledger, triggers,
-containers, cron, storage) one final time immediately before freeze.
-1.4. Confirm the exact maintenance-window date/time has been supplied by the business
+self-hosted may have advanced further (confirmed true again this phase — see the note at
+the top of this document).
+1.4. Re-run the same live checks as the Phase 50 baseline (ledger, triggers, containers,
+cron, storage) one final time immediately before freeze.
+1.5. Confirm the exact maintenance-window date/time has been supplied by the business
 (Gate A).
-1.5. Confirm rollback plan (§7) and all named operators/approvers are available and on
+1.6. Confirm rollback plan (§7) and all named operators/approvers are available and on
 call for the window.
 
 ### 2. Cloud write freeze
@@ -135,7 +159,12 @@ generation runs) per their established CLOUD→REPLACE/MERGE classification.
 by direct copy, no FK validation needed by design.
 6.8. `alshrouq_dispatches` (CLOUD→REPLACE) — the `20260820180000_alshrouq_dispatch.sql`
 *migration* is already applied on self-hosted and must **not** be manually replayed;
-only the *data* is imported here.
+only the *data* is imported here. **Dependency**: Cloud rows may carry
+`resolution_outcome = 'handled_manually'` (three incidents corrected on Cloud around
+2026-09-12) — step 1.2's migration application
+(`20260918120000_alshrouq_handled_manually.sql`) must complete *before* this import step,
+or any such row will fail self-hosted's `alshrouq_dispatches_resolution_outcome_valid`
+CHECK constraint.
 6.9. CDR historical data per the hybrid strategy (`phase45_cdr_migration_plan.md`) —
 import historical rows, then let the existing Yeastar sync resume for anything after the
 freeze point.
