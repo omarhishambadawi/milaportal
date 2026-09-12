@@ -28,13 +28,35 @@
  * observed, and it keeps owning the order's dispatch slot.
  */
 
-/** What an operator can conclude. Deliberately none of them is "retry". */
-export type AlShrouqResolutionOutcome = "delivered" | "not_delivered" | "undetermined";
+/**
+ * What an operator can conclude. Deliberately none of them is "retry".
+ *
+ * The first three are all statements about what **AlShrouq** said — see
+ * `explainResolutionOutcome`, where each one names the courier. That shared
+ * premise is why `handled_manually` had to be added rather than one of them
+ * reused: for a delivery somebody dealt with by hand and which the Portal is
+ * forbidden to ask the courier about, all three would be a confirmation nobody
+ * obtained. See `alshrouq-reconciliation.ts`.
+ */
+export type AlShrouqResolutionOutcome =
+  | "delivered"
+  | "not_delivered"
+  | "undetermined"
+  /**
+   * The order was dealt with outside the automated system.
+   *
+   * **Not a success.** It says the Portal's dispatch is finished with, not that
+   * it worked — for the 2026-09-10 deliveries no request ever reached AlShrouq
+   * at all. It is the one outcome that asserts nothing about the courier, which
+   * is precisely what makes it safe to record without contacting them.
+   */
+  | "handled_manually";
 
 export const ALSHROUQ_RESOLUTION_OUTCOMES: readonly AlShrouqResolutionOutcome[] = [
   "delivered",
   "not_delivered",
   "undetermined",
+  "handled_manually",
 ] as const;
 
 /**
@@ -100,6 +122,10 @@ export function describeResolutionOutcome(outcome: AlShrouqResolutionOutcome): s
       return "Confirmed not delivered";
     case "undetermined":
       return "Unable to determine";
+    case "handled_manually":
+      // The wording is load-bearing. "No automated dispatch required" is the
+      // half that stops this being read as the dispatch having succeeded.
+      return "Handled manually — no automated dispatch required";
   }
 }
 
@@ -112,6 +138,20 @@ export function explainResolutionOutcome(outcome: AlShrouqResolutionOutcome): st
       return "AlShrouq confirmed no delivery was created for this order.";
     case "undetermined":
       return "The outcome could not be established even after checking with AlShrouq.";
+    case "handled_manually":
+      /*
+       * The only explanation here that does not mention what AlShrouq said,
+       * because it is the only outcome recorded without asking them.
+       *
+       * Both halves matter. "Dealt with outside the automated system" is what
+       * happened; "no AlShrouq delivery was created by the Portal, and none was
+       * confirmed" is what did not, and is what keeps this from being mistaken
+       * for a delivery confirmation later by somebody reading the timeline.
+       */
+      return (
+        "The order was dealt with outside the automated system. No AlShrouq delivery " +
+        "was created by the Portal, and none was confirmed with the courier."
+      );
   }
 }
 
@@ -130,6 +170,44 @@ export function resolutionWarningFor(status: string | null | undefined): string 
 
 /** The `order_activity.action` this workflow writes. */
 export const RESOLUTION_ACTIVITY_ACTION = "alshrouq_dispatch_resolved";
+
+/**
+ * The `order_activity.action` a **correction** writes.
+ *
+ * Its own action, never a second `alshrouq_dispatch_resolved`. The two are
+ * different events and an audit log that called them the same thing would make
+ * "who decided this" unanswerable: the original entry stays exactly where it is,
+ * saying what was recorded and by whom, and this one sits after it saying what
+ * was changed, by whom, and why.
+ */
+export const RESOLUTION_CORRECTION_ACTIVITY_ACTION = "alshrouq_dispatch_resolution_corrected";
+
+/**
+ * The one correction this system performs: `delivered` → `handled_manually`.
+ *
+ * Deliberately a pair of constants rather than parameters. A general "change any
+ * outcome to any other" operation is an edit button on an audit trail, and the
+ * whole value of a resolution record is that it cannot be quietly rewritten.
+ *
+ * This exists because three dispatches were recorded as `delivered` — "AlShrouq
+ * confirmed the delivery exists and was completed" — when AlShrouq had never
+ * been asked about any of them, and for one of them no request had ever left the
+ * machine. That is a claim the evidence contradicts, and correcting it is not
+ * the same act as making a fresh decision.
+ */
+export const CORRECTABLE_FROM_OUTCOME = "delivered" as const;
+export const CORRECTION_TARGET_OUTCOME = "handled_manually" as const;
+
+/**
+ * The operator's reason for a correction, bounded like a resolution note.
+ *
+ * Required for the same reason: a correction with no account of why is an
+ * unsourced change to an audit record, which is worse than the wrong value it
+ * replaces because it is no longer visible as a question.
+ */
+export function isValidCorrectionReason(reason: string): boolean {
+  return isValidResolutionNote(reason);
+}
 
 /**
  * The operator's note, bounded.

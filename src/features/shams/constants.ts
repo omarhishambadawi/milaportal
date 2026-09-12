@@ -26,6 +26,13 @@ const FAILURE_COPY: Record<string, string> = {
   http_error: "Unable to load Shams data. Please try again.",
   malformed: "Shams MIS returned an unexpected response. Please try again.",
   auth_failed: "Shams MIS rejected the portal's credentials. Contact an administrator.",
+  /*
+   * Not a credential problem, and the wording must not imply one: the CRM
+   * refused the portal itself as out of date. Rotating a password does nothing
+   * here — the portal has to be updated to the version the CRM now requires.
+   */
+  incompatible_client:
+    "This portal needs updating before it can talk to Shams. Contact an administrator.",
   invalid_query: "That search could not be run. Check the values and try again.",
   /*
    * MilaPortal's own catalogue, not Shams'. The wording says so: an agent told

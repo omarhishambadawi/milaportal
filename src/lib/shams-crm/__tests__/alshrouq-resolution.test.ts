@@ -18,6 +18,7 @@ import {
   canResolveDispatch,
   describeResolutionOutcome,
   describeResolveRefusal,
+  explainResolutionOutcome,
   isResolutionOutcome,
   isValidResolutionNote,
   normaliseResolutionNote,
@@ -62,17 +63,46 @@ describe("the resolution contract", () => {
     expect(canResolveDispatch("something-new")).toBe(false);
   });
 
-  it("offers exactly three outcomes, and none of them is a retry", () => {
+  it("offers exactly four outcomes, and none of them is a retry", () => {
     expect([...ALSHROUQ_RESOLUTION_OUTCOMES]).toEqual([
       "delivered",
       "not_delivered",
       "undetermined",
+      // Added for the 2026-09-10 deliveries that were dealt with by hand. The
+      // other three each assert something AlShrouq said, and those are exactly
+      // the dispatches nobody is allowed to ask AlShrouq about.
+      "handled_manually",
     ]);
     for (const outcome of ALSHROUQ_RESOLUTION_OUTCOMES) {
       expect(describeResolutionOutcome(outcome)).not.toMatch(/retry|resend|send again/i);
     }
     expect(isResolutionOutcome("retry")).toBe(false);
     expect(isResolutionOutcome("accepted")).toBe(false);
+  });
+
+  /**
+   * The distinction the audit trail has to keep.
+   *
+   * "Handled manually" must never read as the automated dispatch having worked
+   * — for 12389 no request ever left the machine — and it must not claim a
+   * courier confirmation, because obtaining one was forbidden.
+   */
+  it("never lets handled_manually read as a delivery confirmation", () => {
+    const label = describeResolutionOutcome("handled_manually");
+    const detail = explainResolutionOutcome("handled_manually");
+
+    expect(label).toBe("Handled manually — no automated dispatch required");
+    expect(label).not.toMatch(/delivered|success|sent|dispatched/i);
+
+    // The one explanation that does not speak for AlShrouq.
+    expect(detail).not.toMatch(/AlShrouq confirmed/i);
+    expect(detail).toMatch(/outside the automated system/i);
+    expect(detail).toMatch(/none was confirmed/i);
+
+    // And the other three still do, which is why this one had to exist.
+    for (const other of ["delivered", "not_delivered", "undetermined"] as const) {
+      expect(explainResolutionOutcome(other)).toMatch(/AlShrouq/);
+    }
   });
 
   /** An answer already recorded is not open to a second opinion. */
@@ -490,7 +520,9 @@ describe("the server function's boundary", () => {
     expect(body).not.toMatch(/data\.(resolvedBy|resolvedAt|userId|actorId|dispatchStatus|status)/);
     // The validator accepts exactly three fields.
     expect(body).toContain("dispatchId: z.string().uuid()");
-    expect(body).toContain('outcome: z.enum(["delivered", "not_delivered", "undetermined"])');
+    expect(body).toContain(
+      'outcome: z.enum(["delivered", "not_delivered", "undetermined", "handled_manually"])',
+    );
     expect(body).toContain("note: z.string().min(3).max(280)");
   });
 

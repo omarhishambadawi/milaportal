@@ -3755,10 +3755,10 @@ asserts the trigger path does not exist anywhere in the codebase.
 
 #### The two tables
 
-| table | one row per | holds |
-| --- | --- | --- |
-| `shams_offers` | (item, branch) **with** an offer | price, `offer_percent`, `offer_display`, `after_offer_price` |
-| `shams_offer_products` | item the sweep has **checked** | scope, branch counts, `offer_display`, and a product-level price pair |
+| table                  | one row per                      | holds                                                                 |
+| ---------------------- | -------------------------------- | --------------------------------------------------------------------- |
+| `shams_offers`         | (item, branch) **with** an offer | price, `offer_percent`, `offer_display`, `after_offer_price`          |
+| `shams_offer_products` | item the sweep has **checked**   | scope, branch counts, `offer_display`, and a product-level price pair |
 
 The second is not redundant. It is the only thing that separates **"we asked and
 there is no promotion"** (`scope = 'none'`, with a `checked_at` date on it) from
@@ -3856,7 +3856,7 @@ freeze the prices agents quote.
 ### Branch stock — the summary card and the register
 
 **The card answers the call.** An agent on the phone is asked what it costs,
-whether there is an offer, what it costs *with* the offer, how many there are and
+whether there is an offer, what it costs _with_ the offer, how many there are and
 where. `ProductSummaryCard` states all of it the moment a product opens —
 **price · applied offer · offer price · units in stock · available branches** —
 and none of it costs a third-party request except the stock half:
@@ -3970,14 +3970,50 @@ catalogue described below; this host is contacted only by the background job tha
 fills it. See _The local product catalogue_.
 
 ```
-src/lib/shams-crm/client.server.ts       login + session (X-Session-Token), 401 -> one re-login -> one retry
+src/lib/shams-crm/client.server.ts       login (app_version handshake) + session (X-Session-Token), 401 -> one re-login -> one retry
 src/lib/shams-crm/catalog.server.ts      full-catalog fetch + in-memory cache: 6 h TTL, single-flight, stale-on-failure fallback; fetchCatalogNow is the no-fallback read the refresh uses
 src/lib/shams-crm/catalog-sync.server.ts marker-driven refresh of the local catalogue; never throws, never shrinks it
 src/lib/shams-crm/products.server.ts     the seam: the catalog as the Portal's own ShamsProduct
-src/lib/shams-crm/diagnostics.server.ts  admin-only smoke test (login / catalog / cache reuse)
+src/lib/shams-crm/diagnostics.server.ts  admin-only smoke test (compatibility / login / catalog / cache reuse)
 src/lib/shams-crm/alshrouq-config.server.ts  admin-only AlShrouq connectivity probe (read-only)
 src/lib/shams-crm/types.ts               wire shapes + normalized models
 ```
+
+#### The client version handshake
+
+`POST /login` carries `app_version` alongside the credentials, and the CRM checks
+it **before** it looks at the password. A client below the published floor is
+refused with **HTTP 426** and never reaches authentication.
+
+```
+POST /login  {username, password, client_name, app_version}
+GET  /api/public/desktop-release/manifest -> {minimum_supported_version, ...}   (unauthenticated)
+```
+
+`CLIENT_APP_VERSION` in `client.server.ts` is the version declared, pinned to the
+floor the CRM publishes. `client_name` is unchanged and still says truthfully
+that the caller is the Portal — `app_version` states which wire contract it
+speaks, not what software it is.
+
+A 426 costs one extra round trip and then heals itself: the floor is read from
+the public manifest and the login retried once at that version, which is adopted
+for later logins only if it actually worked. The pinned constant is still tried
+first, so an ordinary login stays a single request. The manifest value is
+shape-checked against a version pattern before being echoed back — it arrives
+from an unauthenticated endpoint.
+
+**426 is classified as `incompatible_client`, never `auth_failed`.** These are
+different faults with different fixes, and conflating them sends someone to
+rotate a credential that was never the problem — which is exactly what happened
+on 2026-09-10, when the CRM raised its floor and every dependent feature reported
+the portal's credentials as rejected. For the same reason `login` only classifies
+401 and 403 as `auth_failed`; any other non-2xx from `/login` is `http_error`,
+and a 2xx without a session token is `malformed`.
+
+The smoke test reports compatibility and authentication as separate columns, so
+"the CRM refused this build" can never again be read as "the password is wrong".
+`verifyAgentAgainstCrm` in `agent-setup.server.ts` posts its own login and
+declares the same version through `crmClientVersion()`.
 
 ### The local product catalogue
 
@@ -4041,6 +4077,18 @@ result rather than invent one. Whatever the agent typed is escaped first
 (`escapeLikePattern`), so a `%` in `1% CREAM` is a percent sign rather than a
 wildcard the syntax never offered them.
 
+**An absent pattern is omitted, not sent as null.** Every argument of
+`shams_search_product_catalog` carries a SQL default
+(`p_name_pattern text DEFAULT NULL`, `p_code_pattern text DEFAULT NULL`,
+`p_max_rows integer DEFAULT 2000`), so `?? undefined` is dropped by
+`JSON.stringify`, PostgREST calls the function without that named argument, and
+the default supplies it. The same holds for `p_source_marker` on
+`shams_promote_product_catalog` and for `p_after`, `p_cursor` and
+`p_source_marker` on the offer store's functions — all verified against the
+deployed signatures. `catalog-store.test.ts` asserts the **serialised** argument
+body rather than the object literal, because that equivalence is a property of
+the request and would stop holding if one of those defaults were ever dropped.
+
 **Refresh.** `refreshProductCatalog` follows the Desktop's rule rather than a
 TTL: read `GET /stock/sync/status`, reduce it to one success marker
 (`stockSyncMarker`), and re-fetch `/products/names` only when that marker has
@@ -4091,7 +4139,7 @@ missing 43 (`shams_sync_runs`, for one) plainly did exist. Lovable applies
 migrations through its own path and the version stamps do not always line up, so
 **the ledger can be wrong in both directions**.
 
-So verify the *objects*, never the ledger, after shipping schema:
+So verify the _objects_, never the ledger, after shipping schema:
 
 ```sql
 SELECT to_regclass('public.shams_product_catalog') AS tbl,
@@ -4107,7 +4155,7 @@ migration:
   `extensions.gin_trgm_ops` then fails to resolve and takes the migration with
   it. Reference the opclass unqualified under a `SET LOCAL search_path`.
 - **Deploying is a separate act from pushing.** `main` can be several commits
-  ahead of what `milaportal.live` serves, and the scheduler pokes the *published*
+  ahead of what `milaportal.live` serves, and the scheduler pokes the _published_
   Worker — so a `pg_cron` job can report HTTP 200 every minute while running code
   that predates the feature being debugged.
 
@@ -5044,6 +5092,10 @@ cancelled`. `processing` is a claim, not a report. `indeterminate` is terminal
 until a human resolves it, and is never followed by another POST — the whole
 point of scheduling is that nobody is watching.
 
+There is one arrow back: `processing → scheduled`, taken only when the failure
+happened **before** the POST was transmitted, so there is nothing at AlShrouq to
+duplicate. See "A failure before the POST — 2026-09-12".
+
 **With the gate closed the run claims nothing**, sends nothing and invents no
 status; rows stay `scheduled` and are picked up whenever it opens.
 `alshrouq_dispatch_due()` sends nothing either while the vault entries
@@ -5194,6 +5246,123 @@ Every terminal write goes through `finishClaim`, guarded on
 `dispatch_status = 'processing'`, so a reaped run waking up late cannot
 overwrite an `indeterminate` a person has already resolved.
 
+#### A failure before the POST — 2026-09-12
+
+**What was observed.** The `alshrouq-dispatch-due` cron fired every minute and
+`/api/alshrouq-run-scheduled` answered **HTTP 500** for roughly sixteen
+consecutive minutes. Deliveries whose scheduled time arrived in that window were
+not handed to the courier, and staff saw them sitting past their time.
+
+**What actually happened**, from the production row that proves it
+(`client_order_id` 12389, due 2026-09-10 18:25:00Z):
+
+| column            | value                                                              |
+| ----------------- | ------------------------------------------------------------------ |
+| `last_attempt_at` | `18:25:00.665Z` — the claim succeeded, at the scheduled minute      |
+| `attempt_count`   | **0** — every terminal write sets 1, so none of them ever ran       |
+| `last_error`      | the reaper's sentence, written ~15 minutes later                    |
+| `dispatch_status` | `indeterminate`                                                     |
+
+The row was claimed and then **nothing finished it**.
+
+**What made the login fail that evening** is the CRM's minimum-client-version
+gate — see "The client version handshake". It answers **426 Upgrade
+Required** on `POST /login` before it looks at the credentials, the Portal was
+declaring no `app_version`, and `login()` rounded every non-2xx up to
+`auth_failed` and threw. 18:25:00Z is 21:25 +03:00, about forty minutes before
+`e416ecc` fixed the handshake.
+
+So the two incidents are connected, but not in the direction it looked: the CRM
+version gate was the trigger, and it was fixed at the source. What it _exposed_
+is the defect below, which is independent of it and would have been reached by
+any other pre-transmission failure.
+
+The cause is a distinction the worker was not making.
+`createAlshrouqOrder` **throws** for every failure that happens _before_ the
+POST is transmitted — a CRM that refuses the login, a CRM that cannot be
+reached, a login that times out — and _returns_ for everything from `fetch`
+onwards. Nothing in `runDueAlShrouqDispatches` caught the throw. So one
+unreachable CRM:
+
+1. aborted the whole batch, leaving every other due delivery that minute
+   untouched;
+2. escaped to the route, which answered pg_cron with a 500 — the observed
+   symptom, repeating for as long as due work kept waking the poll;
+3. left the claimed row in `processing`, reachable by nothing but
+   `reapStaleClaims`, which correctly settles a claim it cannot explain as
+   `indeterminate` — a state only a human can clear.
+
+A delivery that had never been sent to anybody therefore ended up needing
+somebody to ring AlShrouq about it.
+
+The CRM was demonstrably unwell that afternoon: seven **immediate** dispatches
+took a 500 or 502 between 16:25 and 16:43 the same day. Those were handled
+correctly — a returned 5xx is `indeterminate` by design. Only the throw-shaped
+failure was mishandled.
+
+**The fix**, in `alshrouq-scheduler.server.ts`:
+
+- **Each row runs in its own `try`.** A row that throws is settled or released on
+  its own and the run continues to the next one. One bad delivery no longer
+  costs the batch, and the endpoint no longer answers 500 for a per-row problem.
+- **A pre-transmission failure releases the row back to `scheduled`**, through
+  the single helper `releaseClaim`, with the reason on `last_error` and
+  `attempt_count` incremented. This is safe by contract rather than by hope: the
+  worker tracks whether `deps.createOrder` has returned, and releases only when
+  it has not — which is exactly when the transport guarantees nothing was
+  transmitted. **There is no delivery to duplicate, because there is no
+  delivery.**
+- **A failure _after_ the POST is unchanged.** If the create returned and only
+  the write-down failed, the row stays claimed for `reapStaleClaims` to settle
+  as `indeterminate`. Transmitted, outcome unknown, never re-POSTed.
+- **`RETRY_BACKOFF_MS` (2 minutes)** keeps a released row from being re-claimed
+  by the very next minute's poll. `client.server.ts` names the hazard this
+  avoids: "repeatedly re-authenticating a user credential against a server that
+  keeps refusing is how an account gets locked." A delivery that has never been
+  attempted has no `last_attempt_at`, so a first dispatch is never delayed.
+- **The due read is ordered `scheduled_for` ascending** and reads
+  `BATCH_SIZE × 4` before the backoff filter, so the longest-waiting delivery
+  drains first and rows resting in backoff cannot crowd out a fresh one.
+- **`classifyDispatchFailure`** names the failure: `configuration`,
+  `authentication`, `incompatible_client`, `upstream`, `timeout`, `database`,
+  `unknown`. It reads the HTTP status as well as the kind, because
+  `client.server.ts` used to raise `auth_failed` for _any_ non-2xx on `/login` —
+  which is exactly how the CRM's 426 read as a bad password. `blocked` (waiting
+  on a person) is 401/403, `not_configured` and `incompatible_client`;
+  everything else is `retryable`. It returns fixed sentences and copies nothing
+  out of the upstream error, so no credential or customer detail reaches a log
+  or a row.
+- **The run summary gained three integers** — `retryable`, `deferred`,
+  `unsettled` — and both the summary and the 500 path now name the job
+  (`alshrouq-run-scheduled`) and the failure category.
+
+**There is no attempt budget.** A delivery that stops being retried after N
+tries is a delivery silently abandoned during an outage, which is the failure
+this change exists to end. A row waits, with the reason visible on the order,
+until it goes out or a person acts.
+
+**Recovery does not depend on any particular minute.** The due query has always
+asked `scheduled_for <= now()`, never `= this minute`, so a delivery due at 18:30
+during an 18:26–18:41 outage is still overdue at 18:42 and is taken by the first
+healthy run. What the fix adds is that the run in question is now healthy.
+
+**Nothing about the database changed** — no migration, no new column, no cron
+change. `attempt_count`, `last_attempt_at` and `last_error` already existed.
+Verified against production on 2026-09-12: `alshrouq-dispatch-due` is active on
+`* * * * *` running `SELECT public.alshrouq_dispatch_due()`, the installed
+function is the canonical body, and no row is stuck in `processing` or overdue.
+
+**Relationship to the Shams CRM work.** Not the catalogue and offer commits of
+2026-09-05…07 — those go nowhere near `getSessionToken`, `login` or the create
+transport. The connection is to `e416ecc`, the client-version handshake: the
+CRM's 426 gate is what broke every login that evening, and it is what the
+scheduled dispatch tripped over. That trigger is already fixed at the source,
+and this change fixes the separate defect it exposed — a pre-transmission throw
+stranding a claim. **This change touches no shared authentication
+infrastructure**; it only classifies what the transport already reports,
+`incompatible_client` included, so a 426 now reads as "the Portal needs
+updating" rather than as a credential problem.
+
 #### "Already booked"
 
 The reconciliation GET now runs for a **4xx** as well. The commonest reason the
@@ -5242,6 +5411,138 @@ statement about a courier just booked, so the reference is reported and the
 failure to record it is logged (`[alshrouq] a booked delivery could not be
 recorded`) rather than swallowed; on the scheduling path — which contacts nobody
 — it is an honest save failure.
+
+### Settling a stuck dispatch — the operator's runbook
+
+An `indeterminate` or `failed` row is the machine saying it has stopped
+guessing. Nothing automatic will ever move it. This is what a person does, and
+what the Portal can and cannot do for them.
+
+**1. Read the row's own evidence first.** `attempt_count` is the discriminator
+nothing else gives you:
+
+| `attempt_count` | `last_error`                                 | What it means                                                                |
+| --------------- | -------------------------------------------- | ---------------------------------------------------------------------------- |
+| **1**           | "The CRM returned 500 / 502 …"               | The POST **was transmitted**. The CRM answered ambiguously. A delivery may exist. |
+| **0**           | "…being sent when the process stopped…"      | No terminal write ever ran. Settled by `reapStaleClaims`, which cannot tell whether the POST went out. |
+
+Every terminal write sets `attempt_count`, so `0` means the run died between the
+claim and any outcome being recorded. That narrows the question but does not
+answer it on its own — pair it with whether any dispatch at all was succeeding
+in that window (see "A failure before the POST — 2026-09-12" for how that
+argument is made).
+
+**2. Establish the truth at AlShrouq.** Two routes, and which one is available
+depends on `local_id`:
+
+- **`local_id` present** → the order page's **Check status** button
+  (`refreshAlShrouqOrderStatus`, `GET …/orders/{id}/refresh`). A read, repeatable,
+  safe.
+- **`local_id` null** → the button cannot help: it has no CRM id to ask about.
+  This is the normal case for a row that never got a usable create response,
+  which is every row that reaches `indeterminate` this way. **The answer has to
+  come from AlShrouq directly**, quoting the `client_order_id` — which is the
+  order's `display_no` without the `#`.
+
+`findAlshrouqOrderByClientOrderId` would answer exactly this question with one
+GET, and the worker already uses it internally — but it is **not exposed to an
+operator**. Wiring it to a button is the obvious next improvement and is
+deliberately not part of the 2026-09-12 fix.
+
+**3. Record what was established**, through the Resolve control on the order
+page — `delivered`, `not_delivered` or `undetermined`, with a note. It writes
+four columns and an `order_activity` entry, contacts nobody, and **does not
+change `dispatch_status`**: the machine's observation stands beside the
+operator's conclusion rather than being overwritten by it.
+
+**Resolving does not free the order to be sent again.** `cancelled_at` stays
+null, so the row keeps the order's slot in `alshrouq_dispatches_live_order_key`.
+Recording what happened and re-authorising a delivery are separate decisions,
+and the second one is not currently automatable — a genuinely undelivered order
+needs the dispatch cancelled or a new order raised, which is a deliberate human
+act.
+
+**Never** resolve a row as `delivered` on the strength of database evidence
+alone. The columns can say a POST was never transmitted; they cannot say a
+customer received anything.
+
+#### The reconciliation centre — 2026-09-12
+
+`/admin/alshrouq-reconciliation`, gated on `admin_access`, reading the
+`alshrouq_dispatches_unresolved_idx` the 2026-08-23 migration built and nothing
+had ever queried. Two actions, and **neither of them dispatches anything**:
+
+- **Look up** — `alshrouqLookupDispatch` → `findAlshrouqOrderByClientOrderId`.
+  One GET, repeatable. It is the question that matters for a row with no
+  `local_id`, which the order page's Check status button cannot ask.
+- **Record outcome** — the existing `alshrouqResolveDispatch`, unchanged in what
+  it writes.
+
+There is no retry, resend or re-dispatch control on the page and no code path
+from it to the create transport. A test asserts both: no control label matches
+`Retry|Resend|Re-dispatch|Send again|Dispatch`, and the module imports none of
+`alshrouqDispatchOrder`, `createAlshrouqOrder` or `runDueAlShrouqDispatches`.
+
+##### `handled_manually`, and why a fourth outcome was needed
+
+12389, 12422 and 12428 were dealt with by hand after the outage, under a
+standing instruction that nothing at all is to be sent to AlShrouq about them.
+The three existing outcomes could not express that, because **each one asserts
+something the courier said**:
+
+| outcome         | its own explanation                                            |
+| --------------- | -------------------------------------------------------------- |
+| `delivered`     | "AlShrouq confirmed the delivery exists and was completed."      |
+| `not_delivered` | "AlShrouq confirmed no delivery was created for this order."     |
+| `undetermined`  | "…could not be established even after checking with AlShrouq."   |
+
+Recording any of them would be an operator entering a confirmation they were
+forbidden to obtain. `handled_manually` — "Handled manually — no automated
+dispatch required" — is the one statement that is true and needs no external
+contact. It says the Portal's dispatch is finished with; it says nothing
+whatever about the courier. `20260918120000` widens the CHECK and reads it back.
+
+##### The refusal, and where it lives
+
+`alshrouq-reconciliation.ts` is pure and imports no transport, so it cannot be
+where a request leaks out. It refuses on two grounds: the three ids from the
+incident (matched on `client_order_id` **or** dispatch uuid, so a mistyped one
+still fails closed), and any dispatch already resolved `handled_manually` — the
+first covers the window before the second is true.
+
+`alshrouqLookupDispatch` checks it **before the permission read and before the
+row is fetched**, so there is no ordering of its steps in which a request could
+go out for one of the three; a test asserts that ordering. `alshrouqResolveDispatch`
+checks it too, and refuses any courier-confirming outcome for a blocked
+dispatch. The page not drawing a button is a convenience, not the guarantee.
+
+##### When the record disagrees with the evidence
+
+On 2026-09-12 at 01:06–01:07 all three were resolved as **`delivered`** —
+including 12389, whose `attempt_count` is 0 and for which no request ever left
+the machine. `resolveAlShrouqDispatch` will not overwrite an operator's account,
+deliberately, so the contradiction cannot be papered over. It can be shown:
+`describeEvidenceConflict` flags a `delivered` recorded against a dispatch that
+was never transmitted, or against one the Portal was barred from asking about,
+and the page renders it beside the resolution. It reports; it never edits.
+
+#### The worklist that does not exist
+
+`20260823120000_alshrouq_dispatch_resolution.sql` creates
+`alshrouq_dispatches_unresolved_idx` and its comment calls it _"the operator's
+worklist: stuck and not yet settled"_. **Nothing queries it.** The only place an
+`indeterminate` row is visible is the order page of the order it belongs to.
+
+The cost is measurable rather than theoretical: on 2026-09-12 there were **nine
+unresolved `indeterminate` rows and one unresolved `failed` row**, the oldest
+twenty days old, none carrying a resolution. An operator cannot settle what they
+cannot find.
+
+The index is already there and already the right shape, so the missing piece is
+an admin surface that reads it.
+
+**Built on 2026-09-12** — see "The reconciliation centre" above. This section is
+kept as the record of why it was needed.
 
 ### The dispatch state model, and the order timeline
 
@@ -7120,7 +7421,7 @@ reshuffle under the agent's cursor.
 
 **The header lines up with its column because it cannot not.** One `<table>`,
 `table-fixed`, and a single `<colgroup>` whose seven `<col>` elements are the
-*only* place any width is stated — no `w-` class on a `th` or a `td`, and no
+_only_ place any width is stated — no `w-` class on a `th` or a `td`, and no
 pixel offset anywhere in the component, because there is nothing left for one to
 correct. A `<th>` and the `<td>`s beneath it are the same table column by
 definition of the element, so no CSS, breakpoint or content length can make them
@@ -7129,7 +7430,7 @@ column is exactly how a header and a body come to disagree about which column is
 which; nothing is hidden now.
 
 **Responsive, deliberately, in two states.** From `md` up it is this table,
-inside a wrapper that *may* scroll horizontally — `min-w` sits below the `md`
+inside a wrapper that _may_ scroll horizontally — `min-w` sits below the `md`
 breakpoint, so at any ordinary width there is nothing to scroll, and a narrow
 window scrolls one bounded region instead of misaligning seven columns. Below
 `md` the table is replaced by a structured card per branch.
@@ -7137,7 +7438,7 @@ window scrolls one bounded region instead of misaligning seven columns. Below
 **Arabic is isolated with `<bdi>`, not `dir="auto"`.** `dir="auto"` on a cell
 flips the whole cell, and a City column that right-aligns for Arabic branches
 and left-aligns for the rest is precisely the drift this table was rebuilt to
-remove. `<bdi>` renders the run right-to-left *inside* a cell that stays aligned
+remove. `<bdi>` renders the run right-to-left _inside_ a cell that stays aligned
 with its header.
 
 **Price and Applied Offer are separate and adjacent.** They are the pair an agent
@@ -7222,6 +7523,7 @@ What that bought, concretely:
   sets of 1, 12, 13, 20, 100 and 200 codes through the object the handler uses.
   The two constants cannot be one — `shams.functions.ts` ships to the browser
   bundle and `offer-store.server.ts` does not — so a test asserts they agree.
+
 - **The click prefetch is gone.** It existed to overlap a CRM request with the
   router navigation; there is no CRM request left to overlap, so the workaround
   was deleted rather than kept. Hover prefetching was never added and a test

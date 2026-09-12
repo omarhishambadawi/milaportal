@@ -14,9 +14,17 @@
  *
  * ## Authentication
  *
- *   POST /login  {username, password, client_name}
+ *   POST /login  {username, password, client_name, app_version}
  *     -> {session_token, id, role, branch_code, allowed_features, username}
  *   GET  /...    X-Session-Token: <session_token>
+ *
+ * ## Client version handshake
+ *
+ * The CRM gates `/login` on the caller's declared `app_version` and answers
+ * **426 Upgrade Required** to anything below its published floor — before it
+ * ever looks at the credentials. A 426 is therefore a statement about the
+ * *client*, never about the password, and is classified apart from
+ * `auth_failed` so a compatibility break is not escalated as a credential one.
  *
  * This is a **user** login, not a machine account — the same credential a person
  * types into the Desktop — used here as an authorized temporary measure until
@@ -52,6 +60,29 @@ import type { RawCrmLoginResponse } from "./types";
 const BASE_URL = "https://shams-crm.cloud";
 
 const LOGIN_PATH = "/login";
+
+/**
+ * The client version the Portal declares at login.
+ *
+ * A constant for the same reason `BASE_URL` is one: not a secret, established
+ * from the shipped Desktop package (`desktop-version.json`), and matching the
+ * `minimum_supported_version` the CRM publishes. It is a *protocol* field —
+ * `client_name` still says truthfully that this is the Portal and not a Desktop
+ * install; this only says which wire contract the Portal speaks.
+ */
+const CLIENT_APP_VERSION = "2026.09.10.204500";
+
+/**
+ * Where the CRM publishes the floor it enforces. Unauthenticated by design —
+ * the Desktop reads it before it can log in, and so can we.
+ */
+const RELEASE_MANIFEST_PATH = "/api/public/desktop-release/manifest";
+
+/** Shape-check on a version read from the manifest before it is echoed back. */
+const VERSION_PATTERN = /^\d{4}(?:\.\d{1,6}){2,4}$/;
+
+/** Short: this runs inside a login that a caller is already waiting on. */
+const MANIFEST_TIMEOUT_MS = 10_000;
 
 /** Per-request timeout. The catalog read is the slow one; 60 s covers it. */
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -102,7 +133,13 @@ export type ShamsCrmErrorKind =
   | "unavailable"
   | "http_error"
   | "malformed"
-  | "auth_failed";
+  | "auth_failed"
+  /**
+   * The CRM refused the client itself as out of date (HTTP 426), without
+   * judging the credentials. Distinct from `auth_failed` on purpose: the two
+   * have different causes, different fixes and different people to wake up.
+   */
+  | "incompatible_client";
 
 /** A failure safe to surface. Never carries a credential, token, or body. */
 export class ShamsCrmError extends Error {
@@ -193,6 +230,7 @@ function evictIfNeeded(): void {
 export function _resetCrmSession(): void {
   sessions.clear();
   inFlight.clear();
+  negotiatedVersion = null;
 }
 
 /** How many sessions are cached. For tests and diagnostics — never a token. */
@@ -233,14 +271,52 @@ async function request<T>(
 }
 
 /**
- * Exchange the configured credentials for a session token.
+ * The version accepted after a 426, once one has been. Null until then.
  *
- * `client_name` mirrors what the Desktop sends — its `COMPUTERNAME` — so the
- * server sees a named client rather than an anonymous one. There is no
- * `COMPUTERNAME` in a Worker, hence the explicit portal identifier.
+ * Set only once a login carrying it got **past the version gate** — which is
+ * not the same as succeeding. A retry that reaches "invalid credentials" has
+ * proved the version is acceptable and the password is the separate problem;
+ * throwing that away would make every login in a bad-credential state pay the
+ * 426 and the manifest read again. A retry that is itself refused with 426
+ * proves nothing and is not adopted.
  */
-async function login(env: ShamsCrmEnv): Promise<SessionState> {
-  const { status, body } = await request<RawCrmLoginResponse>(
+let negotiatedVersion: string | null = null;
+
+/** The version the next login will declare. */
+function declaredVersion(): string {
+  return negotiatedVersion ?? CLIENT_APP_VERSION;
+}
+
+/** The floor the CRM currently publishes, or null if it cannot be read. */
+async function readRequiredVersion(baseUrl: string): Promise<string | null> {
+  try {
+    const { status, body } = await request<{ minimum_supported_version?: unknown }>(
+      `${baseUrl}${RELEASE_MANIFEST_PATH}`,
+      { method: "GET", headers: { accept: "application/json" } },
+      MANIFEST_TIMEOUT_MS,
+    );
+    if (status < 200 || status >= 300) return null;
+    const raw =
+      typeof body?.minimum_supported_version === "string"
+        ? body.minimum_supported_version.trim()
+        : "";
+    // Shape-checked before it is sent back: this value arrives from an
+    // unauthenticated endpoint, and the only thing it is allowed to be is a
+    // version string.
+    return VERSION_PATTERN.test(raw) ? raw : null;
+  } catch {
+    // The manifest is a convenience, not a dependency. A login that cannot read
+    // it still reports the 426 it got.
+    return null;
+  }
+}
+
+/** One login attempt at a stated client version. Returns the raw outcome. */
+function attemptLogin(
+  env: ShamsCrmEnv,
+  appVersion: string,
+): Promise<{ status: number; body: RawCrmLoginResponse | null }> {
+  return request<RawCrmLoginResponse>(
     `${env.baseUrl}${LOGIN_PATH}`,
     {
       method: "POST",
@@ -249,17 +325,67 @@ async function login(env: ShamsCrmEnv): Promise<SessionState> {
         username: env.username,
         password: env.password,
         client_name: "milaserv-portal",
+        app_version: appVersion,
       }),
     },
     DEFAULT_TIMEOUT_MS,
   );
+}
 
-  const token = body?.session_token;
-  if (status < 200 || status >= 300 || !token) {
-    // The body may explain why; it is not repeated here.
+/**
+ * Exchange the configured credentials for a session token.
+ *
+ * `client_name` mirrors what the Desktop sends — its `COMPUTERNAME` — so the
+ * server sees a named client rather than an anonymous one. There is no
+ * `COMPUTERNAME` in a Worker, hence the explicit portal identifier.
+ *
+ * A 426 costs one extra round trip: the published floor is read and the login
+ * retried once at that version. That is what keeps the next time the CRM raises
+ * its floor from being another outage — but the pinned constant is still tried
+ * first, so the ordinary login remains a single request.
+ */
+async function login(env: ShamsCrmEnv): Promise<SessionState> {
+  const attemptedVersion = declaredVersion();
+  let outcome = await attemptLogin(env, attemptedVersion);
+
+  if (outcome.status === 426) {
+    const required = await readRequiredVersion(env.baseUrl);
+    if (required && required !== attemptedVersion) {
+      const retry = await attemptLogin(env, required);
+      if (retry.status !== 426) negotiatedVersion = required;
+      outcome = retry;
+    }
+  }
+
+  const { status, body } = outcome;
+
+  // The body may explain any of these; it is not repeated in the message.
+  if (status === 426) {
+    throw new ShamsCrmError(
+      "incompatible_client",
+      "Shams CRM refused this client as out of date.",
+      status,
+    );
+  }
+  // Only these two are the server judging the credential. Anything else it
+  // returns is a fault on the call, and saying "rejected the credentials" about
+  // it sends someone to rotate a password that was never the problem.
+  if (status === 401 || status === 403) {
     throw new ShamsCrmError("auth_failed", "Shams CRM rejected the portal's credentials.", status);
   }
+  if (status < 200 || status >= 300) {
+    throw new ShamsCrmError("http_error", "Shams CRM could not complete the login.", status);
+  }
+  const token = body?.session_token;
+  if (!token) {
+    throw new ShamsCrmError("malformed", "Shams CRM returned a login without a session.", status);
+  }
   return { token, expiresAt: Date.now() + SESSION_TTL_MS };
+}
+
+/** The client version currently declared at login. For diagnostics only. */
+export function crmClientVersion(): string {
+  return declaredVersion();
 }
 
 /**
@@ -359,6 +485,14 @@ export async function crmFetch<T>(path: string, opts: { timeoutMs?: number } = {
       sessions.delete(principalKey(SERVICE_PRINCIPAL));
       if (attempt === 0) continue;
       throw new ShamsCrmError("auth_failed", "Shams CRM rejected the portal's session.", status);
+    }
+    // Same meaning as at login: the CRM is refusing the client, not the read.
+    if (status === 426) {
+      throw new ShamsCrmError(
+        "incompatible_client",
+        "Shams CRM refused this client as out of date.",
+        status,
+      );
     }
     if (status < 200 || status >= 300) {
       throw new ShamsCrmError("http_error", "Shams CRM returned an unexpected status.", status);

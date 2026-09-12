@@ -9,6 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  classifyDispatchFailure,
   runDueAlShrouqDispatches,
   scheduleAlShrouqDispatch,
 } from "@/lib/shams-crm/alshrouq-scheduler.server";
@@ -96,7 +97,15 @@ function fakeSupabase(
   const inserts: any[] = [];
   const updates: { id: string; patch: any }[] = [];
   const tablesRead: string[] = [];
-  let claimed = false;
+  /**
+   * Which rows have already been claimed, by id.
+   *
+   * A set rather than a flag because a batch has several rows: the
+   * compare-and-swap refuses a *second* claim of the *same* row, and a fake
+   * that refused the second claim of any row could not tell batch isolation
+   * working from batch isolation broken.
+   */
+  const claimedIds = new Set<string>();
   let inserted = false;
 
   const api = {
@@ -114,6 +123,7 @@ function fakeSupabase(
         },
         is: () => chain,
         lte: () => chain,
+        order: () => chain,
         /**
          * Only the reap sweep filters on `<`, so this is what identifies it.
          *
@@ -134,10 +144,11 @@ function fakeSupabase(
         maybeSingle: async () => {
           if (state.patch) {
             // A claim attempt.
-            if (opts.claimFails || claimed) return { data: null, error: null };
-            claimed = true;
-            updates.push({ id: state.eqs.id as string, patch: state.patch });
-            return { data: { id: state.eqs.id }, error: null };
+            const id = state.eqs.id as string;
+            if (opts.claimFails || claimedIds.has(id)) return { data: null, error: null };
+            claimedIds.add(id);
+            updates.push({ id, patch: state.patch });
+            return { data: { id }, error: null };
           }
           if (inserted && opts.existingAfterInsert !== undefined) {
             return { data: opts.existingAfterInsert, error: null };
@@ -586,5 +597,355 @@ describe("runDueAlShrouqDispatches", () => {
     expect(serialized).not.toContain("Ahmed");
     expect(serialized).not.toContain("0500000000");
     expect(serialized).not.toContain("maps.app.goo.gl");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The 2026-09-12 incident: a failure before the POST                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The scheduled-dispatch endpoint answered pg_cron with a 500 every minute for
+ * about a quarter of an hour, and deliveries whose time had come did not go out.
+ *
+ * The cause was not the cron, the due query or the claim. It was that
+ * `createAlshrouqOrder` **throws** for everything that fails before the POST is
+ * transmitted — a refused CRM login, an unreachable CRM, a login timeout — and
+ * nothing in the worker caught it. One throw aborted the whole batch, escaped to
+ * the route as a 500, and left the row it had just claimed sitting in
+ * `processing`, where the only thing that could reach it was the fifteen-minute
+ * reaper, which settles it as `indeterminate` for a person to ring the courier
+ * about. A delivery that had never been sent to anybody.
+ *
+ * Every test below is one sentence of that, inverted.
+ */
+describe("a failure before anything is transmitted", () => {
+  /** `createAlshrouqOrder`'s own contract: it throws only when nothing was sent. */
+  function throwsBeforeSending(kind: string, httpStatus: number | null = null) {
+    return vi.fn(async () => {
+      const err = new Error("upstream") as Error & {
+        kind: string;
+        httpStatus: number | null;
+      };
+      err.name = "ShamsCrmError";
+      err.kind = kind;
+      err.httpStatus = httpStatus;
+      throw err;
+    });
+  }
+
+  /**
+   * The headline. The delivery stays recoverable instead of being stranded.
+   */
+  it("puts the row back to scheduled rather than stranding it in processing", async () => {
+    const supabase = fakeSupabase({ due: [dueRow()] });
+    const s = await runDueAlShrouqDispatches(supabase as any, {
+      ...deps({ live: true }),
+      createOrder: throwsBeforeSending("unavailable") as any,
+    });
+
+    expect(s.retryable).toBe(1);
+    expect(s.claimed).toBe(1);
+    expect(s.accepted).toBe(0);
+    expect(s.indeterminate).toBe(0);
+
+    const final = supabase.updates.at(-1)!.patch;
+    // Back where it started, so the next poll finds it — not `processing`, not
+    // `indeterminate`, and above all not `accepted`.
+    expect(final.dispatch_status).toBe("scheduled");
+    expect(final.last_error).toMatch(/still scheduled and will be tried again/);
+    expect(final.attempt_count).toBe(1);
+  });
+
+  /** The run answers pg_cron normally. A 500 a minute was the visible symptom. */
+  it("does not throw out of the run", async () => {
+    const supabase = fakeSupabase({ due: [dueRow()] });
+    await expect(
+      runDueAlShrouqDispatches(supabase as any, {
+        ...deps({ live: true }),
+        createOrder: throwsBeforeSending("timeout") as any,
+      }),
+    ).resolves.toMatchObject({ retryable: 1 });
+  });
+
+  /**
+   * Batch isolation. One unreachable delivery used to take the rest of the
+   * minute's work down with it.
+   */
+  it("one failing delivery does not stop the others", async () => {
+    const createOrder = vi.fn(async (payload: any) => {
+      if (payload.client_order_id === "bad") {
+        const err = new Error("upstream") as Error & { kind: string };
+        err.name = "ShamsCrmError";
+        err.kind = "unavailable";
+        throw err;
+      }
+      return { kind: "accepted" as const, operationId: "op-1", status: 201, body: null };
+    });
+
+    const supabase = fakeSupabase({
+      due: [
+        dueRow({
+          id: "bad-1",
+          client_order_id: "bad",
+          payload_snapshot: { ...SNAPSHOT, client_order_id: "bad" },
+        }),
+        dueRow({ id: "good-1" }),
+        dueRow({ id: "good-2" }),
+      ],
+    });
+    const s = await runDueAlShrouqDispatches(supabase as any, {
+      ...deps({ live: true }),
+      createOrder: createOrder as any,
+    });
+
+    expect(s.claimed).toBe(3);
+    expect(s.retryable).toBe(1);
+    expect(s.accepted).toBe(2);
+    // The two healthy deliveries went out in the same run as the broken one.
+    expect(createOrder).toHaveBeenCalledTimes(3);
+  });
+
+  /**
+   * The failure is named, so the production alert is not just "500".
+   *
+   * A 401 on the login is the agent's credential being refused and needs a
+   * person; anything else on the login is the CRM having a bad time and does
+   * not. Telling an administrator to re-enter a password that is perfectly
+   * correct is the wrong answer to a 502.
+   */
+  it.each([
+    ["auth_failed", 401, "authentication", false],
+    ["auth_failed", 403, "authentication", false],
+    // A transport that has not narrowed `auth_failed` — which is what the CRM's
+    // 426 version gate arrived through on 2026-09-10.
+    ["auth_failed", 502, "upstream", true],
+    // What that same gate is called now. Its fix is a deployment, not a
+    // password, so it is neither `authentication` nor retryable.
+    ["incompatible_client", 426, "incompatible_client", false],
+    ["not_configured", null, "configuration", false],
+    ["timeout", null, "timeout", true],
+    ["unavailable", null, "upstream", true],
+    ["http_error", 500, "upstream", true],
+    ["malformed", 200, "upstream", true],
+  ])("classifies %s/%s as %s", async (kind, status, category, retryable) => {
+    const failure = classifyDispatchFailure(
+      Object.assign(new Error("x"), { kind, httpStatus: status }),
+    );
+    expect(failure.category).toBe(category);
+    expect(failure.retryable).toBe(retryable);
+  });
+
+  /** A Postgres SQLSTATE is a database fault, not an upstream one. */
+  it("tells a database fault apart from an upstream one", () => {
+    const failure = classifyDispatchFailure(
+      Object.assign(new Error("could not connect"), { code: "08006" }),
+    );
+    expect(failure.category).toBe("database");
+    expect(failure.retryable).toBe(true);
+  });
+
+  /** A classification is a category, never the upstream's own words. */
+  it("never copies the upstream message into what it stores", () => {
+    const failure = classifyDispatchFailure(
+      Object.assign(new Error("login failed for ahmed@example.test / hunter2"), {
+        kind: "auth_failed",
+        httpStatus: 401,
+      }),
+    );
+    expect(failure.message).not.toContain("hunter2");
+    expect(failure.message).not.toContain("ahmed@example.test");
+  });
+
+  /** A refused credential is an administrator's problem, counted as such. */
+  it("counts a refused sign-in as blocked, not as a transient retry", async () => {
+    const supabase = fakeSupabase({ due: [dueRow()] });
+    const s = await runDueAlShrouqDispatches(supabase as any, {
+      ...deps({ live: true }),
+      createOrder: throwsBeforeSending("auth_failed", 401) as any,
+    });
+
+    expect(s.blocked).toBe(1);
+    expect(s.retryable).toBe(0);
+    expect(supabase.updates.at(-1)!.patch.dispatch_status).toBe("scheduled");
+  });
+
+  /**
+   * The 2026-09-10 outage's own shape, as the transport now reports it.
+   *
+   * The CRM's minimum-client-version gate answers 426 before it looks at the
+   * credentials. `login()` reads the published floor and retries once, so
+   * reaching the worker means even that failed — the delivery waits for a
+   * deployment, and says so, rather than telling anyone to change a password.
+   */
+  it("survives the CRM refusing the client version", async () => {
+    const supabase = fakeSupabase({ due: [dueRow()] });
+    const s = await runDueAlShrouqDispatches(supabase as any, {
+      ...deps({ live: true }),
+      createOrder: throwsBeforeSending("incompatible_client", 426) as any,
+    });
+
+    expect(s.blocked).toBe(1);
+    expect(s.indeterminate).toBe(0);
+    const final = supabase.updates.at(-1)!.patch;
+    // Recoverable: the delivery is still scheduled, and goes out on the first
+    // run after the Portal is updated.
+    expect(final.dispatch_status).toBe("scheduled");
+    expect(final.last_error).toMatch(/refused this version of the Portal/);
+    expect(final.last_error).not.toMatch(/credentials/);
+  });
+
+  /**
+   * The one case that must NOT be released.
+   *
+   * The POST was made; only writing down what came back failed. Releasing the
+   * row here would re-POST a delivery that may already have a driver, so it
+   * stays claimed for the reaper to settle as `indeterminate`.
+   */
+  it("leaves a row claimed when the POST happened and the result could not be written", async () => {
+    const supabase = fakeSupabase({ due: [dueRow()] });
+    const failing = {
+      from(table: string) {
+        const chain = supabase.from(table);
+        const update = chain.update;
+        chain.update = (patch: any) => {
+          const next = update(patch);
+          // The claim goes through `.maybeSingle()` and still succeeds; the
+          // terminal write is awaited directly, and that is the one that fails.
+          if (patch.dispatch_status !== "processing") {
+            next.then = (_resolve: any, reject: any) => reject(new Error("connection lost"));
+          }
+          return next;
+        };
+        return chain;
+      },
+    };
+
+    const s = await runDueAlShrouqDispatches(failing as any, deps({ live: true }));
+
+    expect(s.unsettled).toBe(1);
+    expect(s.retryable).toBe(0);
+    expect(s.blocked).toBe(0);
+    // Never returned to `scheduled`: a second POST is exactly what must not
+    // follow a transmitted create.
+    expect(supabase.updates.every((u) => u.patch.dispatch_status !== "scheduled")).toBe(true);
+  });
+
+  /**
+   * The recovery sentence from the incident report, as a test.
+   *
+   * Due at 18:30, the endpoint failing from 18:26 to 18:41. At 18:42 the row is
+   * still `scheduled`, still overdue, and the first healthy run sends it. The
+   * due query asks `scheduled_for <= now`, never `== this minute`.
+   */
+  it("sends a delivery that became overdue while the scheduler was failing", async () => {
+    const supabase = fakeSupabase({
+      due: [dueRow({ scheduled_for: "2026-09-12T18:30:00Z", last_attempt_at: null })],
+    });
+    const s = await runDueAlShrouqDispatches(
+      supabase as any,
+      deps({ live: true }),
+      new Date("2026-09-12T18:42:00Z"),
+    );
+
+    expect(s.due).toBe(1);
+    expect(s.accepted).toBe(1);
+    expect(posts()).toBe(1);
+  });
+
+  /**
+   * A released row rests before it is tried again.
+   *
+   * Without this a delivery held up by a refused sign-in would ask the CRM to
+   * refuse it sixty times an hour, which `client.server.ts` names as the way an
+   * account gets locked.
+   */
+  it("holds a just-released row back for the backoff, then takes it", async () => {
+    const justTried = fakeSupabase({
+      due: [dueRow({ last_attempt_at: "2026-09-12T18:41:30Z" })],
+    });
+    const held = await runDueAlShrouqDispatches(
+      justTried as any,
+      deps({ live: true }),
+      new Date("2026-09-12T18:42:00Z"),
+    );
+    expect(held.deferred).toBe(1);
+    expect(held.due).toBe(0);
+    expect(posts()).toBe(0);
+
+    const rested = fakeSupabase({
+      due: [dueRow({ last_attempt_at: "2026-09-12T18:38:00Z" })],
+    });
+    const sent = await runDueAlShrouqDispatches(
+      rested as any,
+      deps({ live: true }),
+      new Date("2026-09-12T18:42:00Z"),
+    );
+    expect(sent.deferred).toBe(0);
+    expect(sent.accepted).toBe(1);
+    expect(posts()).toBe(1);
+  });
+
+  /** A delivery that has never been attempted is never delayed by the backoff. */
+  it("does not delay a first attempt", async () => {
+    const supabase = fakeSupabase({ due: [dueRow({ last_attempt_at: null })] });
+    const s = await runDueAlShrouqDispatches(
+      supabase as any,
+      deps({ live: true }),
+      new Date("2026-09-12T18:42:00Z"),
+    );
+    expect(s.deferred).toBe(0);
+    expect(s.accepted).toBe(1);
+  });
+
+  /**
+   * Releasing does not free the order's slot.
+   *
+   * The row stays live — `cancelled_at` untouched — so
+   * `alshrouq_dispatches_live_order_key` still holds the order, and no second
+   * dispatch can be created for it while this one waits.
+   */
+  it("keeps the order's dispatch slot while it waits", async () => {
+    const supabase = fakeSupabase({ due: [dueRow()] });
+    await runDueAlShrouqDispatches(supabase as any, {
+      ...deps({ live: true }),
+      createOrder: throwsBeforeSending("unavailable") as any,
+    });
+
+    for (const update of supabase.updates) {
+      expect(update.patch).not.toHaveProperty("cancelled_at");
+      expect(update.patch.dispatch_status).not.toBe("cancelled");
+    }
+  });
+
+  /**
+   * A retry of a released row is still one POST, because the claim is still a
+   * compare-and-swap. Two overlapping runs over the same released row send once.
+   */
+  it("a released row cannot be dispatched twice by overlapping runs", async () => {
+    const supabase = fakeSupabase({ due: [dueRow({ last_attempt_at: "2026-09-12T18:00:00Z" })] });
+    const shared = deps({ live: true });
+    const now = new Date("2026-09-12T18:42:00Z");
+
+    const [a, b] = await Promise.all([
+      runDueAlShrouqDispatches(supabase as any, shared, now),
+      runDueAlShrouqDispatches(supabase as any, shared, now),
+    ]);
+
+    expect(a.claimed + b.claimed).toBe(1);
+    expect(a.accepted + b.accepted).toBe(1);
+    expect(posts()).toBe(1);
+  });
+
+  /** A cancelled or already-sent row is never in the due set to begin with. */
+  it("never reconsiders a row that is not scheduled", async () => {
+    const supabase = fakeSupabase({ due: [] });
+    const s = await runDueAlShrouqDispatches(supabase as any, {
+      ...deps({ live: true }),
+      createOrder: throwsBeforeSending("unavailable") as any,
+    });
+
+    expect(s).toMatchObject({ due: 0, claimed: 0, retryable: 0, blocked: 0 });
+    expect(supabase.updates).toHaveLength(0);
   });
 });

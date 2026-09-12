@@ -14,7 +14,15 @@
  */
 
 import type { LucideIcon } from "lucide-react";
-import { Activity, LayoutDashboard, RefreshCw, Settings2, Stethoscope, Users } from "lucide-react";
+import {
+  Activity,
+  ClipboardCheck,
+  LayoutDashboard,
+  RefreshCw,
+  Settings2,
+  Stethoscope,
+  Users,
+} from "lucide-react";
 
 export interface AdminNavItem {
   to: string;
@@ -93,6 +101,22 @@ export const ADMIN_NAV: AdminNavGroup[] = [
         title: "Shams diagnostics",
         description: "Connectivity, catalogue and credential checks against the Shams systems.",
         icon: Stethoscope,
+        adminOnly: true,
+      },
+      {
+        /*
+         * The worklist `20260823120000` indexed and nothing queried.
+         *
+         * Filed under Shams CRM because that is the system an AlShrouq dispatch
+         * travels through, and because an operator who has just read the sync
+         * or diagnostics page is already in the right frame of mind for it.
+         */
+        to: "/admin/alshrouq-reconciliation",
+        label: "Dispatch reconciliation",
+        title: "AlShrouq dispatch reconciliation",
+        description:
+          "Dispatches the automated system could not settle, and what operators decided about them.",
+        icon: ClipboardCheck,
         adminOnly: true,
       },
     ],

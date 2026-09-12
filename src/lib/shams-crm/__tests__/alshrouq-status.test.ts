@@ -381,10 +381,16 @@ describe("the server function's gate", () => {
     fileURLToPath(new URL("../../shams.functions.ts", import.meta.url)),
     "utf8",
   );
-  const handler = fn.slice(
-    fn.indexOf("export const alshrouqOrderStatus"),
-    fn.indexOf("export const alshrouqResolveDispatch"),
-  );
+  /*
+   * This handler only, bounded by the *next* export rather than by a named one.
+   *
+   * It previously ran to `alshrouqResolveDispatch`, which meant any function
+   * added between the two was read as part of this one — and the assertions
+   * below are about what `alshrouqOrderStatus` does, not about its neighbours.
+   * `alshrouqCorrectResolution` landing in that gap is what exposed it.
+   */
+  const statusStart = fn.indexOf("export const alshrouqOrderStatus");
+  const handler = fn.slice(statusStart, fn.indexOf("export const ", statusStart + 20));
 
   it("requires an authenticated session", () => {
     expect(handler).toContain("requireSupabaseAuth");

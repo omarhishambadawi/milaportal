@@ -164,7 +164,7 @@ export const Route = createFileRoute("/api/alshrouq-run-scheduled")({
           return json({ error: "not_configured" }, 503);
         }
 
-        const { runDueAlShrouqDispatches } =
+        const { runDueAlShrouqDispatches, classifyDispatchFailure } =
           await import("@/lib/shams-crm/alshrouq-scheduler.server");
 
         try {
@@ -174,22 +174,45 @@ export const Route = createFileRoute("/api/alshrouq-run-scheduled")({
 
           /*
            * Counts only. Never a customer, never a credential, never a payload —
-           * `RunDueSummary` is six integers and a test asserts nothing else
-           * reaches it.
+           * `RunDueSummary` is integers and a test asserts nothing else reaches
+           * it.
            *
            * The gate is stated rather than inferred: `skippedDisabled` already
            * carries it, but "0 accepted" reads identically whether the gate was
            * shut or there was simply nothing to do, and those are opposite
            * operational facts.
+           *
+           * `job` is stated too. A production alert that says only "a scheduled
+           * job failed" sends somebody looking through every cron in the
+           * database; this one names itself.
            */
           console.info("[alshrouq] scheduled run", {
+            job: "alshrouq-run-scheduled",
             ...summary,
             liveDispatchEnabled: isAlShrouqLiveDispatchEnabled(),
           });
           return json({ ok: true, ...summary });
         } catch (err) {
-          console.error("[alshrouq] scheduled run failed:", (err as Error)?.name ?? "unknown");
-          return json({ ok: false, error: "run_failed" }, 500);
+          /*
+           * With per-row isolation inside the worker this should now be reached
+           * only by a failure of the run itself — the stale-claim sweep or the
+           * due read — rather than by one unreachable CRM, which used to abort
+           * the whole batch and answer pg_cron with a 500 every minute.
+           *
+           * It says which job, and what kind of problem, because "500" on its
+           * own was the entire signal an operator had during exactly that
+           * incident. The classifier returns fixed sentences and never copies
+           * anything out of the error, so no credential or customer detail can
+           * reach the log or the response.
+           */
+          const failure = classifyDispatchFailure(err);
+          console.error("[alshrouq] scheduled run failed", {
+            job: "alshrouq-run-scheduled",
+            category: failure.category,
+            retryable: failure.retryable,
+            error: (err as Error)?.name ?? "unknown",
+          });
+          return json({ ok: false, error: "run_failed", category: failure.category }, 500);
         }
       },
     },

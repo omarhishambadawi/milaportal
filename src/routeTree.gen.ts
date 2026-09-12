@@ -55,6 +55,7 @@ import { Route as AppAdminUsersRouteImport } from './routes/_app.admin.users'
 import { Route as AppAdminShamsSyncRouteImport } from './routes/_app.admin.shams-sync'
 import { Route as AppAdminShamsDiagnosticsRouteImport } from './routes/_app.admin.shams-diagnostics'
 import { Route as AppAdminBranchesRouteImport } from './routes/_app.admin.branches'
+import { Route as AppAdminAlshrouqReconciliationRouteImport } from './routes/_app.admin.alshrouq-reconciliation'
 import { Route as Char91DotmcpChar93InvokeToolToolRouteImport } from './routes/[.mcp]/invoke-tool/$tool'
 import { Route as DotlovableOauthConsentRouteImport } from './routes/[.]lovable.oauth.consent'
 import { Route as AppTelesalesWasfatyIndexRouteImport } from './routes/_app.telesales.wasfaty.index'
@@ -303,6 +304,12 @@ const AppAdminBranchesRoute = AppAdminBranchesRouteImport.update({
   path: '/admin/branches',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAdminAlshrouqReconciliationRoute =
+  AppAdminAlshrouqReconciliationRouteImport.update({
+    id: '/admin/alshrouq-reconciliation',
+    path: '/admin/alshrouq-reconciliation',
+    getParentRoute: () => AppRoute,
+  } as any)
 const Char91DotmcpChar93InvokeToolToolRoute =
   Char91DotmcpChar93InvokeToolToolRouteImport.update({
     id: '/.mcp/invoke-tool/$tool',
@@ -398,6 +405,7 @@ export interface FileRoutesByFullPath {
   '/api/telesales-generate': typeof ApiTelesalesGenerateRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
+  '/admin/alshrouq-reconciliation': typeof AppAdminAlshrouqReconciliationRoute
   '/admin/branches': typeof AppAdminBranchesRoute
   '/admin/shams-diagnostics': typeof AppAdminShamsDiagnosticsRoute
   '/admin/shams-sync': typeof AppAdminShamsSyncRoute
@@ -459,6 +467,7 @@ export interface FileRoutesByTo {
   '/api/telesales-generate': typeof ApiTelesalesGenerateRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
+  '/admin/alshrouq-reconciliation': typeof AppAdminAlshrouqReconciliationRoute
   '/admin/branches': typeof AppAdminBranchesRoute
   '/admin/shams-diagnostics': typeof AppAdminShamsDiagnosticsRoute
   '/admin/shams-sync': typeof AppAdminShamsSyncRoute
@@ -522,6 +531,7 @@ export interface FileRoutesById {
   '/api/telesales-generate': typeof ApiTelesalesGenerateRoute
   '/.lovable/oauth/consent': typeof DotlovableOauthConsentRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
+  '/_app/admin/alshrouq-reconciliation': typeof AppAdminAlshrouqReconciliationRoute
   '/_app/admin/branches': typeof AppAdminBranchesRoute
   '/_app/admin/shams-diagnostics': typeof AppAdminShamsDiagnosticsRoute
   '/_app/admin/shams-sync': typeof AppAdminShamsSyncRoute
@@ -585,6 +595,7 @@ export interface FileRouteTypes {
     | '/api/telesales-generate'
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
+    | '/admin/alshrouq-reconciliation'
     | '/admin/branches'
     | '/admin/shams-diagnostics'
     | '/admin/shams-sync'
@@ -646,6 +657,7 @@ export interface FileRouteTypes {
     | '/api/telesales-generate'
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
+    | '/admin/alshrouq-reconciliation'
     | '/admin/branches'
     | '/admin/shams-diagnostics'
     | '/admin/shams-sync'
@@ -708,6 +720,7 @@ export interface FileRouteTypes {
     | '/api/telesales-generate'
     | '/.lovable/oauth/consent'
     | '/.mcp/invoke-tool/$tool'
+    | '/_app/admin/alshrouq-reconciliation'
     | '/_app/admin/branches'
     | '/_app/admin/shams-diagnostics'
     | '/_app/admin/shams-sync'
@@ -1096,6 +1109,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAdminBranchesRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/admin/alshrouq-reconciliation': {
+      id: '/_app/admin/alshrouq-reconciliation'
+      path: '/admin/alshrouq-reconciliation'
+      fullPath: '/admin/alshrouq-reconciliation'
+      preLoaderRoute: typeof AppAdminAlshrouqReconciliationRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/.mcp/invoke-tool/$tool': {
       id: '/.mcp/invoke-tool/$tool'
       path: '/.mcp/invoke-tool/$tool'
@@ -1203,6 +1223,7 @@ interface AppRouteChildren {
   AppProfileRoute: typeof AppProfileRoute
   AppReportsRoute: typeof AppReportsRoute
   AppShamsRoute: typeof AppShamsRoute
+  AppAdminAlshrouqReconciliationRoute: typeof AppAdminAlshrouqReconciliationRoute
   AppAdminBranchesRoute: typeof AppAdminBranchesRoute
   AppAdminShamsDiagnosticsRoute: typeof AppAdminShamsDiagnosticsRoute
   AppAdminShamsSyncRoute: typeof AppAdminShamsSyncRoute
@@ -1248,6 +1269,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppProfileRoute: AppProfileRoute,
   AppReportsRoute: AppReportsRoute,
   AppShamsRoute: AppShamsRoute,
+  AppAdminAlshrouqReconciliationRoute: AppAdminAlshrouqReconciliationRoute,
   AppAdminBranchesRoute: AppAdminBranchesRoute,
   AppAdminShamsDiagnosticsRoute: AppAdminShamsDiagnosticsRoute,
   AppAdminShamsSyncRoute: AppAdminShamsSyncRoute,

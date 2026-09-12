@@ -66,7 +66,21 @@ describe("the identity index counts live dispatches only", () => {
   it("is the last migration to touch either index", () => {
     const later = files.filter((name) => name > CORRECTIVE);
     for (const name of later) {
-      const text = read(name);
+      /*
+       * The *executable* SQL, not the prose — the same reading
+       * `alshrouq-production-readiness.test.ts` takes of these files.
+       *
+       * What must never happen again is a later migration redefining one of
+       * these indexes, and only a statement can do that. A later migration
+       * explaining that it leaves the per-order slot alone is the opposite of
+       * the fault this guards against, and forbidding the sentence would mean
+       * deleting an accurate explanation to satisfy a text match.
+       */
+      const text = read(name)
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .split("\n")
+        .filter((line) => !line.trimStart().startsWith("--"))
+        .join("\n");
       expect(text).not.toContain("alshrouq_dispatches_client_order_key");
       expect(text).not.toContain("alshrouq_dispatches_live_order_key");
     }

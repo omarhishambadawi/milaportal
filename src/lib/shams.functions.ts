@@ -50,6 +50,7 @@ import type {
   ScheduleResult,
 } from "@/lib/shams-crm/alshrouq-scheduler.server";
 import type { ResolveDispatchResult } from "@/lib/shams-crm/alshrouq-resolve.server";
+import type { CorrectResolutionResult } from "@/lib/shams-crm/alshrouq-correct.server";
 import type { AlShrouqStatusResult } from "@/lib/shams-crm/alshrouq-status.server";
 import type { AlShrouqLocationResult } from "@/features/alshrouq/location";
 import type { AgentSetupSummary, ExistingAgentLink } from "@/lib/shams-crm/agent-setup.server";
@@ -1178,6 +1179,384 @@ export const alshrouqOrderStatus = createServerFn({ method: "POST" })
     return refreshAlShrouqOrderStatus(localId);
   });
 
+/* -------------------------------------------------------------------------- */
+/* The reconciliation centre                                                   */
+/* -------------------------------------------------------------------------- */
+
+/** One row of the operator's worklist. Counts and states — never a payload. */
+export interface UnresolvedDispatchRow {
+  dispatchId: string;
+  orderId: string;
+  /** The order's `display_no`, and the reference AlShrouq knows it by. */
+  clientOrderId: string | null;
+  displayNo: string | null;
+  branchNo: string | null;
+  orderStatus: string | null;
+  dispatchStatus: string | null;
+  scheduledFor: string | null;
+  createdAt: string | null;
+  lastAttemptAt: string | null;
+  attemptCount: number | null;
+  lastError: string | null;
+  /**
+   * Whether a POST is known to have left the machine.
+   *
+   * Read from `attempt_count`, which is the only column that can answer it:
+   * every terminal write sets it, so `0` means the run died between claiming the
+   * row and recording any outcome — the signature of a failure *before*
+   * transmission. `1` on an `indeterminate` row means the create returned and
+   * the CRM's answer was ambiguous, so a delivery may exist.
+   *
+   * `"unknown"` rather than a boolean, deliberately. This is the question the
+   * whole state exists because nobody can answer, and a two-valued field would
+   * force it to be answered.
+   */
+  transmission: "confirmed_sent" | "never_sent" | "unknown";
+  /** True when the CRM row id is present, so the live status check can work. */
+  hasExternalReference: boolean;
+  /** False for anything handled manually — see `alshrouq-reconciliation.ts`. */
+  externalLookupAllowed: boolean;
+  manuallyHandled: boolean;
+  resolutionOutcome: string | null;
+  resolutionNote: string | null;
+  resolvedAt: string | null;
+  resolvedByName: string | null;
+  /**
+   * Set when the recorded outcome contradicts the row's own evidence.
+   *
+   * A read, never a correction — `resolveAlShrouqDispatch` will not overwrite an
+   * operator's account, and nothing here tries to. It surfaces the disagreement
+   * so the person who can settle it knows it exists.
+   */
+  evidenceConflict: string | null;
+  /**
+   * True when this row is eligible for the `delivered` → `handled_manually`
+   * correction. Derived from the same conflict the UI displays, so the button
+   * appears exactly where `alshrouqCorrectResolution` would permit it.
+   */
+  correctionAvailable: boolean;
+}
+
+/**
+ * The operator's worklist: stuck dispatches, and whether anyone has settled them.
+ *
+ * `20260823120000` created `alshrouq_dispatches_unresolved_idx` and its comment
+ * called it exactly that. Nothing queried it for twenty days, during which nine
+ * `indeterminate` rows accumulated with no resolution — visible only on the
+ * order page of the order each one belonged to, which is to say findable only by
+ * somebody who already knew to look. This is the query that index was built for.
+ *
+ * Resolved rows come too, capped and newest-first, because "what did we decide
+ * about the last one of these" is the first question an operator asks and the
+ * answer is otherwise a database query.
+ *
+ * **It reads and nothing else.** No transport is imported here, so no branch of
+ * this function can contact AlShrouq however it is called.
+ */
+export const alshrouqUnresolvedDispatches = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }): Promise<UnresolvedDispatchRow[]> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+
+    await assertPermission(supabase, userId, "admin_access");
+
+    const { isExternalContactBlocked, isManuallyHandledDispatch, describeEvidenceConflict } =
+      await import("@/lib/shams-crm/alshrouq-reconciliation");
+
+    /*
+     * The caller's own client, so `alshrouq_dispatches`' SELECT policy — which
+     * follows the order's visibility — decides what this operator sees. An
+     * administrator surface is not a reason to route around RLS.
+     */
+    const { data, error } = await (supabase as any)
+      .from("alshrouq_dispatches")
+      .select(
+        "id,order_id,client_order_id,dispatch_status,scheduled_for,created_at," +
+          "last_attempt_at,attempt_count,last_error,local_id," +
+          "resolution_outcome,resolution_note,resolved_at,resolved_by," +
+          "orders(display_no,branch_no,status)",
+      )
+      .in("dispatch_status", ["indeterminate", "failed"])
+      .order("resolution_outcome", { ascending: true, nullsFirst: true })
+      .order("created_at", { ascending: false })
+      .limit(200);
+
+    if (error) {
+      console.warn("[alshrouq] reconciliation worklist failed:", error.code ?? "unknown");
+      throw new Error("The reconciliation worklist could not be read.");
+    }
+
+    const rows = (data ?? []) as Record<string, any>[];
+
+    /*
+     * Resolver names, in one read rather than one per row.
+     *
+     * A name, and only a name: the audit record stores the uuid, and an operator
+     * reading a worklist needs to know who settled something, not their email.
+     */
+    const resolverIds = [...new Set(rows.map((r) => r.resolved_by).filter(Boolean))] as string[];
+    const names = new Map<string, string>();
+    if (resolverIds.length > 0) {
+      const { data: profiles } = await supabase
+        .from("profiles")
+        .select("id,full_name")
+        .in("id", resolverIds);
+      for (const p of (profiles ?? []) as { id: string; full_name: string | null }[]) {
+        if (p.full_name) names.set(p.id, p.full_name);
+      }
+    }
+
+    return rows.map((r): UnresolvedDispatchRow => {
+      const order = (r.orders ?? null) as Record<string, any> | null;
+      const attempts = typeof r.attempt_count === "number" ? r.attempt_count : null;
+      const ref = {
+        clientOrderId: r.client_order_id ?? null,
+        dispatchId: r.id,
+        resolutionOutcome: r.resolution_outcome ?? null,
+      };
+      const conflict = describeEvidenceConflict({
+        ...ref,
+        attemptCount: attempts,
+        dispatchStatus: r.dispatch_status ?? null,
+      });
+
+      return {
+        dispatchId: r.id,
+        orderId: r.order_id,
+        clientOrderId: r.client_order_id ?? null,
+        displayNo: order?.display_no ?? null,
+        branchNo: order?.branch_no ?? null,
+        orderStatus: order?.status ?? null,
+        dispatchStatus: r.dispatch_status ?? null,
+        scheduledFor: r.scheduled_for ?? null,
+        createdAt: r.created_at ?? null,
+        lastAttemptAt: r.last_attempt_at ?? null,
+        attemptCount: attempts,
+        lastError: r.last_error ?? null,
+        /*
+         * A `failed` row is one AlShrouq refused, which it can only do having
+         * received the request — so that is transmitted by definition. On an
+         * `indeterminate` row the attempt counter is the evidence.
+         */
+        transmission:
+          r.dispatch_status === "failed"
+            ? "confirmed_sent"
+            : attempts === 0
+              ? "never_sent"
+              : attempts != null && attempts > 0
+                ? "confirmed_sent"
+                : "unknown",
+        hasExternalReference: typeof r.local_id === "string" && r.local_id.length > 0,
+        externalLookupAllowed: !isExternalContactBlocked(ref),
+        manuallyHandled:
+          isManuallyHandledDispatch(ref) || ref.resolutionOutcome === "handled_manually",
+        resolutionOutcome: r.resolution_outcome ?? null,
+        resolutionNote: r.resolution_note ?? null,
+        resolvedAt: r.resolved_at ?? null,
+        resolvedByName: r.resolved_by ? (names.get(r.resolved_by) ?? null) : null,
+        evidenceConflict: conflict,
+        /*
+         * Exactly the condition `correctAlShrouqResolutionToHandledManually`
+         * enforces, computed from the same function, so the button cannot appear
+         * where the server would refuse it or hide where it would allow it.
+         */
+        correctionAvailable: conflict !== null && r.resolution_outcome === "delivered",
+      };
+    });
+  });
+
+export type AlShrouqLookupResult =
+  /** A delivery with this reference exists at AlShrouq. */
+  | {
+      kind: "found";
+      externalOrderId: string | null;
+      statusLabel: string | null;
+      isCancelled: boolean;
+    }
+  /** The CRM has no delivery with this reference. **Not** proof none was created. */
+  | { kind: "not_found" }
+  /** Refused before anything was sent — this delivery was handled manually. */
+  | { kind: "blocked"; message: string }
+  | { kind: "dispatch_not_found" }
+  | { kind: "not_configured" }
+  | { kind: "unavailable" };
+
+/**
+ * Does AlShrouq hold a delivery with this dispatch's reference?
+ *
+ * The question the reconciliation centre exists to answer for a row with no
+ * `local_id` — which is every row that reaches `indeterminate` without a usable
+ * create response, and so is every row on the worklist. `alshrouqOrderStatus`
+ * cannot help those: it needs the CRM's own row id, which was never recorded.
+ *
+ * ## One GET, and only ever a GET
+ *
+ * `findAlshrouqOrderByClientOrderId` reads the CRM's order list for a date
+ * window and looks for a matching `client_order_id`. It goes through `crmFetch`,
+ * which is GET-only, and its module's create transport is never reached from
+ * here. Repeating this call any number of times changes nothing at AlShrouq.
+ *
+ * ## The hard block, and why it is before everything
+ *
+ * Three deliveries from the 2026-09-10 outage were dealt with by hand, and the
+ * standing instruction is that nothing at all is to be sent to AlShrouq about
+ * them. That refusal is checked **first** — before the permission read, before
+ * the row is even fetched for its reference — so there is no ordering of this
+ * function's steps in which a request could go out for one of them.
+ *
+ * It is enforced here, at the service boundary, rather than by the screen not
+ * drawing a button. A screen is a suggestion; this is the thing that makes it
+ * true.
+ */
+export const alshrouqLookupDispatch = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => z.object({ dispatchId: z.string().uuid() }).parse(d))
+  .handler(async ({ context, data }): Promise<AlShrouqLookupResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+
+    const { isExternalContactBlocked, EXTERNAL_CONTACT_BLOCKED_MESSAGE } =
+      await import("@/lib/shams-crm/alshrouq-reconciliation");
+
+    // Before anything. A dispatch on the manually-handled list is refused on its
+    // id alone, without a database read and without a permission check, because
+    // neither of those can change the answer.
+    if (isExternalContactBlocked({ dispatchId: data.dispatchId })) {
+      return { kind: "blocked", message: EXTERNAL_CONTACT_BLOCKED_MESSAGE };
+    }
+
+    await assertPermission(supabase, userId, "admin_access");
+
+    const { data: row } = await (supabase as any)
+      .from("alshrouq_dispatches")
+      .select("id,client_order_id,dispatch_status,resolution_outcome")
+      .eq("id", data.dispatchId)
+      .maybeSingle();
+    if (!row) return { kind: "dispatch_not_found" };
+
+    // And again on the row's own reference and outcome, which the id alone could
+    // not see: a row already resolved `handled_manually` is blocked from here on
+    // with no list to maintain.
+    if (
+      isExternalContactBlocked({
+        clientOrderId: row.client_order_id,
+        dispatchId: row.id,
+        resolutionOutcome: row.resolution_outcome,
+      })
+    ) {
+      return { kind: "blocked", message: EXTERNAL_CONTACT_BLOCKED_MESSAGE };
+    }
+
+    const clientOrderId = typeof row.client_order_id === "string" ? row.client_order_id : "";
+    if (clientOrderId.trim().length === 0) return { kind: "dispatch_not_found" };
+
+    const { findAlshrouqOrderByClientOrderId } =
+      await import("@/lib/shams-crm/alshrouq-create.server");
+    const { ShamsCrmError } = await import("@/lib/shams-crm/client.server");
+
+    try {
+      const found = await findAlshrouqOrderByClientOrderId(clientOrderId);
+      if (!found) return { kind: "not_found" };
+      return {
+        kind: "found",
+        externalOrderId: found.externalOrderId != null ? String(found.externalOrderId) : null,
+        statusLabel: found.statusLabel,
+        isCancelled: found.isCancelled,
+      };
+    } catch (err) {
+      if (err instanceof ShamsCrmError && err.kind === "not_configured") {
+        return { kind: "not_configured" };
+      }
+      // Categories only — the CRM's own message can carry a username.
+      console.warn("[alshrouq] reconciliation lookup failed:", (err as Error)?.name ?? "unknown");
+      return { kind: "unavailable" };
+    }
+  });
+
+/**
+ * Correct a resolution the evidence contradicts. `delivered` → `handled_manually`.
+ *
+ * Narrow on purpose, and narrow in four independent ways: it is admin-only, it
+ * accepts no outcome parameter, it refuses any row whose recorded outcome is not
+ * `delivered`, and it refuses any row whose evidence does not already contradict
+ * that outcome. An ordinary `delivered` — one an operator recorded after actually
+ * ringing AlShrouq — cannot be reached through it.
+ *
+ * ## The eligibility test is the evidence, not a list of ids
+ *
+ * `describeEvidenceConflict` is what decides, which is the same function the
+ * reconciliation centre already uses to *display* the conflict. So the button
+ * appears exactly where the correction is permitted, and neither can drift from
+ * the other. Hardcoding the three incident ids here would have made this
+ * operation untestable against the condition it actually exists for.
+ *
+ * ## It contacts nobody
+ *
+ * `alshrouq-correct.server.ts` imports no transport — not the create, not the
+ * reconciliation GET, not the CRM client — so no outcome of this function has a
+ * branch that reaches AlShrouq. That is the same way `alshrouqResolveDispatch`
+ * meets the same requirement: by not importing the thing that could break it.
+ *
+ * ## It does not replace normal resolution
+ *
+ * `alshrouqResolveDispatch` is untouched and still refuses every row that
+ * already carries an answer. This is a second, differently-named door, and the
+ * only transition behind it is the one above.
+ */
+export const alshrouqCorrectResolution = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) =>
+    z
+      .object({
+        dispatchId: z.string().uuid(),
+        /*
+         * No `outcome` field, deliberately.
+         *
+         * The transition is a property of the operation, not a parameter of it —
+         * a caller who could name the target could turn this into a general
+         * "rewrite any resolution" endpoint, which is the thing this design
+         * exists to avoid.
+         */
+        reason: z.string().min(3).max(280),
+      })
+      .parse(d),
+  )
+  .handler(async ({ context, data }): Promise<CorrectResolutionResult> => {
+    const { supabase, userId } = context as { supabase: any; userId: string };
+
+    await assertPermission(supabase, userId, "admin_access");
+
+    /*
+     * The visibility read runs on the *caller's* client, so the dispatch's own
+     * RLS policy — which follows the order's visibility — decides whether this
+     * operator may see the row at all. A dispatch they cannot see is reported as
+     * absent rather than as forbidden, the same reading every other action on
+     * this table takes.
+     */
+    const { data: visible } = await (supabase as any)
+      .from("alshrouq_dispatches")
+      .select("id")
+      .eq("id", data.dispatchId)
+      .maybeSingle();
+    if (!visible) return { kind: "not_found" };
+
+    // And the write runs as the service role, after the checks above — the same
+    // pattern as every other write to this table.
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { correctAlShrouqResolutionToHandledManually } =
+      await import("@/lib/shams-crm/alshrouq-correct.server");
+
+    return correctAlShrouqResolutionToHandledManually(
+      {
+        dispatchId: data.dispatchId,
+        reason: data.reason,
+        // The verified session's subject, never anything the caller sent. The
+        // corrector is whoever is signed in now — never the original author.
+        correctedBy: userId,
+      },
+      supabaseAdmin,
+    );
+  });
+
 export const alshrouqResolveDispatch = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) =>
@@ -1185,7 +1564,7 @@ export const alshrouqResolveDispatch = createServerFn({ method: "POST" })
       .object({
         dispatchId: z.string().uuid(),
         // A closed set, validated here as well as by the database's CHECK.
-        outcome: z.enum(["delivered", "not_delivered", "undetermined"]),
+        outcome: z.enum(["delivered", "not_delivered", "undetermined", "handled_manually"]),
         // The evidence. Required: a resolution with no account of how it was
         // reached is an unsourced claim in an audit trail.
         note: z.string().min(3).max(280),
@@ -1205,10 +1584,38 @@ export const alshrouqResolveDispatch = createServerFn({ method: "POST" })
      */
     const { data: visible } = await (supabase as any)
       .from("alshrouq_dispatches")
-      .select("id")
+      .select("id,client_order_id,resolution_outcome")
       .eq("id", data.dispatchId)
       .maybeSingle();
     if (!visible) return { kind: "not_found" };
+
+    /*
+     * A manually-handled dispatch may only be given an outcome that asserts
+     * nothing about the courier.
+     *
+     * The other three all mean "AlShrouq confirmed …" — and this is precisely
+     * the dispatch nobody is allowed to ask AlShrouq about, so there is no way
+     * an operator could have obtained such a confirmation. Refusing here rather
+     * than trusting the screen keeps the audit trail honest even if some future
+     * caller offers the wrong choice: `delivered` on 12389 would be a courier
+     * delivery recorded for a request that never left the machine.
+     */
+    const { isExternalContactBlocked, OFFLINE_RESOLUTION_OUTCOMES } =
+      await import("@/lib/shams-crm/alshrouq-reconciliation");
+    const blocked = isExternalContactBlocked({
+      clientOrderId: visible.client_order_id,
+      dispatchId: visible.id,
+      resolutionOutcome: visible.resolution_outcome,
+    });
+    if (blocked && !OFFLINE_RESOLUTION_OUTCOMES.includes(data.outcome)) {
+      return {
+        kind: "conflict",
+        status: null,
+        message:
+          "This delivery was handled manually and AlShrouq was never asked about it, " +
+          "so it can only be recorded as handled manually.",
+      };
+    }
 
     // And the write runs as the service role, after the check above — the same
     // pattern as every other write to this table. See `alshrouqDispatchOrder`.

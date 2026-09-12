@@ -14,6 +14,7 @@ import {
 import { useOrderAlShrouqDispatch } from "@/features/alshrouq/use-order-dispatch";
 import {
   RESOLUTION_ACTIVITY_ACTION,
+  RESOLUTION_CORRECTION_ACTIVITY_ACTION,
   describeResolutionOutcome,
   isResolutionOutcome,
 } from "@/lib/shams-crm/alshrouq-resolution";
@@ -71,6 +72,16 @@ function describe(e: OrderActivityEvent, nameOf: (id: unknown) => string): strin
    * because that is what it is.
    */
   if (e.action === RESOLUTION_ACTIVITY_ACTION) return "AlShrouq dispatch resolved by operator";
+  /*
+   * A correction, worded so it cannot be mistaken for a fresh resolution.
+   *
+   * The original entry stays above it in the log saying what was first
+   * recorded; this says that record was changed. Two events, two titles --
+   * calling both "resolved by operator" would make the history unreadable.
+   */
+  if (e.action === RESOLUTION_CORRECTION_ACTIVITY_ACTION) {
+    return "AlShrouq resolution corrected by operator";
+  }
   /*
    * AlShrouq's own refusal, kept where it can be read later.
    *
@@ -167,6 +178,20 @@ function detailLine(e: OrderActivityEvent): string | null {
       : "Outcome recorded";
     const note = typeof d.note === "string" && d.note.trim() !== "" ? d.note.trim() : null;
     return note ? `${outcome} · ${note}` : outcome;
+  }
+  if (e.action === RESOLUTION_CORRECTION_ACTIVITY_ACTION) {
+    // What it was, what it became, and why -- in the operator's vocabulary.
+    // No payload, no courier body, no customer identity: the correction record
+    // holds none of those.
+    const from = isResolutionOutcome(d.previous_outcome)
+      ? describeResolutionOutcome(d.previous_outcome)
+      : "the previous outcome";
+    const to = isResolutionOutcome(d.corrected_outcome)
+      ? describeResolutionOutcome(d.corrected_outcome)
+      : "a corrected outcome";
+    const reason = typeof d.reason === "string" && d.reason.trim() !== "" ? d.reason.trim() : null;
+    const head = `${from} → ${to}`;
+    return reason ? `${head} · ${reason}` : head;
   }
   if (e.action === REJECTION_ACTIVITY_ACTION) {
     /*

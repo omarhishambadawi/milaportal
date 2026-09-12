@@ -455,8 +455,8 @@ describe("the scheduler cannot fail silently", () => {
   });
 
   /**
-   * The summary is six integers, so logging it cannot leak a customer. This is
-   * the assertion that keeps it that way.
+   * The summary is integers and nothing else, so logging it cannot leak a
+   * customer. This is the assertion that keeps it that way.
    */
   it("logs counts and never a customer, a payload or a credential", async () => {
     const createOrder = vi.fn(async () => ({
@@ -476,15 +476,23 @@ describe("the scheduler cannot fail silently", () => {
       // `reaped` counts abandoned `processing` claims settled as indeterminate.
       // Also an integer, and also a fact about this service rather than about
       // any order.
+      // `retryable`, `deferred` and `unsettled` came with per-row failure
+      // isolation: rows put back to `scheduled` after a failure that never
+      // transmitted, rows resting inside the retry backoff, and rows whose POST
+      // was made but whose outcome could not be written down. Integers, like
+      // the rest, for the same reason.
       [
         "accepted",
         "blocked",
         "claimed",
+        "deferred",
         "due",
         "failed",
         "indeterminate",
         "reaped",
+        "retryable",
         "skippedDisabled",
+        "unsettled",
       ].sort(),
     );
     for (const value of Object.values(summary)) expect(typeof value).toBe("number");
@@ -599,6 +607,21 @@ describe("cancellation attribution", () => {
 /* Parts 4 & 6 — what this phase deliberately did NOT do                     */
 /* ------------------------------------------------------------------------- */
 
+/**
+ * The rule being pinned here is **no second POST**, which is not the same rule
+ * as "no second attempt", and the difference is the whole of the 2026-09-12
+ * scheduled-dispatch incident.
+ *
+ * A create that *returned* — accepted, refused, timed out, 500 — was
+ * transmitted, and nothing may follow it but a GET. That is what these tests
+ * assert, and it is unchanged.
+ *
+ * A create that *threw* was never transmitted: `createAlshrouqOrder` guarantees
+ * exactly that, and it is why a refused CRM login can be tried again without
+ * any risk of a second driver. That case used to abort the batch and strand the
+ * row in `processing`; it is now released back to `scheduled`, which is a retry
+ * of something that never happened rather than a repeat of something that did.
+ */
 describe("no automatic retry, anywhere", () => {
   it("never re-POSTs an indeterminate dispatch", async () => {
     const createOrder = vi.fn(async () => ({
@@ -648,10 +671,35 @@ describe("no automatic retry, anywhere", () => {
     expect(createOrder).toHaveBeenCalledTimes(1);
   });
 
-  /** No timer, no backoff, no re-queue anywhere in the worker. */
-  it("has no retry mechanism in the scheduler at all", () => {
-    expect(scheduler).not.toMatch(/setTimeout|setInterval|retryCount|backoff|requeue/i);
-    expect(scheduler).toContain("attempt_count: 1");
+  /**
+   * No in-process retry loop, which is the shape that would re-send.
+   *
+   * A timer or a loop around the transport could call `createOrder` twice
+   * inside one run, with nothing between the two attempts able to tell whether
+   * the first one reached a courier. The worker has neither: it makes at most
+   * one `createOrder` call per row per run, and a row it releases is re-read
+   * from the database by a later poll with the claim's compare-and-swap
+   * standing between it and any concurrent worker.
+   */
+  it("has no in-process retry loop around the transport", () => {
+    expect(scheduler).not.toMatch(/setTimeout|setInterval|requeue/i);
+    // Exactly one call site, so "at most one POST per claim" is structural.
+    expect(scheduler.match(/deps\.createOrder\(/g) ?? []).toHaveLength(1);
+  });
+
+  /**
+   * The released row goes back to `scheduled`, not to a terminal state, and
+   * only ever from the one helper whose contract is "nothing was transmitted".
+   */
+  it("releases an unsent row only through releaseClaim", () => {
+    // The sole writer of `dispatch_status: "scheduled"` on a claimed row. The
+    // only other occurrence in the file is `"scheduled" as const` on the insert
+    // that parks a brand-new dispatch, which claims nothing.
+    expect(scheduler.match(/dispatch_status: "scheduled",/g) ?? []).toHaveLength(1);
+    expect(scheduler).toContain("async function releaseClaim(");
+    // And that helper goes through the same `processing` guard as every other
+    // terminal write, so a reaped run cannot overwrite a settled row.
+    expect(scheduler).toMatch(/releaseClaim[\s\S]{0,600}await finishClaim\(/);
   });
 });
 
