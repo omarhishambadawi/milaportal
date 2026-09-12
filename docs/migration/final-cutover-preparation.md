@@ -69,6 +69,39 @@ prerequisite's status changes as a result of this correction alone: items 10 and
 blocker on Vercel MCP OAuth is removed as moot (it never applied to the real
 architecture), which simplifies but does not close that item.
 
+**Fourth finding, from a dedicated read-only SMTP readiness audit (no cutover action, no
+configuration change, no email sent)**: prior phases (49, 50, and this document's item 9)
+confirmed only that `GOTRUE_SMTP_USER` matched a placeholder-pattern and left the other
+`GOTRUE_SMTP_*` values as "cannot be verified without printing them." This audit went
+further using safe, non-value-revealing checks and found the self-hosted SMTP
+configuration to be **conclusively non-functional, not merely unverified**:
+- `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`, `SMTP_ADMIN_EMAIL`, and `SMTP_SENDER_NAME` all
+  match placeholder/fake-pattern shapes (checked by substring/shape heuristics only — no
+  value was printed).
+- `SMTP_PORT` is set to `2500`, a non-standard port (GoTrue's own documented default is
+  `587`; common real values are `25`/`465`/`587`).
+- The configured `SMTP_HOST` **fails DNS resolution** from inside the `supabase-auth`
+  container.
+- A control check resolving `smtp.gmail.com` from the same container **succeeded**,
+  proving the container's own DNS/egress is fine — the failure is specific to the
+  configured (placeholder) hostname, not the environment.
+- **No email was sent** at any point during the audit; only DNS lookups and a TCP
+  connection attempt (which failed, consistent with the DNS failure) were performed —
+  both read-only, non-mutating network diagnostics.
+
+The same audit also found that `GOTRUE_SITE_URL` (`http://localhost:3000`) and
+`API_EXTERNAL_URL` (`http://localhost:8000/auth/v1`) — GoTrue's own site/API URLs, used to
+build every email link and to validate `redirectTo` — are still set to local development
+values, and `GOTRUE_URI_ALLOW_LIST`/`ADDITIONAL_REDIRECT_URLS` is empty (so only
+`GOTRUE_SITE_URL` itself is an accepted redirect target). **This is a distinct dependency
+from the application-level `SITE_URL`/`VITE_SITE_URL` in item 10 below** — that pair is
+read by the Cloudflare Worker application itself (`src/lib/password.server.ts`) to build
+the link it *asks* GoTrue to redirect to; `GOTRUE_SITE_URL`/`API_EXTERNAL_URL`/
+`GOTRUE_URI_ALLOW_LIST` are GoTrue's own server-side settings that generate and *validate*
+that link independently. Neither was previously tracked as its own prerequisite in this
+document (see the new item 9b below). Item 9's status is corrected accordingly, and item
+9b is added; no other item's status changes as a result of this finding.
+
 > Until explicit cutover authorization is given, all Lovable Cloud access used for
 > preparation must remain read-only/SELECT-only. No freeze, export execution, INSERT,
 > UPDATE, DELETE, DDL, credential changes, or other production mutation is permitted.
@@ -88,7 +121,8 @@ architecture), which simplifies but does not close that item.
 | 6 | Phase 44 scratch rehearsal container | **CLOSED** | Destroyed in Phase 50, confirmed absent this session, production containers unaffected |
 | 7 | Auth roster pull | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the already-authenticated Lovable MCP connector's direct query access to Cloud `auth.users` (`id`/`email`/metadata only, never `encrypted_password`) — no Cloud `service_role` GoTrue Admin API key or other new credential required |
 | 8 | `avatars` storage bucket | **REQUIRES OPERATOR INPUT** (RLS is READY, settings fully determined) | No longer an open decision: name (`avatars`), private, `file_size_limit = 4194304` (4 MB), and `allowed_mime_types = {image/png,image/jpeg,image/webp,image/gif}` are all fixed by already-applied migration `20260721002100_avatars_bucket_limits.sql` and `src/lib/avatar.ts` — not "no existing Cloud value to mirror" as previously stated. That migration is an `UPDATE ... WHERE id='avatars'`, applied while the bucket didn't exist, so it was a no-op; creation must set these values explicitly, not rely on the migration re-firing. Exact statement attempted this phase and blocked by this session's own permission classifier ("Modify Shared Resources") — only remaining step is running it, with the operator's explicit go-ahead (see §2 step 9.1) |
-| 9 | Real SMTP credentials | **REQUIRES OPERATOR INPUT** | `GOTRUE_SMTP_*` names present on `supabase-auth`; `GOTRUE_SMTP_ADMIN_EMAIL` reconfirmed this phase as a placeholder-pattern value; the other 5 vars (`HOST`/`PORT`/`USER`/`PASS`/`SENDER_NAME`) hold non-empty values whose authenticity as real production credentials cannot be verified without printing them, which this phase did not do — the only reliable proof remains the real SMTP delivery test already gated to runbook step 12 |
+| 9 | Real SMTP credentials | **NOT PRODUCTION-READY** (requires operator input) | Corrected by the SMTP readiness audit (see the fourth finding above): all of `GOTRUE_SMTP_HOST/USER/PASS/ADMIN_EMAIL/SENDER_NAME` match placeholder/fake-pattern shapes, `GOTRUE_SMTP_PORT` is a non-standard `2500`, and — going beyond pattern-matching — `SMTP_HOST` **fails DNS resolution** from `supabase-auth` while a control lookup (`smtp.gmail.com`) succeeds from the same container, proving the container's DNS/egress works and the configured host itself is not a real, reachable relay. This is a stronger, confirmed-non-functional finding, not merely "unverified" as Phases 49–50 and this document previously stated. No value was printed and no email was sent to reach this conclusion |
+| 9b | GoTrue URL/redirect configuration (`GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, `GOTRUE_URI_ALLOW_LIST`) | **REQUIRES OPERATOR INPUT** | New item, added from the SMTP readiness audit's fourth finding above. `GOTRUE_SITE_URL=http://localhost:3000` and `API_EXTERNAL_URL=http://localhost:8000/auth/v1` are still local-development values; `GOTRUE_URI_ALLOW_LIST` is empty. These are GoTrue's own server-side settings — distinct from the application-level `SITE_URL`/`VITE_SITE_URL` in item 10, which the Cloudflare Worker app reads separately. Every password-reset/invite email link GoTrue generates, and every `redirectTo` it will accept, depends on these being set to the real production domain before the controlled SMTP test (runbook step 12) can produce a usable, non-localhost link |
 | 10 | Application env vars (`SITE_URL`, `VITE_SITE_URL`, `LOVABLE_API_KEY`, `LOVABLE_SEND_URL`) | **REQUIRES OPERATOR INPUT** | Load-bearing, absent from `.env.example`. **Corrected this phase**: Vercel is no longer part of the architecture (see the third finding at the top of this document) — the live app deploys as a Cloudflare Worker via Lovable, so these vars must be set in Lovable's project environment settings for that Worker, per `.env.example`'s own guidance for `SHAMS_MIS_BASE_URL`. No MCP tool available this session exposes Worker environment-variable values or presence, so this remains unverifiable from here — operator confirmation required, not a guess |
 | 11 | Shams credentials (`SHAMS_CRM_*`, `SHAMS_MIS_*`) | **REQUIRES OPERATOR INPUT** | No `SHAMS_*` name found in any inspectable container this session; consumed only by the deployed Cloudflare Worker's server-only code (`src/lib/shams-crm/client.server.ts`, `src/lib/shams/client.server.ts`), not by any self-hosted container. self-hosted's `shams_sync_tick()` cron function additionally requires two Vault secrets, `shams_sync_scheduler_url` and `email_queue_service_role_key`, to reach that Worker's scheduler endpoint — both confirmed **absent** (no row in `vault.decrypted_secrets`) — a separate self-hosted wiring step from the CRM/MIS credentials themselves, not resolvable until the deployed Worker's scheduler endpoint exists |
 | 12 | Cloud production export path | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the same Lovable MCP connector's `query_database` capability against the live Cloud project — a literal `psql`/`pg_dump` binary is not required for this path; export *execution* is still a cutover-day action (item 18) and remains SELECT-only until Gate B |
@@ -123,6 +157,13 @@ investigation beyond what is already documented.
 10–11's described dependency is corrected from Vercel (removed from the architecture,
 `vercel.json` deleted on `origin/main`) to the actual deployment target, a Cloudflare
 Worker deployed via Lovable — see the third finding at the top of this document.
+
+**Net change in this SMTP-readiness documentation update**: item 9 is relabeled from
+"REQUIRES OPERATOR INPUT" (implying only that a value was unverified) to **NOT
+PRODUCTION-READY** (confirmed non-functional by DNS/TCP checks) — operator action is
+still what closes it, so this is a wording correction, not a new blocker. A new item, 9b,
+is added for GoTrue's own URL/redirect settings, previously untracked in this document.
+See the fourth finding at the top of this document for the full evidence trail.
 
 ---
 
@@ -275,8 +316,9 @@ to grant explicit approval for it to be run in-session. The 4 RLS policies
 preserving object paths/ownership so the pre-attached RLS policies resolve correctly.
 
 ### 10. SMTP/application/Shams configuration
-10.1. Replace placeholder `GOTRUE_SMTP_*` values on self-hosted `supabase-auth` with
-real production SMTP credentials.
+10.1. Replace placeholder `GOTRUE_SMTP_*` values on self-hosted `supabase-auth` with real
+production SMTP credentials. The current values are confirmed non-functional (§1 item 9)
+— `SMTP_HOST` does not resolve — not merely unverified, so this is not optional hygiene.
 10.2. Set `SITE_URL`, `VITE_SITE_URL`, `LOVABLE_API_KEY`, `LOVABLE_SEND_URL` in Lovable's
 project environment settings for the deployed Cloudflare Worker — the app's current, and
 only, deployment target (Vercel was removed from the architecture; see the third finding
@@ -285,6 +327,14 @@ at the top of this document and §1 item 10).
 sync runtime reads them.
 10.4. Do not print or log any of these values at any point; verify presence by name/
 connectivity test only.
+10.5. Set GoTrue's own `GOTRUE_SITE_URL` and `API_EXTERNAL_URL` to the real production
+domain (currently `localhost` values — §1 item 9b), and populate
+`GOTRUE_URI_ALLOW_LIST`/`ADDITIONAL_REDIRECT_URLS` with any additional redirect targets
+the application requires. **This is not the same variable as step 10.2's application-level
+`SITE_URL`/`VITE_SITE_URL`** — GoTrue reads its own copy independently to both generate
+email links and validate `redirectTo`. Skipping this step leaves step 10.1's SMTP fix
+insufficient on its own: real credentials would deliver an email, but every link inside it
+would still point at `localhost`.
 
 ### 11. Post-import validation
 11.1. Run full count/FK/orphan validation across every imported table
@@ -300,13 +350,24 @@ FK integrity holds against the newly-added branch rows.
 11.5. Confirm migration 69 is still absent from the ledger.
 
 ### 12. Controlled authentication/password-reset test
-12.1. Verify SMTP delivery works end-to-end **before** opening the system to real users:
-send one test password-reset email through the real SMTP configuration set in step 10.1
-and confirm delivery/format.
-12.2. Perform exactly one controlled login/reset-password flow using a designated test
-or operator account: request reset, receive email, set a new password, log in
-successfully.
-12.3. Do not skip this step — SMTP presence (name-only) was never confirmed to produce
+12.1. Confirm both step 10.1 (real SMTP credentials) and step 10.5 (GoTrue
+`SITE_URL`/`API_EXTERNAL_URL`/`URI_ALLOW_LIST` set to the real production domain) are
+complete. SMTP credentials alone are not sufficient — see the fourth finding at the top
+of this document.
+12.2. Restart only the `supabase-auth` container to pick up the new environment values.
+No other self-hosted container needs to restart for this change.
+12.3. Before sending anything, re-verify DNS resolution and TCP reachability of the newly
+configured `SMTP_HOST`:`SMTP_PORT` from inside `supabase-auth`, using the same read-only
+method as the SMTP readiness audit (`getent hosts`, then a TCP connect attempt) — this
+confirms the new values are actually live without yet sending any mail.
+12.4. Send **exactly one** test through the real, now-configured SMTP path: a
+password-recovery/invite request to a single designated operator/test account. Respect
+GoTrue's mailer rate limit (`GOTRUE_SMTP_MAX_FREQUENCY`, ~1 minute per address by
+default) — do not resend speculatively.
+12.5. Confirm all of: real delivery, correct sender identity, a link pointing at the real
+(non-`localhost`) production domain, and a successful end-to-end password-reset round
+trip (request → receive → set new password → log in).
+12.6. Do not skip this step — SMTP presence (name-only) was never confirmed to produce
 real deliverable email in any prior phase; this is the first real-world proof.
 
 ### 13. Application smoke tests
@@ -447,17 +508,23 @@ this section is implemented or tested against production in this phase.
    communicated to users ahead of the cutover window as part of the business's own
    communication plan (outside the scope of this technical document).
 4. **SMTP must be proven to deliver real email before the system is opened to users**
-   (runbook step 12.1) — presence of `GOTRUE_SMTP_*` variable names is not sufficient
-   proof; an actual test email must be sent and received through the real production
-   SMTP configuration.
+   (runbook steps 12.1–12.4) — presence of `GOTRUE_SMTP_*` variable names is not
+   sufficient proof, and neither is real SMTP credentials alone: a dedicated SMTP
+   readiness audit found the self-hosted configuration confirmed non-functional (DNS
+   resolution failure on `SMTP_HOST`, not just an unverified placeholder — see the
+   fourth finding at the top of this document), and separately found that GoTrue's own
+   `GOTRUE_SITE_URL`/`API_EXTERNAL_URL` still point at `localhost` (§1 item 9b). Both
+   must be corrected (runbook steps 10.1 and 10.5) before an actual test email is sent
+   and received with a usable, non-`localhost` link.
 5. **Exactly one controlled reset-password smoke test is required during cutover**
-   (runbook step 12.2), using a designated test/operator account, performed after SMTP
-   is configured and before the system is declared open. This is the first real-world
-   validation of the full reset flow against the self-hosted GoTrue instance with real
-   SMTP — Phase 47 validated the mechanism structurally (`resetPasswordForEmail`
-   compatibility) but never sent a real, deliverable email.
-6. Only after both the SMTP test (5.4) and the controlled reset test (5.5 / runbook
-   12.2) succeed should the system be considered ready to accept real user traffic.
+   (runbook step 12.5), using a designated test/operator account, performed after both
+   SMTP credentials (10.1) and GoTrue's URL/redirect settings (10.5) are configured and
+   before the system is declared open. This is the first real-world validation of the
+   full reset flow against the self-hosted GoTrue instance with real SMTP — Phase 47
+   validated the mechanism structurally (`resetPasswordForEmail` compatibility) but
+   never sent a real, deliverable email.
+6. Only after both the SMTP test and the controlled reset test (runbook 12.4–12.5)
+   succeed should the system be considered ready to accept real user traffic.
 
 ---
 
@@ -480,7 +547,8 @@ document. No status changes as a result, only the named destination.
 |---|---|---|---|
 | Cloud Auth `service_role` key | Auth roster pull | — | **Superseded.** No longer required: the already-authenticated Lovable MCP connector (verified this phase) provides equivalent capability via direct `SELECT` on Cloud `auth.users`; no new credential needed from the business owner. |
 | Cloud Postgres direct connection credentials (libpq) | Final production export | — | **Superseded.** No longer required: the already-authenticated Lovable MCP connector (verified this phase) can `SELECT` every table needed for the export directly against the live Cloud project; a literal `psql`/`pg_dump` binary is not required for this path. The connector is also capable of writes, so export *execution* remains a SELECT-only, Gate-B-gated cutover-day action, not performed by this preparation phase. |
-| Self-hosted `GOTRUE_SMTP_HOST/PORT/USER/PASS/SENDER_NAME/ADMIN_EMAIL` | Real password-reset email delivery | `supabase-auth` container environment (self-hosted) | Variable names present; values still read as placeholder — **operator must replace with real production SMTP credentials** |
+| Self-hosted `GOTRUE_SMTP_HOST/PORT/USER/PASS/SENDER_NAME/ADMIN_EMAIL` | Real password-reset email delivery | `supabase-auth` container environment (self-hosted) | **NOT PRODUCTION-READY** (confirmed, not just placeholder-patterned): all 5 non-port values match placeholder/fake shapes and `SMTP_HOST` fails DNS resolution from `supabase-auth` (control lookup of `smtp.gmail.com` succeeds from the same container, so the container's own DNS/egress is not the cause); `SMTP_PORT` is a non-standard `2500` — **operator must replace with real, reachable production SMTP credentials** |
+| Self-hosted `GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, `GOTRUE_URI_ALLOW_LIST` | Correct (non-`localhost`) password-reset/invite links; `redirectTo` validation | `supabase-auth` container environment (self-hosted) | **New row, added by the SMTP readiness audit.** `GOTRUE_SITE_URL=http://localhost:3000`, `API_EXTERNAL_URL=http://localhost:8000/auth/v1`, `GOTRUE_URI_ALLOW_LIST` empty — all local-development values. Distinct from the `SITE_URL`/`VITE_SITE_URL` row below, which the Cloudflare Worker application reads separately — **operator must set these to the real production domain** |
 | `SITE_URL`, `VITE_SITE_URL` | Password-reset redirect URL correctness | Lovable project environment settings (Cloudflare Worker) | **Missing from `.env.example`; must come from institutional knowledge — operator must supply** |
 | `LOVABLE_API_KEY`, `LOVABLE_SEND_URL` | Email queue/webhook routes | Lovable project environment settings (Cloudflare Worker) | **Missing from `.env.example`; must come from institutional knowledge — operator must supply** |
 | `SHAMS_CRM_USERNAME`, `SHAMS_CRM_PASSWORD`, `SHAMS_MIS_BASE_URL`, `SHAMS_MIS_ACCOUNT_IDENTIFIER`, `SHAMS_MIS_API_KEY` | `shams_offers` rebuild via `shams-sync-tick` | Wherever the Shams sync runtime reads its environment | **Not found in any inspectable container — operator must supply, all required together per `.env.example`'s documented grouping** |
@@ -524,8 +592,8 @@ preparation phase or any prior phase has paused, exported, or altered Cloud in a
 4. Trigger re-enable confirmation — all 4 temporarily-disabled triggers back to
    `tgenabled='O'` (runbook 11.4).
 5. Migration 69 still absent from the ledger (runbook 11.5).
-6. SMTP real-delivery test succeeds (runbook 12.1).
-7. Controlled password-reset smoke test succeeds end-to-end (runbook 12.2).
+6. SMTP real-delivery test succeeds (runbook 12.4).
+7. Controlled password-reset smoke test succeeds end-to-end (runbook 12.5).
 8. Application smoke tests pass across all 6 surfaces (runbook 13).
 9. No rollback-trigger condition (below) is observed during the post-switch monitoring
    window (runbook 15).
@@ -558,13 +626,13 @@ runbook step 15.
 - The business must supply the exact cutover date/time, honoring the confirmed
   constraint of "after 12:30 AM." **This document does not choose that date/time.**
 
-Gate A has **not** been passed yet — 4 items (§1, rows 8–11: `avatars` bucket creation
-execution, real SMTP, Cloudflare Worker application env vars, Shams CRM/MIS credentials)
-remain open, and
-the exact date/time has not been provided. Item 8's decision is resolved (see its row) —
-only the creation statement's execution is still pending. Items 7 and 12 (Auth roster
-pull, Cloud production export path) closed via the already-authenticated
-Lovable MCP connector — no new credential required.
+Gate A has **not** been passed yet — 5 items (§1, rows 8–9b, 10–11: `avatars` bucket
+creation execution, real SMTP [now confirmed NOT PRODUCTION-READY, not just unverified],
+GoTrue URL/redirect configuration [new, item 9b], Cloudflare Worker application env vars,
+Shams CRM/MIS credentials) remain open, and the exact date/time has not been provided.
+Item 8's decision is resolved (see its row) — only the creation statement's execution is
+still pending. Items 7 and 12 (Auth roster pull, Cloud production export path) closed via
+the already-authenticated Lovable MCP connector — no new credential required.
 
 ### Gate B — Immediately before executing cutover
 Once Gate A is passed and a specific date/time is scheduled, execution may not begin
@@ -582,31 +650,40 @@ untouched.
 **READY WITH CONDITIONS.**
 
 ### Remaining operator inputs
-1. Real production SMTP credentials for self-hosted `supabase-auth`.
-2. Confirmation that `SITE_URL`/`VITE_SITE_URL`/`LOVABLE_API_KEY`/`LOVABLE_SEND_URL` are
+1. Real production SMTP credentials for self-hosted `supabase-auth`. **Confirmed
+   NOT PRODUCTION-READY** by the SMTP readiness audit (DNS resolution failure on
+   `SMTP_HOST`, placeholder-pattern values across `HOST/USER/PASS/ADMIN_EMAIL/SENDER_NAME`,
+   non-standard `SMTP_PORT`) — this is stronger than the prior "unverified placeholder"
+   framing; see the fourth finding at the top of this document and §1 item 9.
+2. GoTrue's own `GOTRUE_SITE_URL`/`API_EXTERNAL_URL`/`GOTRUE_URI_ALLOW_LIST` on
+   self-hosted `supabase-auth`, currently `localhost` values with an empty allow list
+   (§1 item 9b, new this phase). Distinct from item 3 below's application-level
+   `SITE_URL`/`VITE_SITE_URL` — both must be set correctly for password-reset links to
+   work, but they are different variables read by different services.
+3. Confirmation that `SITE_URL`/`VITE_SITE_URL`/`LOVABLE_API_KEY`/`LOVABLE_SEND_URL` are
    set in Lovable's project environment settings for the deployed Cloudflare Worker.
-   **Corrected this phase**: Vercel is no longer part of the architecture, so no MCP
-   connector authorization or OAuth step applies here — this is a direct operator
+   **Corrected in a prior phase**: Vercel is no longer part of the architecture, so no
+   MCP connector authorization or OAuth step applies here — this is a direct operator
    confirmation, not gated on any authentication flow.
-3. Shams CRM/MIS credentials for the sync runtime, plus the two self-hosted Vault
+4. Shams CRM/MIS credentials for the sync runtime, plus the two self-hosted Vault
    secrets (`shams_sync_scheduler_url`, `email_queue_service_role_key`) once the deployed
    Cloudflare Worker's scheduler endpoint exists.
-4. Execute `avatars` bucket creation — the decision is closed (§1, item 8; exact
+5. Execute `avatars` bucket creation — the decision is closed (§1, item 8; exact
    statement in §2 step 9.1); only running it remains, blocked this phase by the
    session's own permission classifier, pending operator action or explicit approval.
 
-Resolved this phase, no longer remaining: Cloud Auth roster access and the Cloud
+Resolved in a prior phase, no longer remaining: Cloud Auth roster access and the Cloud
 production export path (previously listed here) — both are obtainable via the
-already-authenticated Lovable MCP connector verified this phase, with no new credential
-required from the business owner. See the note at the top of this document and §6. Within
-item 4 above, the `avatars` bucket's size/MIME-limit *decision* is also resolved this
-phase — only the creation statement's *execution* remains open.
+already-authenticated Lovable MCP connector, with no new credential required from the
+business owner. See the note at the top of this document and §6. Within item 5 above, the
+`avatars` bucket's size/MIME-limit *decision* is also resolved — only the creation
+statement's *execution* remains open.
 
 ### Remaining credentials/access
-Identical to the 4 items above (§6 gives the exact variable names and destinations for
-each) — no credential has been supplied, read, or invented in this phase. Two
-previously-listed credential requirements (Cloud Auth `service_role` key, Cloud Postgres
-libpq credentials) are superseded — see §6.
+Identical to the 5 items above (§6 gives the exact variable names and destinations for
+each) — no credential has been supplied, read, or invented in any documentation phase.
+Two previously-listed credential requirements (Cloud Auth `service_role` key, Cloud
+Postgres libpq credentials) are superseded — see §6.
 
 ### Remaining business confirmations
 1. Exact cutover date/time (constraint already given: after 12:30 AM; specific date/time
@@ -616,8 +693,10 @@ No other business decision remains open — optional branches, verification-snap
 exclusion, and credential strategy are all CLOSED as of this phase.
 
 ### Exact next action
-Operator closes items 1–4 above (in parallel, independent of each other and of the date/
-time decision). Once closed, and once the business supplies the exact cutover date/time,
+Operator closes items 1–5 above (in parallel, independent of each other and of the date/
+time decision — items 1 and 2 are both self-hosted `supabase-auth` environment changes and
+are naturally done together, but neither depends on the other being done first). Once
+closed, and once the business supplies the exact cutover date/time,
 Gate A is passed. At the start of the scheduled window, the user must issue an explicit
 `GO`/`NO-GO` at Gate B before any execution phase (a future "Phase 51 — Cutover
 Execution") may begin runbook step 2 onward. Cloud production export and Auth roster
