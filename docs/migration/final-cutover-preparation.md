@@ -226,6 +226,40 @@ prerequisite below is marked CLOSED. GoTrue's SITE_URL/API_EXTERNAL_URL/URI_ALLO
 the Zoho SMTP configuration were independently re-verified correct and unchanged (DNS
 resolves, TCP `587` open) and remain ready the moment the pfSense conflict is fixed.
 
+**Eighth finding, from this phase's final external production validation (read-only
+checks only, no configuration change, no email sent)**: IT reported the pfSense WAN
+port-443 conflict (seventh finding) resolved. Live re-verification this session found
+this **not actually true** — the conflict is unchanged from the seventh finding. Evidence:
+- Internal chain re-confirmed fully healthy: `nginx -t` passes; the real Let's Encrypt
+  certificate is loaded and unchanged (`CN=milaportal.milaserv.com`, SAN
+  `DNS:milaportal.milaserv.com`, issued by Let's Encrypt `YE1`, valid `2026-09-13` to
+  `2026-12-12`); requesting `https://milaportal.milaserv.com/auth/v1/health` directly
+  against the origin (`10.10.11.160`) with a valid `apikey` header returns a correct `200`
+  with GoTrue's own health payload (`{"version":"v2.189.0","name":"GoTrue",...}`) through
+  Nginx → Envoy → GoTrue; `GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, and
+  `GOTRUE_URI_ALLOW_LIST` are confirmed set to the real production domain
+  (`https://milaportal.milaserv.com`, `https://milaportal.milaserv.com/auth/v1`,
+  `https://milaportal.milaserv.com/reset-password`); Zoho SMTP is reachable
+  (`smtp.zoho.com` resolves to `136.143.190.56`, TCP `587` confirmed open from
+  `supabase-auth`); all 12 production containers remain healthy; Envoy still has no
+  host-exposed port (host port 8000 confirmed absent from `ss -tln`).
+- Resolving the hostname via a public resolver (`1.1.1.1`) still gives the same real
+  public IP as the seventh finding (`196.219.151.53`). Port 80 against that IP still
+  forwards correctly to this server's own Nginx (`301` to HTTPS, `Server: nginx`).
+- **Port 443 against that same public IP is still answered by pfSense's own WebGUI**,
+  not this server's Nginx: three separate connection attempts all returned pfSense's
+  self-signed certificate (`CN=pfSense-6861967375476`) and its `404` HTML page, identical
+  to the seventh finding's evidence. This was re-checked three times to rule out a
+  transient result.
+
+**Conclusion: the pfSense WAN port-443 conflict is still live** — nothing on this
+server changed or needed to change (its side of the chain was already correct and
+remains correct), but the actual internet-facing path still does not reach MilaPortal on
+port 443. Per this phase's own stop condition, **no email was sent**, no `avatars`-bucket
+or other write action was attempted, and no prerequisite below is marked CLOSED. Items 9
+and 9b are unchanged from the seventh finding's status. This is squarely IT's pfSense box,
+outside this session's access and remit.
+
 > Until explicit cutover authorization is given, all Lovable Cloud access used for
 > preparation must remain read-only/SELECT-only. No freeze, export execution, INSERT,
 > UPDATE, DELETE, DDL, credential changes, or other production mutation is permitted.
@@ -245,8 +279,8 @@ resolves, TCP `587` open) and remain ready the moment the pfSense conflict is fi
 | 6 | Phase 44 scratch rehearsal container | **CLOSED** | Destroyed in Phase 50, confirmed absent this session, production containers unaffected |
 | 7 | Auth roster pull | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the already-authenticated Lovable MCP connector's direct query access to Cloud `auth.users` (`id`/`email`/metadata only, never `encrypted_password`) — no Cloud `service_role` GoTrue Admin API key or other new credential required |
 | 8 | `avatars` storage bucket | **REQUIRES OPERATOR INPUT** (RLS is READY, settings fully determined) | No longer an open decision: name (`avatars`), private, `file_size_limit = 4194304` (4 MB), and `allowed_mime_types = {image/png,image/jpeg,image/webp,image/gif}` are all fixed by already-applied migration `20260721002100_avatars_bucket_limits.sql` and `src/lib/avatar.ts` — not "no existing Cloud value to mirror" as previously stated. That migration is an `UPDATE ... WHERE id='avatars'`, applied while the bucket didn't exist, so it was a no-op; creation must set these values explicitly, not rely on the migration re-firing. Exact statement attempted this phase and blocked by this session's own permission classifier ("Modify Shared Resources") — only remaining step is running it, with the operator's explicit go-ahead (see §2 step 9.1) |
-| 9 | Real SMTP credentials | **CONFIGURED, TEST PENDING** (was NOT PRODUCTION-READY) | Real Zoho Mail production credentials now set on self-hosted `supabase-auth` (`smtp.zoho.com:587`, `milaportal@milaserv.com`) and live-verified this phase: DNS resolves, TCP `587` open, `supabase-auth` restarted and healthy (see the fifth finding above). Not yet CLOSED — the controlled end-to-end password-reset email test (runbook step 12) has not been run; it was waiting on item 9b's HTTPS endpoint, addressed by the same finding |
-| 9b | GoTrue URL/redirect configuration (`GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, `GOTRUE_URI_ALLOW_LIST`) | **CONFIGURED; ORIGIN HTTPS VERIFIED; BLOCKED ON PFSENSE PORT-443 CONFLICT** (was REQUIRES OPERATOR INPUT) | `GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, and `GOTRUE_URI_ALLOW_LIST` are set to the real production domain and confirmed working end-to-end against the origin directly (see the seventh finding above): real trusted Let's Encrypt cert loaded, Nginx→Envoy→GoTrue chain returns a correct `401`. Not yet CLOSED: tested against the real public IP, port 443 is answered by IT's **pfSense firewall's own WebGUI** (self-signed cert, wrong response) instead of being forwarded to this server, while port 80 forwards correctly — a firewall-side WAN-port conflict, not a MilaPortal-server issue. **Single remaining dependency**: IT moves/restricts the pfSense WebGUI off port 443 on the WAN interface (or otherwise resolves the conflict) so the existing 443→`10.10.11.160:443` NAT rule can actually reach Nginx |
+| 9 | Real SMTP credentials | **CONFIGURED; CONNECTIVITY RE-VERIFIED; TEST STILL PENDING ON 9b** | Real Zoho Mail production credentials remain set on self-hosted `supabase-auth` (`smtp.zoho.com:587`, `milaportal@milaserv.com`) and re-verified live this phase: DNS resolves to `136.143.190.56`, TCP `587` open, `supabase-auth` healthy. Not yet CLOSED — the controlled end-to-end password-reset email test (runbook step 12) still cannot run: it requires item 9b's external HTTPS path, which the eighth finding confirms is still blocked (pfSense port-443 conflict, reported fixed by IT but found unchanged) |
+| 9b | GoTrue URL/redirect configuration (`GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, `GOTRUE_URI_ALLOW_LIST`) | **CONFIGURED; ORIGIN HTTPS VERIFIED; STILL BLOCKED ON PFSENSE PORT-443 CONFLICT** (unchanged despite IT's report that it was fixed — see the eighth finding) | `GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, and `GOTRUE_URI_ALLOW_LIST` are set to the real production domain and re-confirmed working end-to-end against the origin directly this phase (a correct `200` with GoTrue's health payload through Nginx→Envoy→GoTrue, using a valid `apikey`). Not yet CLOSED: re-tested against the real public IP this phase, port 443 is **still** answered by IT's **pfSense firewall's own WebGUI** (self-signed cert, `404` page) instead of being forwarded to this server, while port 80 still forwards correctly — the same firewall-side WAN-port conflict as the seventh finding, reported by IT as fixed but found live and unchanged this phase. **Single remaining dependency**: IT moves/restricts the pfSense WebGUI off port 443 on the WAN interface (or otherwise resolves the conflict) so the existing 443→`10.10.11.160:443` NAT rule can actually reach Nginx |
 | 10 | Application env vars (`SITE_URL`, `VITE_SITE_URL`, `LOVABLE_API_KEY`, `LOVABLE_SEND_URL`) | **REQUIRES OPERATOR INPUT** | Load-bearing, absent from `.env.example`. **Corrected this phase**: Vercel is no longer part of the architecture (see the third finding at the top of this document) — the live app deploys as a Cloudflare Worker via Lovable, so these vars must be set in Lovable's project environment settings for that Worker, per `.env.example`'s own guidance for `SHAMS_MIS_BASE_URL`. No MCP tool available this session exposes Worker environment-variable values or presence, so this remains unverifiable from here — operator confirmation required, not a guess |
 | 11 | Shams credentials (`SHAMS_CRM_*`, `SHAMS_MIS_*`) | **REQUIRES OPERATOR INPUT** | No `SHAMS_*` name found in any inspectable container this session; consumed only by the deployed Cloudflare Worker's server-only code (`src/lib/shams-crm/client.server.ts`, `src/lib/shams/client.server.ts`), not by any self-hosted container. self-hosted's `shams_sync_tick()` cron function additionally requires two Vault secrets, `shams_sync_scheduler_url` and `email_queue_service_role_key`, to reach that Worker's scheduler endpoint — both confirmed **absent** (no row in `vault.decrypted_secrets`) — a separate self-hosted wiring step from the CRM/MIS credentials themselves, not resolvable until the deployed Worker's scheduler endpoint exists |
 | 12 | Cloud production export path | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the same Lovable MCP connector's `query_database` capability against the live Cloud project — a literal `psql`/`pg_dump` binary is not required for this path; export *execution* is still a cutover-day action (item 18) and remains SELECT-only until Gate B |
