@@ -152,6 +152,42 @@ audit and this remaining dependency were both read-only/document-only from this 
 side. No item's status in §1 changes as a result of this finding; items 9 and 9b remain
 open below pending the controlled test.
 
+**Sixth finding, superseding part of the fifth (config change, no cutover action, no
+email sent)**: the intended TLS-provisioning model changed — IT manages Cloudflare DNS
+and the Let's Encrypt DNS-01 challenge/issuance entirely on their own systems, and **no
+Cloudflare API token is to be requested, stored, or used on the MilaPortal server at
+all**. The `CERTBOT_AUTHENTICATOR=dns-cloudflare` setting from the fifth finding has been
+removed. In its place, `CERTBOT_AUTHENTICATOR=dns-rfc2136` is set as a deliberately inert
+placeholder — a real certbot plugin this image ships, but with no `rfc2136.ini`
+credentials file, chosen only so the container's built-in autorenewal loop keeps failing
+**locally** (confirmed live: `Authenticator is 'dns-rfc2136' but '/etc/letsencrypt/
+rfc2136.ini' is missing`, zero Let's Encrypt contact, no Cloudflare reference anywhere in
+its config or logs) rather than falling back to the default HTTP-01 `webroot`
+authenticator, which — unlike the DNS-authenticator credential check — would actually
+contact Let's Encrypt and accumulate real failed-validation attempts every ~8 days
+(Cloudflare Flexible mode plus the closed port 80 make HTTP-01 validation impossible
+here, per the earlier network-topology audit). `volumes/proxy/nginx/letsencrypt/
+cloudflare.ini.example` was kept, per instruction, but its header now marks it superseded
+documentation, not the active path.
+
+This phase also corrected a mechanics misunderstanding worth recording: a DNS-01 ACME
+challenge is created fresh by, and cryptographically bound to, a single certbot
+invocation (one order, one time-limited token) — it cannot be "completed later" by this
+container just because IT separately created a `_acme-challenge` TXT record during their
+own, independent issuance run elsewhere. This container was never part of that ACME
+order and has no mechanism to join it retroactively. The revised, and now fully prepared,
+path is a direct file handoff: IT supplies the already-issued certificate and key, and
+this phase created the exact expected drop-in location, bind-mounted and persistent —
+`volumes/proxy/nginx/letsencrypt/live/milaportal.milaserv.com/{fullchain.pem,privkey.pem,
+chain.pem}` — with a README documenting the exact three files, an `openssl` verification
+recipe, and the one command to reload Nginx afterward. **This file handoff is now the
+single remaining external dependency**, superseding the fifth finding's Cloudflare-token
+dependency. Re-verified live this phase after the change: `nginx -t` passes, all 12
+containers remain healthy, Nginx→Envoy connectivity still confirmed (a real `401` from
+GoTrue, not a connection error), Envoy still has no host-exposed port, port 80 still
+redirects to 443, and the public HTTPS endpoint is still unreachable (expected — no
+certificate exists yet). No item's status in §1 changes as a result of this finding.
+
 > Until explicit cutover authorization is given, all Lovable Cloud access used for
 > preparation must remain read-only/SELECT-only. No freeze, export execution, INSERT,
 > UPDATE, DELETE, DDL, credential changes, or other production mutation is permitted.
@@ -172,7 +208,7 @@ open below pending the controlled test.
 | 7 | Auth roster pull | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the already-authenticated Lovable MCP connector's direct query access to Cloud `auth.users` (`id`/`email`/metadata only, never `encrypted_password`) — no Cloud `service_role` GoTrue Admin API key or other new credential required |
 | 8 | `avatars` storage bucket | **REQUIRES OPERATOR INPUT** (RLS is READY, settings fully determined) | No longer an open decision: name (`avatars`), private, `file_size_limit = 4194304` (4 MB), and `allowed_mime_types = {image/png,image/jpeg,image/webp,image/gif}` are all fixed by already-applied migration `20260721002100_avatars_bucket_limits.sql` and `src/lib/avatar.ts` — not "no existing Cloud value to mirror" as previously stated. That migration is an `UPDATE ... WHERE id='avatars'`, applied while the bucket didn't exist, so it was a no-op; creation must set these values explicitly, not rely on the migration re-firing. Exact statement attempted this phase and blocked by this session's own permission classifier ("Modify Shared Resources") — only remaining step is running it, with the operator's explicit go-ahead (see §2 step 9.1) |
 | 9 | Real SMTP credentials | **CONFIGURED, TEST PENDING** (was NOT PRODUCTION-READY) | Real Zoho Mail production credentials now set on self-hosted `supabase-auth` (`smtp.zoho.com:587`, `milaportal@milaserv.com`) and live-verified this phase: DNS resolves, TCP `587` open, `supabase-auth` restarted and healthy (see the fifth finding above). Not yet CLOSED — the controlled end-to-end password-reset email test (runbook step 12) has not been run; it was waiting on item 9b's HTTPS endpoint, addressed by the same finding |
-| 9b | GoTrue URL/redirect configuration (`GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, `GOTRUE_URI_ALLOW_LIST`) | **CONFIGURED, HTTPS PENDING ONE EXTERNAL DEPENDENCY** (was REQUIRES OPERATOR INPUT) | `GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, and `GOTRUE_URI_ALLOW_LIST` are now set to the real production domain (see the fifth finding above) — no longer `localhost`. Not yet CLOSED: the domain is not yet reachable over HTTPS end-to-end. An Nginx (`jonasal/nginx-certbot`) reverse proxy now terminates TLS in front of Envoy on the origin, DNS-01 (Cloudflare) is fully configured, and the **single remaining external dependency** is a Cloudflare API token from IT, to be saved as `volumes/proxy/nginx/letsencrypt/cloudflare.ini` (outside this repository) per `cloudflare.ini.example`'s instructions — no credential was invented or requested ad hoc |
+| 9b | GoTrue URL/redirect configuration (`GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, `GOTRUE_URI_ALLOW_LIST`) | **CONFIGURED, HTTPS PENDING ONE EXTERNAL DEPENDENCY** (was REQUIRES OPERATOR INPUT) | `GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, and `GOTRUE_URI_ALLOW_LIST` are now set to the real production domain — no longer `localhost`. Not yet CLOSED: the domain is not yet reachable over HTTPS end-to-end. An Nginx (`jonasal/nginx-certbot`) reverse proxy terminates TLS in front of Envoy on the origin; per the sixth finding above, this server holds **no Cloudflare API token** — IT manages Cloudflare DNS/DNS-01 issuance entirely externally, and the **single remaining external dependency** is IT placing the already-issued certificate/key at `volumes/proxy/nginx/letsencrypt/live/milaportal.milaserv.com/{fullchain.pem,privkey.pem,chain.pem}` (outside this repository) per that directory's `README.md` — no credential was invented or requested ad hoc |
 | 10 | Application env vars (`SITE_URL`, `VITE_SITE_URL`, `LOVABLE_API_KEY`, `LOVABLE_SEND_URL`) | **REQUIRES OPERATOR INPUT** | Load-bearing, absent from `.env.example`. **Corrected this phase**: Vercel is no longer part of the architecture (see the third finding at the top of this document) — the live app deploys as a Cloudflare Worker via Lovable, so these vars must be set in Lovable's project environment settings for that Worker, per `.env.example`'s own guidance for `SHAMS_MIS_BASE_URL`. No MCP tool available this session exposes Worker environment-variable values or presence, so this remains unverifiable from here — operator confirmation required, not a guess |
 | 11 | Shams credentials (`SHAMS_CRM_*`, `SHAMS_MIS_*`) | **REQUIRES OPERATOR INPUT** | No `SHAMS_*` name found in any inspectable container this session; consumed only by the deployed Cloudflare Worker's server-only code (`src/lib/shams-crm/client.server.ts`, `src/lib/shams/client.server.ts`), not by any self-hosted container. self-hosted's `shams_sync_tick()` cron function additionally requires two Vault secrets, `shams_sync_scheduler_url` and `email_queue_service_role_key`, to reach that Worker's scheduler endpoint — both confirmed **absent** (no row in `vault.decrypted_secrets`) — a separate self-hosted wiring step from the CRM/MIS credentials themselves, not resolvable until the deployed Worker's scheduler endpoint exists |
 | 12 | Cloud production export path | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the same Lovable MCP connector's `query_database` capability against the live Cloud project — a literal `psql`/`pg_dump` binary is not required for this path; export *execution* is still a cutover-day action (item 18) and remains SELECT-only until Gate B |
