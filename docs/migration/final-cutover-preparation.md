@@ -188,6 +188,44 @@ GoTrue, not a connection error), Envoy still has no host-exposed port, port 80 s
 redirects to 443, and the public HTTPS endpoint is still unreachable (expected — no
 certificate exists yet). No item's status in §1 changes as a result of this finding.
 
+**Seventh finding, from this phase's HTTPS validation (real cert now live, no cutover
+action, no email sent)**: IT reported all external infrastructure work — Cloudflare, DNS,
+NAT/port-forwarding, and Let's Encrypt issuance — complete. Live verification this phase
+found a real, trusted, correctly-matched Let's Encrypt certificate now issued and loaded
+(`CN=milaportal.milaserv.com`, SAN `DNS:milaportal.milaserv.com`, issued by Let's Encrypt
+intermediate `YE1`, valid `2026-09-13` to `2026-12-12`, ECDSA key confirmed matching the
+certificate via `openssl x509 -pubkey` / `openssl pkey -pubout` comparison — note a plain
+`openssl rsa -noout -modulus` check on this key falsely reports a mismatch because the key
+is EC, not RSA; the pubkey-based comparison is the correct method and confirms a MATCH).
+`CERTBOT_AUTHENTICATOR` was found already changed on disk (outside this repo, by IT/an
+external process) from the sixth finding's inert `dns-rfc2136` placeholder to `webroot`,
+consistent with certbot having actually completed a real HTTP-01 issuance — left as-is,
+not reverted, since it now reflects a real working state. `nginx -t` passes, all 12
+containers remain healthy, Envoy still has no host-exposed port, and requesting
+`https://milaportal.milaserv.com/auth/v1/health` **directly against this origin**
+(`10.10.11.160`, matching what this host's own internal/split-horizon DNS resolves the
+hostname to) succeeds end-to-end with a real `401` from GoTrue through Nginx → Envoy — the
+full internal chain and the certificate itself are confirmed correct.
+
+However, **the actual internet-facing path is not yet working**, found by resolving the
+hostname via a public resolver (`1.1.1.1`) to get the real public IP (`196.219.151.53`,
+no longer Cloudflare-proxied — the DNS record now appears unproxied/"grey-clouded" rather
+than going through Cloudflare's edge) and connecting to it directly: **port 80 correctly
+forwards through to this server's Nginx** (received the expected 301-to-HTTPS response,
+`Server: nginx`), but **port 443 does not reach Nginx at all** — it is answered instead by
+`pfSense`'s own web-GUI self-signed certificate (`CN=pfSense-6861967375476`) and returns a
+generic `404`, not GoTrue's response. This indicates the pfSense firewall/router's own
+management WebGUI is bound to port 443 on the WAN/public interface and is intercepting
+the connection before any NAT port-forward rule to `10.10.11.160:443` can apply — a
+firewall-side configuration conflict (two things wanting port 443 on the same public IP),
+not anything on this server. This is **squarely IT's pfSense box**, outside this session's
+access and explicitly outside its remit to touch. Until resolved, a real user clicking a
+password-reset link from outside this network would hit pfSense's admin interface, not
+MilaPortal — so per this phase's own stop condition, **no email was sent** and no
+prerequisite below is marked CLOSED. GoTrue's SITE_URL/API_EXTERNAL_URL/URI_ALLOW_LIST and
+the Zoho SMTP configuration were independently re-verified correct and unchanged (DNS
+resolves, TCP `587` open) and remain ready the moment the pfSense conflict is fixed.
+
 > Until explicit cutover authorization is given, all Lovable Cloud access used for
 > preparation must remain read-only/SELECT-only. No freeze, export execution, INSERT,
 > UPDATE, DELETE, DDL, credential changes, or other production mutation is permitted.
@@ -208,7 +246,7 @@ certificate exists yet). No item's status in §1 changes as a result of this fin
 | 7 | Auth roster pull | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the already-authenticated Lovable MCP connector's direct query access to Cloud `auth.users` (`id`/`email`/metadata only, never `encrypted_password`) — no Cloud `service_role` GoTrue Admin API key or other new credential required |
 | 8 | `avatars` storage bucket | **REQUIRES OPERATOR INPUT** (RLS is READY, settings fully determined) | No longer an open decision: name (`avatars`), private, `file_size_limit = 4194304` (4 MB), and `allowed_mime_types = {image/png,image/jpeg,image/webp,image/gif}` are all fixed by already-applied migration `20260721002100_avatars_bucket_limits.sql` and `src/lib/avatar.ts` — not "no existing Cloud value to mirror" as previously stated. That migration is an `UPDATE ... WHERE id='avatars'`, applied while the bucket didn't exist, so it was a no-op; creation must set these values explicitly, not rely on the migration re-firing. Exact statement attempted this phase and blocked by this session's own permission classifier ("Modify Shared Resources") — only remaining step is running it, with the operator's explicit go-ahead (see §2 step 9.1) |
 | 9 | Real SMTP credentials | **CONFIGURED, TEST PENDING** (was NOT PRODUCTION-READY) | Real Zoho Mail production credentials now set on self-hosted `supabase-auth` (`smtp.zoho.com:587`, `milaportal@milaserv.com`) and live-verified this phase: DNS resolves, TCP `587` open, `supabase-auth` restarted and healthy (see the fifth finding above). Not yet CLOSED — the controlled end-to-end password-reset email test (runbook step 12) has not been run; it was waiting on item 9b's HTTPS endpoint, addressed by the same finding |
-| 9b | GoTrue URL/redirect configuration (`GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, `GOTRUE_URI_ALLOW_LIST`) | **CONFIGURED, HTTPS PENDING ONE EXTERNAL DEPENDENCY** (was REQUIRES OPERATOR INPUT) | `GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, and `GOTRUE_URI_ALLOW_LIST` are now set to the real production domain — no longer `localhost`. Not yet CLOSED: the domain is not yet reachable over HTTPS end-to-end. An Nginx (`jonasal/nginx-certbot`) reverse proxy terminates TLS in front of Envoy on the origin; per the sixth finding above, this server holds **no Cloudflare API token** — IT manages Cloudflare DNS/DNS-01 issuance entirely externally, and the **single remaining external dependency** is IT placing the already-issued certificate/key at `volumes/proxy/nginx/letsencrypt/live/milaportal.milaserv.com/{fullchain.pem,privkey.pem,chain.pem}` (outside this repository) per that directory's `README.md` — no credential was invented or requested ad hoc |
+| 9b | GoTrue URL/redirect configuration (`GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, `GOTRUE_URI_ALLOW_LIST`) | **CONFIGURED; ORIGIN HTTPS VERIFIED; BLOCKED ON PFSENSE PORT-443 CONFLICT** (was REQUIRES OPERATOR INPUT) | `GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, and `GOTRUE_URI_ALLOW_LIST` are set to the real production domain and confirmed working end-to-end against the origin directly (see the seventh finding above): real trusted Let's Encrypt cert loaded, Nginx→Envoy→GoTrue chain returns a correct `401`. Not yet CLOSED: tested against the real public IP, port 443 is answered by IT's **pfSense firewall's own WebGUI** (self-signed cert, wrong response) instead of being forwarded to this server, while port 80 forwards correctly — a firewall-side WAN-port conflict, not a MilaPortal-server issue. **Single remaining dependency**: IT moves/restricts the pfSense WebGUI off port 443 on the WAN interface (or otherwise resolves the conflict) so the existing 443→`10.10.11.160:443` NAT rule can actually reach Nginx |
 | 10 | Application env vars (`SITE_URL`, `VITE_SITE_URL`, `LOVABLE_API_KEY`, `LOVABLE_SEND_URL`) | **REQUIRES OPERATOR INPUT** | Load-bearing, absent from `.env.example`. **Corrected this phase**: Vercel is no longer part of the architecture (see the third finding at the top of this document) — the live app deploys as a Cloudflare Worker via Lovable, so these vars must be set in Lovable's project environment settings for that Worker, per `.env.example`'s own guidance for `SHAMS_MIS_BASE_URL`. No MCP tool available this session exposes Worker environment-variable values or presence, so this remains unverifiable from here — operator confirmation required, not a guess |
 | 11 | Shams credentials (`SHAMS_CRM_*`, `SHAMS_MIS_*`) | **REQUIRES OPERATOR INPUT** | No `SHAMS_*` name found in any inspectable container this session; consumed only by the deployed Cloudflare Worker's server-only code (`src/lib/shams-crm/client.server.ts`, `src/lib/shams/client.server.ts`), not by any self-hosted container. self-hosted's `shams_sync_tick()` cron function additionally requires two Vault secrets, `shams_sync_scheduler_url` and `email_queue_service_role_key`, to reach that Worker's scheduler endpoint — both confirmed **absent** (no row in `vault.decrypted_secrets`) — a separate self-hosted wiring step from the CRM/MIS credentials themselves, not resolvable until the deployed Worker's scheduler endpoint exists |
 | 12 | Cloud production export path | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the same Lovable MCP connector's `query_database` capability against the live Cloud project — a literal `psql`/`pg_dump` binary is not required for this path; export *execution* is still a cutover-day action (item 18) and remains SELECT-only until Gate B |
