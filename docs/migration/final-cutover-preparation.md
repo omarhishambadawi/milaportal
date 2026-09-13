@@ -252,13 +252,81 @@ this **not actually true** — the conflict is unchanged from the seventh findin
   to the seventh finding's evidence. This was re-checked three times to rule out a
   transient result.
 
-**Conclusion: the pfSense WAN port-443 conflict is still live** — nothing on this
-server changed or needed to change (its side of the chain was already correct and
-remains correct), but the actual internet-facing path still does not reach MilaPortal on
-port 443. Per this phase's own stop condition, **no email was sent**, no `avatars`-bucket
-or other write action was attempted, and no prerequisite below is marked CLOSED. Items 9
-and 9b are unchanged from the seventh finding's status. This is squarely IT's pfSense box,
-outside this session's access and remit.
+**Conclusion drawn at the time — since proven wrong, see the correction in the ninth
+finding**: the evidence above was read as "the pfSense WAN port-443 conflict is still
+live." No email was sent, no `avatars`-bucket or other write action was attempted, and no
+prerequisite was marked CLOSED on the strength of it. The observation itself is accurate
+and reproducible; only the conclusion drawn from it was wrong.
+
+**Ninth finding, from this phase's root-routing work (real Nginx change made, no cutover
+action, no email sent)** — this finding **corrects the seventh and eighth findings' central
+conclusion**:
+
+*The pfSense port-443 "blocker" was a measurement artifact.* Every prior probe was issued
+**from this server itself** to the WAN IP (`196.219.151.53`). Traffic taking that path
+leaves the LAN, comes back to the firewall's own WAN address, and — with no NAT reflection
+/hairpin rule configured — is answered by pfSense's own WebGUI. That is why those probes
+saw `CN=pfSense-6861967375476`. It says nothing about the path real users take. Proven this
+phase from the Nginx access log: a **real external browser** (`197.53.56.87`, an ISP
+address outside this LAN, Chrome/Windows) loaded `https://milaportal.milaserv.com/dashboard`
+and `/orders` plus their asset bundles, all `200`, and Cloudflare edge addresses
+(`172.68.234.57`, `172.64.0.0/13`) appear in the same log. **The internet-facing path works
+and has been working; port 443 does reach this server's Nginx from outside.** No pfSense,
+NAT, DNS, or Cloudflare change was made by this phase (or any prior one) — the firewall
+never needed the fix the seventh and eighth findings asked IT for. Probes from this host to
+the WAN IP remain unreliable by design; validate from a genuinely external client, or from
+the access log.
+
+*The real defect, found and fixed this phase, was Nginx's root routing.* The proxy was
+running the **unmodified vendor-default** `supabase-nginx.conf.tpl`, whose `location /`
+serves **Supabase Studio behind HTTP Basic Auth** — so the production domain's root
+answered `401 WWW-Authenticate: Basic realm="supabase"` (a browser-native credential
+dialog) instead of the application. The Basic Auth was never accidental: it is the only
+thing guarding Studio, and removing it would have published a full database admin console.
+The routing around it was the defect. The template now reads:
+
+| Path | Upstream | Note |
+|---|---|---|
+| `/` (everything else) | `https://milaportal.live` | The existing MilaPortal Cloudflare Worker, deployed via Lovable — its canonical origin, per `docs/project.md`. Catch-all, so the app's client-side routing (`/dashboard`, `/orders`, `/reset-password`, …) resolves as it does on that origin |
+| `/auth/v1` | `api-gw:8000` (Envoy) | **Narrowed from `/auth`** — the bare prefix also swallowed the application's own `/auth` sign-in route. `/auth/v1` is the gateway's real GoTrue prefix (confirmed against Envoy's `lds.yaml`), so no Supabase behaviour is lost |
+| `/rest`, `/graphql`, `/realtime/v1/`, `/storage/v1/`, `/functions`, `/mcp`, `/sso` | `api-gw:8000` (Envoy) | Unchanged, byte-for-byte |
+
+Worker upstream specifics, each established by test rather than assumption: the `Host`
+header **must** be rewritten to `milaportal.live` (forwarding `milaportal.milaserv.com`
+makes Cloudflare route the request back to this origin — a loop; verified directly); SNI is
+set to match; the upstream certificate is verified against the container's CA bundle
+(`Verify return code: 0`); and the resolver is pinned to Docker's embedded DNS with
+**`ipv6=off`**, because the container has no IPv6 default route while `milaportal.live`
+publishes AAAA records. `proxy_redirect`/`proxy_cookie_domain` map the upstream origin back
+to this one.
+
+*Studio kept its protection and left the public root.* Studio is a Next.js app with no base
+path — its assets and API calls are absolute, and its `/api/*` would collide with the
+application's own `/api/*` routes — so a `/studio` sub-path is not safely possible without
+rebuilding it, and was **not** forced. It now has its own listener, `8443`, where it still
+owns `/`, behind the **same** Basic Auth, published on the LAN address `10.10.11.160` only
+(confirmed: `LISTEN 10.10.11.160:8443`, refused on loopback, nothing forwards it publicly).
+Verified: `/project/default` on the public 443 returns the application's `404`, not Studio;
+`8443` without credentials returns `401`; with credentials returns Studio's own `307` to
+`/project/default`.
+
+*Two items remain open and are deliberately not closed by this phase.* (a) The deployed
+Worker still points at **Cloud** Supabase (`gwnxlpophyvgafctrbkx.supabase.co`, read from its
+own live CSP `connect-src`), not at this self-hosted stack — so a self-hosted password-reset
+link would land on an application wired to Cloud. That is a cutover-day switch (§1 item 10),
+not a proxy concern, and it is the substantive reason **no password-reset email was sent
+this phase**. (b) `/mcp` is claimed by both sides — Envoy routes it, and the application
+also serves it (`src/routes/mcp.ts`, `.lovable/mcp/manifest.json`). The existing Supabase
+block was preserved unchanged, so the application's `/mcp` is currently shadowed on this
+domain; whoever owns that endpoint at cutover should decide deliberately.
+
+Re-verified after the change: `nginx -t` passes, all 12 containers healthy, certificate
+untouched (`CN=milaportal.milaserv.com`, valid to `2026-12-12`), port 80 still redirects to
+443, `/auth/v1/health` returns GoTrue `v2.189.0` `200`, `/storage/v1/version` `200`,
+`/rest/v1/` returns the same `403` through Nginx as it does straight from Envoy, and host
+port 8000 remains unexposed. **The Nginx files themselves live in
+`/opt/supabase/supabase-project/`, which is not a git repository** — only this document is
+version-controlled.
 
 > Until explicit cutover authorization is given, all Lovable Cloud access used for
 > preparation must remain read-only/SELECT-only. No freeze, export execution, INSERT,
@@ -279,8 +347,8 @@ outside this session's access and remit.
 | 6 | Phase 44 scratch rehearsal container | **CLOSED** | Destroyed in Phase 50, confirmed absent this session, production containers unaffected |
 | 7 | Auth roster pull | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the already-authenticated Lovable MCP connector's direct query access to Cloud `auth.users` (`id`/`email`/metadata only, never `encrypted_password`) — no Cloud `service_role` GoTrue Admin API key or other new credential required |
 | 8 | `avatars` storage bucket | **REQUIRES OPERATOR INPUT** (RLS is READY, settings fully determined) | No longer an open decision: name (`avatars`), private, `file_size_limit = 4194304` (4 MB), and `allowed_mime_types = {image/png,image/jpeg,image/webp,image/gif}` are all fixed by already-applied migration `20260721002100_avatars_bucket_limits.sql` and `src/lib/avatar.ts` — not "no existing Cloud value to mirror" as previously stated. That migration is an `UPDATE ... WHERE id='avatars'`, applied while the bucket didn't exist, so it was a no-op; creation must set these values explicitly, not rely on the migration re-firing. Exact statement attempted this phase and blocked by this session's own permission classifier ("Modify Shared Resources") — only remaining step is running it, with the operator's explicit go-ahead (see §2 step 9.1) |
-| 9 | Real SMTP credentials | **CONFIGURED; CONNECTIVITY RE-VERIFIED; TEST STILL PENDING ON 9b** | Real Zoho Mail production credentials remain set on self-hosted `supabase-auth` (`smtp.zoho.com:587`, `milaportal@milaserv.com`) and re-verified live this phase: DNS resolves to `136.143.190.56`, TCP `587` open, `supabase-auth` healthy. Not yet CLOSED — the controlled end-to-end password-reset email test (runbook step 12) still cannot run: it requires item 9b's external HTTPS path, which the eighth finding confirms is still blocked (pfSense port-443 conflict, reported fixed by IT but found unchanged) |
-| 9b | GoTrue URL/redirect configuration (`GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, `GOTRUE_URI_ALLOW_LIST`) | **CONFIGURED; ORIGIN HTTPS VERIFIED; STILL BLOCKED ON PFSENSE PORT-443 CONFLICT** (unchanged despite IT's report that it was fixed — see the eighth finding) | `GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, and `GOTRUE_URI_ALLOW_LIST` are set to the real production domain and re-confirmed working end-to-end against the origin directly this phase (a correct `200` with GoTrue's health payload through Nginx→Envoy→GoTrue, using a valid `apikey`). Not yet CLOSED: re-tested against the real public IP this phase, port 443 is **still** answered by IT's **pfSense firewall's own WebGUI** (self-signed cert, `404` page) instead of being forwarded to this server, while port 80 still forwards correctly — the same firewall-side WAN-port conflict as the seventh finding, reported by IT as fixed but found live and unchanged this phase. **Single remaining dependency**: IT moves/restricts the pfSense WebGUI off port 443 on the WAN interface (or otherwise resolves the conflict) so the existing 443→`10.10.11.160:443` NAT rule can actually reach Nginx |
+| 9 | Real SMTP credentials | **CONFIGURED; CONNECTIVITY VERIFIED; END-TO-END TEST PENDING ON ITEM 10** | Real Zoho Mail production credentials remain set on self-hosted `supabase-auth` (`smtp.zoho.com:587`, `milaportal@milaserv.com`): DNS resolves to `136.143.190.56`, TCP `587` open, `supabase-auth` healthy. Item 9b's HTTPS dependency is now resolved, but the controlled test is still not runnable: the deployed Worker application points at **Cloud** Supabase, not this stack (ninth finding), so a self-hosted reset link would land on an app wired to Cloud. The test belongs after item 10's env-var switch, at cutover |
+| 9b | GoTrue URL/redirect configuration (`GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, `GOTRUE_URI_ALLOW_LIST`) | **CLOSED for HTTPS/routing; end-to-end reset test still pending on item 9** (the pfSense "blocker" was a measurement artifact — see the ninth finding) | All three are set to the real production domain and verified working end-to-end: `/auth/v1/health` returns GoTrue `v2.189.0` `200` through Nginx→Envoy→GoTrue, and external HTTPS is **confirmed working** — real external browsers load the application over `https://milaportal.milaserv.com` (Nginx access log, ISP client addresses, `200`s). The seventh/eighth findings' pfSense port-443 conflict was an artifact of probing the WAN IP from inside the LAN with no NAT reflection; no firewall change was ever required. Root routing was separately wrong (Studio behind Basic Auth on `/`) and is fixed this phase |
 | 10 | Application env vars (`SITE_URL`, `VITE_SITE_URL`, `LOVABLE_API_KEY`, `LOVABLE_SEND_URL`) | **REQUIRES OPERATOR INPUT** | Load-bearing, absent from `.env.example`. **Corrected this phase**: Vercel is no longer part of the architecture (see the third finding at the top of this document) — the live app deploys as a Cloudflare Worker via Lovable, so these vars must be set in Lovable's project environment settings for that Worker, per `.env.example`'s own guidance for `SHAMS_MIS_BASE_URL`. No MCP tool available this session exposes Worker environment-variable values or presence, so this remains unverifiable from here — operator confirmation required, not a guess |
 | 11 | Shams credentials (`SHAMS_CRM_*`, `SHAMS_MIS_*`) | **REQUIRES OPERATOR INPUT** | No `SHAMS_*` name found in any inspectable container this session; consumed only by the deployed Cloudflare Worker's server-only code (`src/lib/shams-crm/client.server.ts`, `src/lib/shams/client.server.ts`), not by any self-hosted container. self-hosted's `shams_sync_tick()` cron function additionally requires two Vault secrets, `shams_sync_scheduler_url` and `email_queue_service_role_key`, to reach that Worker's scheduler endpoint — both confirmed **absent** (no row in `vault.decrypted_secrets`) — a separate self-hosted wiring step from the CRM/MIS credentials themselves, not resolvable until the deployed Worker's scheduler endpoint exists |
 | 12 | Cloud production export path | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the same Lovable MCP connector's `query_database` capability against the live Cloud project — a literal `psql`/`pg_dump` binary is not required for this path; export *execution* is still a cutover-day action (item 18) and remains SELECT-only until Gate B |
