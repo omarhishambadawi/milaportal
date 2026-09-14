@@ -750,6 +750,18 @@ No other self-hosted container needs to restart for this change.
 configured `SMTP_HOST`:`SMTP_PORT` from inside `supabase-auth`, using the same read-only
 method as the SMTP readiness audit (`getent hosts`, then a TCP connect attempt) — this
 confirms the new values are actually live without yet sending any mail.
+
+**Use `nc` for the TCP half, not `/dev/tcp`.** Recorded because the operator-readiness
+check hit it: `docker exec supabase-auth sh -c '(echo > /dev/tcp/smtp.zoho.com/587)'`
+reports the port **closed even when it is open** — that syntax is a bash feature and this
+container's shell is busybox. A false "SMTP unreachable" immediately before the one test
+email is exactly the wrong moment for a misleading probe. The commands that actually work,
+both read-only and neither sending mail:
+
+```
+docker exec supabase-auth getent hosts smtp.zoho.com
+docker exec supabase-auth nc -z -w 5 smtp.zoho.com 587 && echo OPEN
+```
 12.4. Send **exactly one** test through the real, now-configured SMTP path: a
 password-recovery/invite request to a single designated operator/test account. Respect
 GoTrue's mailer rate limit (`GOTRUE_SMTP_MAX_FREQUENCY`, ~1 minute per address by
@@ -921,8 +933,18 @@ this section is implemented or tested against production in this phase.
 ## 6. Credentials and secrets checklist
 
 No secret value appears anywhere below — this is a checklist of what must be supplied,
-by whom, and where. All rows are unchanged from Phase 50's findings and re-confirmed live
-this session (name-only presence checks), **except the two rows marked superseded**,
+by whom, and where.
+
+**Corrected at the operator-readiness check**: the SMTP and GoTrue-URL rows still carried
+their original "placeholder values / `localhost`" status long after the fifth finding
+replaced both with real production configuration, and the `SITE_URL`/`LOVABLE_*` rows still
+said "missing from `.env.example`" after the eleventh finding added them. Since this table
+is what an operator reads during the window, those four rows are now restated against
+re-verified live evidence. **The correction removes stale alarm, not real work**: no item's
+underlying status improved, and the Shams row is unchanged and still outstanding.
+
+The remaining rows are unchanged from Phase 50's findings and re-confirmed live
+(name-only presence checks), **except the two rows marked superseded**,
 which were resolved this phase via the already-authenticated Lovable MCP connector (see
 the note at the top of this document). The connector's own authentication is pre-existing
 and was neither created, modified, nor reset in this phase — only its capability was
@@ -937,11 +959,11 @@ document. No status changes as a result, only the named destination.
 |---|---|---|---|
 | Cloud Auth `service_role` key | Auth roster pull | — | **Superseded.** No longer required: the already-authenticated Lovable MCP connector (verified this phase) provides equivalent capability via direct `SELECT` on Cloud `auth.users`; no new credential needed from the business owner. |
 | Cloud Postgres direct connection credentials (libpq) | Final production export | — | **Superseded.** No longer required: the already-authenticated Lovable MCP connector (verified this phase) can `SELECT` every table needed for the export directly against the live Cloud project; a literal `psql`/`pg_dump` binary is not required for this path. The connector is also capable of writes, so export *execution* remains a SELECT-only, Gate-B-gated cutover-day action, not performed by this preparation phase. |
-| Self-hosted `GOTRUE_SMTP_HOST/PORT/USER/PASS/SENDER_NAME/ADMIN_EMAIL` | Real password-reset email delivery | `supabase-auth` container environment (self-hosted) | **NOT PRODUCTION-READY** (confirmed, not just placeholder-patterned): all 5 non-port values match placeholder/fake shapes and `SMTP_HOST` fails DNS resolution from `supabase-auth` (control lookup of `smtp.gmail.com` succeeds from the same container, so the container's own DNS/egress is not the cause); `SMTP_PORT` is a non-standard `2500` — **operator must replace with real, reachable production SMTP credentials** |
-| Self-hosted `GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, `GOTRUE_URI_ALLOW_LIST` | Correct (non-`localhost`) password-reset/invite links; `redirectTo` validation | `supabase-auth` container environment (self-hosted) | **New row, added by the SMTP readiness audit.** `GOTRUE_SITE_URL=http://localhost:3000`, `API_EXTERNAL_URL=http://localhost:8000/auth/v1`, `GOTRUE_URI_ALLOW_LIST` empty — all local-development values. Distinct from the `SITE_URL`/`VITE_SITE_URL` row below, which the Cloudflare Worker application reads separately — **operator must set these to the real production domain** |
-| `SITE_URL`, `VITE_SITE_URL` | Password-reset redirect URL correctness | Lovable project environment settings (Cloudflare Worker) | **Missing from `.env.example`; must come from institutional knowledge — operator must supply** |
-| `LOVABLE_API_KEY`, `LOVABLE_SEND_URL` | Email queue/webhook routes | Lovable project environment settings (Cloudflare Worker) | **Missing from `.env.example`; must come from institutional knowledge — operator must supply** |
-| `SHAMS_CRM_USERNAME`, `SHAMS_CRM_PASSWORD`, `SHAMS_MIS_BASE_URL`, `SHAMS_MIS_ACCOUNT_IDENTIFIER`, `SHAMS_MIS_API_KEY` | `shams_offers` rebuild via `shams-sync-tick` | Wherever the Shams sync runtime reads its environment | **Not found in any inspectable container — operator must supply, all required together per `.env.example`'s documented grouping** |
+| Self-hosted `GOTRUE_SMTP_HOST/PORT/USER/PASS/SENDER_NAME/ADMIN_EMAIL` | Real password-reset email delivery | `supabase-auth` container environment (self-hosted) | **SUPPLIED AND VERIFIED — corrected at the operator-readiness check.** This row previously read NOT PRODUCTION-READY (placeholder values, `SMTP_HOST` failing DNS), which was true when the SMTP readiness audit wrote it and was superseded by the fifth finding. Real Zoho production credentials are configured on `supabase-auth` (`smtp.zoho.com:587`, `SMTP_SENDER_NAME=MilaPortal`); re-probed read-only at this check — DNS resolves to `136.143.190.56`, `nc -z` confirms TCP `587` open from inside the container. What remains is the single end-to-end test email, which is window-gated on the Worker env switch (§1 item 9), not a missing credential |
+| Self-hosted `GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, `GOTRUE_URI_ALLOW_LIST` | Correct (non-`localhost`) password-reset/invite links; `redirectTo` validation | `supabase-auth` container environment (self-hosted) | **SET AND VERIFIED — corrected at the operator-readiness check.** This row previously read `localhost` development values; that was superseded by the fifth finding and is no longer true. All three name the real production domain (`https://milaportal.milaserv.com`, `.../auth/v1`, `.../reset-password`), re-read on file at this check. No operator action outstanding |
+| `SITE_URL`, `VITE_SITE_URL` | Password-reset redirect URL correctness | Lovable project environment settings (Cloudflare Worker) | **Now documented in `.env.example`** (eleventh finding), so the names and the reason each is load-bearing no longer depend on institutional knowledge. Outstanding action is operator confirmation that they are set on the deployed Worker — unobservable from here |
+| `LOVABLE_API_KEY`, `LOVABLE_SEND_URL` | Email queue/webhook routes | Lovable project environment settings (Cloudflare Worker) | **Now documented in `.env.example`** (eleventh finding). Outstanding action is operator confirmation only. Both go dormant after cutover: self-hosted GoTrue sends over its own SMTP and never calls the webhook (§13, §14) |
+| `SHAMS_CRM_USERNAME`, `SHAMS_CRM_PASSWORD`, `SHAMS_MIS_BASE_URL`, `SHAMS_MIS_ACCOUNT_IDENTIFIER`, `SHAMS_MIS_API_KEY` | `shams_offers` rebuild via `shams-sync-tick` | Lovable project environment settings (Cloudflare Worker) — read server-side only, at `src/lib/shams-crm/client.server.ts:120-121` and `src/lib/shams/client.server.ts:85-87` | **Still outstanding — genuinely external.** Not found in any inspectable container; each group is all-or-nothing (a partial set reports "not configured" rather than failing at request time). **Separate from, and not a substitute for, the four self-hosted Vault secrets in §15** — Shams sync needs both |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_PUBLISHABLE_KEY` (+ `VITE_` counterparts) | Application-to-database connectivity | Lovable project environment settings (Cloudflare Worker) | Documented in `.env.example`; live presence on the actual deployment unverifiable from this environment — operator should confirm. **`SUPABASE_PROJECT_ID`/`VITE_SUPABASE_PROJECT_ID` dropped from this row**: no code reads them since the pre-cutover hardening phase (§9.4), and `.env.example` no longer lists them |
 | `ALSHROUQ_SCHEDULER_SECRET`, `CDR_SYNC_SECRET`, `YEASTAR_*` | Scheduler/sync authentication | Lovable project environment settings (Cloudflare Worker) | Documented in `.env.example`; live presence unverifiable — operator should confirm |
 | `ALSHROUQ_LIVE_DISPATCH_ENABLED` | Live dispatch gating | Lovable project environment settings (Cloudflare Worker) | Documented, defaults safe-closed (`"false"`) — no action required unless the business wants it enabled post-cutover |
@@ -1735,9 +1757,9 @@ red.**
 | ✅ | Migration 69 held | Ledger 150 applied, `20260723022830` absent — re-verified live this phase |
 | ✅ | Destination clean | `orders`/`complaints`/`profiles`/`user_roles`/`cdr_records`/`alshrouq_dispatches`/`auth.users` all 0 rows |
 | ✅ | Stack healthy | 12 production containers up, and all 11 that declare a healthcheck report healthy (`supabase-nginx` declares none); 3/3 cron jobs active; host port 8000 absent from `ss -tln`, so Envoy is still unexposed, `8443` still bound to `10.10.11.160` only |
-| ✅ | HTTPS + certificate | Real Let's Encrypt cert to 2026-12-12; external browsers served. Carried forward from the ninth finding — **not** re-probed this phase |
+| ✅ | HTTPS + certificate | **Re-probed at the operator-readiness check**: `CN=milaportal.milaserv.com`, issuer Let's Encrypt `YE1`, valid `2026-09-13 18:18 UTC` → `2026-12-12 18:18 UTC`; `/auth/v1/health` answers through Nginx→Envoy→GoTrue on the origin. External browsers served — carried forward from the ninth finding |
 | ✅ | GoTrue URL/redirect config | `SITE_URL`, `API_EXTERNAL_URL`, `ADDITIONAL_REDIRECT_URLS` re-read on file this phase, all naming the production domain |
-| ✅ | SMTP reachability | DNS/TCP to `smtp.zoho.com:587` verified in the eighth finding and **not** re-probed this phase; re-read on file here: `SMTP_PORT=587`, `SMTP_SENDER_NAME=MilaPortal` (so the display name survives cutover) |
+| ✅ | SMTP reachability | **Re-probed at the operator-readiness check**: `smtp.zoho.com` resolves to `136.143.190.56` and `nc -z` confirms TCP `587` open from inside `supabase-auth`; `SMTP_PORT=587`, `SMTP_SENDER_NAME=MilaPortal` on file (so the display name survives cutover). Probe with `nc`, never `/dev/tcp` — see runbook 12.3 |
 | ✅ | No Cloud fallback in the build | `PUBLIC_SUPABASE_FALLBACKS` deleted; build fails naming the missing variable (§9.5) |
 | ✅ | No project-ref dependency | Nothing reads `SUPABASE_PROJECT_ID` (§9.4) |
 | ✅ | Repository Cloud scan | 5 `gwnxlpophyvgafctrbkx` hits, all generated/tooling/historical (§9.10, re-run this phase) |
