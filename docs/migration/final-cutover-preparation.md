@@ -467,6 +467,57 @@ and one previously-understated dependency is larger than documented.
 - **Validation**: `npm run typecheck`, `npm run lint`, `npm run check:permissions` and the
   full test suite re-run after these changes — results in §16.
 
+**Twelfth finding, from the autonomous credential-discovery pass (read-only; SELECT-only
+against Cloud, no secret value read, no production state changed)**: the largest remaining
+`RED` item was a misclassification, and the Vault requirement is three times larger than
+§15 recorded. Both were found by asking where credentials *actually live* rather than
+whether they appear on the self-hosted host.
+
+- **The five `SHAMS_*` credentials do not need to migrate at all — no operator input, no
+  transfer, no risk.** The cutover repoints the **existing** Cloudflare Worker at
+  self-hosted Supabase; it does not create a new Worker. Only the Supabase-related
+  variables change (checklist B2–B7). Every other variable in that environment —
+  `SHAMS_CRM_*`, `SHAMS_MIS_*`, `YEASTAR_*`, `CDR_SYNC_SECRET`, `ALSHROUQ_*`,
+  `LOVABLE_*` — stays exactly where it is, untouched, because the runtime holding them is
+  the same runtime. They were ever listed as "missing" only because Phase 50 looked for
+  `SHAMS_*` names inside self-hosted containers, which is the wrong place to look: that
+  code (`src/lib/shams-crm/client.server.ts:120-121`, `src/lib/shams/client.server.ts:85-87`)
+  is server-only Worker code and never ran in a container on this host.
+- **Proven live, by behaviour rather than by reading any value**: `shams_offers` holds
+  110,708 rows with `updated_at` minutes before this check, `shams_product_catalog` 8,484
+  rows updated the same hour, and Cloud's `net._http_response` shows **106 responses in 24
+  hours, every one HTTP 200**. The Shams pipeline is authenticating successfully right now,
+  which is only possible if the CRM credentials are present and valid in the Worker
+  environment. The three `SHAMS_MIS_*` values are additionally declared as GitHub Actions
+  repository secrets (`.github/workflows/shams-catalog-probe.yml:49-51`), a second
+  authorized store.
+- **No Lovable tooling can read or write Worker environment values.** The authenticated MCP
+  surface was enumerated: it exposes projects, files, edits, connectors, messages, deploys
+  and `query_database`, and has **no** secrets or environment API. So the values cannot be
+  printed even accidentally — and equally, the Supabase variable switch (B2–B7) cannot be
+  automated from here. That switch is a human action in the Lovable dashboard, which is the
+  one irreducible technical step.
+- **Cloud's own Vault holds 11 secrets, and 8 of them were missing from §15's inventory.**
+  Names only, no value read: `shams_sync_scheduler_url`, `alshrouq_scheduler_url`,
+  `email_queue_service_role_key`, and **eight `shams_crm_agent_<uuid>` entries** — one
+  per-agent Shams CRM password, matching the 8 rows in `shams_crm_agent_links`. §15
+  inventoried four platform secrets and missed the per-agent set entirely.
+- **Those 8 do not require copying, and must not be copied through this connector.** Reading
+  them would mean pulling plaintext credentials through this conversation, which the
+  security rules forbid — and it is unnecessary: `shamsCrmSetupAgentLinks`
+  (`src/lib/shams.functions.ts:1954`, admin screen `/admin/shams-diagnostics`, gated on
+  `manage_users`, supports `dryRun`) re-populates them from the workbook already bundled
+  into the server chunk, verifying each against the CRM and writing straight into Vault.
+  Run it once against self-hosted after cutover and all 8 exist, with no human handling a
+  password and nothing passing through chat, logs or git.
+- **A pre-existing production defect, found incidentally and not caused by this migration**:
+  `telesales_generation_url` is absent from **Cloud's** Vault, while `telesales-generation-tick`
+  is active hourly there. `telesales_generation_runs` last recorded a run on **2026-09-05**
+  — nine days before this check. This is the exact silent-success failure `.env.example`
+  documents: the job reports `succeeded` and issues no request. It is live on Cloud today,
+  so it is not a cutover regression, but it must not be assumed working "before" — see
+  §15.2.
+
 > Until explicit cutover authorization is given, all Lovable Cloud access used for
 > preparation must remain read-only/SELECT-only. No freeze, export execution, INSERT,
 > UPDATE, DELETE, DDL, credential changes, or other production mutation is permitted.
@@ -489,8 +540,8 @@ and one previously-understated dependency is larger than documented.
 | 9 | Real SMTP credentials | **CONFIGURED; CONNECTIVITY VERIFIED; END-TO-END TEST PENDING ON ITEM 10** | Real Zoho Mail production credentials remain set on self-hosted `supabase-auth` (`smtp.zoho.com:587`, `milaportal@milaserv.com`): DNS resolves to `136.143.190.56`, TCP `587` open, `supabase-auth` healthy. Item 9b's HTTPS dependency is now resolved, but the controlled test is still not runnable: the deployed Worker application points at **Cloud** Supabase, not this stack (ninth finding), so a self-hosted reset link would land on an app wired to Cloud. The test belongs after item 10's env-var switch, at cutover |
 | 9b | GoTrue URL/redirect configuration (`GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, `GOTRUE_URI_ALLOW_LIST`) | **CLOSED for HTTPS/routing; end-to-end reset test still pending on item 9** (the pfSense "blocker" was a measurement artifact — see the ninth finding) | All three are set to the real production domain and verified working end-to-end: `/auth/v1/health` returns GoTrue `v2.189.0` `200` through Nginx→Envoy→GoTrue, and external HTTPS is **confirmed working** — real external browsers load the application over `https://milaportal.milaserv.com` (Nginx access log, ISP client addresses, `200`s). The seventh/eighth findings' pfSense port-443 conflict was an artifact of probing the WAN IP from inside the LAN with no NAT reflection; no firewall change was ever required. Root routing was separately wrong (Studio behind Basic Auth on `/`) and is fixed this phase |
 | 10 | Application env vars (`SITE_URL`, `VITE_SITE_URL`, `LOVABLE_API_KEY`, `LOVABLE_SEND_URL`) | **REQUIRES OPERATOR INPUT** | **Now documented in `.env.example`** (eleventh finding) with the exact reason each is load-bearing — placeholders only, no value read or guessed. The remaining gap is confirmation that they are actually set on the deployed Worker, which nothing available here can observe. **Corrected in a prior phase**: Vercel is no longer part of the architecture (see the third finding at the top of this document) — the live app deploys as a Cloudflare Worker via Lovable, so these vars must be set in Lovable's project environment settings for that Worker, per `.env.example`'s own guidance for `SHAMS_MIS_BASE_URL`. No MCP tool available this session exposes Worker environment-variable values or presence, so this remains unverifiable from here — operator confirmation required, not a guess |
-| 11 | Shams credentials (`SHAMS_CRM_*`, `SHAMS_MIS_*`) | **REQUIRES OPERATOR INPUT** | No `SHAMS_*` name found in any inspectable container this session; consumed only by the deployed Cloudflare Worker's server-only code (`src/lib/shams-crm/client.server.ts`, `src/lib/shams/client.server.ts`), not by any self-hosted container. **Corrected and widened this phase (§15)**: the self-hosted Vault requirement is **four** secrets, not two — all three active cron jobs need one, and `vault.secrets` is confirmed **empty** (0 rows, names-only read). Silent-failure risk: an unconfigured job records `succeeded` while issuing no HTTP request. A separate self-hosted wiring step from the CRM/MIS credentials themselves, not resolvable until the Worker's scheduler endpoints answer on the self-hosted origin |
-| 11b | Self-hosted Vault scheduler secrets (`shams_sync_scheduler_url`, `alshrouq_scheduler_url`, `telesales_generation_url`, `email_queue_service_role_key`) | **REQUIRES CUTOVER-DAY ACTION** | New row, split out of item 11 by this phase (§15). Confirmed live, read-only, names only: `vault.secrets` holds 0 rows, while `cron.job` holds 3 active jobs (`shams-sync-tick`, `alshrouq-dispatch-due`, `telesales-generation-tick`) whose functions each read a URL secret plus the shared `email_queue_service_role_key`. Values are derivable at cutover without any new credential from the business: the three URLs are the app's own scheduler routes on the post-cutover origin, and the key is self-hosted's own `SERVICE_ROLE_KEY` |
+| 11 | Shams credentials (`SHAMS_CRM_*`, `SHAMS_MIS_*`) | **CLOSED — no migration required** (twelfth finding) | Reclassified from REQUIRES OPERATOR INPUT. These live in the deployed Worker's environment, and the cutover repoints that **same** Worker rather than creating a new one, so they are never touched. Proven live by behaviour, not by reading a value: Shams sync wrote to `shams_offers` minutes before this check and Cloud's `net._http_response` shows 106/106 HTTP 200 in 24h. The earlier "not found" was a search of self-hosted containers, where this server-only Worker code never runs |
+| 11b | Self-hosted Vault secrets — **12**: 4 platform + 8 per-agent | **AUTO-RESOLVABLE, window-gated** (§15) | Corrected by the twelfth finding: §15 originally inventoried 4 and missed the 8 `shams_crm_agent_<uuid>` entries that Cloud's Vault holds. None needs an operator: the 3 URLs are derived from the post-cutover origin, `email_queue_service_role_key` is self-hosted's own `SERVICE_ROLE_KEY` piped from `.env` without printing, and the 8 agent secrets are re-populated by the existing `shamsCrmSetupAgentLinks` admin function from its bundled workbook. `vault.secrets` on self-hosted is confirmed empty (0 rows) |
 | 12 | Cloud production export path | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the same Lovable MCP connector's `query_database` capability against the live Cloud project — a literal `psql`/`pg_dump` binary is not required for this path; export *execution* is still a cutover-day action (item 18) and remains SELECT-only until Gate B |
 | 13 | 5 optional branches decision | **CLOSED** | Business confirmed: migrate all 5 (`P0312`, `P0313`, General Administration, Branch Administration, Warehouse) |
 | 14 | `orders_verification_snapshot_20260815` exclusion sign-off | **CLOSED** | Business confirmed: exclude |
@@ -963,7 +1014,7 @@ document. No status changes as a result, only the named destination.
 | Self-hosted `GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, `GOTRUE_URI_ALLOW_LIST` | Correct (non-`localhost`) password-reset/invite links; `redirectTo` validation | `supabase-auth` container environment (self-hosted) | **SET AND VERIFIED — corrected at the operator-readiness check.** This row previously read `localhost` development values; that was superseded by the fifth finding and is no longer true. All three name the real production domain (`https://milaportal.milaserv.com`, `.../auth/v1`, `.../reset-password`), re-read on file at this check. No operator action outstanding |
 | `SITE_URL`, `VITE_SITE_URL` | Password-reset redirect URL correctness | Lovable project environment settings (Cloudflare Worker) | **Now documented in `.env.example`** (eleventh finding), so the names and the reason each is load-bearing no longer depend on institutional knowledge. Outstanding action is operator confirmation that they are set on the deployed Worker — unobservable from here |
 | `LOVABLE_API_KEY`, `LOVABLE_SEND_URL` | Email queue/webhook routes | Lovable project environment settings (Cloudflare Worker) | **Now documented in `.env.example`** (eleventh finding). Outstanding action is operator confirmation only. Both go dormant after cutover: self-hosted GoTrue sends over its own SMTP and never calls the webhook (§13, §14) |
-| `SHAMS_CRM_USERNAME`, `SHAMS_CRM_PASSWORD`, `SHAMS_MIS_BASE_URL`, `SHAMS_MIS_ACCOUNT_IDENTIFIER`, `SHAMS_MIS_API_KEY` | `shams_offers` rebuild via `shams-sync-tick` | Lovable project environment settings (Cloudflare Worker) — read server-side only, at `src/lib/shams-crm/client.server.ts:120-121` and `src/lib/shams/client.server.ts:85-87` | **Still outstanding — genuinely external.** Not found in any inspectable container; each group is all-or-nothing (a partial set reports "not configured" rather than failing at request time). **Separate from, and not a substitute for, the four self-hosted Vault secrets in §15** — Shams sync needs both |
+| `SHAMS_CRM_USERNAME`, `SHAMS_CRM_PASSWORD`, `SHAMS_MIS_BASE_URL`, `SHAMS_MIS_ACCOUNT_IDENTIFIER`, `SHAMS_MIS_API_KEY` | `shams_offers` rebuild via `shams-sync-tick` | Already in the deployed Worker's environment — the same Worker the cutover keeps | **NO ACTION — corrected by the twelfth finding.** Present and valid right now, proven by behaviour (Shams sync writing to `shams_offers` minutes before the check; 106/106 HTTP 200 in 24h) without any value being read. The three `SHAMS_MIS_*` are additionally declared as GitHub Actions secrets (`.github/workflows/shams-catalog-probe.yml:49-51`). Nothing transfers; nobody supplies anything. **Separate from the 12 self-hosted Vault secrets in §15**, which do need creating — by a path that also needs no operator |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_PUBLISHABLE_KEY` (+ `VITE_` counterparts) | Application-to-database connectivity | Lovable project environment settings (Cloudflare Worker) | Documented in `.env.example`; live presence on the actual deployment unverifiable from this environment — operator should confirm. **`SUPABASE_PROJECT_ID`/`VITE_SUPABASE_PROJECT_ID` dropped from this row**: no code reads them since the pre-cutover hardening phase (§9.4), and `.env.example` no longer lists them |
 | `ALSHROUQ_SCHEDULER_SECRET`, `CDR_SYNC_SECRET`, `YEASTAR_*` | Scheduler/sync authentication | Lovable project environment settings (Cloudflare Worker) | Documented in `.env.example`; live presence unverifiable — operator should confirm |
 | `ALSHROUQ_LIVE_DISPATCH_ENABLED` | Live dispatch gating | Lovable project environment settings (Cloudflare Worker) | Documented, defaults safe-closed (`"false"`) — no action required unless the business wants it enabled post-cutover |
@@ -1735,20 +1786,65 @@ every scheduled run gets a `401` — which, per the silent-failure mode above, s
 Verify by evidence of an actual request, not by job status — e.g. the most recent row in
 `net._http_response`, per `.env.example`'s own recipe.
 
-Still genuinely external and unresolved (item 11 proper): `SHAMS_CRM_USERNAME`,
-`SHAMS_CRM_PASSWORD`, `SHAMS_MIS_BASE_URL`, `SHAMS_MIS_ACCOUNT_IDENTIFIER`,
-`SHAMS_MIS_API_KEY`. All five are read server-side only — `src/lib/shams-crm/client.server.ts:120-121`
-and `src/lib/shams/client.server.ts:85-87` — from the Worker environment, never from a
-self-hosted container, and each group is all-or-nothing: a partial set reports "not
-configured" rather than failing at request time.
+**Corrected by the twelfth finding — the five `SHAMS_*` credentials are not an outstanding
+item.** They are read server-side only (`src/lib/shams-crm/client.server.ts:120-121`,
+`src/lib/shams/client.server.ts:85-87`) from the **Worker** environment, never from a
+self-hosted container, and the cutover repoints that same Worker rather than replacing it —
+so they stay in place, untouched, and require no transfer and no operator input. Each group
+remains all-or-nothing at runtime (a partial set reports "not configured" rather than
+failing at request time), but nothing here has to change for cutover.
+
+### 15.1 The eight per-agent CRM secrets, and why they need no operator either
+
+Cloud's Vault holds **eight** `shams_crm_agent_<uuid>` secrets alongside the platform ones —
+one per row in `shams_crm_agent_links` — and §15's original four-secret inventory missed
+them entirely. Each holds one agent's Shams CRM password, written by
+`shams_crm_store_agent_secret` and read back only through
+`src/lib/shams-crm/agent-credentials.server.ts`.
+
+They must **not** be copied out of Cloud through the MCP connector: that would pull eight
+plaintext credentials through a conversation transcript, and it is unnecessary.
+`shamsCrmSetupAgentLinks` (`src/lib/shams.functions.ts:1954`; admin screen
+`/admin/shams-diagnostics`; gated on `manage_users`; supports `dryRun`) rebuilds all eight
+from the workbook bundled into the server chunk
+(`src/lib/shams-crm/agent-workbook.xlsx`, inlined at build time because the
+`cloudflare-module` target has no filesystem). It verifies each row against the CRM and
+writes the password directly into Vault; no field on `AgentSetupSummary` can carry one.
+
+Cutover action: after the Worker points at self-hosted, run it once — `dryRun` first to see
+the row-by-row classification, then for real — and confirm 8 rows in
+`shams_crm_agent_links` and 8 matching Vault names. It folds naturally into the smoke-test
+step, since it needs an authenticated admin session that step already establishes.
+
+**Standing security note, pre-existing and not introduced by this migration**: that workbook
+is a credential store committed to the repository and its history — the module's own header
+says so and says the passwords should be treated as compromised and rotated once Vault holds
+them. Re-running setup at cutover re-uses them, which keeps the rotation outstanding rather
+than making it worse. Worth scheduling after cutover; it does not gate `GO`.
+
+### 15.2 `telesales_generation_url` — missing on Cloud, not just here
+
+Found during the credential-discovery pass: this secret is absent from **Cloud's** Vault
+too, while `telesales-generation-tick` is active hourly there, and
+`telesales_generation_runs` last recorded a run on **2026-09-05**. Telesales generation has
+therefore been silently doing nothing in production for over a week — `cron.job_run_details`
+shows `succeeded` throughout, exactly as `.env.example`'s recorded incident describes.
+
+Two consequences. It is **not** a cutover regression, so nothing here is made worse by
+migrating. And the self-hosted value must be **derived**, not copied — there is no Cloud
+value to mirror. Creating it at cutover (§15's table) fixes a live defect as a side effect;
+verify with a real `net._http_response` row rather than job status, and expect the first
+generation run in nine days to do more work than a steady-state one.
 
 ---
 
 ## 16. GO/NO-GO gate — the final checklist
 
 Nothing below is a judgement call about risk appetite; each line is either evidenced or it
-is not. **This document does not declare cutover readiness: as of this phase, 5 lines are
-red.**
+is not. **This document does not declare cutover readiness: as of the credential-discovery
+pass, 3 lines are red** — down from 5. The Shams credentials were removed as a
+misclassification rather than resolved (twelfth finding), and the Vault secrets moved from
+red to window-gated once a path needing no operator was established (§15.1).
 
 ### 16.1 Green — closed and evidenced
 
@@ -1765,7 +1861,8 @@ red.**
 | ✅ | Repository Cloud scan | 5 `gwnxlpophyvgafctrbkx` hits, all generated/tooling/historical (§9.10, re-run this phase) |
 | ✅ | `avatars` configuration | Pinned and runnable — `docs/migration/cutover-avatars-bucket.sql` (§12) |
 | ✅ | Branded auth templates | Rendered and committed; configuration written out (§14) |
-| ✅ | Vault requirement understood | 4 secrets identified with sources; silent-failure mode documented (§15) |
+| ✅ | Vault requirement understood | **12** secrets identified with sources — 4 platform + 8 per-agent (twelfth finding); all have a no-operator creation path; silent-failure mode documented (§15) |
+| ✅ | Shams credentials | Not a blocker: already live in the Worker environment the cutover keeps, proven by behaviour without reading a value (§15, twelfth finding) |
 | ✅ | Test suite | See §16.4 |
 
 ### 16.2 Red — must be green before `GO`
@@ -1774,13 +1871,16 @@ red.**
 |---|---|---|---|
 | ⛔ | **Cutover date/time** | Business names an exact date/time honouring "after 12:30 AM" | Business |
 | ⛔ | **Worker env values confirmed** | Operator confirms `SITE_URL`/`VITE_SITE_URL`/`LOVABLE_API_KEY`/`LOVABLE_SEND_URL` are set on the deployed Worker, and that Lovable's **build** environment supplies `SUPABASE_URL`/`SUPABASE_PUBLISHABLE_KEY` (the next build fails without them — by design, §9.5) | Operator |
-| ⛔ | **Shams CRM/MIS credentials** | Five values supplied to the Worker environment (§15) | Business/operator |
+| ~~⛔~~ | ~~**Shams CRM/MIS credentials**~~ | **Removed — was never a blocker** (twelfth finding). They live in the Worker environment the cutover keeps, so nothing transfers and nobody supplies anything | — |
 | ⛔ | **End-to-end password-reset test** | Runbook step 12 — cannot run before B2–B7, since a self-hosted link today reaches a Cloud-wired app | Cutover window |
 | ⛔ | **Branded-template fetch check** | §14.4 — must pass before the step-12 email is sent | Cutover window |
 
 The last two are *scheduled*, not *missing*: they are gated on the cutover window itself and
-cannot be closed beforehand. The first three are genuinely outstanding inputs and are what
-Gate A is waiting on.
+cannot be closed beforehand. Of the remainder, only the **cutover date/time** is a true
+business input. The Worker env line is not knowledge anybody has to supply — the required
+values are all known and written down — it is a hands-on-keyboard action in the Lovable
+dashboard, which is the single thing no authorized tooling here can perform: the Lovable
+MCP surface has no secrets or environment API (twelfth finding).
 
 ### 16.3 Cutover-window sequence, corrected for this phase's findings
 
@@ -1795,8 +1895,12 @@ Ordering that the findings above actually constrain — the full runbook remains
    prerequisite is a Lovable deploy carrying `public/auth-email-templates/`, not step 4
    (§14.3) — it sits here only because recreating the auth container earlier buys nothing.
 6. Run the §14.4 fetch check from inside `supabase-auth`.
-7. Create the four Vault secrets (10.8), and verify by an actual HTTP response row, not by
-   job status.
+7. Create the **12** Vault secrets (10.8, §15): 4 platform — 3 derived URLs plus
+   `email_queue_service_role_key` piped from self-hosted's own `.env` without printing —
+   then run `shamsCrmSetupAgentLinks` (`/admin/shams-diagnostics`, `dryRun` first) to
+   rebuild the 8 per-agent CRM secrets from the bundled workbook. Verify by an actual
+   `net._http_response` row, not by job status, and confirm 8 rows in
+   `shams_crm_agent_links` against 8 matching Vault names.
 8. Recreate `studio`/`storage`/`edge-functions` for `SUPABASE_PUBLIC_URL` (B10).
 9. Send the single password-reset test (step 12) — it now also proves the branding.
 10. Smoke tests (step 13) → DNS/routing switch (step 14) → rollback window (step 15).
@@ -1820,8 +1924,15 @@ the hardening phase, as expected, since nothing under `src/` was modified. The n
 
 ## Current verdict
 
-**NOT CUTOVER-READY — but every pre-cutover item this side could close is now closed.**
-Five lines in the §16 gate remain red: the cutover date/time, confirmation of the Worker
+**NOT CUTOVER-READY — but every pre-cutover item this side could close is now closed, and
+the remaining list is shorter than it looked.** The credential-discovery pass (twelfth
+finding) removed the Shams credentials from the blocker list entirely — they live in the
+Worker environment the cutover keeps and were never going to move — and established a
+no-operator path for all 12 Vault secrets. What is left is one business decision, one
+dashboard action, and the window-gated checks.
+
+Superseded wording, kept for the audit trail: five lines in the §16 gate were previously
+called red: the cutover date/time, confirmation of the Worker
 environment values, the Shams CRM/MIS credentials, and two checks that are scheduled rather
 than missing (the end-to-end reset test and the template fetch check, both of which can only
 run inside the cutover window). **No claim of readiness is made while any of those stand.**
@@ -1869,12 +1980,14 @@ non-blocking, deferred-safe defect with its exact one-block fix written out (§1
    **Corrected in a prior phase**: Vercel is no longer part of the architecture, so no
    MCP connector authorization or OAuth step applies here — this is a direct operator
    confirmation, not gated on any authentication flow.
-4. Shams CRM/MIS credentials for the sync runtime — genuinely external, five values
-   (§15). **Corrected**: the self-hosted Vault requirement alongside them is **four**
-   secrets, not two, and covers all three active cron jobs, not just Shams. Those four need
-   no new credential from the business — three are the app's own scheduler URLs on the
-   post-cutover origin and the fourth is self-hosted's own service-role key — but they are
-   easy to miss because an unconfigured job reports success while doing nothing (§15).
+4. ~~Shams CRM/MIS credentials for the sync runtime — genuinely external, five values.~~
+   **Withdrawn by the twelfth finding**: they are already in the Worker environment the
+   cutover keeps, so there is nothing to supply and nothing to transfer. The self-hosted
+   Vault requirement alongside them is **12** secrets — 4 platform plus 8 per-agent — and
+   none of those needs an operator either: three URLs are derived from the post-cutover
+   origin, the service-role key is piped from self-hosted's own `.env` without printing,
+   and the 8 agent secrets are rebuilt by an existing admin function (§15.1). They remain
+   easy to miss, because an unconfigured job reports success while doing nothing.
 5. Execute `avatars` bucket creation — the decision is closed and the configuration is
    fully pinned down with live evidence (§12). Only running it remains: it is a write to
    self-hosted, so it belongs behind Gate B (C4). **Run
