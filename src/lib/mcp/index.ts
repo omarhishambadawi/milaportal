@@ -5,18 +5,14 @@ import getOrder from "./tools/get-order";
 import listComplaints from "./tools/list-complaints";
 import ordersSummary from "./tools/orders-summary";
 
-// The OAuth issuer must be the caller's actual GoTrue host, matching the
-// `iss` claim on the token. On Supabase Cloud that is not necessarily
-// SUPABASE_URL — publish can rewrite it to a .lovable.cloud proxy — so the
-// Cloud case keeps deriving the direct host from VITE_SUPABASE_PROJECT_ID
-// (inlined by Vite at build time and unaffected by that rewrite). Self-hosted
-// Supabase has no Cloud project ref, so it falls back to SUPABASE_URL, which
-// there points at the instance directly.
-const projectRef = import.meta.env.VITE_SUPABASE_PROJECT_ID;
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? process.env.SUPABASE_URL;
-const issuerHost = projectRef
-  ? `https://${projectRef}.supabase.co`
-  : (supabaseUrl ?? "https://project-ref-unset.supabase.co").replace(/\/+$/, "");
+// The OAuth issuer must be the caller's actual GoTrue host, matching the `iss`
+// claim on the token — which is the Supabase instance this build points at, so
+// it is derived from that one URL and nothing else. An earlier version preferred
+// a separate VITE_SUPABASE_PROJECT_ID, rebuilt into `https://<ref>.supabase.co`;
+// that name is gone, because it could keep the issuer on one instance while the
+// data path moved to another, and the split showed up nowhere else.
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? process.env.SUPABASE_URL ?? "";
+const issuerHost = supabaseUrl.replace(/\/+$/, "");
 
 export default defineMcp({
   name: "milaserv-daily-log-mcp",

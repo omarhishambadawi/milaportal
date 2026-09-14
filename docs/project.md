@@ -892,9 +892,10 @@ Google server key never enters a bundle.
 ### MCP tools (`src/lib/mcp/`)
 
 `defineMcp` with `auth.oauth.issuer({ issuer: <host>/auth/v1, acceptedAudiences: "authenticated" })`. `<host>` is
-`https://<projectRef>.supabase.co` when `VITE_SUPABASE_PROJECT_ID` is set (Supabase Cloud — publish can rewrite
-`SUPABASE_URL` to a `.lovable.cloud` proxy, so the project ref stays the source of truth there); otherwise it falls
-back to `VITE_SUPABASE_URL`/`SUPABASE_URL` directly, for self-hosted Supabase.
+`VITE_SUPABASE_URL`/`SUPABASE_URL` with any trailing slash stripped — the single source of the issuer, on Cloud and
+self-hosted alike. A previous `VITE_SUPABASE_PROJECT_ID` override (rebuilding `https://<ref>.supabase.co`) was
+removed: it could hold the issuer on one instance while the data path pointed at another, with nothing else to
+reveal the split.
 Tools: `whoami`, `list_orders`, `get_order`, `list_complaints`,
 `orders_summary`. Each builds a per-request Supabase client with the caller's
 bearer token, so **RLS is the boundary** — the tools grant nothing the user does
@@ -1248,7 +1249,7 @@ Provider-agnostic and pure. `index.ts` is the only import surface.
 | `lib/query-client.ts`                        | `QUERY_DEFAULTS` / `MUTATION_DEFAULTS`, each option carrying its rationale.                                                                                                                                                                                                          |
 | `lib/supabase-paginate.ts`                   | `fetchAllPaginated` — PostgREST caps a response at 1000 rows; safety ceiling 200k.                                                                                                                                                                                                   |
 | `lib/security-headers.ts`                    | Enforced CSP (`frame-ancestors`, `base-uri`, `object-src`, `form-action`) + a full report-only CSP, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, HSTS over TLS only, `Report-To` + `Reporting-Endpoints`. Never weakens an existing header. |
-| `lib/server-env.ts`                          | `hydrateServerEnv` — bridges `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_PROJECT_ID` across the `VITE_` boundary. The service-role key is deliberately absent from `BRIDGED_KEYS`.                                                                                         |
+| `lib/server-env.ts`                          | `hydrateServerEnv` — bridges `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` across the `VITE_` boundary. The service-role key is deliberately absent from `BRIDGED_KEYS`.                                                                                         |
 | `lib/error-capture.ts` / `lib/error-page.ts` | Capture the original `Error` out-of-band and render a dependency-free 500 page.                                                                                                                                                                                                      |
 | `lib/floating-card.ts`                       | Pure viewport arithmetic for hover cards, unit-tested rather than hover-tested.                                                                                                                                                                                                      |
 | `lib/ksa-geo.ts`                             | 57-vertex Saudi outline + the shared equirectangular projection.                                                                                                                                                                                                                     |
@@ -10150,16 +10151,17 @@ Template: `.env.example`. `.env` is git-ignored.
 
 | Variable                                                     | Scope           | Notes                                                                                       |
 | ------------------------------------------------------------ | --------------- | ------------------------------------------------------------------------------------------- |
-| `SUPABASE_PROJECT_ID` / `VITE_SUPABASE_PROJECT_ID`           | server / client | Project ref. The `VITE_` copy drives the MCP OAuth issuer on Supabase Cloud; unset on self-hosted, where the issuer falls back to `SUPABASE_URL`. |
-| `SUPABASE_URL` / `VITE_SUPABASE_URL`                         | server / client |                                                                                             |
+| `SUPABASE_URL` / `VITE_SUPABASE_URL`                         | server / client | Instance origin, and the sole source of the MCP OAuth issuer. **Required** — `vite.config.ts` fails the build when neither name is set, rather than defaulting to a project nobody chose. |
 | `SUPABASE_PUBLISHABLE_KEY` / `VITE_SUPABASE_PUBLISHABLE_KEY` | server / client | Anon key. Browser-safe by design; **RLS is the boundary**.                                  |
 | `SUPABASE_SERVICE_ROLE_KEY`                                  | **server only** | Bypasses RLS. Never `VITE_`-prefixed, never bridged by `hydrateServerEnv`, never committed. |
 | `SITE_URL` / `VITE_SITE_URL`                                 | server          | Fallback origin for recovery emails when no request context exists.                         |
 
-`vite.config.ts` ships **last-resort fallbacks** for the three public Supabase
-values, because the Lovable preview sandbox periodically loses its `.env` and the
-bundle then inlines `undefined`. A real value in the environment always wins. The
-service-role key is not among them and must never be.
+`vite.config.ts` **requires** `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`, under
+either the `VITE_` or the unprefixed name, and bridges whichever one is supplied to
+the other. Neither present is a build error, not a default: hard-coded fallbacks
+used to stand in for the Lovable sandbox's periodically-lost `.env`, and the price
+was that a build missing them still succeeded, silently wired to the project those
+fallbacks named. The service-role key was never among them and must never be.
 
 ### Google Maps Platform — two keys, on purpose
 
@@ -10327,18 +10329,21 @@ project history.
    Windows and neither `vite dev` nor `vite build` starts. `withNativeSepRoot`
    wraps one hook; it is a no-op off Windows and should be removed when upstream
    fixes it.
-10. **Public Supabase values are hard-coded as build fallbacks** in
-    `vite.config.ts`, working around a Lovable sandbox that repeatedly loses its
-    `.env` (commits `b21a573`, `093dbad` fixed it sandbox-side only, so it kept
-    regressing).
+10. **A build with no Supabase URL or anon key fails rather than starting.**
+    `vite.config.ts` used to hard-code both as fallbacks, working around a Lovable
+    sandbox that repeatedly loses its `.env` (commits `b21a573`, `093dbad` fixed it
+    sandbox-side only, so it kept regressing). That trade is no longer worth it: a
+    sandbox without its `.env` now reports exactly which variable is missing,
+    instead of quietly building against a project nobody selected.
 11. **`useAgentDirectory` returns `role: null` for most callers**, because
     `user_roles` SELECT is scoped. Every consumer must tolerate it.
 12. **Audit writes are best-effort.** `logAdminAction` never throws. Making the
     trail provably complete needs a two-phase write (record, act, mark
     committed), which belongs with that requirement rather than ahead of it.
-13. **The Supabase project reference is reconciled.** `supabase/config.toml` now
-    points at `gwnxlpophyvgafctrbkx`, matching `.env` and the `vite.config.ts`
-    fallbacks — one project, the Lovable Cloud instance. This item used to flag a
+13. **The Supabase project reference is reconciled.** `supabase/config.toml` points
+    at `gwnxlpophyvgafctrbkx` — the Lovable Cloud instance, and the CLI's link
+    target only; it is not read at runtime and is no longer echoed by any fallback
+    in `vite.config.ts`. This item used to flag a
     disagreement with `xscurilznfinllufgdpq`, a different Supabase project the
     Supabase CLI was linked to at the time; that project is not referenced
     anywhere else in the tracked repository. `supabase/.temp/` (the CLI's local
@@ -10571,9 +10576,9 @@ Drawn from what the code itself marks as deferred, incomplete, or blocked.
    in the module and it is deliberately isolated to a single function.
 2. **Verify the Customer Care refactor in a browser** against live PBX responses
    — specifically the O1 notice card and the "—" missed column.
-3. **Supabase project reference reconciled.** `config.toml` now agrees with
-   `.env` and the `vite.config.ts` fallbacks at `gwnxlpophyvgafctrbkx`, the one
-   live (Lovable Cloud) project — no further action needed.
+3. **Supabase project reference reconciled.** `config.toml` names
+   `gwnxlpophyvgafctrbkx`, the one live (Lovable Cloud) project, as the Supabase
+   CLI's link target — no further action needed until that tooling is repointed.
 4. **Decide on the owner-protection triggers.** `trg_protect_last_owner` and
    `trg_protect_owner_profile` were held back from the live project; applying
    them is what makes an Owner grant genuinely irreversible.

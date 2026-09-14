@@ -47,30 +47,23 @@ function withNativeSepRoot(plugin: Plugin): Plugin {
   return plugin;
 }
 
-// Last-resort fallbacks for the three PUBLIC Supabase values, used only when the
-// build environment supplies neither the VITE_-prefixed nor the unprefixed name.
+// The PUBLIC Supabase values every build must be given, under either the
+// VITE_-prefixed or the unprefixed name. Both are browser-safe by design — the
+// published bundle already ships them to every visitor, and RLS is the security
+// boundary (see .env.example). The service role key is NOT here and must never
+// be: it bypasses RLS.
 //
-// Why they can live in the repo: the URL, project ref, and anon/publishable key
-// are browser-safe by design — the published bundle already ships them to every
-// visitor, and RLS is the security boundary (see .env.example). The service role
-// key is NOT here and must never be: it bypasses RLS.
-//
-// Why they exist at all: the Lovable preview sandbox periodically loses its .env
-// (see commits b21a573, 093dbad — both "fixed" it sandbox-side only, so it kept
-// regressing). When that happens the client bundle inlines `undefined` for
-// import.meta.env.VITE_SUPABASE_* and the app dies on load with "Missing
-// Supabase environment variable(s)". These fallbacks make any build of this repo
-// self-sufficient; a real value in the environment always wins.
-const PUBLIC_SUPABASE_FALLBACKS: Record<string, string> = {
-  SUPABASE_PROJECT_ID: "gwnxlpophyvgafctrbkx",
-  SUPABASE_URL: "https://gwnxlpophyvgafctrbkx.supabase.co",
-  SUPABASE_PUBLISHABLE_KEY:
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd3bnhscG9waHl2Z2FmY3RyYmt4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE5NjI4NTIsImV4cCI6MjA5NzUzODg1Mn0.lQLEeZtmf9IQrINg2kWNiBu1MUjIaV7s40i5hGQUKa0",
-};
+// There is deliberately no default. Hard-coded fallback values used to live here
+// so a Lovable preview sandbox that had lost its .env would still boot (see
+// commits b21a573, 093dbad). The cost of that safety net was that a build
+// supplying neither name still succeeded, silently wired to whichever project
+// the fallback named — and a working-looking application reading the wrong
+// database is a far worse outcome than a build that stops.
+const REQUIRED_PUBLIC_SUPABASE_KEYS = ["SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY"] as const;
 
-function supabasePublicEnvFallback(): Plugin {
+function supabasePublicEnv(): Plugin {
   return {
-    name: "supabase-public-env-fallback",
+    name: "supabase-public-env",
     // `config` (not configResolved) so the returned `define` entries merge before
     // Vite finalizes env replacement. User/ambient env still wins: a define is
     // emitted only when neither the process env nor any .env file has the key.
@@ -84,12 +77,18 @@ function supabasePublicEnvFallback(): Plugin {
       const has = (key: string) => Boolean(process.env[key] || fileEnv[key]);
 
       const define: Record<string, string> = {};
+      const missing: string[] = [];
 
-      for (const [key, fallback] of Object.entries(PUBLIC_SUPABASE_FALLBACKS)) {
+      for (const key of REQUIRED_PUBLIC_SUPABASE_KEYS) {
         const viteKey = `VITE_${key}`;
-        // Prefer whichever real value exists under either name before falling back.
+        // Either name satisfies the requirement; the other is filled in from it.
         const resolved =
-          process.env[viteKey] || fileEnv[viteKey] || process.env[key] || fileEnv[key] || fallback;
+          process.env[viteKey] || fileEnv[viteKey] || process.env[key] || fileEnv[key];
+
+        if (!resolved) {
+          missing.push(`${viteKey} (or ${key})`);
+          continue;
+        }
 
         // Client + SSR bundles: inline only when Vite's own env pipeline would
         // otherwise inline undefined.
@@ -100,6 +99,15 @@ function supabasePublicEnvFallback(): Plugin {
         // separately by hydrateServerEnv() in src/server.ts.
         if (!process.env[key]) process.env[key] = resolved;
         if (!process.env[viteKey]) process.env[viteKey] = resolved;
+      }
+
+      if (missing.length > 0) {
+        throw new Error(
+          `Missing Supabase environment variable(s): ${missing.join(", ")}. ` +
+            `Set them in the build environment (see .env.example). There is no built-in ` +
+            `default on purpose — a build must never be able to silently target a Supabase ` +
+            `project nobody chose.`,
+        );
       }
 
       return Object.keys(define).length > 0 ? { define } : undefined;
@@ -135,7 +143,7 @@ export default defineConfig({
       },
     },
     plugins: [
-      supabasePublicEnvFallback(),
+      supabasePublicEnv(),
       withNativeSepRoot(mcpPlugin()),
       VitePWA({
         registerType: "autoUpdate",
