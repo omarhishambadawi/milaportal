@@ -1841,8 +1841,9 @@ generation run in nine days to do more work than a steady-state one.
 ## 16. GO/NO-GO gate — the final checklist
 
 Nothing below is a judgement call about risk appetite; each line is either evidenced or it
-is not. **This document does not declare cutover readiness: as of the credential-discovery
-pass, 3 lines are red** — down from 5. The Shams credentials were removed as a
+is not. **This document does not declare cutover readiness: 4 lines are red.** Three came
+through the credential-discovery pass; the fourth — the export mechanism (§17) — was found
+at the execution-ownership pass and is the one that blocks setting a date. The Shams credentials were removed as a
 misclassification rather than resolved (twelfth finding), and the Vault secrets moved from
 red to window-gated once a path needing no operator was established (§15.1).
 
@@ -1864,6 +1865,7 @@ red to window-gated once a path needing no operator was established (§15.1).
 | ✅ | Vault requirement understood | **12** secrets identified with sources — 4 platform + 8 per-agent (twelfth finding); all have a no-operator creation path; silent-failure mode documented (§15) |
 | ✅ | Shams credentials | Not a blocker: already live in the Worker environment the cutover keeps, proven by behaviour without reading a value (§15, twelfth finding) |
 | ✅ | Test suite | See §16.4 |
+| ⚠️ | ~~Cloud export path~~ | **Downgraded from green by §17.** Capability is proven; the mechanism is not viable at 53 MB. Item 12's READY FOR CUTOVER is withdrawn until a transport is chosen |
 
 ### 16.2 Red — must be green before `GO`
 
@@ -1872,6 +1874,7 @@ red to window-gated once a path needing no operator was established (§15.1).
 | ⛔ | **Cutover date/time** | Business names an exact date/time honouring "after 12:30 AM" | Business |
 | ⛔ | **Worker env values confirmed** | Operator confirms `SITE_URL`/`VITE_SITE_URL`/`LOVABLE_API_KEY`/`LOVABLE_SEND_URL` are set on the deployed Worker, and that Lovable's **build** environment supplies `SUPABASE_URL`/`SUPABASE_PUBLISHABLE_KEY` (the next build fails without them — by design, §9.5) | Operator |
 | ~~⛔~~ | ~~**Shams CRM/MIS credentials**~~ | **Removed — was never a blocker** (twelfth finding). They live in the Worker environment the cutover keeps, so nothing transfers and nobody supplies anything | — |
+| ⛔ | **Cloud export mechanism** | Replace runbook step 3.1 — the connector cannot carry 53 MB (§17). Needs option A (Cloud DB connection details via the Lovable dashboard) or option B | Operator (one dashboard action) |
 | ⛔ | **End-to-end password-reset test** | Runbook step 12 — cannot run before B2–B7, since a self-hosted link today reaches a Cloud-wired app | Cutover window |
 | ⛔ | **Branded-template fetch check** | §14.4 — must pass before the step-12 email is sent | Cutover window |
 
@@ -1919,6 +1922,83 @@ and the same Node major CI uses). The chain exited **0**: typecheck clean, lint 
 permission-parity guard passes, and **4,339 tests across 151 files pass** — unchanged from
 the hardening phase, as expected, since nothing under `src/` was modified. The new
 `scripts/render-auth-email-templates.mjs` was additionally linted on its own and is clean.
+
+---
+
+## 17. The export path does not scale — sized, not assumed (blocking; found at the execution-ownership pass)
+
+§1 item 12 and runbook step 3.1 record the Cloud production export as **READY FOR CUTOVER**
+via the Lovable MCP connector's `query_database`. That was validated as a *capability*
+question — can arbitrary `SELECT` be run against Cloud? — and the answer is still yes. It was
+never validated as a *volume* question, and on volume it fails.
+
+### 17.1 The measurement
+
+Row counts from Cloud's `pg_stat_user_tables`, and average JSON bytes per row measured
+directly with `avg(length(to_jsonb(t)::text))` over a 500-row sample per table:
+
+| Table | Rows | Bytes/row | JSON total |
+|---|---|---|---|
+| `cdr_records` | 29,698 | 878 | **26.1 MB** |
+| `order_activity` | 41,689 | 274 | **11.4 MB** |
+| `orders` | 8,485 | 740 | **6.3 MB** |
+| `alshrouq_dispatches` | 2,360 | 1,571 | 3.7 MB |
+| `telesales_source_records` | 2,423 | ~1,500 | ~3.6 MB |
+| `telesales_leads` | 825 | 1,559 | 1.3 MB |
+| everything else in scope | ~3,000 | — | ~1 MB |
+| **Total** | **~89,000** | | **≈ 53 MB** |
+
+`shams_*` (110,679 offers, 16 MB) is excluded — it is rebuilt, not copied (§2 step 8).
+
+### 17.2 Why that is not executable through the connector
+
+Every row read through `query_database` arrives as a tool result **in the executing agent's
+context**, and every row written to self-hosted leaves as an `INSERT` **through the same
+context**. The payload is therefore paid for twice. At roughly 3 characters per token for
+dense JSON full of UUIDs and timestamps, 53 MB is ~18M tokens one way and ~36M round trip,
+against a session budget of 15M. Automatic context compaction does not help: it frees
+working memory, it does not refund tokens already spent.
+
+This is not a tuning problem or a matter of smaller batches. Chunking changes the number of
+calls, not the number of bytes, and at 500 rows per call it is ~180 read calls plus ~180
+write calls, each carrying its share of the same 53 MB. The path is short by a factor of
+roughly 2.5 even after the reduction in §17.3.
+
+**Consequence: runbook step 3.1 cannot be performed as written, and no cutover date should be
+fixed until the mechanism is replaced.** The honest status of §1 item 12 is *capability
+proven, mechanism not viable at production volume*.
+
+### 17.3 One real reduction, from a strategy already in the document
+
+`cdr_records` — 26.1 MB, half the payload — **does not need to come from Cloud at all**. The
+CDR mirror is explicitly hybrid (§2 step 6.9): Yeastar is the source of truth and the mirror
+only ever holds rows the PBX emitted. `.env.example` documents the backfill as self-healing —
+each run takes the live days plus the oldest days still missing, converging on
+`YEASTAR_CDR_SYNC_HORIZON_DAYS` (90). Letting the existing sync rebuild the mirror
+post-cutover removes the single largest table from the migration and costs only a warm-up
+period during which Calls dashboards fill in. That drops the transfer to ≈ 27 MB — still
+beyond the connector, but it materially shrinks whatever mechanism replaces it.
+
+### 17.4 Candidate mechanisms
+
+| | Mechanism | Viability |
+|---|---|---|
+| A | Obtain the Cloud Postgres connection details through the **Lovable dashboard**, then run one piped `pg_dump … \| psql …` directly between the two databases | **Recommended.** Bytes never touch an agent context; minutes not hours; standard, restartable, verifiable by counts. Costs one manual dashboard action, and the credential must reach the shell **without** passing through this conversation |
+| B | Cloud-side push: `net.http_post` from Cloud's Postgres (pg_net is live there — 106 responses in 24h) to self-hosted PostgREST, batched server-to-server | Workable, no data through any agent context, but needs a shared credential between the two stacks. Every channel for establishing one runs through this conversation, so it implies either exposing a production key or minting a temporary capability URL behind an Nginx change — more moving parts, on the box that terminates production TLS |
+| C | Chunked transfer through `query_database` as currently documented | **Not viable** — §17.2 |
+
+A is the only option that is both safe and boring, which is what a cutover wants. B is the
+fallback if no connection detail can be surfaced. C should be struck from the runbook rather
+than left standing as the plan.
+
+### 17.5 What this does not change
+
+Everything else in this document stands. The schema is in place, the destination is clean,
+`auth.users` on Cloud holds **4** users (so the UUID-preserving auth import is trivial at
+this size), all 12 Vault secrets have a no-operator path, the branded templates are prepared,
+and the Worker switch is unchanged. This is a transport problem for one step, not a redesign
+— but it is a hard blocker for that step, and it is the reason a date cannot responsibly be
+set yet.
 
 ---
 
