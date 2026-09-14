@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "check:permissions": "node scripts/check-permission-parity.mjs",
+    "build:auth-email-templates": "node scripts/render-auth-email-templates.mjs",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

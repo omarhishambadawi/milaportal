@@ -34,6 +34,10 @@ src/integrations/supabase/
 # Entirely a LOVABLE:BEGIN/END managed block, rewritten by Lovable on sync.
 AGENTS.md
 
+# Static GoTrue mail templates, re-emitted by
+# scripts/render-auth-email-templates.mjs from src/lib/email-templates/.
+public/auth-email-templates/
+
 # @lovable.dev/mcp-js route handlers, re-emitted by its Vite plugin on every
 # dev server start and every build.
 src/routes/mcp.ts

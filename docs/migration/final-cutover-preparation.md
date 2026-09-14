@@ -398,6 +398,75 @@ The full repository re-scan behind this finding, with every remaining occurrence
 classified, is §9.10. The `avatars` storage preparation is §12 and the auth-email/template
 change is §13.
 
+**Eleventh finding, from this phase's final pre-cutover closure audit (repository changes
+made; no Worker environment, no database write, no migration applied, no container
+recreated, no Nginx/DNS/Cloudflare/NAT change, no email sent)**: three things previously
+recorded as open decisions or accepted losses turn out to be closable from the repository,
+and one previously-understated dependency is larger than documented.
+
+- **The branded auth emails do not have to be lost (§14, supersedes §13's conclusion and
+  checklist item A5).** §13 recorded self-hosted GoTrue falling back to its plain built-in
+  templates as "a deliberate, acceptable trade" needing a business decision. It is neither
+  necessary nor a decision: GoTrue reads each template from a URL
+  (`GOTRUE_MAILER_TEMPLATES_*`) and each subject from `GOTRUE_MAILER_SUBJECTS_*`, for all
+  six mail types — verified against `supabase/auth`'s own `example.env` and its
+  `internal/mailer/templatemailer/template.go`. The six branded React Email templates are
+  now rendered to static GoTrue templates by `scripts/render-auth-email-templates.mjs`
+  (`npm run build:auth-email-templates`) into `public/auth-email-templates/`, with GoTrue's
+  own placeholders (`{{ .ConfirmationURL }}`, `{{ .SiteURL }}`, `{{ .Email }}`,
+  `{{ .NewEmail }}`, `{{ .Token }}`) where the per-message values go. They render from the
+  same components the Cloud webhook renders, so the branding has one source, not two.
+  Setting the env vars is a cutover-window action; nothing is applied to the running
+  `supabase-auth`, and no email was sent.
+- **Only one of the six auth mails is reachable in this application at all (§14.1).**
+  Verified by reading every auth call site: `resetPasswordForEmail` is called in exactly
+  three places (`src/routes/auth.tsx:91`, `src/lib/password.server.ts:127`,
+  `src/features/profile/components/temporary-password-expired.tsx:50`); account creation
+  goes through `admin.createUser({ email_confirm: true })` (`src/lib/admin.functions.ts:231`),
+  which sends nothing; every other admin/profile path calls `updateUserById({ password })`
+  or `updateUser({ password })`. There is no signup, invite, magic-link, email-change or
+  reauthentication flow. So `recovery` is the only template that can fire — which is also
+  the one email every migrated user must receive under the password-reset-only strategy
+  (§5). The other five are prepared for completeness, not because a user can trigger one.
+- **The scheduler/Vault dependency is four secrets, not two (§15).** §1 item 11 recorded
+  `shams_sync_scheduler_url` and `email_queue_service_role_key`. Reading the actual function
+  bodies in the migrations and the live `cron.job` table found three active jobs, each of
+  which needs a URL secret plus the shared service-role key: `shams-sync-tick` →
+  `shams_sync_scheduler_url`, `alshrouq-dispatch-due` → `alshrouq_scheduler_url`,
+  `telesales-generation-tick` → `telesales_generation_url`. Confirmed live this phase
+  (names only, no value read, read-only `SELECT`): `vault.secrets` holds **zero rows**, so
+  all three are unconfigured. This also closes §9.9's "not re-verified" gap. The failure
+  mode is the dangerous one `.env.example` already documents from a real incident: pg_cron
+  records the run as **succeeded** while issuing no HTTP request at all, so AlShrouq
+  scheduled dispatch and telesales generation would be silently dead after cutover exactly
+  as Shams sync would.
+- **`.env.example` now documents `SITE_URL`/`VITE_SITE_URL` and `LOVABLE_API_KEY`/
+  `LOVABLE_SEND_URL`** — the four load-bearing variables §1 item 10 recorded as "absent
+  from `.env.example`, must come from institutional knowledge." Placeholders only; no value
+  was read, guessed or committed. This does not close item 10 (the operator must still
+  confirm they are set on the deployed Worker), but it removes the documentation gap that
+  made them easy to forget.
+- **The `avatars` creation statement is now a runnable, reviewed artifact**
+  (`docs/migration/cutover-avatars-bucket.sql`) rather than a fenced block inside this
+  document: transactional, idempotent, with its own verification and rollback queries, and
+  deliberately **not** placed under `supabase/migrations/` because `supabase/config.toml`
+  still names the Cloud project and a CLI push would carry it there. Re-verified live and
+  read-only this phase: `storage.buckets` 0 rows, `storage.objects` 0 rows, all 4
+  owner-scoped policies attached. The bucket was **not** created — it stays a Gate-B write
+  (C4), per this task's own instruction to prefer preparation.
+- **Re-verified live, read-only, unchanged**: migration ledger at **150** applied with
+  `20260723022830` (migration 69) **absent**; latest applied `20260917130000`, so
+  `20260918120000_alshrouq_handled_manually.sql` remains the single pending normal
+  migration; destination tables `orders`/`complaints`/`profiles`/`user_roles`/`cdr_records`/
+  `alshrouq_dispatches`/`auth.users` all **0 rows**; all 12 containers healthy; all 3 cron
+  jobs active.
+- **Cloud-dependency re-scan (§9.10) re-run this phase over tracked files**: no new
+  occurrence, no reclassification. The five `gwnxlpophyvgafctrbkx` hits are exactly
+  `.lovable/mcp/manifest.json` (generated), `supabase/config.toml` (tooling), and three
+  `docs/project.md` history lines.
+- **Validation**: `npm run typecheck`, `npm run lint`, `npm run check:permissions` and the
+  full test suite re-run after these changes — results in §16.
+
 > Until explicit cutover authorization is given, all Lovable Cloud access used for
 > preparation must remain read-only/SELECT-only. No freeze, export execution, INSERT,
 > UPDATE, DELETE, DDL, credential changes, or other production mutation is permitted.
@@ -416,11 +485,12 @@ change is §13.
 | 5 | Self-hosted schema recapture | **CLOSED** | Performed in Phase 50 (`prod_schema_phase50.sql`); a further recapture immediately before the real export remains standard cutover-day hygiene, not an outstanding gap |
 | 6 | Phase 44 scratch rehearsal container | **CLOSED** | Destroyed in Phase 50, confirmed absent this session, production containers unaffected |
 | 7 | Auth roster pull | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the already-authenticated Lovable MCP connector's direct query access to Cloud `auth.users` (`id`/`email`/metadata only, never `encrypted_password`) — no Cloud `service_role` GoTrue Admin API key or other new credential required |
-| 8 | `avatars` storage bucket | **READY FOR CUTOVER** (settings fully determined and re-verified — §12; execution is a Gate-B write) | No longer an open decision: name (`avatars`), private, `file_size_limit = 4194304` (4 MB), and `allowed_mime_types = {image/png,image/jpeg,image/webp,image/gif}` are all fixed by already-applied migration `20260721002100_avatars_bucket_limits.sql` and `src/lib/avatar.ts` — not "no existing Cloud value to mirror" as previously stated. That migration is an `UPDATE ... WHERE id='avatars'`, applied while the bucket didn't exist, so it was a no-op; creation must set these values explicitly, not rely on the migration re-firing. Exact statement attempted this phase and blocked by this session's own permission classifier ("Modify Shared Resources") — only remaining step is running it, with the operator's explicit go-ahead (see §2 step 9.1) |
+| 8 | `avatars` storage bucket | **READY FOR CUTOVER** (settings fully determined and re-verified — §12; execution is a Gate-B write) | No longer an open decision: name (`avatars`), private, `file_size_limit = 4194304` (4 MB), and `allowed_mime_types = {image/png,image/jpeg,image/webp,image/gif}` are all fixed by already-applied migration `20260721002100_avatars_bucket_limits.sql` and `src/lib/avatar.ts` — not "no existing Cloud value to mirror" as previously stated. That migration is an `UPDATE ... WHERE id='avatars'`, applied while the bucket didn't exist, so it was a no-op; creation must set these values explicitly, not rely on the migration re-firing. The statement is now a reviewed, runnable artifact carrying its own verification and rollback queries — `docs/migration/cutover-avatars-bucket.sql` — kept deliberately outside `supabase/migrations/` so the Cloud-linked CLI cannot carry it to Cloud (§12). Only remaining step is running it against self-hosted, behind Gate B (C4) |
 | 9 | Real SMTP credentials | **CONFIGURED; CONNECTIVITY VERIFIED; END-TO-END TEST PENDING ON ITEM 10** | Real Zoho Mail production credentials remain set on self-hosted `supabase-auth` (`smtp.zoho.com:587`, `milaportal@milaserv.com`): DNS resolves to `136.143.190.56`, TCP `587` open, `supabase-auth` healthy. Item 9b's HTTPS dependency is now resolved, but the controlled test is still not runnable: the deployed Worker application points at **Cloud** Supabase, not this stack (ninth finding), so a self-hosted reset link would land on an app wired to Cloud. The test belongs after item 10's env-var switch, at cutover |
 | 9b | GoTrue URL/redirect configuration (`GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, `GOTRUE_URI_ALLOW_LIST`) | **CLOSED for HTTPS/routing; end-to-end reset test still pending on item 9** (the pfSense "blocker" was a measurement artifact — see the ninth finding) | All three are set to the real production domain and verified working end-to-end: `/auth/v1/health` returns GoTrue `v2.189.0` `200` through Nginx→Envoy→GoTrue, and external HTTPS is **confirmed working** — real external browsers load the application over `https://milaportal.milaserv.com` (Nginx access log, ISP client addresses, `200`s). The seventh/eighth findings' pfSense port-443 conflict was an artifact of probing the WAN IP from inside the LAN with no NAT reflection; no firewall change was ever required. Root routing was separately wrong (Studio behind Basic Auth on `/`) and is fixed this phase |
-| 10 | Application env vars (`SITE_URL`, `VITE_SITE_URL`, `LOVABLE_API_KEY`, `LOVABLE_SEND_URL`) | **REQUIRES OPERATOR INPUT** | Load-bearing, absent from `.env.example`. **Corrected this phase**: Vercel is no longer part of the architecture (see the third finding at the top of this document) — the live app deploys as a Cloudflare Worker via Lovable, so these vars must be set in Lovable's project environment settings for that Worker, per `.env.example`'s own guidance for `SHAMS_MIS_BASE_URL`. No MCP tool available this session exposes Worker environment-variable values or presence, so this remains unverifiable from here — operator confirmation required, not a guess |
-| 11 | Shams credentials (`SHAMS_CRM_*`, `SHAMS_MIS_*`) | **REQUIRES OPERATOR INPUT** | No `SHAMS_*` name found in any inspectable container this session; consumed only by the deployed Cloudflare Worker's server-only code (`src/lib/shams-crm/client.server.ts`, `src/lib/shams/client.server.ts`), not by any self-hosted container. self-hosted's `shams_sync_tick()` cron function additionally requires two Vault secrets, `shams_sync_scheduler_url` and `email_queue_service_role_key`, to reach that Worker's scheduler endpoint — both confirmed **absent** (no row in `vault.decrypted_secrets`) — a separate self-hosted wiring step from the CRM/MIS credentials themselves, not resolvable until the deployed Worker's scheduler endpoint exists |
+| 10 | Application env vars (`SITE_URL`, `VITE_SITE_URL`, `LOVABLE_API_KEY`, `LOVABLE_SEND_URL`) | **REQUIRES OPERATOR INPUT** | **Now documented in `.env.example`** (eleventh finding) with the exact reason each is load-bearing — placeholders only, no value read or guessed. The remaining gap is confirmation that they are actually set on the deployed Worker, which nothing available here can observe. **Corrected in a prior phase**: Vercel is no longer part of the architecture (see the third finding at the top of this document) — the live app deploys as a Cloudflare Worker via Lovable, so these vars must be set in Lovable's project environment settings for that Worker, per `.env.example`'s own guidance for `SHAMS_MIS_BASE_URL`. No MCP tool available this session exposes Worker environment-variable values or presence, so this remains unverifiable from here — operator confirmation required, not a guess |
+| 11 | Shams credentials (`SHAMS_CRM_*`, `SHAMS_MIS_*`) | **REQUIRES OPERATOR INPUT** | No `SHAMS_*` name found in any inspectable container this session; consumed only by the deployed Cloudflare Worker's server-only code (`src/lib/shams-crm/client.server.ts`, `src/lib/shams/client.server.ts`), not by any self-hosted container. **Corrected and widened this phase (§15)**: the self-hosted Vault requirement is **four** secrets, not two — all three active cron jobs need one, and `vault.secrets` is confirmed **empty** (0 rows, names-only read). Silent-failure risk: an unconfigured job records `succeeded` while issuing no HTTP request. A separate self-hosted wiring step from the CRM/MIS credentials themselves, not resolvable until the Worker's scheduler endpoints answer on the self-hosted origin |
+| 11b | Self-hosted Vault scheduler secrets (`shams_sync_scheduler_url`, `alshrouq_scheduler_url`, `telesales_generation_url`, `email_queue_service_role_key`) | **REQUIRES CUTOVER-DAY ACTION** | New row, split out of item 11 by this phase (§15). Confirmed live, read-only, names only: `vault.secrets` holds 0 rows, while `cron.job` holds 3 active jobs (`shams-sync-tick`, `alshrouq-dispatch-due`, `telesales-generation-tick`) whose functions each read a URL secret plus the shared `email_queue_service_role_key`. Values are derivable at cutover without any new credential from the business: the three URLs are the app's own scheduler routes on the post-cutover origin, and the key is self-hosted's own `SERVICE_ROLE_KEY` |
 | 12 | Cloud production export path | **READY FOR CUTOVER** | Confirmed this phase: obtainable via the same Lovable MCP connector's `query_database` capability against the live Cloud project — a literal `psql`/`pg_dump` binary is not required for this path; export *execution* is still a cutover-day action (item 18) and remains SELECT-only until Gate B |
 | 13 | 5 optional branches decision | **CLOSED** | Business confirmed: migrate all 5 (`P0312`, `P0313`, General Administration, Branch Administration, Warehouse) |
 | 14 | `orders_verification_snapshot_20260815` exclusion sign-off | **CLOSED** | Business confirmed: exclude |
@@ -429,6 +499,7 @@ change is §13.
 | 17 | Cloud write freeze | **REQUIRES CUTOVER-DAY ACTION** | Must not happen before Gate B |
 | 18 | Final production export/snapshot | **REQUIRES CUTOVER-DAY ACTION** | Must not happen before Gate B |
 | 19 | DNS/reverse-proxy switch | **REQUIRES CUTOVER-DAY ACTION** | Must not happen before Gate B |
+| 20 | Branded auth email templates preserved on self-hosted | **PREPARED — cutover-window configuration only** (§14) | Supersedes §13's "accepted regression" and checklist A5. All six branded templates are rendered to GoTrue-compatible static HTML (`npm run build:auth-email-templates` → `public/auth-email-templates/`) from the same React components the Cloud webhook uses. Closing it needs only the `GOTRUE_MAILER_TEMPLATES_*`/`GOTRUE_MAILER_SUBJECTS_*` values at cutover plus the pre-send fetch check in §14.4 — GoTrue falls back to its plain defaults **silently** if a template URL does not resolve. Only `recovery` is reachable in this application (§14.1) |
 
 **Net change from Phase 50**: business decisions 13, 14, and 16 move from OPEN to
 CLOSED. The maintenance window (15) is partially constrained ("after 12:30 AM") but not
@@ -643,6 +714,17 @@ would still point at `localhost`.
 already-corrected `SUPABASE_PUBLIC_URL` (§9.7 — the file is fixed, the running containers
 still carry the installer default) takes effect. No other container needs recreating for
 this, and no value has to be decided at the time.
+
+10.7. Set `GOTRUE_MAILER_TEMPLATES_*` and `GOTRUE_MAILER_SUBJECTS_*` on `supabase-auth` so
+the branded templates survive the cutover instead of being replaced by GoTrue's plain
+defaults — exact values, ordering constraint and the mandatory pre-send fetch check are in
+§14. This must be done **before** step 12's single test email, not after: that email is the
+one every migrated user then receives.
+
+10.8. Create the four self-hosted Vault secrets the three active cron jobs need
+(`shams_sync_scheduler_url`, `alshrouq_scheduler_url`, `telesales_generation_url`,
+`email_queue_service_role_key`) — §15. Without them each job records `succeeded` while
+making no request at all, so this cannot be validated by watching `cron.job_run_details`.
 
 ### 11. Post-import validation
 11.1. Run full count/FK/orphan validation across every imported table
@@ -1300,10 +1382,12 @@ were **not executed** this phase.
 | A2 | *(Done this phase)* `PUBLIC_SUPABASE_FALLBACKS` removed from `vite.config.ts`; the build now requires the Supabase URL and anon key and fails naming them (D8) | Merged, not held back: it is correct for Cloud and self-hosted alike, so it no longer has to land with B6 |
 | A3 | Nginx `location /mcp` removal — exact one-block diff and reload command prepared, **unapplied** (§10.5) | Independent of cutover; zero benefit until the domain serves the self-hosted app, so deferred deliberately |
 | A4 | *(Done this phase)* `SUPABASE_PUBLIC_URL` corrected in `/opt/supabase/supabase-project/.env` (D17, §9.7) | File only — takes effect when `studio`/`storage`/`edge-functions` are next recreated; fold that recreate into runbook step 10 |
-| A5 | Confirm with the business that self-hosted GoTrue's **default** auth-email templates replacing the branded Lovable ones is accepted (§9.6, and §13 for the exact before/after) | User-visible change; decide before, not after. Still open — the only preparation item this phase could not close itself |
-| A6 | Re-check the Vault secrets and `cron.job` URLs that §9.9 could not read this phase | Blocked here by the session's permission classifier |
+| A5 | ~~Confirm with the business that GoTrue's **default** templates replacing the branded ones is accepted~~ | **Superseded (§14).** There is nothing to accept: the branded templates are preserved by configuration. Reduced to awareness that the From address becomes `milaportal@milaserv.com` |
+| A6 | *(Done this phase)* Re-check the Vault secrets and `cron.job` URLs that §9.9 could not read | `vault.secrets` empty; 3 active jobs; **4** secrets required, not 2 (§15) |
 | A7 | *(Done this phase)* Verify SMTP reachability, GoTrue URL/redirect config, and that all six Supabase path prefixes proxy correctly | §9.1, §9.8 |
-| A8 | *(Done this phase)* `SUPABASE_PROJECT_ID` dependency removed from the code (D5/D6, §9.4); full repository re-scan classified (§9.10); `avatars` configuration pinned down (§12); auth-email delta documented (§13) | Typecheck, lint, permission parity and 4,339 tests all pass |
+| A8 | *(Done in the hardening phase)* `SUPABASE_PROJECT_ID` dependency removed from the code (D5/D6, §9.4); full repository re-scan classified (§9.10); `avatars` configuration pinned down (§12); auth-email delta documented (§13) | Typecheck, lint, permission parity and 4,339 tests all pass |
+| A9 | *(Done this phase)* Branded auth templates rendered to GoTrue-compatible static HTML and committed; exact `GOTRUE_MAILER_*` configuration and the mandatory pre-send fetch check written out (§14) | Repository only — nothing set on `supabase-auth`, no email sent |
+| A10 | *(Done this phase)* `avatars` creation turned into a runnable, idempotent artifact with verification and rollback (`docs/migration/cutover-avatars-bucket.sql`); `.env.example` gap for `SITE_URL`/`VITE_SITE_URL`/`LOVABLE_API_KEY`/`LOVABLE_SEND_URL` closed | Bucket **not** created — still C4 behind Gate B |
 
 ### B. Must happen during cutover — after Gate B `GO`, in this order
 
@@ -1333,6 +1417,8 @@ records this).
 | C3 | UUID-preserving Auth import and business-data import (§2 steps 5–7) |
 | C4 | `avatars` bucket creation (§1 item 8) |
 | C5 | The controlled password-reset test email (§2 step 12) — **still blocked until B2–B8 land**, because a self-hosted reset link sent today reaches an application wired to Cloud |
+| C8 | Set `GOTRUE_MAILER_TEMPLATES_*`/`GOTRUE_MAILER_SUBJECTS_*` and recreate `supabase-auth`, then run the §14.4 fetch check — after B7, before C5 (§14.3) |
+| C9 | Create the four Vault scheduler secrets (§15), then verify by an actual HTTP response row rather than by cron job status |
 | C6 | DNS / NAT / reverse-proxy switch (§2 step 14) |
 | C7 | Rollback decision (§2 step 15) |
 
@@ -1421,19 +1507,309 @@ environment this phase:
 | Link | Worker origin | `https://milaportal.milaserv.com/auth/v1/verify?…`, redirecting to `/reset-password` |
 | Webhook route | Live | **Dormant, not broken** — self-hosted GoTrue never calls it; the route, its templates and `LOVABLE_API_KEY` stay in place unused |
 
-This is the one user-visible regression in the cutover, and it lands on the single email
-every migrated user is required to receive (password-reset-only strategy, §5). It is
-**cosmetic, not functional** — the link works either way — and it is reversible later
-without a second cutover, by either setting `GOTRUE_MAILER_TEMPLATE_*` to hosted copies of
-the existing templates or configuring a GoTrue send-email hook back to the Worker route.
-Neither is prepared here: it is a business call (checklist A5), not a technical gap, and
-nothing about it gates `GO`.
+**Superseded by §14 — read that section, not this conclusion.** The paragraph that stood
+here called the unbranded email an accepted regression requiring a business decision. It was
+describing the consequence of leaving `GOTRUE_MAILER_TEMPLATES_*` unset, not a property of
+self-hosting. The branded templates are now rendered as static GoTrue templates and the
+exact configuration is written out in §14; the residual user-visible delta is the From
+address alone. Everything above in §13 remains an accurate description of the two transports
+and of what happens if §14's configuration is **not** applied.
+
+---
+
+## 14. Preserving the branded auth emails on self-hosted (prepared; nothing configured, no email sent)
+
+§13 documented the branded templates being replaced by GoTrue's plain built-in ones as an
+accepted, reversible-later regression needing a business sign-off (checklist A5). That
+framing was wrong in one specific way: it treated "GoTrue sends its own defaults" as a
+property of self-hosting. It is a property of **leaving `GOTRUE_MAILER_TEMPLATES_*`
+unset**, which is where this stack happens to be, and it is fixable at cutover with
+configuration alone — no application change, no webhook, no dependency on Lovable after
+cutover.
+
+### 14.1 Scope: one template is reachable, five are insurance
+
+Read from the code, not assumed. The only auth mail this application can cause is
+`recovery`:
+
+| Flow | Call site | Sends mail? |
+|---|---|---|
+| "Forgot password?" on sign-in | `src/routes/auth.tsx:91` — `resetPasswordForEmail` | **Yes — recovery** |
+| Admin-triggered reset | `src/lib/password.server.ts:127` — `resetPasswordForEmail` | **Yes — recovery** |
+| Expired temporary password | `src/features/profile/components/temporary-password-expired.tsx:50` | **Yes — recovery** |
+| Admin creates a user | `src/lib/admin.functions.ts:231` — `admin.createUser({ email_confirm: true })` | No — confirmed at creation, no invite/confirmation mail |
+| Admin resets a password | `src/lib/admin.functions.ts:501` — `updateUserById({ password })` | No |
+| User changes own password | `src/lib/profile.functions.ts:97,207`, `src/routes/reset-password.tsx:34` | No |
+
+There is no signup, magic-link, email-change or reauthentication path anywhere in `src/`.
+So `recovery` is the one that matters — and under the password-reset-only strategy (§5) it
+is also the one email **every** migrated user is required to receive. The remaining five
+are prepared because they cost nothing extra to render and leaving them unset would mean a
+plain email the day someone adds a flow.
+
+### 14.2 What is prepared, and where it lives
+
+`npm run build:auth-email-templates` (`scripts/render-auth-email-templates.mjs`) renders
+the six components in `src/lib/email-templates/` to static GoTrue templates in
+`public/auth-email-templates/`, substituting GoTrue's own placeholders for the per-message
+props:
+
+| File | GoTrue template | Placeholders substituted |
+|---|---|---|
+| `recovery.html` | `RECOVERY` | `{{ .ConfirmationURL }}` |
+| `confirmation.html` | `CONFIRMATION` (from `signup.tsx`) | `{{ .ConfirmationURL }}`, `{{ .SiteURL }}`, `{{ .Email }}` |
+| `invite.html` | `INVITE` | `{{ .ConfirmationURL }}`, `{{ .SiteURL }}` |
+| `magic_link.html` | `MAGIC_LINK` | `{{ .ConfirmationURL }}` |
+| `email_change.html` | `EMAIL_CHANGE` | `{{ .ConfirmationURL }}`, `{{ .Email }}`, `{{ .NewEmail }}` |
+| `reauthentication.html` | `REAUTHENTICATION` | `{{ .Token }}` |
+
+Rendering rather than hand-copying is the point: the Cloud webhook
+(`src/routes/lovable/email/auth/webhook.ts`) renders the same components per message, so
+the brand exists once. Change a template and re-run the script; both transports move
+together. The output is generator-owned and listed in `.prettierignore` alongside the other
+generated files. Verified after rendering: every `{{`/`}}` in all six files belongs to one
+of the placeholders above — no stray Go template syntax was introduced by the renderer.
+
+Because the files sit in `public/`, they ship with the application build and are served at
+`/auth-email-templates/<name>.html` on whatever origin the app is deployed to. One
+consequence to state plainly: the next Lovable deploy publishes these paths on
+`milaportal.live` as well. They contain branding and placeholders only — no secret, no
+token, no user data — and nothing links to them.
+
+### 14.3 The exact cutover configuration
+
+Set on self-hosted `supabase-auth` (runbook step 10.7). Subjects are set explicitly rather
+than left to GoTrue's defaults: comparing against `supabase/auth`'s own `example.env`,
+`RECOVERY` and `INVITE` happen to match today's wording, `CONFIRMATION`, `MAGIC_LINK` and
+`EMAIL_CHANGE` do not, and `REAUTHENTICATION`'s default is not documented there. Setting
+all six removes the question:
+
+```
+GOTRUE_MAILER_TEMPLATES_RECOVERY=https://milaportal.milaserv.com/auth-email-templates/recovery.html
+GOTRUE_MAILER_TEMPLATES_CONFIRMATION=https://milaportal.milaserv.com/auth-email-templates/confirmation.html
+GOTRUE_MAILER_TEMPLATES_INVITE=https://milaportal.milaserv.com/auth-email-templates/invite.html
+GOTRUE_MAILER_TEMPLATES_MAGIC_LINK=https://milaportal.milaserv.com/auth-email-templates/magic_link.html
+GOTRUE_MAILER_TEMPLATES_EMAIL_CHANGE=https://milaportal.milaserv.com/auth-email-templates/email_change.html
+GOTRUE_MAILER_TEMPLATES_REAUTHENTICATION=https://milaportal.milaserv.com/auth-email-templates/reauthentication.html
+
+GOTRUE_MAILER_SUBJECTS_RECOVERY=Reset your password
+GOTRUE_MAILER_SUBJECTS_CONFIRMATION=Confirm your email
+GOTRUE_MAILER_SUBJECTS_INVITE=You've been invited
+GOTRUE_MAILER_SUBJECTS_MAGIC_LINK=Your login link
+GOTRUE_MAILER_SUBJECTS_EMAIL_CHANGE=Confirm your new email
+GOTRUE_MAILER_SUBJECTS_REAUTHENTICATION=Your verification code
+```
+
+Subjects are copied verbatim from `EMAIL_SUBJECTS` in `webhook.ts`, so the subject line does
+not change for users.
+
+**Ordering constraint — what it actually depends on.** Not the Worker env switch. The
+templates are static assets of the application build, and Nginx's catch-all `location /`
+already proxies this domain to the deployed Worker (ninth finding), so these URLs start
+resolving as soon as a Lovable deploy ships the files — before cutover, and on
+`milaportal.live` too. What the configuration must not precede is that deploy. It is kept in
+the cutover window regardless, for a different reason: applying it means recreating
+`supabase-auth`, and there is no benefit to doing that early when nothing sends mail through
+this stack yet. Set it after B7 and before the step-12 test email.
+
+**Two mechanics worth knowing before setting these**, both read from
+`supabase/auth`'s `internal/mailer/templatemailer/template.go`:
+
+1. A value that does not start with `http` is treated as a path and appended to
+   `SiteURL` — so `/auth-email-templates/recovery.html` also works and stays correct if the
+   domain ever changes. Absolute URLs are used above because they are what the verification
+   command in §14.4 can be run against verbatim.
+2. **Failure is silent.** If the URL does not resolve, GoTrue logs the fetch error and
+   sends its **built-in default template** instead. Nothing fails, nothing retries loudly,
+   and the only visible symptom is an unbranded email in a user's inbox. This is why §14.4
+   is not optional.
+
+### 14.4 Mandatory verification, before the one test email
+
+From inside the auth container, after setting the variables and recreating it:
+
+```
+docker exec supabase-auth wget -qO- https://milaportal.milaserv.com/auth-email-templates/recovery.html | head -5
+```
+
+It must return the template's HTML. A redirect, a 404, the application's HTML shell, or a
+DNS/TLS error all mean GoTrue will quietly fall back to its default. Only after this
+succeeds should runbook step 12's single password-recovery test be sent — and that email is
+then also the end-to-end proof that the branding survived.
+
+If the fetch cannot be made to work from inside the container (the request leaves the Docker
+network and returns through the public edge), the fallback is to serve the same six files
+directly from the `supabase-nginx` container on an internal-only listener and point the
+variables at `http://supabase-nginx:<port>/...`. That keeps the templates inside the Docker
+network with no public round trip. It is a change to a file outside version control
+(`/opt/supabase/supabase-project/`), so it is recorded as the fallback rather than the
+default.
+
+### 14.5 What still changes for users, and what does not
+
+| | Before (Cloud) | After (self-hosted, configured per §14.3) |
+|---|---|---|
+| Look | Branded MilaPortal card | **Unchanged** — same components, same brand rule, same button |
+| Subject | "Reset your password" | **Unchanged** — set explicitly |
+| From address | `MilaPortal <noreply@milaportal.live>` via Lovable | `MilaPortal <milaportal@milaserv.com>` via Zoho — **changes**, and cannot not change: it is the SMTP identity, not a template |
+| Link | Worker origin | `https://milaportal.milaserv.com/auth/v1/verify?…` → `/reset-password` |
+| Webhook route | Live | Dormant, not broken — self-hosted GoTrue never calls it |
+
+So the residual user-visible delta is the sender address alone. That is a consequence of
+moving mail transport to the business's own Zoho mailbox, and the display name (`MilaPortal`,
+already set as `SMTP_SENDER_NAME`) is preserved. **Checklist item A5 is therefore no longer
+a business decision about accepting unbranded email** — it is reduced to awareness that the
+From address becomes `milaportal@milaserv.com`.
+
+---
+
+## 15. Scheduler Vault secrets — four, not two (verified live, names only)
+
+§1 item 11 recorded two Vault secrets, scoped to Shams. Reading the function bodies and the
+live `cron.job` table shows the dependency is wider and identical in shape for all three
+active jobs: each reads a URL secret naming the application endpoint it must call, plus one
+shared service-role key used as the `Authorization: Bearer` credential.
+
+| Cron job | Schedule | Function | URL secret | Application route it must reach |
+|---|---|---|---|---|
+| `shams-sync-tick` | every minute | `public.shams_sync_tick()` | `shams_sync_scheduler_url` | `/api/shams-sync-run` |
+| `alshrouq-dispatch-due` | every minute | `public.alshrouq_dispatch_due()` | `alshrouq_scheduler_url` | `/api/alshrouq-run-scheduled` |
+| `telesales-generation-tick` | hourly | `public.telesales_generation_tick()` | `telesales_generation_url` | `/api/telesales-generate` |
+
+Plus, shared by all three: **`email_queue_service_role_key`** — read 9 times across the
+migrations, the same credential `email_queue_dispatch()` uses.
+
+**Live state, re-verified this phase (read-only, names only, no value read or printed):**
+`vault.secrets` contains **0 rows**; all three cron jobs are **active**. Definitions are in
+`20260916120000_shams_offers.sql:705-708`, `20260901120000_alshrouq_scheduler_canonical.sql:191-197`
+and `20260901160000_telesales_scheduler.sql:124-131`.
+
+**Why this is a real gate item and not hygiene.** An unconfigured job does not error: it
+returns 0, and pg_cron records the run as `succeeded`. `.env.example` documents the
+precedent in the repository's own words — "5,769 consecutive 'succeeded' runs; not one HTTP
+request; a real delivery left unsent for days." Post-cutover this would silently disable
+Shams offer sync, AlShrouq scheduled dispatch and telesales generation at once, and
+`cron.job_run_details` would show nothing wrong.
+
+**What must be supplied, by whom, when.** No new credential from the business is needed for
+this item — unlike the Shams CRM/MIS credentials in item 11, which are genuinely external:
+
+| Secret | Value source | When |
+|---|---|---|
+| `shams_sync_scheduler_url` | `https://milaportal.milaserv.com/api/shams-sync-run` | Cutover window, after B2–B7 |
+| `alshrouq_scheduler_url` | `https://milaportal.milaserv.com/api/alshrouq-run-scheduled` | Same |
+| `telesales_generation_url` | `https://milaportal.milaserv.com/api/telesales-generate` | Same |
+| `email_queue_service_role_key` | Self-hosted `SERVICE_ROLE_KEY` (`/opt/supabase/supabase-project/.env` line 36) — never printed, never committed | Same |
+
+**The pairing that is easy to get wrong.** All three routes authenticate the caller by
+comparing the bearer token against the **Worker's own** `SUPABASE_SERVICE_ROLE_KEY`
+(`isScheduler()` in `src/routes/api/shams-sync-run.ts:67-70`,
+`telesales-generate.ts:58-61`, `alshrouq-run-scheduled.ts:82`). So
+`email_queue_service_role_key` in the database Vault and `SUPABASE_SERVICE_ROLE_KEY` in the
+Worker environment (checklist B5) must be the **same** key. Set one and not the other and
+every scheduled run gets a `401` — which, per the silent-failure mode above, still reads as
+`succeeded` in `cron.job_run_details`.
+
+Verify by evidence of an actual request, not by job status — e.g. the most recent row in
+`net._http_response`, per `.env.example`'s own recipe.
+
+Still genuinely external and unresolved (item 11 proper): `SHAMS_CRM_USERNAME`,
+`SHAMS_CRM_PASSWORD`, `SHAMS_MIS_BASE_URL`, `SHAMS_MIS_ACCOUNT_IDENTIFIER`,
+`SHAMS_MIS_API_KEY`. All five are read server-side only — `src/lib/shams-crm/client.server.ts:120-121`
+and `src/lib/shams/client.server.ts:85-87` — from the Worker environment, never from a
+self-hosted container, and each group is all-or-nothing: a partial set reports "not
+configured" rather than failing at request time.
+
+---
+
+## 16. GO/NO-GO gate — the final checklist
+
+Nothing below is a judgement call about risk appetite; each line is either evidenced or it
+is not. **This document does not declare cutover readiness: as of this phase, 5 lines are
+red.**
+
+### 16.1 Green — closed and evidenced
+
+| | Item | Evidence |
+|---|---|---|
+| ✅ | Migration 69 held | Ledger 150 applied, `20260723022830` absent — re-verified live this phase |
+| ✅ | Destination clean | `orders`/`complaints`/`profiles`/`user_roles`/`cdr_records`/`alshrouq_dispatches`/`auth.users` all 0 rows |
+| ✅ | Stack healthy | 12 production containers up, and all 11 that declare a healthcheck report healthy (`supabase-nginx` declares none); 3/3 cron jobs active; host port 8000 absent from `ss -tln`, so Envoy is still unexposed, `8443` still bound to `10.10.11.160` only |
+| ✅ | HTTPS + certificate | Real Let's Encrypt cert to 2026-12-12; external browsers served. Carried forward from the ninth finding — **not** re-probed this phase |
+| ✅ | GoTrue URL/redirect config | `SITE_URL`, `API_EXTERNAL_URL`, `ADDITIONAL_REDIRECT_URLS` re-read on file this phase, all naming the production domain |
+| ✅ | SMTP reachability | DNS/TCP to `smtp.zoho.com:587` verified in the eighth finding and **not** re-probed this phase; re-read on file here: `SMTP_PORT=587`, `SMTP_SENDER_NAME=MilaPortal` (so the display name survives cutover) |
+| ✅ | No Cloud fallback in the build | `PUBLIC_SUPABASE_FALLBACKS` deleted; build fails naming the missing variable (§9.5) |
+| ✅ | No project-ref dependency | Nothing reads `SUPABASE_PROJECT_ID` (§9.4) |
+| ✅ | Repository Cloud scan | 5 `gwnxlpophyvgafctrbkx` hits, all generated/tooling/historical (§9.10, re-run this phase) |
+| ✅ | `avatars` configuration | Pinned and runnable — `docs/migration/cutover-avatars-bucket.sql` (§12) |
+| ✅ | Branded auth templates | Rendered and committed; configuration written out (§14) |
+| ✅ | Vault requirement understood | 4 secrets identified with sources; silent-failure mode documented (§15) |
+| ✅ | Test suite | See §16.4 |
+
+### 16.2 Red — must be green before `GO`
+
+| | Item | What closes it | Owner |
+|---|---|---|---|
+| ⛔ | **Cutover date/time** | Business names an exact date/time honouring "after 12:30 AM" | Business |
+| ⛔ | **Worker env values confirmed** | Operator confirms `SITE_URL`/`VITE_SITE_URL`/`LOVABLE_API_KEY`/`LOVABLE_SEND_URL` are set on the deployed Worker, and that Lovable's **build** environment supplies `SUPABASE_URL`/`SUPABASE_PUBLISHABLE_KEY` (the next build fails without them — by design, §9.5) | Operator |
+| ⛔ | **Shams CRM/MIS credentials** | Five values supplied to the Worker environment (§15) | Business/operator |
+| ⛔ | **End-to-end password-reset test** | Runbook step 12 — cannot run before B2–B7, since a self-hosted link today reaches a Cloud-wired app | Cutover window |
+| ⛔ | **Branded-template fetch check** | §14.4 — must pass before the step-12 email is sent | Cutover window |
+
+The last two are *scheduled*, not *missing*: they are gated on the cutover window itself and
+cannot be closed beforehand. The first three are genuinely outstanding inputs and are what
+Gate A is waiting on.
+
+### 16.3 Cutover-window sequence, corrected for this phase's findings
+
+Ordering that the findings above actually constrain — the full runbook remains §2:
+
+1. Apply pending migration `20260918120000` (B1). Migration 69 stays held.
+2. Freeze Cloud writes → export → Auth roster → import (§2 steps 2–7).
+3. Create the `avatars` bucket — `docs/migration/cutover-avatars-bucket.sql` (C4).
+4. Switch the Worker env and redeploy (B2–B7), then verify via the live CSP header (B8) and
+   the regenerated MCP manifest (B9).
+5. Set `GOTRUE_MAILER_TEMPLATES_*`/`SUBJECTS_*` and recreate `supabase-auth` (10.7). The
+   prerequisite is a Lovable deploy carrying `public/auth-email-templates/`, not step 4
+   (§14.3) — it sits here only because recreating the auth container earlier buys nothing.
+6. Run the §14.4 fetch check from inside `supabase-auth`.
+7. Create the four Vault secrets (10.8), and verify by an actual HTTP response row, not by
+   job status.
+8. Recreate `studio`/`storage`/`edge-functions` for `SUPABASE_PUBLIC_URL` (B10).
+9. Send the single password-reset test (step 12) — it now also proves the branding.
+10. Smoke tests (step 13) → DNS/routing switch (step 14) → rollback window (step 15).
+
+Rollback checkpoints are unchanged (§7): free before the freeze; cheap between freeze and
+DNS switch; costly after the switch, bounded by the observation window. Steps 5–7 above are
+individually reversible by restoring the previous env values and recreating the container —
+they touch no data.
+
+### 16.4 Validation run for this phase
+
+`npm run typecheck && npm run lint && npm run check:permissions && npm test` was re-run in
+a `node:22` container after the changes in the eleventh finding (this host's Node is v18 and
+`vitest` requires ≥ 20.12 — the same pre-existing environment gap earlier phases recorded,
+and the same Node major CI uses). The chain exited **0**: typecheck clean, lint clean, the
+permission-parity guard passes, and **4,339 tests across 151 files pass** — unchanged from
+the hardening phase, as expected, since nothing under `src/` was modified. The new
+`scripts/render-auth-email-templates.mjs` was additionally linted on its own and is clean.
 
 ---
 
 ## Current verdict
 
 **NOT CUTOVER-READY — but every pre-cutover item this side could close is now closed.**
+Five lines in the §16 gate remain red: the cutover date/time, confirmation of the Worker
+environment values, the Shams CRM/MIS credentials, and two checks that are scheduled rather
+than missing (the end-to-end reset test and the template fetch check, both of which can only
+run inside the cutover window). **No claim of readiness is made while any of those stand.**
+
+This closure phase added: the branded auth emails are preserved rather than lost (§14), the
+scheduler Vault dependency is four secrets rather than two (§15), the `avatars` creation is
+a runnable artifact rather than a fenced block (§12), `.env.example` documents the four
+previously-undocumented load-bearing variables, and the gate itself is written out as a
+checklist (§16). Nothing was applied: no Worker environment, no database write, no migration,
+no container recreated, no Nginx/DNS/Cloudflare/NAT change, no email sent.
 
 The two dependencies the previous revision called genuine pre-cutover work — the
 hard-coded Cloud fallback in `vite.config.ts` (§9.5, D8) and the
@@ -1454,10 +1830,10 @@ configuration are correct and working (§9.8), and the `/mcp` collision remains 
 non-blocking, deferred-safe defect with its exact one-block fix written out (§10.5).
 
 ### Remaining operator inputs
-1. **Business decision (§13, checklist A5): accept that self-hosted GoTrue's plain default
-   auth emails replace the branded MilaPortal templates.** Cosmetic and reversible, but it
-   lands on the one email every migrated user must receive, so it should be decided
-   deliberately rather than discovered from an inbox.
+1. ~~**Business decision (§13, checklist A5): accept that self-hosted GoTrue's plain default
+   auth emails replace the branded MilaPortal templates.**~~ **Closed by §14** — the
+   templates are preserved by configuration, so there is no regression to accept. What
+   remains is awareness, not a decision: the From address becomes `milaportal@milaserv.com`.
 2. **Worker environment values at cutover (§11 category B)** — the URL, anon key and
    service-role key switch, plus `SITE_URL`/`VITE_SITE_URL`. Nothing in the repository
    blocks these any more; they are Lovable project settings only.
@@ -1471,15 +1847,18 @@ non-blocking, deferred-safe defect with its exact one-block fix written out (§1
    **Corrected in a prior phase**: Vercel is no longer part of the architecture, so no
    MCP connector authorization or OAuth step applies here — this is a direct operator
    confirmation, not gated on any authentication flow.
-4. Shams CRM/MIS credentials for the sync runtime, plus the two self-hosted Vault
-   secrets (`shams_sync_scheduler_url`, `email_queue_service_role_key`) once the deployed
-   Cloudflare Worker's scheduler endpoint exists.
+4. Shams CRM/MIS credentials for the sync runtime — genuinely external, five values
+   (§15). **Corrected**: the self-hosted Vault requirement alongside them is **four**
+   secrets, not two, and covers all three active cron jobs, not just Shams. Those four need
+   no new credential from the business — three are the app's own scheduler URLs on the
+   post-cutover origin and the fourth is self-hosted's own service-role key — but they are
+   easy to miss because an unconfigured job reports success while doing nothing (§15).
 5. Execute `avatars` bucket creation — the decision is closed and the configuration is
-   now fully pinned down with live evidence (§12; exact statement in §2 step 9.1). Only
-   running it remains: it is a write to self-hosted, so it belongs behind Gate B (C4).
-   **Use the given statement verbatim** — the limits migration already ran as a no-op and
-   will not re-fire, so a bucket created without those five columns set silently loses both
-   server-side upload guards.
+   fully pinned down with live evidence (§12). Only running it remains: it is a write to
+   self-hosted, so it belongs behind Gate B (C4). **Run
+   `docs/migration/cutover-avatars-bucket.sql` as written** — the limits migration already
+   ran as a no-op and will not re-fire, so a bucket created without those five columns set
+   silently loses both server-side upload guards.
 
 Resolved in a prior phase, no longer remaining: Cloud Auth roster access and the Cloud
 production export path (previously listed here) — both are obtainable via the

@@ -430,6 +430,35 @@ Recovery-email origin is derived from the incoming request
 (`x-forwarded-host`/`host`, falling back to `SITE_URL`), never from a
 client-supplied value.
 
+### Auth email delivery
+
+Only one auth email exists in practice. `resetPasswordForEmail` is called from
+three places (`src/routes/auth.tsx`, `src/lib/password.server.ts`,
+`temporary-password-expired.tsx`); account creation uses
+`admin.createUser({ email_confirm: true })` and every other path changes a
+password rather than an address, so **recovery** is the only template a user can
+trigger. The other five exist for completeness.
+
+**On Lovable Cloud**, GoTrue does not send mail itself: it posts to
+`src/routes/lovable/email/auth/webhook.ts`, which verifies the signature with
+`LOVABLE_API_KEY`, renders the branded React Email templates in
+`src/lib/email-templates/`, and enqueues via `enqueue_email`; the dispatcher at
+`src/routes/lovable/email/queue/process.ts` sends through `LOVABLE_SEND_URL`.
+
+**On a self-hosted Supabase stack**, GoTrue sends over SMTP directly and never
+calls that webhook. It reads each template from a URL
+(`GOTRUE_MAILER_TEMPLATES_*`) and each subject from `GOTRUE_MAILER_SUBJECTS_*`,
+so the same branding is preserved by pointing those at the static renders in
+`public/auth-email-templates/`. Those files are generated — `npm run
+build:auth-email-templates` (`scripts/render-auth-email-templates.mjs`) renders
+the same components with GoTrue's placeholders (`{{ .ConfirmationURL }}` and
+friends) substituted for the per-message props, so the brand has one source
+rather than a hand-copied second one. Edit the components, re-run the script.
+
+A template URL that does not resolve is **not** an error: GoTrue silently falls
+back to its plain built-in template, and the only symptom is an unbranded email.
+Verify the fetch from inside the auth container before relying on it.
+
 ---
 
 ## Authorization (RBAC)
@@ -10155,6 +10184,7 @@ Template: `.env.example`. `.env` is git-ignored.
 | `SUPABASE_PUBLISHABLE_KEY` / `VITE_SUPABASE_PUBLISHABLE_KEY` | server / client | Anon key. Browser-safe by design; **RLS is the boundary**.                                  |
 | `SUPABASE_SERVICE_ROLE_KEY`                                  | **server only** | Bypasses RLS. Never `VITE_`-prefixed, never bridged by `hydrateServerEnv`, never committed. |
 | `SITE_URL` / `VITE_SITE_URL`                                 | server          | Fallback origin for recovery emails when no request context exists.                         |
+| `LOVABLE_API_KEY` / `LOVABLE_SEND_URL`                       | **server only** | Auth-mail webhook signature and send endpoint while Lovable Cloud is the auth server. Dormant on a self-hosted stack, whose GoTrue sends over its own SMTP. |
 
 `vite.config.ts` **requires** `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`, under
 either the `VITE_` or the unprefixed name, and bridges whichever one is supplied to
