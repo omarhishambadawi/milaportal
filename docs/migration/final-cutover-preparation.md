@@ -871,21 +871,309 @@ untouched.
 
 ---
 
+## 9. Worker → Cloud Supabase dependency audit (read-only; nothing changed)
+
+Performed against the repository, the live Worker's own response headers, the self-hosted
+stack's configuration, and the running containers. **No Worker environment variable, no
+repository source file, no Nginx file and no container configuration was modified.**
+
+### 9.1 The single source of every Supabase endpoint
+
+`supabase-js` derives the REST, Auth, Storage, Realtime, Functions and GraphQL endpoints
+from **one** value — the URL passed to `createClient` — by appending a fixed path prefix.
+There is no separate "API URL", "Auth URL", "Storage URL", "Realtime URL" or "Functions
+URL" variable anywhere in this repository; a grep for such names returns nothing. This
+matters for cutover scope: **switching the URL switches all six services at once**, and
+there is no second place to forget.
+
+Confirmed this phase that Nginx already proxies all six derived prefixes to Envoy on
+`milaportal.milaserv.com`, so the derived endpoints resolve:
+
+| `supabase-js` derived path | Nginx `location` | Upstream |
+|---|---|---|
+| `/auth/v1/*` | `/auth/v1` | `api-gw:8000` |
+| `/rest/v1/*` | `/rest` | `api-gw:8000` |
+| `/storage/v1/*` | `/storage/v1/` | `api-gw:8000` |
+| `/realtime/v1/*` (incl. `/realtime/v1/websocket`) | `/realtime/v1/` | `api-gw:8000` |
+| `/functions/v1/*` | `/functions` | `api-gw:8000` |
+| `/graphql/v1` | `/graphql` | `api-gw:8000` |
+
+A consequence worth stating explicitly, because it changes the security posture: after
+cutover **Supabase becomes same-origin with the application** (both are
+`https://milaportal.milaserv.com`). Today they are cross-origin.
+
+### 9.2 Confirmed: the deployed Worker still points at Cloud
+
+Re-verified live this phase, without touching the deployment: `GET https://milaportal.live/mcp`
+returns its `Content-Security-Policy-Report-Only` header containing
+`connect-src … https://gwnxlpophyvgafctrbkx.supabase.co wss://gwnxlpophyvgafctrbkx.supabase.co …`.
+Because that directive is **computed at request time** from `SUPABASE_URL`/`VITE_SUPABASE_URL`
+(`src/lib/security-headers.ts`, `connectSources()`), it is direct evidence of the Worker's
+live environment rather than of a build artifact. The Worker is on Cloud.
+
+### 9.3 Dependency inventory
+
+Self-hosted target values are named by their source of truth rather than reproduced, per
+this document's own rule (§2 step 10.4) that credential values are never printed.
+
+| # | Variable / config | Current Cloud value | Exact intended self-hosted value | Where configured | Must change at cutover? |
+|---|---|---|---|---|---|
+| D1 | `VITE_SUPABASE_URL` | `https://gwnxlpophyvgafctrbkx.supabase.co` | `https://milaportal.milaserv.com` | Lovable project environment settings for the deployed Cloudflare Worker (build-time inlined by Vite) | **YES** |
+| D2 | `SUPABASE_URL` | `https://gwnxlpophyvgafctrbkx.supabase.co` | `https://milaportal.milaserv.com` | Same (read from `process.env` at runtime; gap-filled from D1 by `hydrateServerEnv`) | **YES** |
+| D3 | `VITE_SUPABASE_PUBLISHABLE_KEY` | Cloud anon JWT, `ref: gwnxlpophyvgafctrbkx` | Value of `ANON_KEY`, `/opt/supabase/supabase-project/.env` line 35 | Lovable Worker env | **YES** |
+| D4 | `SUPABASE_PUBLISHABLE_KEY` | Same Cloud anon JWT | Same as D3 | Lovable Worker env (gap-filled from D3 by `hydrateServerEnv`) | **YES** |
+| D5 | `VITE_SUPABASE_PROJECT_ID` | `gwnxlpophyvgafctrbkx` | **Unset / empty — not a self-hosted value** | Lovable Worker env | **YES — must be REMOVED, see §9.4** |
+| D6 | `SUPABASE_PROJECT_ID` | `gwnxlpophyvgafctrbkx` | **Unset / empty** | Lovable Worker env | **YES — must be REMOVED** |
+| D7 | `SUPABASE_SERVICE_ROLE_KEY` | Cloud service-role JWT | Value of `SERVICE_ROLE_KEY`, `/opt/supabase/supabase-project/.env` line 36 | Lovable Worker env, **server-only**, never `VITE_`-prefixed | **YES** |
+| D8 | `PUBLIC_SUPABASE_FALLBACKS` | Cloud project ref, URL **and anon key hard-coded in the repository** (`vite.config.ts` lines 64–69) | Self-hosted equivalents, or the block removed | **Repository source file** — version-controlled, ships in every build | **YES — see §9.5, highest-risk item** |
+| D9 | `SITE_URL` / `VITE_SITE_URL` | Presumed `https://milaportal.live` (unverifiable from here) | `https://milaportal.milaserv.com` | Lovable Worker env; read at `src/lib/password.server.ts:88` as the reset-link origin fallback | **YES** |
+| D10 | `supabase/config.toml` → `project_id` | `gwnxlpophyvgafctrbkx` | Self-hosted project ref used by the migration tooling | Repository source file | **Tooling only — not read at runtime by the Worker** |
+| D11 | `.lovable/mcp/manifest.json` → `auth.issuer` | `https://gwnxlpophyvgafctrbkx.supabase.co/auth/v1` | `https://milaportal.milaserv.com/auth/v1` | **Generated artifact** — re-emitted by the `@lovable.dev/mcp-js` Vite plugin from `src/lib/mcp/index.ts`; `.prettierignore` documents it as generator-owned | **Derived from D5 — never hand-edit** |
+| D12 | CSP `connect-src` allowlist | `https://gwnxlpophyvgafctrbkx.supabase.co` + `wss://…` | `https://milaportal.milaserv.com` + `wss://milaportal.milaserv.com` | `src/lib/security-headers.ts`, `connectSources()` | **Derived from D1/D2 — no separate change, and no code change** |
+| D13 | Auth redirect URL (`redirectTo`) | `${origin}/reset-password` | Unchanged — already origin-relative | `src/routes/auth.tsx:92`, `src/features/profile/components/temporary-password-expired.tsx:51`, `src/lib/password.server.ts:128` | **NO — already correct** |
+| D14 | `GOTRUE_URI_ALLOW_LIST` | n/a (Cloud-side) | `https://milaportal.milaserv.com/reset-password` | Self-hosted `supabase-auth` | **NO — already set, verified live this phase** |
+| D15 | `GOTRUE_SITE_URL` / `API_EXTERNAL_URL` | n/a (Cloud-side) | `https://milaportal.milaserv.com` / `https://milaportal.milaserv.com/auth/v1` | Self-hosted `supabase-auth` | **NO — already set, verified live this phase** |
+| D16 | `LOVABLE_API_KEY` / `LOVABLE_SEND_URL` + `/lovable/email/auth/webhook` | Cloud GoTrue delivers auth mail through this Worker webhook | **Becomes dormant** — self-hosted GoTrue sends via its own SMTP and never calls the webhook | Lovable Worker env; route at `src/routes/lovable/email/auth/webhook.ts` | **NO change required, but see §9.6** |
+| D17 | `SUPABASE_PUBLIC_URL` | n/a (Cloud-side) | `https://milaportal.milaserv.com` | `/opt/supabase/supabase-project/.env` line 97 — **currently still the installer default `http://localhost:8000`** | **YES — stale, see §9.7** |
+
+### 9.4 D5/D6 — the non-obvious one: the project ref must be removed, not replaced
+
+`src/lib/mcp/index.ts` builds the MCP OAuth issuer as
+`https://${VITE_SUPABASE_PROJECT_ID}.supabase.co/auth/v1` **whenever that variable is set**,
+and only falls back to `VITE_SUPABASE_URL`/`SUPABASE_URL` when it is not. The file's own
+comment explains why: on Cloud, publish can rewrite `SUPABASE_URL` to a `.lovable.cloud`
+proxy, so the project ref is deliberately the more trustworthy source there.
+
+The cutover consequence is that **switching D1–D4 and D7 alone is not sufficient**. If
+`VITE_SUPABASE_PROJECT_ID` is merely left in place, the application's data path moves to
+self-hosted while its MCP OAuth issuer keeps pointing at Cloud GoTrue — a split state that
+no other variable reveals. Setting it to some self-hosted string is equally wrong: it would
+produce `https://<whatever>.supabase.co/auth/v1`, a Cloud hostname pattern that does not
+exist for this stack. The only correct action is to **remove/empty it**, at which point the
+issuer resolves to `https://milaportal.milaserv.com/auth/v1` — which matches self-hosted
+GoTrue's `API_EXTERNAL_URL` exactly (verified live this phase).
+
+This dependency was not previously recorded in this document.
+
+### 9.5 D8 — the hard-coded Cloud fallback in `vite.config.ts` is the highest-risk item
+
+`PUBLIC_SUPABASE_FALLBACKS` (`vite.config.ts` lines 64–69) hard-codes the Cloud project
+ref, the Cloud URL **and the Cloud anon key** into the repository. Its `config` hook applies
+them whenever the build environment supplies neither the `VITE_`-prefixed nor the
+unprefixed name. The block exists for a legitimate reason, documented in place: the Lovable
+preview sandbox periodically loses its `.env`, and without the fallback the bundle inlines
+`undefined` and the app dies on load.
+
+At cutover that safety net inverts into a hazard. A build in which the Supabase variables
+are missing or misspelled will **not fail** — it will silently produce a bundle wired to
+Cloud Supabase, and the failure mode is a working-looking application reading the wrong
+database. Every other dependency in §9.3 fails loudly; this one fails quietly. It must be
+changed in the same build that changes the Worker environment, not afterwards.
+
+### 9.6 D16 — the auth-email transport changes hands at cutover
+
+Today, Cloud GoTrue hands auth mail to this Worker's `/lovable/email/auth/webhook`, which
+renders the React Email templates and sends via Lovable (`LOVABLE_API_KEY`,
+sender domain `milaportal.live`, hard-coded at `webhook.ts:34–36`). Self-hosted GoTrue has
+no such hook configured: it sends directly over SMTP (`smtp.zoho.com:587`, sender
+`milaportal@milaserv.com`). So at cutover the auth-email path moves from the Worker to
+GoTrue, the webhook route becomes dormant rather than broken, and **the branded templates
+in `src/lib/email-templates/` stop being used for auth mail** — self-hosted GoTrue will
+send its own default templates instead. That is a deliberate, acceptable trade for this
+cutover, but it is a visible user-facing change and is recorded here so it is not
+discovered from a user's inbox.
+
+### 9.7 D17 — `SUPABASE_PUBLIC_URL` is still the installer default
+
+`/opt/supabase/supabase-project/.env` line 97 reads `SUPABASE_PUBLIC_URL=http://localhost:8000`
+— unchanged from the installer default, and now inconsistent with the rest of the stack
+(`API_EXTERNAL_URL` and `SITE_URL` on the same file both correctly name
+`https://milaportal.milaserv.com`, and port 8000 is deliberately internal-only). No failure
+has been attributed to it and it is not on the application's data path, so this is recorded
+as a correctness/hygiene item rather than a blocker.
+
+### 9.8 Corroboration of items 9 and 9b
+
+Independently re-verified this phase, and both hold: `smtp.zoho.com` resolves to
+`136.143.190.56` and TCP `587` is open from the host; `supabase-auth`'s live container
+environment carries `GOTRUE_SITE_URL=https://milaportal.milaserv.com`,
+`API_EXTERNAL_URL=https://milaportal.milaserv.com/auth/v1` and
+`GOTRUE_URI_ALLOW_LIST=https://milaportal.milaserv.com/reset-password`. The "Current
+verdict" section below had not been updated to match items 9/9b and is corrected in this
+phase.
+
+### 9.9 Not re-verified this phase
+
+The self-hosted Vault secrets (`shams_sync_scheduler_url`, `email_queue_service_role_key`,
+`alshrouq_scheduler_url`) and the `cron.job` command URLs were **not** re-checked: the
+query was blocked by this session's own permission classifier ("Production Reads"). §1 item
+11's prior finding is carried forward unchanged rather than restated as though re-confirmed.
+
+---
+
+## 10. `/mcp` collision — assessment (routing NOT changed)
+
+This resolves open item (b) recorded in the Nginx routing section above.
+
+### 10.1 What each side actually serves
+
+**Supabase's `/mcp` is disabled by design.** Envoy's `lds.template.yaml` (lines 556–582)
+routes `prefix: /mcp` to the **`studio`** cluster with `prefix_rewrite: /api/mcp`, and
+attaches an RBAC per-route filter whose rule is `action: DENY` over `any: true` principals,
+under the literal comment `# Block access to /mcp by default`. The enabling configuration
+sits immediately below it, commented out and labelled `# Enable local access (danger
+zone!)`, and restricts principals to `127.0.0.1`/`::1`. Empirically, through the production
+Nginx listener:
+
+```
+curl -k -H 'Host: milaportal.milaserv.com' https://127.0.0.1/mcp
+→ 403  "RBAC: access denied"
+```
+
+So the endpoint Nginx currently forwards to is Supabase **Studio's** MCP interface, which
+this stack denies to everyone. Studio is already confined to the LAN-only `8443` listener
+by deliberate design (§ Nginx routing, above). Routing `/mcp` to Envoy on the public `443`
+listener therefore cannot produce anything but `403` — it delivers **zero functionality**.
+
+**MilaPortal's `/mcp` is real and working.** Against the Worker's own origin:
+
+```
+curl -i https://milaportal.live/mcp
+→ 401
+   WWW-Authenticate: Bearer realm="mcp",
+     resource_metadata="https://milaportal.live/.well-known/oauth-protected-resource"
+```
+
+That is a correct, live OAuth-gated MCP server — `src/routes/mcp.ts` → `src/lib/mcp/index.ts`,
+five read-only tools (`whoami`, `list_orders`, `get_order`, `list_complaints`,
+`orders_summary`), each building a per-request Supabase client from the caller's bearer
+token so RLS remains the boundary.
+
+### 10.2 Is MilaPortal's `/mcp` used by production application code?
+
+**No.** A grep across `src/` for any fetch or reference to `/mcp` returns only the
+generator-emitted route handlers (`src/routes/mcp.ts`, `src/routes/[.mcp]/…`,
+`src/routes/[.well-known]/oauth-protected-resource.ts`) and the tool definitions under
+`src/lib/mcp/`. No page, no component, no server function and no scheduled job calls it.
+
+`/mcp` is an **external integration surface** — an endpoint for third-party MCP clients —
+not an internal dependency of the portal. Nothing a user does in the UI traverses it.
+
+### 10.3 What actually breaks
+
+Only one path is shadowed. Nginx's `location /mcp` is a prefix match, and the portal's
+sibling MCP routes all begin with `/.` — `/.mcp/list-tools`, `/.mcp/invoke-tool/$tool`,
+`/.well-known/oauth-protected-resource` — so they do **not** match it and already reach the
+application. The collision claims exactly the MCP **transport** endpoint.
+
+That partial shadowing is worse than a clean one. `trustForwardedHost: true` is set on the
+handlers and Nginx sets `X-Forwarded-Host`, so after cutover the discovery document at
+`/.well-known/oauth-protected-resource` — which reaches the app — will advertise the
+resource as `https://milaportal.milaserv.com/mcp`, and that exact URL will answer with
+Supabase's `403 RBAC: access denied`. The MCP server becomes **discoverable but unusable**,
+and the error it returns points an integrator at Supabase rather than at the real cause.
+
+### 10.4 Verdict
+
+**Not a production blocker. A real defect, safe to defer, trivial and safe to fix.**
+
+- No user-facing functionality breaks — nothing in the application calls `/mcp`.
+- Nothing is lost by removing Supabase's claim on it: that route is DENY-all in this stack
+  and reaches a Studio instance that is intentionally not public.
+- The fix is to delete the `location /mcp { … }` block from the Nginx template, so the
+  catch-all `location /` carries `/mcp` to the application like every other app route. It
+  is one block, in a file that is **not** version-controlled
+  (`/opt/supabase/supabase-project/`), and it is reversible.
+- It does **not** gate `GO`. It should be closed either before cutover as independent
+  hygiene, or immediately after, and it must be a deliberate decision rather than an
+  accident of a vendor default.
+
+**Not changed this phase**, per this task's constraints: no Nginx file was edited and no
+route was moved.
+
+---
+
+## 11. Minimal cutover checklist — Worker: Cloud → self-hosted
+
+Scoped deliberately to **moving the application's Supabase dependency**. It does not
+restate the data-migration runbook in §2 (steps 2–9), which stands unchanged; it is the
+env/config half that §2 step 10.2 previously covered only in outline. Categories B and C
+were **not executed** this phase.
+
+### A. Can be prepared now — no production effect, no GO required
+
+| | Action | Notes |
+|---|---|---|
+| A1 | Read the self-hosted `ANON_KEY` and `SERVICE_ROLE_KEY` from `/opt/supabase/supabase-project/.env` (lines 35, 36) and stage them into Lovable's secret store **without** applying | Values never printed, logged or committed (§2 step 10.4) |
+| A2 | Prepare the `vite.config.ts` `PUBLIC_SUPABASE_FALLBACKS` change (D8) as a reviewed, **unmerged** commit | Must land with B6, not before — merging early re-points preview builds |
+| A3 | Prepare the Nginx `location /mcp` removal in the template, **unapplied** (§10.4) | Independent of cutover; may also be done after |
+| A4 | Prepare the `SUPABASE_PUBLIC_URL` correction (D17) | Hygiene, not on the data path |
+| A5 | Confirm with the business that self-hosted GoTrue's **default** auth-email templates replacing the branded Lovable ones is accepted (§9.6) | User-visible change; decide before, not after |
+| A6 | Re-check the Vault secrets and `cron.job` URLs that §9.9 could not read this phase | Blocked here by the session's permission classifier |
+| A7 | *(Done this phase)* Verify SMTP reachability, GoTrue URL/redirect config, and that all six Supabase path prefixes proxy correctly | §9.1, §9.8 |
+
+### B. Must happen during cutover — after Gate B `GO`, in this order
+
+| | Action | Verifies |
+|---|---|---|
+| B1 | Apply the pending migration(s) to self-hosted (§1 item 1b) | `schema_migrations` ledger advances |
+| B2 | Set `VITE_SUPABASE_URL` **and** `SUPABASE_URL` = `https://milaportal.milaserv.com` | D1, D2 |
+| B3 | Set `VITE_SUPABASE_PUBLISHABLE_KEY` **and** `SUPABASE_PUBLISHABLE_KEY` = self-hosted `ANON_KEY` | D3, D4 |
+| B4 | **Remove** `VITE_SUPABASE_PROJECT_ID` **and** `SUPABASE_PROJECT_ID` — do not set them to anything | D5, D6 (§9.4) |
+| B5 | Set `SUPABASE_SERVICE_ROLE_KEY` = self-hosted `SERVICE_ROLE_KEY` | D7 |
+| B6 | Set `SITE_URL` / `VITE_SITE_URL` = `https://milaportal.milaserv.com`, and merge + deploy A2 in the **same** build | D9, D8 |
+| B7 | Redeploy the Worker | — |
+| B8 | **Verification gate:** fetch any Worker URL and read `Content-Security-Policy-Report-Only`. `connect-src` must contain `https://milaportal.milaserv.com` and `wss://milaportal.milaserv.com`, and must **not** contain `gwnxlpophyvgafctrbkx` | D12 — single highest-value check; it proves the live environment, not the build |
+| B9 | Confirm the regenerated `.lovable/mcp/manifest.json` issuer no longer names `gwnxlpophyvgafctrbkx` | D11, downstream of B4 |
+
+`.lovable/mcp/manifest.json` and the `src/routes/mcp.ts` family are **generator-owned** —
+they regenerate from B4 and must not be hand-edited (`.prettierignore` records this).
+
+### C. Requires explicit GO/NO-GO — not executed, not preparable
+
+| | Action |
+|---|---|
+| C1 | Cloud write freeze (§2 step 2) |
+| C2 | Final Cloud export / Auth roster acquisition (§2 steps 3–4) |
+| C3 | UUID-preserving Auth import and business-data import (§2 steps 5–7) |
+| C4 | `avatars` bucket creation (§1 item 8) |
+| C5 | The controlled password-reset test email (§2 step 12) — **still blocked until B2–B8 land**, because a self-hosted reset link sent today reaches an application wired to Cloud |
+| C6 | DNS / NAT / reverse-proxy switch (§2 step 14) |
+| C7 | Rollback decision (§2 step 15) |
+
+---
+
 ## Current verdict
 
-**READY WITH CONDITIONS.**
+**NOT CUTOVER-READY — and closer than the previous revision recorded.**
+
+Two dependencies found by this phase's audit are unresolved and are genuine
+pre-cutover work, not paperwork: the hard-coded Cloud fallback in `vite.config.ts`
+(§9.5, D8) and the requirement that `VITE_SUPABASE_PROJECT_ID`/`SUPABASE_PROJECT_ID` be
+**removed** rather than replaced (§9.4, D5/D6). Neither was previously documented, and the
+first fails silently — a build missing its Supabase variables produces a working-looking
+application wired to Cloud. Cutover must not be declared ready while either stands.
+
+Against that, this phase independently corroborated that SMTP connectivity and GoTrue's
+URL/redirect configuration are correct and working (§9.8), and downgraded the `/mcp`
+collision from an open routing question to a non-blocking, deferred-safe defect (§10.4).
 
 ### Remaining operator inputs
-1. Real production SMTP credentials for self-hosted `supabase-auth`. **Confirmed
-   NOT PRODUCTION-READY** by the SMTP readiness audit (DNS resolution failure on
-   `SMTP_HOST`, placeholder-pattern values across `HOST/USER/PASS/ADMIN_EMAIL/SENDER_NAME`,
-   non-standard `SMTP_PORT`) — this is stronger than the prior "unverified placeholder"
-   framing; see the fourth finding at the top of this document and §1 item 9.
-2. GoTrue's own `GOTRUE_SITE_URL`/`API_EXTERNAL_URL`/`GOTRUE_URI_ALLOW_LIST` on
-   self-hosted `supabase-auth`, currently `localhost` values with an empty allow list
-   (§1 item 9b, new this phase). Distinct from item 3 below's application-level
-   `SITE_URL`/`VITE_SITE_URL` — both must be set correctly for password-reset links to
-   work, but they are different variables read by different services.
+1. **Repository change (§9.5, D8): `PUBLIC_SUPABASE_FALLBACKS` in `vite.config.ts`
+   hard-codes the Cloud project ref, URL and anon key.** Must be repointed or removed, and
+   must ship in the **same** build as the Worker environment switch. New this phase, and
+   the only dependency in the inventory whose failure mode is silent.
+2. **Worker environment change (§9.4, D5/D6): `VITE_SUPABASE_PROJECT_ID` and
+   `SUPABASE_PROJECT_ID` must be REMOVED, not repointed** — any non-empty value keeps the
+   MCP OAuth issuer on Cloud GoTrue while the data path moves to self-hosted. New this
+   phase.
+
+   *Superseded, no longer remaining:* real SMTP credentials and GoTrue's
+   `GOTRUE_SITE_URL`/`API_EXTERNAL_URL`/`GOTRUE_URI_ALLOW_LIST` were previously listed
+   here as items 1 and 2 on the strength of an earlier audit that found DNS failure,
+   placeholder values and `localhost` URLs. §1 items 9/9b already record those as
+   configured; §9.8 independently re-verified all of it live this phase. Only the
+   end-to-end reset test remains, and it is gated on item 3 below, not on these.
 3. Confirmation that `SITE_URL`/`VITE_SITE_URL`/`LOVABLE_API_KEY`/`LOVABLE_SEND_URL` are
    set in Lovable's project environment settings for the deployed Cloudflare Worker.
    **Corrected in a prior phase**: Vercel is no longer part of the architecture, so no
