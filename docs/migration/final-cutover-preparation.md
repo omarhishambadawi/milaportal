@@ -546,7 +546,7 @@ whether they appear on the self-hosted host.
 | 13 | 5 optional branches decision | **CLOSED** | Business confirmed: migrate all 5 (`P0312`, `P0313`, General Administration, Branch Administration, Warehouse) |
 | 14 | `orders_verification_snapshot_20260815` exclusion sign-off | **CLOSED** | Business confirmed: exclude |
 | 15 | Maintenance window | **REQUIRES OPERATOR INPUT (business)** | Business confirmed "after 12:30 AM" as a constraint only — exact date/time still not chosen; this phase does not choose it |
-| 16 | Credential-strategy sign-off | **CLOSED** | Business confirmed password-reset-only, UUID/relationship-preserving, no hash migration |
+| 16 | Credential-strategy sign-off | **CHANGED 2026-09-15 — passwords are PRESERVED** | Supersedes the earlier password-reset-only sign-off. Cloud is 100% bcrypt-2a (19/19), self-hosted GoTrue `v2.189.0` verifies bcrypt via Go's `bcrypt`, and `auth.users`/`auth.identities` column sets are byte-identical, so hashes migrate unchanged inside the data-only transport and are never read by an agent (§5A). Gated on the §5B compatibility test, which has not yet been run |
 | 17 | Cloud write freeze | **REQUIRES CUTOVER-DAY ACTION** | Must not happen before Gate B |
 | 18 | Final production export/snapshot | **REQUIRES CUTOVER-DAY ACTION** | Must not happen before Gate B |
 | 19 | DNS/reverse-proxy switch | **REQUIRES CUTOVER-DAY ACTION** | Must not happen before Gate B |
@@ -657,11 +657,19 @@ any other credential-internal column** — the confirmed strategy is password-re
 is procedural, not tool-enforced, and must be followed deliberately.
 
 ### 5. UUID-preserving Auth import (password-reset-only strategy)
-5.1. For each Cloud Auth user, call self-hosted GoTrue's `admin.createUser` with the
-caller-specified `id` set to the exact Cloud UUID (Phase 47's empirically validated
-mechanism — accepted and preserved by GoTrue `v2.189.0`).
-5.2. Do **not** supply or migrate any password hash. Users are created without a valid
-password and will authenticate for the first time only via the password-reset flow.
+5.1. **REWRITTEN 2026-09-15 — passwords are preserved (§5A).** Import `auth.users` and
+`auth.identities` as **data only**, table-scoped, via the §17 transport (Cloud → this server
+directly). UUIDs are preserved because the rows are the Cloud rows; `encrypted_password`
+travels inside the archive and is never read by, or routed through, an agent.
+5.1b. Run the §5B compatibility test **first** if it has not already passed. It is the gate
+for this whole step: if a bcrypt-2a hash produced outside GoTrue does not authenticate, stop
+here and report rather than continuing (§5B's fallback ladder).
+5.2. **Superseded.** The previous instruction — create users with no password and force a
+reset — no longer applies. `admin.createUser` with `password_hash` remains the documented
+fallback if the data-only path fails; the reset-only strategy is reinstated only as a
+deliberate decision, never as a default.
+5.2b. Do **not** set `profiles.must_change_password` for migrated users: that would re-impose
+the forced reset this change exists to remove.
 5.3. Allow `handle_new_user()` to fire and create the default `profiles`/`user_roles`
 row exactly as it does today (default `customer_care` role).
 5.4. Upsert the real `profiles` row (name, contact fields, etc.) and the real
@@ -700,9 +708,15 @@ only the *data* is imported here. **Dependency**: Cloud rows may carry
 (`20260918120000_alshrouq_handled_manually.sql`) must complete *before* this import step,
 or any such row will fail self-hosted's `alshrouq_dispatches_resolution_outcome_valid`
 CHECK constraint.
-6.9. CDR historical data per the hybrid strategy (`phase45_cdr_migration_plan.md`) —
-import historical rows, then let the existing Yeastar sync resume for anything after the
-freeze point.
+6.9. **`cdr_records` — full historical migration. REVISED 2026-09-15: no longer hybrid.**
+The instruction to exclude it and let Yeastar self-heal is superseded; all rows migrate.
+Verified compatible: Cloud holds **33,391** rows spanning `business_day` 2026-06-01 →
+2026-09-14, the column list is identical on both sides
+(`row_id, call_id, ts, business_day, call_from_number, call_to_number, raw, synced_at`), and
+`row_id` (text, the Yeastar-native key) is unique across all 33,391 rows — so a data-only
+copy preserves every row and every id exactly. Import `cdr_sync_days` (106 rows) with it, so
+the mirror knows which days are already covered and the sync does not re-fetch them. Let the
+Yeastar sync resume for anything after the freeze point.
 6.10. Confirm `orders_verification_snapshot_20260815` is **not** created or imported on
 self-hosted at any point in this sequence.
 
@@ -880,7 +894,7 @@ no destructive replace, only additive reconciliation for the rows below.
 `notifications`, `admin_activity`, `alshrouq_dispatches`, all 5 `telesales_*`
 transactional tables (`telesales_leads`, `telesales_customers`, `telesales_lead_activities`,
 `telesales_followups`, `telesales_generation_runs`), `telesales_product_relations`,
-`cdr_records` (per the hybrid historical-import + resume-live-sync strategy).
+`cdr_records` — **full historical import, revised 2026-09-15** (33,391 rows, `row_id` unique, schema identical both sides). The hybrid "let Yeastar self-heal" approach is superseded by explicit instruction; `cdr_sync_days` migrates with it.
 
 ### Included — Shams data (rebuild/derive strategy, not copied)
 - `shams_product_catalog`: no action needed — already synced via its own independent
@@ -896,8 +910,10 @@ transactional tables (`telesales_leads`, `telesales_customers`, `telesales_lead_
   Confirmed static (3,837 rows, unchanged across every phase that checked), not
   referenced by any application code, does not exist on self-hosted, and will not be
   created.
-- Cloud Auth password hashes and any other credential material — excluded per the
-  password-reset-only strategy, not a data-completeness gap.
+- ~~Cloud Auth password hashes~~ — **now INCLUDED (§5A)**. They migrate unchanged inside
+  the data-only `auth.users` copy so users keep their existing passwords. Still excluded:
+  MFA factor secrets (there are none — 0 factors), sessions and refresh tokens, which are
+  deliberately not carried so every user re-authenticates once against the new stack.
 - No additional table, row, or credential is excluded or included beyond what is listed
   above or in the confirmed business decisions — this document does not invent scope.
 
@@ -945,7 +961,81 @@ non-deferrable (confirmed live this session) — this is why the two-pass import
 
 ---
 
-## 5. Password-reset handling — post-migration user experience
+## 5. Password handling — post-migration user experience
+
+> **SUPERSEDED on 2026-09-15 by an explicit policy change: passwords are now PRESERVED.**
+> The password-reset-only strategy described below is no longer the plan. §5A states the
+> replacement and the evidence for it; the original text is retained beneath it because the
+> rollback path and the email-delivery reasoning still depend on parts of it.
+
+### 5A. Password preservation (current strategy)
+
+**Users log in after cutover with exactly the passwords they already have.** No forced
+reset, no temporary credential, no communication campaign.
+
+**Why this is supportable, verified read-only against both stacks — not assumed from "both
+are Supabase Auth":**
+
+| Check | Finding |
+|---|---|
+| Cloud hash family | **100% bcrypt-2a**, all 19 users, length exactly 60. No argon2, no scrypt/firebase, no null or empty passwords |
+| Self-hosted GoTrue | `v2.189.0`, which verifies via Go's `bcrypt` — `$2a$`, `$2b$` and `$2y$` are all accepted by that implementation |
+| `auth.users` columns | **Byte-identical** between Cloud and self-hosted: same 35 columns, same order |
+| `auth.identities` columns | **Byte-identical**: same 9 columns, same order. 19 identities, provider `email` for every one |
+| Complicating factors | **None present**: 0 MFA factors, 0 SSO users, 0 banned, 0 soft-deleted, 0 unconfirmed emails |
+| Auth schema drift | Cloud is one auth migration ahead (`20260625000000`; 77 vs 76). It touched neither `users` nor `identities`, whose column sets match exactly, and neither of the two tables being imported |
+
+No hash value was read at any point. The family was determined with a `CASE` expression
+returning a **label** (`bcrypt-2a`) rather than any substring of the column, so not even a
+prefix of a real hash was retrieved.
+
+**How the hash moves — and why it never passes through an agent.** GoTrue does support
+supplying a hash directly: the admin create-user endpoint accepts `password_hash`
+(`internal/api/admin.go` → `models.NewUserWithPasswordHash`), neither validated nor
+transformed. That path is deliberately **not** the plan, because it would require reading 19
+hashes into an agent context to re-send them. Instead the hashes travel inside the §17
+data-only transport — `pg_dump`/`pg_restore` of `auth.users` and `auth.identities`, Cloud
+directly to this server. The `password_hash` API is recorded only as the documented fallback
+if the database path fails.
+
+**Consequences elsewhere, which must not be missed:**
+- `profiles.must_change_password` must **not** be set for migrated users. The
+  temporary-password machinery (§ Authentication) is for newly-created accounts, and
+  applying it here would re-impose the forced reset this change removes.
+- The single controlled password-reset test (runbook step 12) **remains**, but its meaning
+  changes: it is no longer the mechanism by which every user regains access, it is a
+  functional check that recovery email still works. The higher-value new test is a
+  **successful sign-in with a pre-existing password** (§5B).
+- §14's branded auth templates remain worth having, but the urgency argument behind them
+  weakens: recovery is no longer an email every migrated user is forced to receive.
+
+### 5B. How preservation will be validated — before the window, with no real password
+
+The compatibility argument above is strong but it is still an argument. It gets proven by
+test, and the test needs neither a production hash nor anyone's real password:
+
+1. Create a throwaway user on **self-hosted** with a password generated locally for the
+   test. GoTrue hashes it itself.
+2. Generate, locally, a second bcrypt-**2a** hash of a *different* locally-generated
+   password — produced outside GoTrue, which is precisely the migration condition.
+3. Overwrite the throwaway user's `encrypted_password` with that externally-produced hash.
+4. Attempt sign-in with the second password.
+
+A success proves self-hosted GoTrue accepts a bcrypt-2a hash it did not itself produce —
+exactly what the migration asks of it — using zero production data and zero real passwords.
+Delete the throwaway user afterwards; `auth.users` on self-hosted is currently 0 rows, so the
+table returns to empty.
+
+**This test requires one small write to self-hosted and has not been run**, per the standing
+"no production writes yet" instruction. It is the recommended first action of the cutover
+window, or can be run earlier on request — it is reversible and touches nothing real.
+
+**If it fails**, the strategy does not silently revert. The blocker gets reported, and the
+fallback ladder is: (i) the `password_hash` admin API, which accepts the hash without
+transformation; (ii) only if both fail, the password-reset-only strategy below, reinstated as
+a deliberate decision rather than a default.
+
+### 5C. Original password-reset-only strategy (superseded, retained for rollback context)
 
 This is a plain description of what every migrated user will experience. Nothing in
 this section is implemented or tested against production in this phase.
@@ -1057,6 +1147,13 @@ preparation phase or any prior phase has paused, exported, or altered Cloud in a
 5. Migration 69 still absent from the ledger (runbook 11.5).
 6. SMTP real-delivery test succeeds (runbook 12.4).
 7. Controlled password-reset smoke test succeeds end-to-end (runbook 12.5).
+7b. **Password preservation proven (§5B)**: the externally-produced bcrypt-2a hash test
+   passes before step 5, and after import at least one migrated account signs in with its
+   **pre-existing** password. A failure here is a rollback trigger, not a prompt to quietly
+   fall back to forcing resets.
+7c. **`cdr_records` integrity**: source/destination `count(*)` match (expect 33,391),
+   `count(distinct row_id)` matches the row count on both sides, `business_day` min/max
+   match, and the independently-computed `md5(string_agg(...))` digests are equal.
 8. Application smoke tests pass across all 6 surfaces (runbook 13).
 9. No rollback-trigger condition (below) is observed during the post-switch monitoring
    window (runbook 15).
@@ -1841,8 +1938,10 @@ generation run in nine days to do more work than a steady-state one.
 ## 16. GO/NO-GO gate — the final checklist
 
 Nothing below is a judgement call about risk appetite; each line is either evidenced or it
-is not. **This document does not declare cutover readiness: 3 lines are red**, and none of
-the three is a missing credential. The export mechanism, red at the execution-ownership
+is not. **This document does not declare cutover readiness: 3 red lines and one unproven
+gate.** None of the three reds is a missing credential. The gate is new: password
+preservation is supported on paper but not yet demonstrated (§5B), and it is a hard
+precondition for the auth import rather than a nice-to-have. The export mechanism, red at the execution-ownership
 pass, is resolved with two working transports (§17.4). A new hard constraint replaces it
 rather than a blocker: Cloud carries migration 69 and self-hosted must never receive Cloud
 schema (§17.3a). The Shams credentials were removed as a
@@ -1869,6 +1968,9 @@ red to window-gated once a path needing no operator was established (§15.1).
 | ✅ | Test suite | See §16.4 |
 | ✅ | Cloud export path | **Re-established on a different mechanism (§17.4)**: `pg_dump`/`pg_restore` data-only over the IPv4 pooler, or Lovable's native `.backup` archive as fallback. The connector method behind item 12's original READY is struck — capability was never the issue, transport was |
 | ✅ | Migration 69 invariant has a named threat | Cloud is post-69 (§17.3a); every transport is constrained to data-only, table-scoped, no schema |
+| ✅ | Password-hash compatibility, on paper | Cloud 100% bcrypt-2a; GoTrue `v2.189.0` verifies bcrypt; `auth.users`/`auth.identities` columns byte-identical; no MFA/SSO/banned/unconfirmed users (§5A) |
+| ⏳ | **Password-hash compatibility, proven** | The §5B test — an externally-produced bcrypt-2a hash must authenticate against self-hosted GoTrue. **Not yet run**: needs one small write, withheld under "no production writes yet". Gate for runbook step 5 |
+| ✅ | `cdr_records` migration feasible | 33,391 rows, identical columns both sides, `row_id` unique across all rows; integrity checkable by count, distinct-key and checksum parity without moving data through an agent (§17.3) |
 
 ### 16.2 Red — must be green before `GO`
 
@@ -1971,9 +2073,22 @@ roughly 2.5 even after the reduction in §17.3.
 fixed until the mechanism is replaced.** The honest status of §1 item 12 is *capability
 proven, mechanism not viable at production volume*.
 
-### 17.3 One real reduction, from a strategy already in the document
+### 17.3 ~~One real reduction~~ — WITHDRAWN 2026-09-15 by explicit instruction
 
-`cdr_records` — 26.1 MB, half the payload — **does not need to come from Cloud at all**. The
+> **This reduction is withdrawn. `cdr_records` MUST be migrated in full.** The instruction
+> is explicit that Yeastar self-healing is not an acceptable substitute for historical
+> migration. It costs nothing to comply: the argument below was built on the 53 MB
+> agent-context figure, and the chosen transport (§17.4) carries the whole database in a
+> ~4 MB compressed archive, so CDR's size stopped mattering the moment the transport changed.
+> Migration details and integrity checks are in runbook 6.9. The original reasoning is kept
+> below only to record why it was raised.
+>
+> Integrity plan for the 33,391 rows, none of which routes data through an agent: `count(*)`
+> parity, `count(distinct row_id)` parity, `min`/`max` `business_day` parity, and an
+> `md5(string_agg(...))` checksum computed independently on each side with only the two
+> digests compared.
+
+~~The original argument:~~ `cdr_records` — 26.1 MB, half the payload — does not need to come from Cloud at all. The
 CDR mirror is explicitly hybrid (§2 step 6.9): Yeastar is the source of truth and the mirror
 only ever holds rows the PBX emitted. `.env.example` documents the backfill as self-healing —
 each run takes the live days plus the oldest days still missing, converging on
@@ -2100,8 +2215,13 @@ unchanged.
 What changed between the first draft of §17 and this one: the transport is no longer a
 blocker, and **runbook step 3.1 must be rewritten** — it currently names the connector method
 that §17.2 disproves. Step 3.1 becomes `pg_dump --data-only` over the pooler (A) or a restore
-of Lovable's native `.backup` artifact (B), under §17.3a's data-only rule. Step 6.9's CDR
-import is struck in favour of letting the Yeastar sync rebuild the mirror (§17.3).
+of Lovable's native `.backup` artifact (B), under §17.3a's data-only rule.
+
+Two scope changes landed on 2026-09-15, after this section was first written, and both are
+**easier** under the chosen transport than they would have been under the connector:
+`cdr_records` migrates in full (runbook 6.9, §17.3 withdrawn) and password hashes migrate
+with `auth.users` (§5A). Neither adds meaningful bytes to a ~4 MB archive, and both are
+strictly data-only, so §17.3a's rule is unaffected.
 
 ---
 
