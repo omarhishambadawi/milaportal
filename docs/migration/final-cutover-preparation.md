@@ -2399,6 +2399,58 @@ before the Vault secrets are created, not after.
 
 ---
 
+## 19. Cutover attempt 2026-09-15 03:06 UTC — HALTED BEFORE FREEZE (no production change)
+
+`GO` was given and execution began. It stopped at the transport gate, **before the Cloud
+write freeze**, which is the last point at which stopping is free. Cloud was never frozen,
+no data moved, and production continues to serve from Cloud unchanged.
+
+### 19.1 Completed before the halt
+- Pre-flight green: ledger 150, **migration 69 absent**, destination empty, both notify
+  triggers present, 12 containers up, production verified still on Cloud.
+- **AlShrouq live dispatch confirmed ACTIVE on Cloud** — 2,372 dispatches total, **701 in the
+  last 7 days**, latest 2026-09-14 20:46 UTC, statuses including `accepted`. So
+  `ALSHROUQ_LIVE_DISPATCH_ENABLED` is `"true"` in the Worker environment. This was previously
+  unknowable from here and is exactly the hazard §18.4 flagged.
+- **All three cron jobs disabled on self-hosted** (`cron.alter_job(..., active := false)`, as
+  `supabase_admin`; `postgres` does not own them). Imported dispatch rows plus a live
+  scheduler could otherwise send real couriers to real customers for orders Cloud already
+  handled. They were no-ops anyway with an empty Vault, so nothing functional changed.
+  **They must stay off until after post-cutover validation, then be re-enabled deliberately.**
+
+### 19.2 Why it halted — the direct transport has no reachable endpoint
+
+Two independent obstacles, either sufficient on its own:
+
+1. **Platform.** The Supavisor pooler does not know this tenant. `psql` to
+   `aws-0-eu-central-1.pooler.supabase.com:5432` returns
+   `FATAL: (ENOTFOUND) tenant/user … not found` — **including for the standard
+   `postgres.<project_ref>` username**, not just a custom role. Combined with
+   `db.<ref>.supabase.co` resolving AAAA-only against a host with no IPv6 egress (§17.4),
+   there is no confirmed reachable Postgres endpoint for this Lovable Cloud project. A
+   multi-region pooler survey would have settled whether another region serves the tenant,
+   but it was blocked (below), so "no pooler serves it" is **strongly indicated, not proven**.
+2. **Permission layer.** Persisting the migration role's credential was denied
+   (*Secret-Store Writes*), and the multi-region probe was denied (*Credential Exploration*).
+   Option A needs a credential that survives between an MCP call and a `pg_dump`, so this
+   alone stops it.
+
+No role was created on Cloud (verified: 0 rows matching in `pg_roles`), and every Cloud
+statement this session was a `SELECT`.
+
+### 19.3 Two open decisions, both for the owner
+
+- **Transport.** Retry A by granting the permissions above, or fall back to **B**, Lovable's
+  native export — which needs a UI action that no tooling here can perform.
+- **The freeze mechanism, never decided (§2 step 2.1).** It matters more under B than it
+  would have under A: B's export is asynchronous, delivered by email when ready, and capped
+  at **one per 24 hours**. The snapshot must be taken *after* the freeze to be authoritative,
+  so the frozen window lasts until the export completes — unpredictable, and a failed export
+  costs a day. Under A the dump would have been taken at a chosen instant in minutes. This
+  should be settled before `GO` is re-issued.
+
+---
+
 ## Current verdict
 
 **NOT CUTOVER-READY — but every pre-cutover item this side could close is now closed, and
