@@ -546,7 +546,7 @@ whether they appear on the self-hosted host.
 | 13 | 5 optional branches decision | **CLOSED** | Business confirmed: migrate all 5 (`P0312`, `P0313`, General Administration, Branch Administration, Warehouse) |
 | 14 | `orders_verification_snapshot_20260815` exclusion sign-off | **CLOSED** | Business confirmed: exclude |
 | 15 | Maintenance window | **REQUIRES OPERATOR INPUT (business)** | Business confirmed "after 12:30 AM" as a constraint only — exact date/time still not chosen; this phase does not choose it |
-| 16 | Credential-strategy sign-off | **CHANGED 2026-09-15 — passwords are PRESERVED** | Supersedes the earlier password-reset-only sign-off. Cloud is 100% bcrypt-2a (19/19), self-hosted GoTrue `v2.189.0` verifies bcrypt via Go's `bcrypt`, and `auth.users`/`auth.identities` column sets are byte-identical, so hashes migrate unchanged inside the data-only transport and are never read by an agent (§5A). Gated on the §5B compatibility test, which has not yet been run |
+| 16 | Credential-strategy sign-off | **CHANGED 2026-09-15 — passwords are PRESERVED** | Supersedes the earlier password-reset-only sign-off. Cloud is 100% bcrypt-2a (19/19), self-hosted GoTrue `v2.189.0` verifies bcrypt via Go's `bcrypt`, and `auth.users`/`auth.identities` column sets are byte-identical, so hashes migrate unchanged inside the data-only transport and are never read by an agent (§5A). **The §5B compatibility gate passed on 2026-09-15** — an externally-produced bcrypt-2a hash authenticated against self-hosted GoTrue through the production endpoint |
 | 17 | Cloud write freeze | **REQUIRES CUTOVER-DAY ACTION** | Must not happen before Gate B |
 | 18 | Final production export/snapshot | **REQUIRES CUTOVER-DAY ACTION** | Must not happen before Gate B |
 | 19 | DNS/reverse-proxy switch | **REQUIRES CUTOVER-DAY ACTION** | Must not happen before Gate B |
@@ -661,9 +661,10 @@ is procedural, not tool-enforced, and must be followed deliberately.
 `auth.identities` as **data only**, table-scoped, via the §17 transport (Cloud → this server
 directly). UUIDs are preserved because the rows are the Cloud rows; `encrypted_password`
 travels inside the archive and is never read by, or routed through, an agent.
-5.1b. Run the §5B compatibility test **first** if it has not already passed. It is the gate
-for this whole step: if a bcrypt-2a hash produced outside GoTrue does not authenticate, stop
-here and report rather than continuing (§5B's fallback ladder).
+5.1b. The §5B compatibility gate is **already passed** (2026-09-15): an externally-produced
+bcrypt-2a hash authenticated against self-hosted GoTrue through the production endpoint, and
+the stored hash was confirmed unmodified. No pre-step is required here. Re-run it only if the
+GoTrue image version changes before the window.
 5.2. **Superseded.** The previous instruction — create users with no password and force a
 reset — no longer applies. `admin.createUser` with `password_hash` remains the documented
 fallback if the data-only path fails; the reset-only strategy is reinstated only as a
@@ -1009,10 +1010,11 @@ if the database path fails.
 - §14's branded auth templates remain worth having, but the urgency argument behind them
   weakens: recovery is no longer an email every migrated user is forced to receive.
 
-### 5B. How preservation will be validated — before the window, with no real password
+### 5B. Preservation is PROVEN — test executed 2026-09-15, PASSED
 
-The compatibility argument above is strong but it is still an argument. It gets proven by
-test, and the test needs neither a production hash nor anyone's real password:
+The compatibility argument above is strong but it is still an argument, so it was put to a
+test. **The test ran on 2026-09-15 and passed.** It used neither a production hash nor
+anyone's real password:
 
 1. Create a throwaway user on **self-hosted** with a password generated locally for the
    test. GoTrue hashes it itself.
@@ -1021,19 +1023,34 @@ test, and the test needs neither a production hash nor anyone's real password:
 3. Overwrite the throwaway user's `encrypted_password` with that externally-produced hash.
 4. Attempt sign-in with the second password.
 
-A success proves self-hosted GoTrue accepts a bcrypt-2a hash it did not itself produce —
-exactly what the migration asks of it — using zero production data and zero real passwords.
-Delete the throwaway user afterwards; `auth.users` on self-hosted is currently 0 rows, so the
-table returns to empty.
+**Result — every step passed:**
 
-**This test requires one small write to self-hosted and has not been run**, per the standing
-"no production writes yet" instruction. It is the recommended first action of the cutover
-window, or can be run earlier on request — it is reversible and touches nothing real.
+| Step | Outcome |
+|---|---|
+| Hash generated locally, outside GoTrue | `bcrypt-2a`, length 60 — the exact family and width Cloud uses |
+| Throwaway user + `auth.identities` row inserted with that hash | Accepted |
+| Stored value compared against the generated one | **`STORED_HASH_UNCHANGED=true`** — GoTrue neither rewrote nor re-hashed it |
+| Sign-in through the **real** endpoint (`https://milaportal.milaserv.com/auth/v1/token?grant_type=password`, Nginx → Envoy → GoTrue) | **`AUTH_RESULT=SUCCESS`**, `token_type=bearer`, user object returned, no error |
+| Cleanup | User deleted; `auth.users`, `auth.identities`, `auth.sessions`, `auth.refresh_tokens`, `profiles`, `user_roles` all back to **0** |
 
-**If it fails**, the strategy does not silently revert. The blocker gets reported, and the
-fallback ladder is: (i) the `password_hash` admin API, which accepts the hash without
-transformation; (ii) only if both fail, the password-reset-only strategy below, reinstated as
-a deliberate decision rather than a default.
+**This settles it: self-hosted GoTrue `v2.189.0` authenticates a bcrypt-2a hash it did not
+produce, stored verbatim in `encrypted_password`** — which is exactly and only what the
+migration asks of it. The path was the production path, not a loopback shortcut: the request
+traversed the real domain through Nginx and Envoy.
+
+Method notes worth keeping, because the test should be repeatable without leaking anything:
+the password and hash were generated locally and written to `0600` files, SQL was piped over
+**stdin** rather than passed in `argv`, the anon key was supplied through a `curl` config file
+rather than a command-line header, and every artifact was shredded afterwards. No password,
+hash, or token was printed at any point — the script emitted status lines only.
+
+Verified after the run: migration 69 still absent, ledger still 150, and every business table
+unchanged (`orders`/`complaints`/`cdr_records`/`alshrouq_dispatches`/`admin_activity` all 0,
+`branches` still 137, `storage.buckets` 0, `vault.secrets` 0).
+
+**Had it failed**, the fallback ladder was: (i) the `password_hash` admin API, which accepts
+the hash without transformation; (ii) only if both failed, the reset-only strategy below,
+reinstated as a deliberate decision rather than a default. Neither is needed.
 
 ### 5C. Original password-reset-only strategy (superseded, retained for rollback context)
 
@@ -1938,10 +1955,9 @@ generation run in nine days to do more work than a steady-state one.
 ## 16. GO/NO-GO gate — the final checklist
 
 Nothing below is a judgement call about risk appetite; each line is either evidenced or it
-is not. **This document does not declare cutover readiness: 3 red lines and one unproven
-gate.** None of the three reds is a missing credential. The gate is new: password
-preservation is supported on paper but not yet demonstrated (§5B), and it is a hard
-precondition for the auth import rather than a nice-to-have. The export mechanism, red at the execution-ownership
+is not. **This document does not declare cutover readiness: 3 lines are red.** None of them
+is a missing credential, and none is a technical unknown. Password preservation, which was
+the one unproven gate, is now **demonstrated end-to-end** (§5B) rather than argued. The export mechanism, red at the execution-ownership
 pass, is resolved with two working transports (§17.4). A new hard constraint replaces it
 rather than a blocker: Cloud carries migration 69 and self-hosted must never receive Cloud
 schema (§17.3a). The Shams credentials were removed as a
@@ -1969,7 +1985,7 @@ red to window-gated once a path needing no operator was established (§15.1).
 | ✅ | Cloud export path | **Re-established on a different mechanism (§17.4)**: `pg_dump`/`pg_restore` data-only over the IPv4 pooler, or Lovable's native `.backup` archive as fallback. The connector method behind item 12's original READY is struck — capability was never the issue, transport was |
 | ✅ | Migration 69 invariant has a named threat | Cloud is post-69 (§17.3a); every transport is constrained to data-only, table-scoped, no schema |
 | ✅ | Password-hash compatibility, on paper | Cloud 100% bcrypt-2a; GoTrue `v2.189.0` verifies bcrypt; `auth.users`/`auth.identities` columns byte-identical; no MFA/SSO/banned/unconfirmed users (§5A) |
-| ⏳ | **Password-hash compatibility, proven** | The §5B test — an externally-produced bcrypt-2a hash must authenticate against self-hosted GoTrue. **Not yet run**: needs one small write, withheld under "no production writes yet". Gate for runbook step 5 |
+| ✅ | **Password-hash compatibility, PROVEN** | §5B test executed 2026-09-15 and **passed**: an externally-produced bcrypt-2a hash was stored verbatim (`STORED_HASH_UNCHANGED=true`) and authenticated through the production endpoint (`AUTH_RESULT=SUCCESS`, bearer token, user returned). Throwaway user deleted; all auth and business tables verified back to baseline |
 | ✅ | `cdr_records` migration feasible | 33,391 rows, identical columns both sides, `row_id` unique across all rows; integrity checkable by count, distinct-key and checksum parity without moving data through an agent (§17.3) |
 
 ### 16.2 Red — must be green before `GO`
