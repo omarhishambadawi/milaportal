@@ -16,12 +16,36 @@
  * and would lose any edit on the next regeneration.
  *
  * Only browser-safe values are bridged. SUPABASE_SERVICE_ROLE_KEY bypasses RLS and
- * is deliberately absent from the list: a `VITE_`-prefixed service role key would be
- * inlined into the public bundle, so if one ever appears it must NOT be honoured.
+ * is deliberately absent from BRIDGED_KEYS: a `VITE_`-prefixed service role key would
+ * be inlined into the public bundle, so if one ever appears it must NOT be honoured.
+ * It is resolvable only through SERVER_ONLY_KEYS below, which reads the `MILAPORTAL_`
+ * prefix and nothing else — never a `VITE_` name, never an inlined value.
  */
 
 /** Values safe to carry across the VITE_ boundary in either direction. */
 const BRIDGED_KEYS = ["SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY"] as const;
+
+/**
+ * Server-only values. Resolved from the `MILAPORTAL_` prefix alone and never from
+ * any `VITE_` spelling, so a mistakenly `VITE_`-prefixed service-role key still
+ * cannot become the one the server uses.
+ */
+const SERVER_ONLY_KEYS = ["SUPABASE_SERVICE_ROLE_KEY"] as const;
+
+/**
+ * Prefix for the self-hosted cutover values.
+ *
+ * Lovable's secret store rejects `VITE_*` (build-time browser values) and reserves
+ * `SUPABASE_*` for its own managed secrets, so the cutover configuration cannot be
+ * supplied under the names the application reads. It arrives under this prefix
+ * instead and is mapped here — see the matching block in `vite.config.ts`.
+ *
+ * These outrank everything, including an ambient `process.env.SUPABASE_URL` that
+ * Lovable may itself have set. That is the point: without it the platform's own
+ * managed value would silently win at runtime and the application would keep
+ * talking to Cloud after the cutover.
+ */
+const SELF_HOSTED_PREFIX = "MILAPORTAL_";
 
 /**
  * Vite only guarantees static replacement for literal `import.meta.env.VITE_X`
@@ -68,6 +92,17 @@ export function hydrateServerEnv(workerEnv?: unknown): void {
   const inlined = viteEnv();
 
   for (const key of BRIDGED_KEYS) {
+    // Checked before the ambient value, not after: an override exists precisely to
+    // beat a platform-managed `SUPABASE_*` that is already in process.env.
+    const override = firstString(
+      binding?.[`${SELF_HOSTED_PREFIX}${key}`],
+      process.env[`${SELF_HOSTED_PREFIX}${key}`],
+    );
+    if (override) {
+      process.env[key] = override;
+      continue;
+    }
+
     if (process.env[key]) continue;
 
     const resolved = firstString(
@@ -78,5 +113,15 @@ export function hydrateServerEnv(workerEnv?: unknown): void {
     );
 
     if (resolved) process.env[key] = resolved;
+  }
+
+  // Server-only. No `VITE_` spelling and no inlined value is consulted, so this
+  // cannot be satisfied by anything that reached the browser bundle.
+  for (const key of SERVER_ONLY_KEYS) {
+    const override = firstString(
+      binding?.[`${SELF_HOSTED_PREFIX}${key}`],
+      process.env[`${SELF_HOSTED_PREFIX}${key}`],
+    );
+    if (override) process.env[key] = override;
   }
 }

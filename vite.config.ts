@@ -61,6 +61,24 @@ function withNativeSepRoot(plugin: Plugin): Plugin {
 // database is a far worse outcome than a build that stops.
 const REQUIRED_PUBLIC_SUPABASE_KEYS = ["SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY"] as const;
 
+/**
+ * Prefix for the self-hosted cutover values.
+ *
+ * Lovable's secret store refuses both spellings this build would otherwise want:
+ * `VITE_*` because it treats those as build-time browser values belonging in a
+ * `.env`, and `SUPABASE_*` because that prefix is reserved for its own managed
+ * secrets. Neither restriction can be argued with from here, so the cutover
+ * values arrive under names the platform has no opinion about, and this plugin
+ * maps them onto the names the application already reads. Nothing downstream
+ * changes — `client.ts` still reads `import.meta.env.VITE_SUPABASE_URL`.
+ *
+ * Precedence is deliberate: when a `MILAPORTAL_` value is present it **wins**,
+ * including over a `VITE_SUPABASE_URL` that Lovable Cloud injected into the
+ * sandbox `.env`. Without that, the server would move to self-hosted while the
+ * browser bundle stayed on Cloud — a split that no single variable reveals.
+ */
+const SELF_HOSTED_PREFIX = "MILAPORTAL_";
+
 function supabasePublicEnv(): Plugin {
   return {
     name: "supabase-public-env",
@@ -78,28 +96,70 @@ function supabasePublicEnv(): Plugin {
 
       const define: Record<string, string> = {};
       const missing: string[] = [];
+      const selfHosted: string[] = [];
+
+      const selfHostedValue = (key: string) =>
+        process.env[`${SELF_HOSTED_PREFIX}${key}`] || fileEnv[`${SELF_HOSTED_PREFIX}${key}`];
+
+      // All or nothing. A build with the URL pointed at self-hosted but the key
+      // still Cloud's (or the reverse) authenticates against one project with
+      // another's credential, which surfaces as a confusing 401 rather than as
+      // the configuration mistake it is.
+      const overridden = REQUIRED_PUBLIC_SUPABASE_KEYS.filter((key) => selfHostedValue(key));
+      if (overridden.length > 0 && overridden.length !== REQUIRED_PUBLIC_SUPABASE_KEYS.length) {
+        const absent = REQUIRED_PUBLIC_SUPABASE_KEYS.filter((key) => !selfHostedValue(key));
+        throw new Error(
+          `Partial self-hosted Supabase configuration. Set ` +
+            `${absent.map((k) => SELF_HOSTED_PREFIX + k).join(", ")} as well, or unset ` +
+            `${overridden.map((k) => SELF_HOSTED_PREFIX + k).join(", ")} to stay on the ` +
+            `Lovable-managed configuration. A half-applied override is never intended.`,
+        );
+      }
 
       for (const key of REQUIRED_PUBLIC_SUPABASE_KEYS) {
         const viteKey = `VITE_${key}`;
+        const override = selfHostedValue(key);
         // Either name satisfies the requirement; the other is filled in from it.
+        // A `MILAPORTAL_` value outranks both, including Lovable Cloud's own
+        // injected `VITE_` value — that is the whole point of the prefix.
         const resolved =
-          process.env[viteKey] || fileEnv[viteKey] || process.env[key] || fileEnv[key];
+          override || process.env[viteKey] || fileEnv[viteKey] || process.env[key] || fileEnv[key];
 
         if (!resolved) {
-          missing.push(`${viteKey} (or ${key})`);
+          missing.push(`${viteKey} (or ${key}, or ${SELF_HOSTED_PREFIX}${key})`);
           continue;
         }
 
-        // Client + SSR bundles: inline only when Vite's own env pipeline would
-        // otherwise inline undefined.
-        if (!has(viteKey)) define[`import.meta.env.${viteKey}`] = JSON.stringify(resolved);
+        // Client + SSR bundles: inline when Vite's own env pipeline would otherwise
+        // inline undefined — or, for an override, when it would otherwise inline the
+        // Cloud value from the sandbox `.env`.
+        if (override || !has(viteKey)) {
+          define[`import.meta.env.${viteKey}`] = JSON.stringify(resolved);
+        }
 
         // Same-process server readers (vite dev SSR): fill process.env gaps so
         // auth-middleware & friends see the values. The built Worker is covered
         // separately by hydrateServerEnv() in src/server.ts.
-        if (!process.env[key]) process.env[key] = resolved;
-        if (!process.env[viteKey]) process.env[viteKey] = resolved;
+        //
+        // An override assigns rather than gap-fills, and must also land on
+        // process.env[viteKey]: Vite's own loadEnv() reads process.env ahead of
+        // `.env` files, so this is what stops the Cloud value being re-inlined
+        // regardless of how `define` merges.
+        if (override) {
+          process.env[key] = resolved;
+          process.env[viteKey] = resolved;
+          selfHosted.push(key);
+        } else {
+          if (!process.env[key]) process.env[key] = resolved;
+          if (!process.env[viteKey]) process.env[viteKey] = resolved;
+        }
       }
+
+      // Server-only, and deliberately handled outside the loop above so it can
+      // never be added to `define`: inlining a service-role key would publish an
+      // RLS-bypassing credential to every browser.
+      const serviceRoleOverride = selfHostedValue("SUPABASE_SERVICE_ROLE_KEY");
+      if (serviceRoleOverride) process.env.SUPABASE_SERVICE_ROLE_KEY = serviceRoleOverride;
 
       if (missing.length > 0) {
         throw new Error(
@@ -107,6 +167,14 @@ function supabasePublicEnv(): Plugin {
             `Set them in the build environment (see .env.example). There is no built-in ` +
             `default on purpose — a build must never be able to silently target a Supabase ` +
             `project nobody chose.`,
+        );
+      }
+
+      if (selfHosted.length > 0) {
+        // Names only. The values are a URL and an anon key, but this line exists to
+        // make an override visible in a build log, not to print configuration.
+        console.log(
+          `[supabase-public-env] self-hosted override active for: ${selfHosted.join(", ")}`,
         );
       }
 
