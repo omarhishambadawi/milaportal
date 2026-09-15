@@ -1841,9 +1841,11 @@ generation run in nine days to do more work than a steady-state one.
 ## 16. GO/NO-GO gate — the final checklist
 
 Nothing below is a judgement call about risk appetite; each line is either evidenced or it
-is not. **This document does not declare cutover readiness: 4 lines are red.** Three came
-through the credential-discovery pass; the fourth — the export mechanism (§17) — was found
-at the execution-ownership pass and is the one that blocks setting a date. The Shams credentials were removed as a
+is not. **This document does not declare cutover readiness: 3 lines are red**, and none of
+the three is a missing credential. The export mechanism, red at the execution-ownership
+pass, is resolved with two working transports (§17.4). A new hard constraint replaces it
+rather than a blocker: Cloud carries migration 69 and self-hosted must never receive Cloud
+schema (§17.3a). The Shams credentials were removed as a
 misclassification rather than resolved (twelfth finding), and the Vault secrets moved from
 red to window-gated once a path needing no operator was established (§15.1).
 
@@ -1865,7 +1867,8 @@ red to window-gated once a path needing no operator was established (§15.1).
 | ✅ | Vault requirement understood | **12** secrets identified with sources — 4 platform + 8 per-agent (twelfth finding); all have a no-operator creation path; silent-failure mode documented (§15) |
 | ✅ | Shams credentials | Not a blocker: already live in the Worker environment the cutover keeps, proven by behaviour without reading a value (§15, twelfth finding) |
 | ✅ | Test suite | See §16.4 |
-| ⚠️ | ~~Cloud export path~~ | **Downgraded from green by §17.** Capability is proven; the mechanism is not viable at 53 MB. Item 12's READY FOR CUTOVER is withdrawn until a transport is chosen |
+| ✅ | Cloud export path | **Re-established on a different mechanism (§17.4)**: `pg_dump`/`pg_restore` data-only over the IPv4 pooler, or Lovable's native `.backup` archive as fallback. The connector method behind item 12's original READY is struck — capability was never the issue, transport was |
+| ✅ | Migration 69 invariant has a named threat | Cloud is post-69 (§17.3a); every transport is constrained to data-only, table-scoped, no schema |
 
 ### 16.2 Red — must be green before `GO`
 
@@ -1874,7 +1877,7 @@ red to window-gated once a path needing no operator was established (§15.1).
 | ⛔ | **Cutover date/time** | Business names an exact date/time honouring "after 12:30 AM" | Business |
 | ⛔ | **Worker env values confirmed** | Operator confirms `SITE_URL`/`VITE_SITE_URL`/`LOVABLE_API_KEY`/`LOVABLE_SEND_URL` are set on the deployed Worker, and that Lovable's **build** environment supplies `SUPABASE_URL`/`SUPABASE_PUBLISHABLE_KEY` (the next build fails without them — by design, §9.5) | Operator |
 | ~~⛔~~ | ~~**Shams CRM/MIS credentials**~~ | **Removed — was never a blocker** (twelfth finding). They live in the Worker environment the cutover keeps, so nothing transfers and nobody supplies anything | — |
-| ⛔ | **Cloud export mechanism** | Replace runbook step 3.1 — the connector cannot carry 53 MB (§17). Needs option A (Cloud DB connection details via the Lovable dashboard) or option B | Operator (one dashboard action) |
+| ✅ | ~~**Cloud export mechanism**~~ | **Resolved (§17.4).** Two confirmed transports, neither routing data through an agent context: the pooler is IPv4-reachable and a scoped read-only role can be created without asking anyone (A), and Lovable's native export produces a `pg_dump` custom-format archive this project has already used twice (B). The whole database is ~4 MB compressed. Runbook step 3.1's connector method is struck | — |
 | ⛔ | **End-to-end password-reset test** | Runbook step 12 — cannot run before B2–B7, since a self-hosted link today reaches a Cloud-wired app | Cutover window |
 | ⛔ | **Branded-template fetch check** | §14.4 — must pass before the step-12 email is sent | Cutover window |
 
@@ -1979,26 +1982,126 @@ post-cutover removes the single largest table from the migration and costs only 
 period during which Calls dashboards fill in. That drops the transfer to ≈ 27 MB — still
 beyond the connector, but it materially shrinks whatever mechanism replaces it.
 
-### 17.4 Candidate mechanisms
+### 17.3a **Cloud has migration 69 applied. No schema may cross from Cloud to self-hosted.**
 
-| | Mechanism | Viability |
+Found while evaluating transports, and it outranks the transport question. Verified
+read-only against Cloud:
+
+| Check | Cloud | Self-hosted |
 |---|---|---|
-| A | Obtain the Cloud Postgres connection details through the **Lovable dashboard**, then run one piped `pg_dump … \| psql …` directly between the two databases | **Recommended.** Bytes never touch an agent context; minutes not hours; standard, restartable, verifiable by counts. Costs one manual dashboard action, and the credential must reach the shell **without** passing through this conversation |
-| B | Cloud-side push: `net.http_post` from Cloud's Postgres (pg_net is live there — 106 responses in 24h) to self-hosted PostgREST, batched server-to-server | Workable, no data through any agent context, but needs a shared credential between the two stacks. Every channel for establishing one runs through this conversation, so it implies either exposing a production key or minting a temporary capability URL behind an Nginx change — more moving parts, on the box that terminates production TLS |
-| C | Chunked transfer through `query_database` as currently documented | **Not viable** — §17.2 |
+| `20260723022830` in `schema_migrations` | **present (1)** | absent (0) |
+| `orders` triggers | `orders_prevent_reassignment`, `orders_updated`, `trg_log_order_activity`, `trg_set_order_display_no`, `trg_sync_order_invoice_flags` — **no `trg_notify_order`** | all of those **plus `trg_notify_order`** |
+| `complaints` triggers | `trg_log_complaint_activity` — **no `trg_notify_complaint`** | both |
+| Ledger size | 106 | 150 |
 
-A is the only option that is both safe and boring, which is what a cutover wants. B is the
-fallback if no connection detail can be surfaced. C should be struck from the runbook rather
-than left standing as the plan.
+Cloud is the **post-migration-69 state**: the two notify triggers and their backing
+functions are already gone there. Self-hosted deliberately still has them, which is the
+whole reason §4 can disable-then-re-enable them around the bulk import.
+
+**Therefore any restore that carries schema — `pg_restore` without `--data-only`, or a
+plain-SQL dump replayed whole — silently applies migration 69's effect to self-hosted**,
+drops the two triggers, and breaks the §4 trigger strategy and the §7 rollback gate that
+checks 69 is still absent. The ledgers differing (106 vs 150) means the two schemas are not
+comparable object-for-object and never were; only the *data* is transferable.
+
+**Rule for every transport below, without exception: data only, table-scoped, never schema,
+never `auth` schema objects, never `supabase_migrations`.**
+
+### 17.3b Corrected figures — exact counts, replacing planner estimates
+
+§17.1 sized the export from `pg_stat_user_tables.n_live_tup`, which is an estimate and was
+stale. Exact `count(*)` per table, and a correction that matters:
+
+| Table | Estimate used in §17.1 | **Exact** |
+|---|---|---|
+| `auth.users` | (read as 4 from `profiles`) | **19** |
+| `profiles` / `user_roles` | 4 / 4 | **19 / 19** |
+| `orders` | 8,485 | 8,501 |
+| `order_activity` | 41,689 | 41,864 |
+| `cdr_records` | 29,698 | 33,391 |
+| `complaints` / `complaint_activity` | 31 / 45 | **61 / 102** |
+| `alshrouq_dispatches` | 2,360 | 2,372 |
+| `telesales_leads` / `telesales_source_records` | 825 / 2,423 | 825 / 2,423 |
+| `branches` | 144 | 144 |
+
+The auth roster is **19 users, not 4** — an earlier report of "4 users, so the auth import is
+trivial" misread `profiles`' stale estimate as the roster and is withdrawn. 19 is still
+small, and `auth.users` = `profiles` = `user_roles` = 19 exactly, so there are no orphans to
+reconcile. Cloud's `avatars` bucket holds exactly **one** object (a 270 kB PNG), so runbook
+9.2 is a single-file copy.
+
+### 17.4 Confirmed transports — both viable, measured not assumed
+
+The earlier draft of this section guessed at mechanisms. Each is now settled by
+measurement.
+
+**Ruled out — direct connection to the primary.** `db.gwnxlpophyvgafctrbkx.supabase.co`
+resolves to an **AAAA record only** (`2a05:d018:…`), and this host has **no IPv6 egress**
+(no default route; an IPv6 fetch fails). Unreachable regardless of credentials.
+
+**Open — the Supavisor pooler, on IPv4.** `aws-0-eu-central-1.pooler.supabase.com` answers
+TCP on both **5432** (session mode) and **6543** (transaction mode) from this server. Session
+mode is what `pg_dump` requires. The region matches Cloud's own reported server address.
+
+**Available — a credential can be created without asking anyone.** `query_database` executes
+as role `postgres` with `rolcreaterole = true` (not superuser, which is normal for Supabase).
+A scoped, read-only role can therefore be created for the window and dropped afterwards.
+
+**Available — a native, self-service export that this project has already used twice.**
+Lovable Cloud ships *Export project data* (More → Cloud → Overview → Advanced settings →
+Export project data → Database → Export). Cloud storage still holds the two artifacts it
+produced: `database_export_06_08_26/msdailylog_260806.backup` (1.7 MB) and
+`database_export_19_08_26/milaportal_260819.backup` (4.1 MB). The `.backup` extension and
+`application/octet-stream` type identify a **`pg_dump` custom-format archive** — exactly what
+`pg_restore --data-only --table=…` consumes, selectively and restartably. **The whole
+database is 4.1 MB compressed**, which is the real answer to §17.1's 53 MB: that figure was
+the cost of JSON through an agent context, not the size of the data.
+
+Documented constraints: database ≤ 15 GB, artifact ≤ 5 GB, **one export per 24 hours**,
+delivered as an emailed download link and saved to the project's Cloud storage. Excluded
+from it: storage files, edge-function code, project secrets, and passwords "not in usable
+form" — the last is a fit rather than a gap, since the strategy is password-reset-only (§5)
+and only `id`/`email`/metadata are needed.
+
+| | Transport | Data path | Security | Speed | Restartable | FK/triggers | Validation | Human action |
+|---|---|---|---|---|---|---|---|---|
+| **A** | `pg_dump --data-only` over the pooler → `pg_restore` into self-hosted, both 17.6 | Cloud → this server, direct TCP. **Never through an agent context** | One scoped read-only role, created for the window and dropped after. Its SCRAM verifier passes through one tool call — see the caveat below | Minutes; 4 MB class | Yes — per-table, re-runnable | `--data-only` + §4's disable/re-enable; **never** `--disable-triggers` blanket | `count(*)` parity per table | **None beyond GO** |
+| **B** | Lovable *Export project data* → download link → `curl` to this server → `pg_restore` | Cloud → email/storage → this server. **Never through an agent context** | No credential created; the download link is a bearer capability, handled out of band | Minutes once produced; export itself is asynchronous | Yes — the artifact is a file, restore is re-runnable | Same | Same | **One UI action + hand over the link** |
+| ~~C~~ | Chunked `query_database` | Through the agent context, twice | — | — | — | — | — | — |
+
+**Recommendation: A, with B as the standing fallback.** A reduces the human action to `GO`
+alone, takes the snapshot at the exact freeze instant rather than whenever an asynchronous
+job finishes, and has no 24-hour retry ceiling — which matters because B's one-per-24h limit
+means a mistimed or failed export costs a day and therefore the window. B remains valuable
+precisely because it needs no credential at all, and because the project has already used it
+successfully twice.
+
+**Two honest caveats on A**, neither disqualifying:
+1. *The verifier is not perfectly hidden.* The plan is to generate the password on this
+   server, never print it, and send only its SCRAM-SHA-256 verifier in `CREATE ROLE`. A SCRAM
+   verifier is authentication-equivalent in practice, so this narrows exposure to a
+   short-lived read-only role rather than eliminating it. The role is dropped at the end of
+   the window, and no production credential is ever involved.
+2. *Supavisor with a non-default role is unverified from here.* The pooler expects
+   `<role>.<project_ref>` as the username; custom roles are supported, but this cannot be
+   proven without connecting. **Treat the first connection as the gate**: if it fails, fall
+   straight through to B rather than improvising.
+
+Both A and B are subject to §17.3a without exception: **data only, table-scoped, no schema.**
 
 ### 17.5 What this does not change
 
 Everything else in this document stands. The schema is in place, the destination is clean,
-`auth.users` on Cloud holds **4** users (so the UUID-preserving auth import is trivial at
-this size), all 12 Vault secrets have a no-operator path, the branded templates are prepared,
-and the Worker switch is unchanged. This is a transport problem for one step, not a redesign
-— but it is a hard blocker for that step, and it is the reason a date cannot responsibly be
-set yet.
+`auth.users` on Cloud holds **19** users with `profiles` and `user_roles` matching it exactly
+(so the UUID-preserving auth import is small and has no orphans to reconcile), all 12 Vault
+secrets have a no-operator path, the branded templates are prepared, and the Worker switch is
+unchanged.
+
+What changed between the first draft of §17 and this one: the transport is no longer a
+blocker, and **runbook step 3.1 must be rewritten** — it currently names the connector method
+that §17.2 disproves. Step 3.1 becomes `pg_dump --data-only` over the pooler (A) or a restore
+of Lovable's native `.backup` artifact (B), under §17.3a's data-only rule. Step 6.9's CDR
+import is struck in favour of letting the Yeastar sync rebuild the mirror (§17.3).
 
 ---
 
