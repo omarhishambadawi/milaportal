@@ -1585,8 +1585,8 @@ were **not executed** this phase.
 | B3 | Set `VITE_SUPABASE_PUBLISHABLE_KEY` **and** `SUPABASE_PUBLISHABLE_KEY` = self-hosted `ANON_KEY` | D3, D4 |
 | B4 | Remove `VITE_SUPABASE_PROJECT_ID` and `SUPABASE_PROJECT_ID` from the Worker env — **now hygiene, no longer load-bearing**: nothing in the code reads them since this phase | D5, D6 (§9.4) |
 | B5 | Set `SUPABASE_SERVICE_ROLE_KEY` = self-hosted `SERVICE_ROLE_KEY` | D7 |
-| B6 | Set `SITE_URL` / `VITE_SITE_URL` = `https://milaportal.milaserv.com` | D9 (D8 no longer needs pairing here — it is already merged) |
-| B7 | Redeploy the Worker | — |
+| B6 | Set `SITE_URL` / `VITE_SITE_URL` = `https://milaportal.milaserv.com` — **downgraded to recommended, not required (§18.3)**: read only as `requestOrigin()`'s last fallback, on a path that always has a request. Runtime, no rebuild needed (`VITE_SITE_URL` is read via `process.env`, not `import.meta.env`) | D9 |
+| B7 | Redeploy the Worker — **automatable**: `deploy_project` exists in the authorized tooling (§18.1), so this step needs no human once the env edit is saved | — |
 | B8 | **Verification gate:** fetch any Worker URL and read `Content-Security-Policy-Report-Only`. `connect-src` must contain `https://milaportal.milaserv.com` and `wss://milaportal.milaserv.com`, and must **not** contain `gwnxlpophyvgafctrbkx` | D12 — single highest-value check; it proves the live environment, not the build |
 | B9 | After the Lovable deploy, confirm `.lovable/mcp/manifest.json`'s issuer no longer names `gwnxlpophyvgafctrbkx` | D11, now downstream of B2 (the URL), not B4. A local `vite build` does not rewrite this file — verify it against a real deploy |
 | B10 | Recreate `supabase-studio`, `supabase-storage` and `supabase-edge-functions` so the corrected `SUPABASE_PUBLIC_URL` takes effect | D17 (§9.7) |
@@ -1993,7 +1993,7 @@ red to window-gated once a path needing no operator was established (§15.1).
 | | Item | What closes it | Owner |
 |---|---|---|---|
 | ⛔ | **Cutover date/time** | Business names an exact date/time honouring "after 12:30 AM" | Business |
-| ⛔ | **Worker env values confirmed** | Operator confirms `SITE_URL`/`VITE_SITE_URL`/`LOVABLE_API_KEY`/`LOVABLE_SEND_URL` are set on the deployed Worker, and that Lovable's **build** environment supplies `SUPABASE_URL`/`SUPABASE_PUBLISHABLE_KEY` (the next build fails without them — by design, §9.5) | Operator |
+| ⛔ | **Worker env switch (dashboard)** | The only step no authorized tooling can perform (§18.1). **Three variables are strictly required** — `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY` — with the two unprefixed Supabase names recommended alongside. `SITE_URL`/`VITE_SITE_URL` are **no longer** on this list (§18.3). The redeploy afterwards is automatable | Operator, in Lovable project settings |
 | ~~⛔~~ | ~~**Shams CRM/MIS credentials**~~ | **Removed — was never a blocker** (twelfth finding). They live in the Worker environment the cutover keeps, so nothing transfers and nobody supplies anything | — |
 | ✅ | ~~**Cloud export mechanism**~~ | **Resolved (§17.4).** Two confirmed transports, neither routing data through an agent context: the pooler is IPv4-reachable and a scoped read-only role can be created without asking anyone (A), and Lovable's native export produces a `pg_dump` custom-format archive this project has already used twice (B). The whole database is ~4 MB compressed. Runbook step 3.1's connector method is struck | — |
 | ⛔ | **End-to-end password-reset test** | Runbook step 12 — cannot run before B2–B7, since a self-hosted link today reaches a Cloud-wired app | Cutover window |
@@ -2238,6 +2238,121 @@ Two scope changes landed on 2026-09-15, after this section was first written, an
 `cdr_records` migrates in full (runbook 6.9, §17.3 withdrawn) and password hashes migrate
 with `auth.users` (§5A). Neither adds meaningful bytes to a ~4 MB archive, and both are
 strictly data-only, so §17.3a's rule is unaffected.
+
+---
+
+## 18. The Worker environment switch — exhaustively scoped (2026-09-15)
+
+Earlier revisions asserted "no Lovable env API" from a partial tool listing. This section
+records the exhaustive check, and it changes the answer in two useful ways: the **redeploy is
+automatable**, and **two of the seven variables are not actually required**.
+
+### 18.1 Automated capability — the full authorized surface
+
+Every tool the authenticated Lovable MCP connector exposes, enumerated rather than sampled:
+
+| Area | Tools |
+|---|---|
+| Identity / workspace | `get_me`, `list_workspaces`, `get_workspace`, `list_design_systems` |
+| Projects | `list_projects`, `get_project`, `create_project`, `initiate_project`, `remix_project`, `move_projects_to_folder`, `set_folder_visibility`, `set_project_visibility`, `list_template_projects` |
+| Code | `list_files`, `read_file`, `get_diff`, `list_edits`, `get_file_upload_url` |
+| Agent messaging | `send_message`, `get_message`, `list_messages`, `render_project_widget` |
+| Knowledge / skills | `get`/`set_project_knowledge`, `get`/`set_workspace_knowledge`, workspace-skill CRUD |
+| Database | `get_database_status`, `enable_database`, `query_database` |
+| Connectors | `list_connectors`, `list_custom_connectors`, `add_connector` |
+| Deployment | **`deploy_project`** |
+| Analytics | `get_project_analytics`, `get_project_analytics_trend` |
+
+**There is no environment-variable or secrets tool of any kind** — nothing to read, set, list
+or delete them, and nothing that returns a connection string. This is a deliberate product
+boundary, not an oversight: `add_connector` states the same rule in its own description —
+"Connectors must always be added through the dashboard — the MCP cannot add them
+programmatically" — and returns a deep link instead of doing the work. Environment variables
+sit in that category.
+
+**But `deploy_project` does exist.** Publishing the project to production hosting is
+therefore an automatable step. So the human action is **the env edit only** — not the edit
+*and* the redeploy, as checklist B7 implied.
+
+No undocumented or destructive workaround was used or is proposed. In particular, driving the
+Lovable **agent** via `send_message` to edit project configuration is explicitly rejected:
+it modifies application code, which is out of scope by instruction, and it is not a supported
+path to environment settings.
+
+### 18.2 What actually has to change — verified against the code, not the checklist
+
+| Variable | Read at | Build or runtime | Required? | Destination (value never printed) |
+|---|---|---|---|---|
+| `VITE_SUPABASE_URL` | `client.ts:9`, `server-env.ts:33`, `mcp/index.ts:14`, `__root.tsx:29`, `webhook.ts:134`, `queue/process.ts:68` — all `import.meta.env` | **Build-time, inlined** | **YES** | `https://milaportal.milaserv.com` |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | `client.ts:10`, `server-env.ts:34` — `import.meta.env` | **Build-time, inlined** | **YES** | self-hosted `.env` → `ANON_KEY` |
+| `SUPABASE_SERVICE_ROLE_KEY` | `client.server.ts:10`, `cdr-store.server.ts:105`, `api/telesales-generate.ts`, `api/alshrouq-run-scheduled.ts`, `api/shams-sync-run.ts` — `process.env` | **Runtime**, server-only | **YES** | self-hosted `.env` → `SERVICE_ROLE_KEY` |
+| `SUPABASE_URL` | `client.server.ts:9`, `security-headers.ts:86` — `process.env` | Runtime | **Not strictly** — gap-filled | same as `VITE_SUPABASE_URL` |
+| `SUPABASE_PUBLISHABLE_KEY` | `client.ts:10` fallback — `process.env` | Runtime | **Not strictly** — gap-filled | same as `VITE_SUPABASE_PUBLISHABLE_KEY` |
+| `SITE_URL` | `password.server.ts:88` only | Runtime | **NO — see 18.3** | `https://milaportal.milaserv.com` |
+| `VITE_SITE_URL` | `password.server.ts:88` only, via **`process.env`** | **Runtime, despite the prefix** | **NO — see 18.3** | same |
+
+*Why two are "not strictly" required:* `hydrateServerEnv` is wired at `src/server.ts:46` and
+runs once per isolate before the server entry, filling `process.env.SUPABASE_URL` and
+`SUPABASE_PUBLISHABLE_KEY` from the Worker binding, the `VITE_`-prefixed binding, or the
+build-inlined value. Setting the `VITE_` pair therefore satisfies the unprefixed pair
+automatically — including the CSP, which reads `process.env.SUPABASE_URL`.
+**Recommendation: set all five anyway.** Relying on the bridge is a subtle dependency to
+discover during a cutover, `.env.example` documents both spellings, and an explicit value
+always wins over a bridged one.
+
+### 18.3 `SITE_URL` / `VITE_SITE_URL` are not cutover blockers
+
+Read at exactly one place — `requestOrigin()` in `password.server.ts:88` — and only as the
+**last** fallback, after `x-forwarded-host` and `host`. Its one caller chain is
+`admin.functions.ts:566` → `sendPasswordResetEmail()`, which runs inside a TanStack Start
+server function and therefore always has a request to read the host from. The fallback is
+never reached in practice, and if it somehow were with the variable unset, the code throws
+`"Cannot send a reset email: the site URL could not be determined"` — a loud failure, not a
+silently wrong domain.
+
+Two corrections follow. `VITE_SITE_URL` is read through **`process.env`, not
+`import.meta.env`**, so despite its prefix it is **not** build-inlined and needs no rebuild.
+And both are **recommended hygiene, not requirements** — they were carried on the blocker
+list as load-bearing, which they are not. Checklist B6 is downgraded accordingly.
+
+### 18.4 Must remain untouched
+
+Verified as Worker-environment values that the cutover does not alter, because the cutover
+repoints the existing Worker rather than replacing it (twelfth finding):
+`SHAMS_CRM_USERNAME`, `SHAMS_CRM_PASSWORD`, `SHAMS_MIS_BASE_URL`,
+`SHAMS_MIS_ACCOUNT_IDENTIFIER`, `SHAMS_MIS_API_KEY`, `YEASTAR_BASE_URL`,
+`YEASTAR_CLIENT_ID`, `YEASTAR_CLIENT_SECRET`, `YEASTAR_UTC_OFFSET_MINUTES`,
+`YEASTAR_BUSINESS_HOURS`, `YEASTAR_OUTBOUND_RING_TIMEOUT_SEC`,
+`YEASTAR_CDR_SYNC_HORIZON_DAYS`, `YEASTAR_CDR_SYNC_MAX_DAYS_PER_RUN`, `CDR_SYNC_SECRET`,
+`ALSHROUQ_LIVE_DISPATCH_ENABLED`, `ALSHROUQ_SCHEDULER_SECRET`, `LOVABLE_API_KEY`,
+`LOVABLE_SEND_URL`, `GOOGLE_MAPS_API_KEY`, `VITE_GOOGLE_MAPS_BROWSER_KEY`.
+
+`VITE_SUPABASE_PROJECT_ID` / `SUPABASE_PROJECT_ID` may be deleted as hygiene — nothing has
+read them since the pre-cutover hardening phase (§9.4) — but leaving them is inert.
+
+**`ALSHROUQ_LIVE_DISPATCH_ENABLED` deserves a deliberate look during the window**, not a
+reflex. It is the courier boundary: if it is currently `"true"`, the newly-imported
+`alshrouq_dispatches` rows plus a freshly-configured scheduler mean real dispatches can be
+created against real customers as soon as the stack is live. Confirm the intended posture
+before the Vault secrets are created, not after.
+
+### 18.5 Verification after the deploy
+
+1. **CSP is the single highest-value check** (existing B8): fetch any Worker URL and read
+   `Content-Security-Policy-Report-Only`. `connect-src` must contain
+   `https://milaportal.milaserv.com` and `wss://milaportal.milaserv.com`, and must **not**
+   contain `gwnxlpophyvgafctrbkx`. It is computed per request from
+   `process.env.SUPABASE_URL`/`VITE_SUPABASE_URL` (`security-headers.ts:86`), so it proves
+   the **live environment**, not a build artifact.
+2. **The build must have succeeded at all** — since the tenth finding, a build lacking the
+   Supabase variables fails by design, naming them. A failed deploy leaves the previous
+   Worker running, so treat a missing new deployment as a signal, not a non-event.
+3. `.lovable/mcp/manifest.json`'s issuer no longer names the Cloud ref (B9) — verify after a
+   real Lovable deploy; a local `vite build` does not rewrite it.
+4. `GET /auth-email-templates/recovery.html` on the production origin returns the template
+   (currently **404** — it ships with this same deploy), which is also §14.4's prerequisite.
+5. A signed-in session against self-hosted, and one migrated account authenticating with its
+   **pre-existing** password (§5B).
 
 ---
 
