@@ -1955,8 +1955,10 @@ generation run in nine days to do more work than a steady-state one.
 ## 16. GO/NO-GO gate — the final checklist
 
 Nothing below is a judgement call about risk appetite; each line is either evidenced or it
-is not. **This document does not declare cutover readiness: 3 lines are red.** None of them
-is a missing credential, and none is a technical unknown. Password preservation, which was
+is not. **This document does not declare cutover readiness: 2 lines are red**, and only one
+of them is a decision. The Worker env switch left the list on 2026-09-15 — the secrets are
+set, and what remains of that step is a publish that must be sequenced after the data import
+(§18A). None of what is left is a missing credential or a technical unknown. Password preservation, which was
 the one unproven gate, is now **demonstrated end-to-end** (§5B) rather than argued. The export mechanism, red at the execution-ownership
 pass, is resolved with two working transports (§17.4). A new hard constraint replaces it
 rather than a blocker: Cloud carries migration 69 and self-hosted must never receive Cloud
@@ -1993,7 +1995,7 @@ red to window-gated once a path needing no operator was established (§15.1).
 | | Item | What closes it | Owner |
 |---|---|---|---|
 | ⛔ | **Cutover date/time** | Business names an exact date/time honouring "after 12:30 AM" | Business |
-| ⛔ | **Worker env switch (dashboard)** | The only step no authorized tooling can perform (§18.1). **Three variables are strictly required** — `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY` — with the two unprefixed Supabase names recommended alongside. `SITE_URL`/`VITE_SITE_URL` are **no longer** on this list (§18.3). The redeploy afterwards is automatable | Operator, in Lovable project settings |
+| ✅ | ~~**Worker env switch (dashboard)**~~ | **DONE 2026-09-15 — armed, not applied.** The three `MILAPORTAL_SUPABASE_*` secrets are set (§18A). Lovable rejects both `VITE_*` and the reserved `SUPABASE_*` prefix, so the values arrive under custom names that `bf526a7` maps onto the ones the app reads. Values are unverifiable until the deploy, which is itself the test; the publish must not happen before the data import |
 | ~~⛔~~ | ~~**Shams CRM/MIS credentials**~~ | **Removed — was never a blocker** (twelfth finding). They live in the Worker environment the cutover keeps, so nothing transfers and nobody supplies anything | — |
 | ✅ | ~~**Cloud export mechanism**~~ | **Resolved (§17.4).** Two confirmed transports, neither routing data through an agent context: the pooler is IPv4-reachable and a scoped read-only role can be created without asking anyone (A), and Lovable's native export produces a `pg_dump` custom-format archive this project has already used twice (B). The whole database is ~4 MB compressed. Runbook step 3.1's connector method is struck | — |
 | ⛔ | **End-to-end password-reset test** | Runbook step 12 — cannot run before B2–B7, since a self-hosted link today reaches a Cloud-wired app | Cutover window |
@@ -2238,6 +2240,47 @@ Two scope changes landed on 2026-09-15, after this section was first written, an
 `cdr_records` migrates in full (runbook 6.9, §17.3 withdrawn) and password hashes migrate
 with `auth.users` (§5A). Neither adds meaningful bytes to a ~4 MB archive, and both are
 strictly data-only, so §17.3a's rule is unaffected.
+
+---
+
+## 18A. ARMED — the three secrets are set, and the next publish is the cutover (2026-09-15)
+
+**State change, recorded because it is the most consequential one in this document.**
+`MILAPORTAL_SUPABASE_URL`, `MILAPORTAL_SUPABASE_PUBLISHABLE_KEY` and
+`MILAPORTAL_SUPABASE_SERVICE_ROLE_KEY` now exist in Lovable's secret store. Nothing has
+been deployed — verified at the time of writing: production's live CSP `connect-src` still
+names the Cloud project, so the running Worker is unchanged.
+
+**What this means in practice: the next production publish repoints the live application at
+self-hosted Supabase**, whoever triggers it and for whatever reason. There is no separate
+confirmation step inside Lovable that distinguishes "publish a copy fix" from "cut over the
+company's database". The build picks up whatever secrets are set at that moment.
+
+**Self-hosted currently holds no business data** — `orders` 0, `complaints` 0, `auth.users`
+0, `cdr_records` 0. So a publish made *before* the data import would put every user in front
+of a working, empty application, with Cloud still holding the real data. That is recoverable
+(re-publish, or roll back routing) but it is a live outage caused by a button, so it is worth
+naming rather than assuming everyone remembers.
+
+**The ordering rule that follows, and it is absolute**: the publish is step 4 of §16.3, not
+step 1. Freeze, export, import and verify **first**; publish **after**. §16.3's sequence
+already had this right — it now has teeth.
+
+**Risk posture while the window is not yet scheduled.** Two defensible options:
+- *Leave the secrets in place* and rely on nobody publishing. Correct if the window is
+  imminent, and it keeps the values entered once, verified once.
+- *Remove them until the window* if the wait will be long or others can publish. Costs a
+  re-entry, and a re-entry is where a typo lives — but it disarms the accident entirely.
+
+This document does not choose; it records that the choice exists and that the default
+("leave them") carries a real, if unlikely, failure mode.
+
+**The secrets cannot be verified before the deploy.** No Lovable tooling reads environment
+values (§18.1), and the preview origin answers `401`, so nothing here can confirm the three
+were entered correctly. **The deploy is the test**, and the CSP check in §18.5 is what reads
+the result — within seconds of the publish, before users are directed anywhere. A build that
+received a partial or malformed override fails loudly by design rather than shipping (§18.2,
+and the partial-configuration guard proven in the `bf526a7` build matrix).
 
 ---
 
